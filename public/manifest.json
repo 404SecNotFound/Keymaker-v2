@@ -1,0 +1,30 @@
+{
+  "name": "Keymaker",
+  "short_name": "Keymaker",
+  "description": "Secure, client-side encryption and decryption with Argon2id and chainable ciphers. Nothing leaves your browser.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#c07f2e",
+  "theme_color": "#c07f2e",
+  "orientation": "any",
+  "icons": [
+    {
+      "src": "/icon-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/icon-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/apple-touch-icon.png",
+      "sizes": "1024x1024",
+      "type": "image/png",
+      "purpose": "any"
+    }
+  ]
+}
