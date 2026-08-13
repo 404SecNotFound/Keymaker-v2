@@ -7,6 +7,12 @@ export const metadata: Metadata = {
   description: 'Client-side file and text encryption with Argon2id and chained ciphers. Nothing leaves your browser.',
 };
 
+// Subdirectory the app is served from — "" at a domain root, "/Keymaker-v2"
+// on a GitHub Pages project site. Next prefixes its own asset URLs from
+// next.config.js, but not <link> tags we write by hand or a path passed to
+// serviceWorker.register(), so those are prefixed here.
+const BASE = process.env.KEYMAKER_BASE_PATH || '';
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -34,10 +40,10 @@ export default function RootLayout({
             content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'"
           />
         )}
-        <link rel="icon" type="image/svg+xml" href="/logo.svg" />
-        <link rel="icon" type="image/x-icon" href="/favicon.ico" />
-        <link rel="manifest" href="/manifest.json" />
-        <link rel="apple-touch-icon" sizes="1024x1024" href="/apple-touch-icon.png" />
+        <link rel="icon" type="image/svg+xml" href={`${BASE}/logo.svg`} />
+        <link rel="icon" type="image/x-icon" href={`${BASE}/favicon.ico`} />
+        <link rel="manifest" href={`${BASE}/manifest.json`} />
+        <link rel="apple-touch-icon" sizes="1024x1024" href={`${BASE}/apple-touch-icon.png`} />
         <meta name="theme-color" content="#c07f2e" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -51,7 +57,7 @@ export default function RootLayout({
             __html: `
               if ('serviceWorker' in navigator) {
                 window.addEventListener('load', function() {
-                  navigator.serviceWorker.register('/sw.js');
+                  navigator.serviceWorker.register('${BASE}/sw.js');
                 });
 
                 // Listen for the service worker's update notification

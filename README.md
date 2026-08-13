@@ -1,5 +1,13 @@
 # Keymaker
 
+### [→ Launch the app](https://404secnotfound.github.io/Keymaker-v2/)
+
+<sub>Runs entirely in the browser. Nothing is uploaded, no account is needed, and it keeps
+working offline once loaded. Requires GitHub Pages to be enabled for this repository —
+see [Publishing](#publishing).</sub>
+
+---
+
 **Client-side encryption for files and text. Nothing ever leaves your browser.**
 
 Keymaker encrypts confidential documents, personal notes, and seed phrases entirely
@@ -230,6 +238,31 @@ npm run test:conformance  # cross-test vs the independent Python reference
 
 `npm run build` produces a fully static `out/` directory. Serve it from any static
 host, or open it from disk on a machine with no network connection.
+
+---
+
+## Publishing
+
+The **Launch the app** link at the top points at GitHub Pages. To make it live:
+
+1. **Settings → Pages → Source: GitHub Actions.** On a private repository this
+   also requires a paid plan.
+2. Run the **Deploy to GitHub Pages** workflow from the Actions tab, or
+   uncomment the `push` trigger in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
+   so every merge to `main` publishes.
+
+A Pages project site is served from `/Keymaker-v2/` rather than the domain root, so
+the deploy builds with `KEYMAKER_BASE_PATH=/Keymaker-v2`. Without it the exported
+HTML would request its assets from the root and serve a blank page. The service
+worker derives its own scope from where it is served, so it needs no configuration.
+
+To host somewhere else — a custom domain, Netlify, Vercel, an internal server —
+build without `KEYMAKER_BASE_PATH` and upload `out/`. Nothing in the app assumes a
+particular origin.
+
+Because Keymaker does all its work in the browser, **whoever serves the bundle is
+the trust anchor.** For high-value secrets, prefer a copy you built and verified
+yourself, kept offline.
 
 The Argon2id suite is deliberately slow. It runs real memory-hard derivations across
 every KDF and cipher combination, and takes a few minutes.

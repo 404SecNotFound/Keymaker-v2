@@ -2,17 +2,26 @@
 // Cache version: bump this on every release to invalidate stale caches
 const CACHE_VERSION = 'keymaker-v1.0.0';
 
+// Where this worker is served from, without a trailing slash. On a root
+// deployment that is "", on a GitHub Pages project site "/Keymaker-v2".
+//
+// Derived from self.location rather than baked in at build time, because the
+// worker's own URL is the one thing that is always correct: the scope of a
+// service worker is the directory it is served from, so this cannot disagree
+// with reality the way a hardcoded prefix could.
+const BASE = new URL('./', self.location).pathname.replace(/\/$/, '');
+
 // App shell files to precache on install.
 // For a static Next.js export the HTML entry point and key assets are enough;
 // the rest (JS chunks, CSS) are picked up at runtime via the fetch handler.
 const APP_SHELL = [
-  '/',
-  '/logo.svg',
-  '/favicon.ico',
-  '/manifest.json',
-  '/apple-touch-icon.png',
-  '/icon-192x192.png',
-  '/icon-512x512.png',
+  `${BASE}/`,
+  `${BASE}/logo.svg`,
+  `${BASE}/favicon.ico`,
+  `${BASE}/manifest.json`,
+  `${BASE}/apple-touch-icon.png`,
+  `${BASE}/icon-192x192.png`,
+  `${BASE}/icon-512x512.png`,
 ];
 
 // ---- Install: precache the app shell ----
@@ -88,8 +97,8 @@ self.addEventListener('fetch', (event) => {
 
   const isNavigation =
     event.request.mode === 'navigate' ||
-    url.pathname === '/' ||
-    url.pathname === '/index.html';
+    url.pathname === `${BASE}/` ||
+    url.pathname === `${BASE}/index.html`;
 
   if (isNavigation) {
     // Network-first with cache fallback (offline support). Only '/' is
@@ -99,7 +108,7 @@ self.addEventListener('fetch', (event) => {
       fetch(event.request)
         .then((response) => cacheResponse(event.request, response))
         .catch(() =>
-          caches.match(event.request).then((cached) => cached || caches.match('/'))
+          caches.match(event.request).then((cached) => cached || caches.match(`${BASE}/`))
         )
     );
     return;
@@ -136,6 +145,6 @@ self.addEventListener('fetch', (event) => {
  * dynamic, anything user-supplied, and anything not enumerated here.
  */
 function isCacheableAsset(pathname) {
-  if (pathname.startsWith('/_next/static/')) return true;
+  if (pathname.startsWith(`${BASE}/_next/static/`)) return true;
   return APP_SHELL.includes(pathname);
 }

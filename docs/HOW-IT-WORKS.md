@@ -296,7 +296,7 @@ New work happens in `src/lib/keymaker-crypto.ts`. The two coexist:
 flowchart LR
     ui["Encryptor UI"] --> km["keymaker-crypto.ts<br/>KEYM v1 — active development"]
     km -->|"legacy input detected"| frozen["crypto.ts<br/>IBTZ v0/v1 — frozen"]
-    km --- kmt["test:keymaker<br/>70 checks"]
+    km --- kmt["test:keymaker<br/>78 checks"]
     frozen --- ft["test:crypto<br/>45 checks, no dependencies"]
 ```
 

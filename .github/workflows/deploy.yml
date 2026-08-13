@@ -1,11 +1,13 @@
 name: Deploy to GitHub Pages
 
-# Manual-only for now. This repository is private, and GitHub Pages on a
-# private repository requires a paid plan with Pages enabled — on a free
-# private repo the deploy job fails on every push to main and buries real
-# CI signal in red. Once Pages is enabled (Settings → Pages → Source:
-# GitHub Actions), restore the automatic trigger by uncommenting the push
-# block below.
+# Publishes the static export to GitHub Pages, which is what the "Launch the
+# app" link in README.md points at.
+#
+# One-time setup: Settings → Pages → Source: GitHub Actions. On a *private*
+# repository Pages also needs a paid plan; until it is enabled this workflow
+# fails on every push, so the push trigger stays commented and the deploy is
+# run manually from the Actions tab. Uncomment the two lines below once Pages
+# is on and every merge to main will publish.
 on:
   # push:
   #   branches: [main]
@@ -38,7 +40,16 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      # A Pages *project* site is served from /<repo>/, not the domain root.
+      # Without this the exported HTML requests /_next/... at the root, every
+      # asset 404s, and the deploy succeeds while serving a blank page.
+      # Delete this line if the site ever moves to a custom domain or a
+      # <user>.github.io root repository.
       - run: npm run build
+        env:
+          KEYMAKER_BASE_PATH: /Keymaker-v2
+          NEXT_TELEMETRY_DISABLED: "1"
 
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
