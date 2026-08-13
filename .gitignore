@@ -25,5 +25,18 @@ yarn-error.log*
 
 # keymaker test runner bundles
 scripts/.regression.build.mjs
+scripts/.fuzz.build.mjs
 scripts/.generate.build.mjs
 *.tsbuildinfo
+
+# playwright
+/test-results/
+/playwright-report/
+/blob-report/
+
+# reference bridge bundle
+reference/.bridge.build.mjs
+
+# python
+__pycache__/
+*.pyc

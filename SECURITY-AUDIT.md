@@ -22,9 +22,10 @@ fixed.
 | KM-03 | Medium | Dice calculator counted impossible rolls as entropy | **Fixed** |
 | KM-04 | Low | No ciphertext size ceiling on the decrypt path | **Fixed** |
 | KM-05 | Low | Password + key file concatenation is ambiguous | **Deferred to KEYM v2** |
-| KM-06 | Low | PBKDF2 is the effective default despite Argon2id being recommended | **Open** |
+| KM-06 | Low | PBKDF2 is the effective default despite Argon2id being recommended | **Fixed** |
 | KM-07 | Low | `connect-src 'self'` did not enforce the zero-egress claim | **Fixed** |
-| KM-08 | Low | Service worker caching scope broader than necessary | **Open** |
+| KM-08 | Low | Service worker caching scope broader than necessary | **Fixed** |
+| KM-14 | Medium | *(new)* Specification omitted the KDF parameter bounds | **Fixed** |
 | KM-09 | Low | Prior audit was stale and could be misread as covering KEYM | **Fixed** |
 | KM-10 | Info | Encryption did not validate caller-supplied KDF parameters | **Fixed** |
 | KM-11 | Info | CSP postprocessor skipped HTML with no CSP meta tag | **Fixed** |
@@ -138,38 +139,73 @@ should combine two secrets. Fixing it changes derivation and therefore the wire
 format, so it belongs in v2 alongside length-prefixed, domain-separated inputs
 and pre-hashing of key files. **KEYM v1 must remain readable exactly as-is.**
 
-## KM-06 / KM-08 — Open
+## KM-06 — Argon2id is now the default
 
-**KM-06:** the UI still initialises to PBKDF2 while labelling Argon2id
-recommended, so the least technical user gets the weaker KDF. Changing the
-default needs a WASM capability probe and a visible fallback, given that
-Argon2id is unavailable where WebAssembly is blocked. Deliberately left as a
-product decision rather than changed unilaterally.
+The UI initialises to Argon2id, so the user who never opens Advanced gets the
+memory-hard KDF. Because Argon2id needs WebAssembly — and the CSP bug proved
+that assumption can fail silently — availability is *probed* rather than
+assumed: `isArgon2idAvailable()` compiles an empty WASM module and loads the
+library. If either step fails, the UI falls back to PBKDF2, disables the
+Argon2id option, and says why. Asserted by a browser test.
 
-**KM-08:** the service worker caches any same-origin GET. Correct for the
-current static bundle, but broad enough that future same-origin resources would
-be persisted without anyone deciding they should be.
+## KM-08 — Service worker caching is now an allowlist
+
+Runtime caching was "cache-first for everything else", correct for the current
+bundle but open-ended. It is now restricted to content-hashed `/_next/static/*`
+and the enumerated app shell. Anything else falls through to the network. For a
+tool whose users may be handling seed phrases, what reaches durable storage
+should be a decision, not a default.
+
+## KM-14 — The specification omitted the parameter bounds *(new finding)*
+
+Not in the original review. Found by writing the reference implementation.
+
+`FORMAT.md` documented the KDF cost parameters but said nothing about bounding
+them. The TypeScript enforced bounds after KM-01; the specification did not, so
+the Python reference — written faithfully from the prose — reproduced the
+original vulnerability. Cross-testing surfaced it immediately: flipping a
+container's `kdf_id` byte makes PBKDF2's iteration bytes be re-read as Argon2id
+parameters, and the reference attempted a ~2.5 GiB allocation.
+
+The TypeScript was already immune. Any *new* implementation built from the
+document would not have been. Bounds are now normative in `FORMAT.md` §3.1,
+with the reading/writing distinction spelled out, and enforced in both
+implementations.
+
+This is the finding that justifies keeping the reference: it is the only thing
+in the project that tests the specification rather than the code.
 
 ---
 
-## Recommended next steps
+## Verification now in CI
 
-Roughly in order of value:
+| Suite | What it covers | Where it runs |
+|---|---|---|
+| `test:crypto` | 45 frozen-core checks, legacy IBTZ decryption | no dependencies installed |
+| `test:keymaker` | 78 KEYM v1 checks, incl. hostile-parameter timing | Node |
+| `test:fuzz` | 2,059 assertions over malformed containers | Node |
+| `test:browser` | 14 tests on the production export | Chromium, Firefox, WebKit |
+| `test:conformance` | 44 cross-implementation checks | Node + Python |
 
-1. **Independent reference implementation.** The KEYM fixtures were generated
-   by the implementation they test, so a specification bug could be frozen into
-   both. A small Rust or Python implementation written only from `FORMAT.md`,
-   cross-tested in both directions across all six KDF/cipher combinations,
-   would turn the fixtures into a real conformance suite.
-2. **Browser-based CI.** The Argon2id/CSP failure was invisible to a green Node
-   suite because Node has no CSP. Playwright against the production export, in
-   Chromium/Firefox/WebKit, online and offline, closes that whole class.
-3. **Parser fuzzing.** `parseKeym()` consumes attacker-controlled binary.
-   Fuzz version, IDs, integer boundaries, flags, and truncation at every byte,
-   asserting no crash, no uncontrolled allocation, no KDF invocation, and
-   deterministic rejection.
-4. **KEYM v2** with streaming/chunked encryption, addressing KM-05 and the
-   whole-file memory cost that makes the 100 MB cap necessary.
+The browser suite was validated against the bug it exists for: stripping
+`'wasm-unsafe-eval'` from the built output fails four tests, two of them
+naming the cause directly.
+
+---
+
+## Remaining work
+
+**KEYM v2.** The one substantial item left, and deliberately not started here —
+a new wire format needs design review before code, not after. It should carry:
+
+- length-prefixed, domain-separated key material, closing KM-05
+- key files hashed to a fixed size before derivation, so a 100 MB key file is
+  not a 100 MB KDF input
+- chunked/streaming encryption, removing the whole-file memory cost that makes
+  the current 100 MB cap necessary
+- the §3.1 bounds as part of the format from the start
+
+KEYM v1 should be frozen as it now stands once v2 exists.
 
 ---
 

@@ -23,6 +23,7 @@ import {
   UserX,
   Dices,
   ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -33,6 +34,7 @@ import {
   encryptData,
   decryptData,
   inspectKeym,
+  isArgon2idAvailable,
   KdfId,
   CipherId,
   DEFAULT_ARGON2ID,
@@ -452,7 +454,14 @@ export function EncryptorTool() {
   // Advanced encryption options (Encrypt tab only — the KEYM container is
   // self-describing, so decryption needs no knobs).
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
-  const [kdfChoice, setKdfChoice] = useState<KdfChoice>("pbkdf2");
+  // Argon2id is the default: the user who never opens Advanced should get the
+  // memory-hard KDF, not the weaker one. It needs WebAssembly, though, so
+  // availability is probed on mount and we fall back visibly rather than
+  // presenting a default that cannot run. Until the probe resolves the choice
+  // is optimistic — the Encrypt button cannot be reached faster than a
+  // microtask, and a failed probe corrects it before any derivation.
+  const [kdfChoice, setKdfChoice] = useState<KdfChoice>("argon2id");
+  const [argon2Available, setArgon2Available] = useState<boolean | null>(null);
   const [argonTimeCost, setArgonTimeCost] = useState(DEFAULT_ARGON2ID.timeCost);
   const [argonMemoryMiB, setArgonMemoryMiB] = useState(DEFAULT_ARGON2ID.memoryKiB / 1024);
   const [argonParallelism, setArgonParallelism] = useState(DEFAULT_ARGON2ID.parallelism);
@@ -500,6 +509,23 @@ export function EncryptorTool() {
   // Derived, not stored — cheap (5 regex tests) and always consistent with
   // `password`, removing a state variable and its sync points.
   const passwordIsStrong = isPasswordStrong(password);
+
+  // Probe Argon2id support once, and demote the default if WebAssembly is
+  // unavailable — a locked-down CSP, an exotic browser, or an embedded
+  // webview. Silently leaving Argon2id selected in that case reproduces
+  // exactly the failure this probe exists to prevent: a button that appears
+  // to work and does nothing.
+  useEffect(() => {
+    let cancelled = false;
+    isArgon2idAvailable().then((available) => {
+      if (cancelled) return;
+      setArgon2Available(available);
+      if (!available) setKdfChoice("pbkdf2");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Clean up clipboard auto-clear timer on unmount
   useEffect(() => {
@@ -1218,20 +1244,39 @@ export function EncryptorTool() {
                         </button>
                         <button
                           type="button"
-                          onClick={() => setKdfChoice("argon2id")}
+                          onClick={() => argon2Available !== false && setKdfChoice("argon2id")}
+                          disabled={argon2Available === false}
                           className={cn(
                             "rounded-lg border p-3 text-left transition-colors",
                             kdfChoice === "argon2id"
                               ? "border-accent/60 bg-accent/10"
-                              : "border-white/10 bg-white/2 hover:border-white/20"
+                              : "border-white/10 bg-white/2 hover:border-white/20",
+                            argon2Available === false && "cursor-not-allowed opacity-40 hover:border-white/10"
                           )}
                         >
-                          <p className="text-[13px] font-semibold">Argon2id <span className="text-accent">· recommended</span></p>
+                          <p className="text-[13px] font-semibold">
+                            Argon2id{" "}
+                            <span className="text-accent">
+                              {argon2Available === false ? "· unavailable" : "· recommended · default"}
+                            </span>
+                          </p>
                           <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
                             Memory-hard — resists GPU/ASIC password cracking.
                           </p>
                         </button>
                       </div>
+
+                      {argon2Available === false && (
+                        <p
+                          role="status"
+                          className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[11px] leading-snug text-yellow-400"
+                        >
+                          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
+                          WebAssembly is unavailable in this browser, so Argon2id cannot run.
+                          Falling back to PBKDF2 at 1,000,000 iterations — still strong, but
+                          not memory-hard. Files you encrypt here stay fully readable everywhere.
+                        </p>
+                      )}
 
                       {kdfChoice === "argon2id" && (
                         <div className="animate-in fade-in-50 space-y-3 rounded-lg border border-white/8 bg-white/2 p-3">

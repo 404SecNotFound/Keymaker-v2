@@ -213,13 +213,20 @@ Report vulnerabilities via the contact in [SECURITY.md](SECURITY.md).
 Requires Node.js 20 or newer.
 
 ```bash
-npm ci                 # reproducible install from the lockfile
-npm run dev            # development server on :9002
-npm run build          # static export to out/, with CSP hash post-processing
+npm ci                    # reproducible install from the lockfile
+npm run dev               # development server on :9002
+npm run build             # static export to out/, with CSP hash post-processing
 npm run typecheck
-npm run test:keymaker  # KEYM v1 suite — round-trips, tamper rejection, fixtures
-npm run test:crypto    # frozen IBTZ core — the legacy decryption contract
+
+npm run test:crypto       # frozen IBTZ core — the legacy decryption contract
+npm run test:keymaker     # KEYM v1 — round-trips, tamper rejection, fixtures
+npm run test:fuzz         # malformed containers against the parser
+npm run test:browser      # the built export, in a real browser (needs build)
+npm run test:conformance  # cross-test vs the independent Python reference
 ```
+
+`test:browser` needs `npx playwright install` once. `test:conformance` needs
+`pip install -r reference/requirements.txt`.
 
 `npm run build` produces a fully static `out/` directory. Serve it from any static
 host, or open it from disk on a machine with no network connection.
@@ -235,6 +242,7 @@ every KDF and cipher combination, and takes a few minutes.
 |---|---|
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
+| [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
 | [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Current Keymaker v2 audit, findings and disposition |
 | [`SECURITY-AUDIT-ITTYBITZ-2026-04.md`](SECURITY-AUDIT-ITTYBITZ-2026-04.md) | Historical IttyBitz audit — legacy core only |

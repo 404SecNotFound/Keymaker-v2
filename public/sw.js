@@ -105,13 +105,37 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Cache-first for everything else (content-hashed assets, icons, manifest)
-  event.respondWith(
-    caches.match(event.request).then((cached) => {
-      if (cached) return cached;
-      return fetch(event.request).then((response) =>
-        cacheResponse(event.request, response)
-      );
-    })
-  );
+  // Cache-first, but only for asset categories we have deliberately decided
+  // belong in the offline bundle.
+  //
+  // The previous rule was "cache-first for everything else", which was correct
+  // for the app as it stands but is a standing invitation: any same-origin
+  // resource added later would start being persisted to disk without anyone
+  // choosing that. For a tool whose users may be handling seed phrases, what
+  // lands in durable storage should be an allowlist, not a default.
+  //
+  // Anything not matched here falls through to the network untouched.
+  if (isCacheableAsset(url.pathname)) {
+    event.respondWith(
+      caches.match(event.request).then((cached) => {
+        if (cached) return cached;
+        return fetch(event.request).then((response) =>
+          cacheResponse(event.request, response)
+        );
+      })
+    );
+  }
 });
+
+/**
+ * Static assets eligible for offline caching.
+ *
+ * /_next/static/* is content-hashed and therefore immutable, so cache-first is
+ * both safe and correct. The rest is the fixed set of icons and metadata the
+ * installed PWA needs to launch offline. Deliberately excluded: anything
+ * dynamic, anything user-supplied, and anything not enumerated here.
+ */
+function isCacheableAsset(pathname) {
+  if (pathname.startsWith('/_next/static/')) return true;
+  return APP_SHELL.includes(pathname);
+}
