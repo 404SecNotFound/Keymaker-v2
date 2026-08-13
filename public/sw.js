@@ -1,6 +1,14 @@
 // Keymaker Service Worker — hand-rolled, zero dependencies
-// Cache version: bump this on every release to invalidate stale caches
-const CACHE_VERSION = 'keymaker-v1.0.0';
+//
+// Cache version. The literal below is a placeholder: the build replaces it
+// with a hash of the emitted bundle (see scripts/apply-build-id.mjs), because
+// a manually bumped constant is only correct if someone remembers, and it had
+// already gone stale across several shipped changes to this very file.
+//
+// It matters beyond cache freshness: the activate handler decides whether a
+// genuine upgrade occurred by looking for a cache under a *different* name. A
+// version string that never changes makes that check unable to fire.
+const CACHE_VERSION = 'keymaker-__BUILD_ID__';
 
 // Where this worker is served from, without a trailing slash. On a root
 // deployment that is "", on a GitHub Pages project site "/Keymaker-v2".

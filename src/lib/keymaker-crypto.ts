@@ -61,9 +61,21 @@ export type KdfParams =
   | { kdf: KdfId.PBKDF2; params: Pbkdf2Params }
   | { kdf: KdfId.ARGON2ID; params: Argon2idParams };
 
+/**
+ * Algorithm selection for encryption. Both fields are **required**.
+ *
+ * They used to be optional, falling back to PBKDF2 + AES-256-GCM. That made
+ * `encryptData(data, password, keyFile)` a valid call that silently produced
+ * the weaker KDF — fine for the UI, which always passes explicit values, but a
+ * trap for a CLI, an extension, or a future refactor. Choosing a KDF is policy
+ * and belongs to the caller; a crypto primitive should not quietly decide it.
+ *
+ * DEFAULT_PBKDF2 and DEFAULT_ARGON2ID remain exported for callers that want
+ * the recommended parameters — they just have to say so.
+ */
 export interface KeymakerOptions {
-  kdf?: KdfParams;
-  cipher?: CipherId;
+  kdf: KdfParams;
+  cipher: CipherId;
 }
 
 export const DEFAULT_PBKDF2: Pbkdf2Params = { iterations: 1_000_000 };
@@ -78,7 +90,12 @@ export type DetectedFormat = "keym-v1" | "ibtz-v1" | "ibtz-v0";
 const SALT_LEN_PBKDF2 = 16;
 const SALT_LEN_ARGON2ID = 32;
 const NONCE_LEN = 12;
-const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
+/**
+ * Largest plaintext we will encrypt. Exported so the UI enforces the *same*
+ * number rather than declaring a parallel copy that can drift.
+ */
+export const MAX_PLAINTEXT_SIZE = 100 * 1024 * 1024; // 100 MB
+const MAX_FILE_SIZE = MAX_PLAINTEXT_SIZE;
 const MAX_PASSWORD_LENGTH = 1024;
 
 /**
@@ -89,7 +106,19 @@ const MAX_PASSWORD_LENGTH = 1024;
  * decryptData() without passing that check. A core crypto API should enforce
  * its own resource limits rather than trusting whichever UI calls it.
  */
-const MAX_CIPHERTEXT_SIZE = MAX_FILE_SIZE + 4096;
+export const MAX_CONTAINER_SIZE = MAX_PLAINTEXT_SIZE + 4096;
+const MAX_CIPHERTEXT_SIZE = MAX_CONTAINER_SIZE;
+
+/**
+ * Longest base64 text we will even decode.
+ *
+ * A container is at most MAX_CONTAINER_SIZE bytes, and base64 expands by 4/3
+ * plus padding. Callers must check the *encoded* length before calling atob(),
+ * because atob() plus the byte-copy allocates roughly 1.75x the string's size
+ * before decryptData() ever sees a buffer to measure. The core size check
+ * protects the KDF; this protects the allocation that precedes it.
+ */
+export const MAX_BASE64_INPUT_CHARS = Math.ceil(MAX_CONTAINER_SIZE / 3) * 4 + 4;
 
 /**
  * Bounds on KDF cost parameters.
@@ -202,6 +231,31 @@ function loadHashWasm(): Promise<typeof import("hash-wasm")> {
  *
  * The result is cached — the answer cannot change within a page lifetime.
  */
+/**
+ * Pull every lazily-imported crypto dependency into the page.
+ *
+ * The README promises the app works air-gapped after first load. That is only
+ * true for code the browser has actually fetched, because the service worker
+ * runtime-caches a chunk when it is *requested* — it does not precache the
+ * whole static tree. A dependency that is only imported when a particular
+ * cipher is first selected would therefore be missing for a user who goes
+ * offline and then reaches for that cipher for the first time.
+ *
+ * Today `@noble/ciphers` happens to also be duplicated into the eagerly loaded
+ * bundle, so ChaCha survives that scenario by accident. That is a bundler
+ * chunking decision, not a guarantee, and it can change silently on any
+ * dependency or toolchain bump. Warming it explicitly turns the accident into
+ * a property, and the offline browser tests assert it for all six KDF/cipher
+ * combinations on first use.
+ *
+ * Fire-and-forget: failures are ignored, since every call site still awaits
+ * its own import and will surface a real error there.
+ */
+export function warmCryptoDependencies(): void {
+  void loadNoble().catch(() => {});
+  void loadHashWasm().catch(() => {});
+}
+
 let argon2AvailabilityPromise: Promise<boolean> | null = null;
 export function isArgon2idAvailable(): Promise<boolean> {
   if (!argon2AvailabilityPromise) {
@@ -380,7 +434,7 @@ export async function encryptData(
   dataBuffer: ArrayBuffer,
   password: string,
   keyFileBuffer: ArrayBuffer | null,
-  options: KeymakerOptions = {}
+  options: KeymakerOptions
 ): Promise<ArrayBuffer> {
   validateCommon(dataBuffer, password, true);
   if (!password) {
@@ -390,8 +444,15 @@ export async function encryptData(
     throw new Error("Web Crypto API not available.");
   }
 
-  const kdf: KdfParams = options.kdf ?? { kdf: KdfId.PBKDF2, params: { ...DEFAULT_PBKDF2 } };
-  const cipher = options.cipher ?? CipherId.AES_256_GCM;
+  // No fallback: the caller states the algorithms, or this throws. See the
+  // note on KeymakerOptions for why an implicit default was a footgun.
+  if (!options || !options.kdf || options.cipher === undefined) {
+    throw new Error(
+      "encryptData requires explicit kdf and cipher options — algorithm selection is the caller's decision."
+    );
+  }
+  const kdf: KdfParams = options.kdf;
+  const cipher = options.cipher;
 
   // Validate caller-supplied options rather than trusting that a UI slider
   // constrained them. Encryption enforces the policy floor as well as the

@@ -1,5 +1,12 @@
 import { test, expect } from "@playwright/test";
-import { encryptText, selectCrypto, useTextMode, STRONG_PASSWORD } from "./helpers";
+import {
+  encryptText,
+  selectCrypto,
+  useTextMode,
+  STRONG_PASSWORD,
+  type Cipher,
+  type Kdf,
+} from "./helpers";
 
 /**
  * Platform guarantees that only exist in a browser running the production
@@ -95,26 +102,67 @@ test("no off-origin request is ever made", async ({ page }) => {
   expect(offOrigin, "the page must not talk to anything").toEqual([]);
 });
 
-test("the app works fully offline after first load", async ({ page, context, browserName }) => {
-  // Service workers are not available in WebKit under Playwright's default
-  // configuration, so offline support cannot be exercised there.
-  test.skip(browserName === "webkit", "service worker offline mode is not testable in WebKit here");
+/**
+ * Offline coverage for every KDF x cipher combination, each on *first use*.
+ *
+ * The important word is first. An earlier version of this test loaded the
+ * page, went offline, and ran Argon2id + AES — which proved only that the one
+ * path it had already exercised still worked. Crypto dependencies are lazily
+ * imported and the service worker runtime-caches a chunk when it is requested,
+ * so a combination the user had never selected could have had its chunk
+ * missing precisely when the network was gone.
+ *
+ * Each case therefore gets a fresh browser context, loads the page exactly
+ * once, goes offline, and only then selects its algorithms. Exercising a
+ * cipher online first would populate the cache and invalidate the test.
+ */
+const OFFLINE_MATRIX: Array<[Kdf, Cipher]> = [
+  ["pbkdf2", "aes"],
+  ["pbkdf2", "chacha"],
+  ["pbkdf2", "chained"],
+  ["argon2id", "aes"],
+  ["argon2id", "chacha"],
+  ["argon2id", "chained"],
+];
 
-  await page.goto("/");
-  // Wait for the service worker to take control.
-  await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, null, {
-    timeout: 30_000,
+for (const [kdf, cipher] of OFFLINE_MATRIX) {
+  test(`offline first use: ${kdf} + ${cipher}`, async ({ browser, browserName }) => {
+    // Service workers are not available in WebKit under Playwright's default
+    // configuration, so offline support cannot be exercised there.
+    test.skip(browserName === "webkit", "service worker offline mode is not testable in WebKit here");
+
+    // A fresh context guarantees an empty HTTP cache and no service worker,
+    // so nothing from a previous case can satisfy this one.
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const failedRequests: string[] = [];
+    page.on("requestfailed", (r) => failedRequests.push(r.url().split("/").pop() ?? r.url()));
+
+    try {
+      await page.goto("/");
+      await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, null, {
+        timeout: 30_000,
+      });
+      // Give the warm-up a moment to pull the lazy crypto chunks into cache.
+      await page.waitForTimeout(2_000);
+
+      await context.setOffline(true);
+      await page.reload();
+      await expect(page.getByRole("tab", { name: "Encrypt" })).toBeVisible();
+
+      // First time this combination has been touched, and there is no network.
+      await useTextMode(page);
+      await selectCrypto(page, kdf, cipher);
+      const container = await encryptText(page, `offline ${kdf} ${cipher}`, STRONG_PASSWORD);
+      expect(container.startsWith("KEYM1:")).toBe(true);
+
+      expect(
+        failedRequests,
+        `a request failed while offline — a dependency was not cached: ${failedRequests.join(", ")}`
+      ).toEqual([]);
+    } finally {
+      await context.setOffline(false);
+      await context.close();
+    }
   });
-
-  await context.setOffline(true);
-  await page.reload();
-
-  // The shell must still render and crypto must still work with no network.
-  await expect(page.getByRole("tab", { name: "Encrypt" })).toBeVisible();
-  await useTextMode(page);
-  await selectCrypto(page, "argon2id", "aes");
-  const container = await encryptText(page, "offline secret", STRONG_PASSWORD);
-  expect(container.startsWith("KEYM1:")).toBe(true);
-
-  await context.setOffline(false);
-});
+}

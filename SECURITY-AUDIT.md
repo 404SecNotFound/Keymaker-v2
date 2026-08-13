@@ -26,6 +26,46 @@ fixed.
 | KM-07 | Low | `connect-src 'self'` did not enforce the zero-egress claim | **Fixed** |
 | KM-08 | Low | Service worker caching scope broader than necessary | **Fixed** |
 | KM-14 | Medium | *(new)* Specification omitted the KDF parameter bounds | **Fixed** |
+
+### Second follow-up review (baseline `cb0a0c8`)
+
+| ID | Severity | Finding | Status |
+|---|---|---|---|
+| KM-02b | Medium | Password gate still certified common dictionary words as "strong" | **Fixed** |
+| KM-15 | Medium | Offline guarantee untested for first-use of most cipher paths | **Fixed** |
+| KM-16 | Low | Pasted base64 allocated before any size check | **Fixed** |
+| KM-17 | Low | One size limit for both directions rejected a max-size container | **Fixed** |
+| KM-18 | Low | QR capacity measured in UTF-16 units, not UTF-8 bytes | **Fixed** |
+| KM-19 | Low | Secret inputs inherited spellcheck/autocorrect/autofill | **Fixed** |
+| KM-20 | Low | Service-worker cache name hand-maintained and stale | **Fixed** |
+| KM-21 | Low | Browser CI executed an unpinned downloaded package | **Fixed** |
+| KM-22 | Low | Reference implementation dependencies floated | **Fixed** |
+| KM-23 | Low | `encryptData` silently defaulted to PBKDF2 | **Fixed** |
+| KM-24 | Low | Dice tool collected roll outcomes it has no use for | **Fixed** |
+
+**KM-02b — the same mistake, twice removed.** The first version accepted
+`a a a a a a`. Tightened to distinct, substantial words, it still accepted
+`password qwerty letmein monkey dragon football`. No morphology check fixes
+this: entropy is a property of *how* a password was chosen, and a string
+carries no evidence of its own provenance. The gate no longer claims to
+identify strong passwords — it enforces a floor and says so. The only entropy
+figure stated anywhere is for passwords Keymaker generated itself, where it
+controls the sampling and the arithmetic is exact.
+
+**KM-15 — the finding did not reproduce, but the concern was right.** First-use
+ChaCha *did* work offline, because Turbopack duplicates `@noble/ciphers` into
+the eagerly-loaded bundle. That is a bundler chunking decision, not a
+guarantee, and it can change on any toolchain bump. Dependencies are now warmed
+explicitly at mount, and the offline suite covers all six KDF/cipher
+combinations, each in a fresh context that goes offline *before* selecting its
+algorithms. The harness was validated by disabling static-asset caching and
+confirming the tests fail.
+
+**KM-20** replaced a hand-bumped `keymaker-v1.0.0` — which had gone stale across
+several shipped changes to the service worker itself — with a hash of the build
+output. It gates more than freshness: the activate handler detects an upgrade
+by finding a cache under a different name, so a constant name disabled that
+check entirely.
 | KM-09 | Low | Prior audit was stale and could be misread as covering KEYM | **Fixed** |
 | KM-10 | Info | Encryption did not validate caller-supplied KDF parameters | **Fixed** |
 | KM-11 | Info | CSP postprocessor skipped HTML with no CSP meta tag | **Fixed** |

@@ -13,7 +13,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Dices, Info, AlertTriangle, CheckCircle2, ShieldAlert } from "lucide-react";
+import { Dices, Info, AlertTriangle, CheckCircle2, ShieldAlert, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -34,6 +34,8 @@ export function DiceEntropyTool() {
   const [targetBits, setTargetBits] = useState<number>(TARGET_BITS);
   const [rollLog, setRollLog] = useState("");
   const [manualRolls, setManualRolls] = useState("");
+  // The roll-log validator is opt-in; see the note by its markup.
+  const [showValidator, setShowValidator] = useState(false);
 
   const calc = useMemo(() => {
     const validSides =
@@ -183,23 +185,22 @@ export function DiceEntropyTool() {
         </div>
       </div>
 
-      <div className="space-y-1.5">
-        <Label htmlFor="roll-log" className="text-[13px] font-medium text-muted-foreground">
-          Roll log <span className="font-normal">(type your rolls — entries are counted automatically)</span>
-        </Label>
-        <Textarea
-          id="roll-log"
-          value={rollLog}
-          onChange={(e) => setRollLog(e.target.value)}
-          placeholder={`e.g. 4 6 2 3 1 … or run together: 46231`}
-          rows={3}
-          className="rounded-xl border-white/10 bg-white/4 focus-visible:border-accent/50 focus-visible:ring-0"
-        />
-      </div>
+      {/*
+        Count first, outcomes never — unless explicitly asked for.
 
+        This tool computes how many rolls you need. It does not generate seeds,
+        so it has no use for the values you rolled. Asking for them anyway put
+        seed-equivalent data into React state, the DOM, the browser's process
+        memory and the mobile keyboard's learning path, in a tool whose users
+        are plausibly rolling real wallet entropy. The cleanest secret is the
+        one the application never receives.
+
+        The validator remains available for anyone who wants their sequence
+        checked for impossible faces, behind a deliberate opt-in and a warning.
+      */}
       <div className="space-y-1.5">
         <Label htmlFor="manual-rolls" className="text-[13px] font-medium text-muted-foreground">
-          …or enter rolls so far manually
+          Rolls completed
         </Label>
         <Input
           id="manual-rolls"
@@ -211,6 +212,58 @@ export function DiceEntropyTool() {
           disabled={rollLog.trim().length > 0}
           className="h-11 rounded-xl border-white/10 bg-white/4 text-[15px] focus-visible:border-accent/50 focus-visible:ring-0 disabled:opacity-40"
         />
+        <p className="text-[11px] text-muted-foreground">
+          Just the count. Keymaker does not need — and deliberately does not ask for —
+          the values you rolled.
+        </p>
+      </div>
+
+      <div className="space-y-1.5">
+        <button
+          type="button"
+          onClick={() => setShowValidator((v) => !v)}
+          aria-expanded={showValidator}
+          className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/2 px-3 py-2.5 text-left text-[13px] transition-colors hover:border-white/20"
+        >
+          <span className="font-medium">
+            Check a roll log{" "}
+            <span className="font-normal text-muted-foreground">— optional, validates each face</span>
+          </span>
+          <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", showValidator && "rotate-180")} />
+        </button>
+
+        {showValidator && (
+          <div className="animate-in fade-in-50 space-y-2 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-3">
+            <p className="text-[11px] leading-snug text-yellow-400">
+              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
+              The sequence you paste here <strong>is</strong> your entropy. It stays on this
+              device — nothing is sent anywhere — but it will exist in browser memory and
+              may be retained by your keyboard or clipboard. Prefer the count above unless
+              you specifically want the faces validated.
+            </p>
+            <Textarea
+              id="roll-log"
+              value={rollLog}
+              onChange={(e) => setRollLog(e.target.value)}
+              placeholder={`e.g. 4 6 2 3 1 … or run together: 46231`}
+              rows={3}
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="none"
+              autoComplete="off"
+              className="rounded-xl border-white/10 bg-white/4 focus-visible:border-accent/50 focus-visible:ring-0"
+            />
+            {rollLog.trim().length > 0 && (
+              <button
+                type="button"
+                onClick={() => setRollLog("")}
+                className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+              >
+                Clear the log from memory
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Results */}

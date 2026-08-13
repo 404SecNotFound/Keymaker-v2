@@ -38,8 +38,12 @@ export default defineConfig({
   ],
 
   webServer: {
-    // `npx serve` with no rewriting — closest thing to a plain static host.
-    command: "npx --yes serve -s out -l 4321",
+    // A checked-in server from Node's standard library, not `npx --yes serve`.
+    // The previous command resolved and executed an unpinned third-party
+    // package at test time, inside the very pipeline that verifies the build's
+    // security properties. Nothing shipped to users, but a regression suite
+    // that fetches unpinned code at runtime is not reproducible.
+    command: "node scripts/static-server.mjs out 4321",
     url: "http://127.0.0.1:4321",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

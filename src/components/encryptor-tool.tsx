@@ -35,6 +35,10 @@ import {
   decryptData,
   inspectKeym,
   isArgon2idAvailable,
+  warmCryptoDependencies,
+  MAX_PLAINTEXT_SIZE,
+  MAX_CONTAINER_SIZE,
+  MAX_BASE64_INPUT_CHARS,
   KdfId,
   CipherId,
   DEFAULT_ARGON2ID,
@@ -97,30 +101,48 @@ function base64ToUint8Array(base64: string): Uint8Array {
 // renders instead of allocating a fresh style object each time.
 const OFFSCREEN_STYLE = { position: 'absolute', left: '-9999px', top: '-9999px' } as const;
 
-// Password strength gate.
+// Minimum password policy — deliberately NOT called a strength measurement.
 //
-// An earlier version accepted any input of 6+ whitespace-separated tokens on
-// the reasoning that "6 diceware words is about 77 bits". That inference only
-// holds when the words were drawn independently and uniformly from a word
-// list. For text a human typed, it is false — and it let "a a a a a a" and
-// "password password password password" through the gate.
+// This check has been wrong twice, in the same way each time. First it accepted
+// any six whitespace-separated tokens ("a a a a a a"). Tightened to distinct,
+// substantial words, it still accepted "password qwerty letmein monkey dragon
+// football" — six distinct dictionary words, every one of them in the first
+// page of any cracking wordlist.
 //
-// Word count is not entropy. What a passphrase rule can cheaply check is that
-// the words are *distinct* and *substantial*, which does not prove entropy but
-// does eliminate the degenerate repetition cases. Two paths count as strong:
+// The lesson is that no amount of morphology fixes this. Entropy is a property
+// of *how a password was chosen*, and a string carries no evidence of its own
+// provenance. A phrase drawn uniformly from a word list and a phrase a person
+// picked because it was memorable are indistinguishable once typed.
 //
-//  1. Character-class rule: >= 24 chars with upper, lower, number, and symbol.
+// So this function no longer claims to identify strong passwords. It enforces
+// a floor and says so. The only entropy figure Keymaker states is for passwords
+// it generated itself, where it controls the sampling and the arithmetic is
+// real — see PASSWORD_ENTROPY_BITS.
+//
+// Two ways to clear the floor:
+//  1. Character-class rule: >= 24 chars with upper, lower, number and symbol.
 //     The symbol class is kept in sync with the generatePassword charset, so a
-//     generated password can never be rejected by this check.
-//  2. Passphrase rule: enough *distinct* words of >= 3 characters, plus a total
-//     length floor. Repeats are counted once, so padding a phrase by repeating
-//     a word does not buy past the gate.
+//     generated password can never be rejected here.
+//  2. Passphrase rule: enough distinct words of >= 3 characters, plus a length
+//     floor. Repeats count once, so padding by repetition buys nothing.
 //
-// This gate is advisory and lives only in the UI. encryptData() does not
-// consult it — cryptographic behaviour must not depend on a heuristic.
+// Advisory and UI-only. encryptData() has never consulted it, and must not —
+// cryptographic behaviour cannot depend on a heuristic.
 const PASSPHRASE_MIN_WORD_LEN = 3;
 
-function isPasswordStrong(pwd: string): boolean {
+// The generator's alphabet and length. Kept here rather than inline so the
+// entropy figure below is derived from the same values the generator uses,
+// and cannot drift from them.
+const PASSWORD_CHARSET =
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+~`|}{[]:;?><,./-=";
+const PASSWORD_LENGTH = 32;
+
+// Exact, because the generator samples uniformly from PASSWORD_CHARSET with
+// rejection sampling. This is the one entropy number Keymaker is entitled to
+// state: it knows the alphabet, the length, and that the draw was unbiased.
+const PASSWORD_ENTROPY_BITS = Math.floor(PASSWORD_LENGTH * Math.log2(PASSWORD_CHARSET.length));
+
+function meetsPasswordPolicy(pwd: string): boolean {
   const trimmed = pwd.trim();
 
   const distinctSubstantialWords = new Set(
@@ -390,7 +412,21 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024;
 // pins level="L" explicitly — raising the ECC level without lowering this
 // limit would make qrcode.react throw for inputs above the new capacity
 // (level M tops out at 2,331 bytes).
-const QR_MAX_CHARS = 2_953;
+/**
+ * Byte-mode capacity of a version-40 QR at error-correction level L.
+ *
+ * Bytes, not characters. Ciphertext is base64 so the two coincide there, but
+ * decrypted plaintext is arbitrary Unicode: `"日本語".length` is 3 while its
+ * UTF-8 encoding is 9 bytes. Sizing by string length therefore over-promised
+ * for every non-ASCII script — Arabic, Urdu, CJK, emoji — and would hand the
+ * encoder more data than the symbol can hold.
+ */
+const QR_MAX_BYTES = 2_953;
+
+/** UTF-8 byte length, which is what the QR encoder actually consumes. */
+function qrByteLength(text: string): number {
+  return new TextEncoder().encode(text).byteLength;
+}
 
 // Self-identifying prefix for encrypted TEXT blobs (files carry the binary
 // "KEYM" magic instead). Decryption strips it if present and still accepts
@@ -449,6 +485,9 @@ export function EncryptorTool() {
   const [textSecret, setTextSecret] = useState('');
   const [outputText, setOutputText] = useState('');
   const [password, setPassword] = useState('');
+  // True only while `password` is exactly what generatePassword() produced.
+  // Gates the entropy figure, which is meaningless for a typed password.
+  const [passwordWasGenerated, setPasswordWasGenerated] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showTextSecret, setShowTextSecret] = useState(false);
   // Advanced encryption options (Encrypt tab only — the KEYM container is
@@ -508,7 +547,7 @@ export function EncryptorTool() {
 
   // Derived, not stored — cheap (5 regex tests) and always consistent with
   // `password`, removing a state variable and its sync points.
-  const passwordIsStrong = isPasswordStrong(password);
+  const passwordMeetsPolicy = meetsPasswordPolicy(password);
 
   // Probe Argon2id support once, and demote the default if WebAssembly is
   // unavailable — a locked-down CSP, an exotic browser, or an embedded
@@ -522,6 +561,13 @@ export function EncryptorTool() {
       setArgon2Available(available);
       if (!available) setKdfChoice("pbkdf2");
     });
+    // Fetch every lazily-imported crypto dependency now, while the network is
+    // presumably still there, so the service worker caches them. Without this
+    // a user who loads the page, goes offline, and then picks a cipher they
+    // have not used before would find the chunk missing — which would make the
+    // README's "works air-gapped after first load" false in exactly the case
+    // it matters.
+    warmCryptoDependencies();
     return () => {
       cancelled = true;
     };
@@ -587,6 +633,10 @@ export function EncryptorTool() {
 
   const handlePasswordChange = useCallback((pwd: string) => {
     setPassword(pwd);
+    // Any edit invalidates the entropy claim — it only holds for the exact
+    // string the CSPRNG produced. generatePassword() re-sets the flag after
+    // calling this.
+    setPasswordWasGenerated(false);
   }, []);
 
   const resetState = useCallback(() => {
@@ -629,9 +679,18 @@ export function EncryptorTool() {
       setDecryptedQrStatus({ kind: "idle" });
   }, []);
 
+  /**
+   * @param maxBytes Ceiling for this particular picker. Encrypting caps the
+   *   *plaintext*; decrypting has to allow the container, which is larger by
+   *   the header, salt, nonces and tags. Sharing one limit meant a file of
+   *   exactly the maximum size could be encrypted and then rejected on the way
+   *   back in — the picker refused the container before the crypto core, which
+   *   does allow the overhead, ever saw it.
+   */
   const handleFileChange = useCallback((
     e: ChangeEvent<HTMLInputElement> | DragEvent<HTMLDivElement>,
-    setter: (file: File | null) => void
+    setter: (file: File | null) => void,
+    maxBytes: number = MAX_PLAINTEXT_SIZE
   ) => {
     let selectedFile: File | null = null;
     if ('dataTransfer' in e) { // DragEvent
@@ -660,10 +719,10 @@ export function EncryptorTool() {
         return;
     }
     
-    if (selectedFile.size > MAX_FILE_SIZE) {
+    if (selectedFile.size > maxBytes) {
       toast({
         title: "File Too Large",
-        description: `Please select a file smaller than ${MAX_FILE_SIZE / 1024 / 1024}MB.`,
+        description: `Please select a file smaller than ${Math.floor(maxBytes / 1024 / 1024)}MB.`,
         variant: "destructive",
       });
       setter(null);
@@ -675,11 +734,13 @@ export function EncryptorTool() {
   
 
   const generatePassword = useCallback(() => {
-    const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()_+~`|}{[]:;?><,./-=";
-    const passwordLength = 32;
+    const charset = PASSWORD_CHARSET;
+    const passwordLength = PASSWORD_LENGTH;
     const charsetLength = charset.length;
     // Rejection sampling: discard values that would cause modulo bias.
     // limit is the largest multiple of charsetLength that fits in a Uint32.
+    // This is what makes the entropy figure below exact rather than
+    // approximate — every character is uniform over the charset.
     const limit = Math.floor(0x100000000 / charsetLength) * charsetLength;
     let newPassword = "";
     while (newPassword.length < passwordLength) {
@@ -692,7 +753,14 @@ export function EncryptorTool() {
       }
     }
     handlePasswordChange(newPassword);
-    toast({ title: "Password Generated", description: "A new secure password has been generated." });
+    // Record that *this* password came from the CSPRNG. Any subsequent typing
+    // clears the flag (see handlePasswordChange), because the entropy claim
+    // only holds for the exact string we generated.
+    setPasswordWasGenerated(true);
+    toast({
+      title: "Password generated",
+      description: `${passwordLength} random characters — ${PASSWORD_ENTROPY_BITS} bits of entropy.`,
+    });
   }, [toast, handlePasswordChange]);
 
 
@@ -811,7 +879,7 @@ export function EncryptorTool() {
         return;
     }
     
-    if (mode === "encrypt" && !isPasswordStrong(mutablePassword)) {
+    if (mode === "encrypt" && !meetsPasswordPolicy(mutablePassword)) {
         toast({
           title: "Weak Password",
           description: "Use at least 24 characters with mixed character classes, or a 4+ word passphrase (diceware-style).",
@@ -870,6 +938,15 @@ export function EncryptorTool() {
             let blobText = textSecret.trim();
             if (blobText.toUpperCase().startsWith(KEYM_TEXT_PREFIX)) {
               blobText = blobText.slice(KEYM_TEXT_PREFIX.length);
+            }
+            // Bound the *encoded* length before decoding. atob() plus the
+            // byte-copy in base64ToUint8Array allocates roughly 1.75x the
+            // string before decryptData() has a buffer it can measure, so the
+            // core size check cannot protect this step — only preceding it can.
+            if (blobText.length > MAX_BASE64_INPUT_CHARS) {
+              throw new Error(
+                `Encrypted text is too large. Maximum is ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)}MB of original data.`
+              );
             }
             const bytes = base64ToUint8Array(blobText);
             inputBuffer = bytes.buffer as ArrayBuffer;
@@ -980,7 +1057,7 @@ export function EncryptorTool() {
 
   const getPasswordStrengthColor = useCallback(() => {
     if (!password) return "border-input";
-    if (isPasswordStrong(password)) return "border-success";
+    if (meetsPasswordPolicy(password)) return "border-success";
     return "border-destructive";
   }, [password]);
 
@@ -990,7 +1067,7 @@ export function EncryptorTool() {
     const hasPassword = !!password;
     if (!hasInput || !hasPassword) return true;
     
-    if (mode === 'encrypt' && !passwordIsStrong) {
+    if (mode === 'encrypt' && !passwordMeetsPolicy) {
         return true;
     }
     
@@ -1082,12 +1159,20 @@ export function EncryptorTool() {
         {inputType === 'file' ? (
           <FileSelector
             id={`${currentMode}-file`}
-            onFileChange={(e) => handleFileChange(e, setFile)}
+            onFileChange={(e) =>
+              handleFileChange(
+                e,
+                setFile,
+                // Decrypting accepts the container, which is larger than the
+                // plaintext it holds by header + salt + nonces + tags.
+                currentMode === 'decrypt' ? MAX_CONTAINER_SIZE : MAX_PLAINTEXT_SIZE
+              )
+            }
             onClear={() => setFile(null)}
             selectedFile={file}
             icon={<FileText size={22} />}
             label="Drop a file here"
-            description={`or click to browse · 100 MB max`}
+            description={`or click to browse · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`}
           />
         ) : (
           <div className="space-y-2">
@@ -1101,6 +1186,18 @@ export function EncryptorTool() {
                 onChange={(e) => setTextSecret(e.target.value)}
                 placeholder={`Enter text to ${currentMode}...`}
                 rows={5}
+                // This field routinely holds BIP-39 seed phrases. Spellcheck can
+                // ship its contents to a remote dictionary service, autocorrect
+                // silently rewrites valid wordlist entries into near-miss words,
+                // and autofill/autocapitalise let a mobile keyboard learn the
+                // phrase. None of that is behaviour a secret input should
+                // inherit by default.
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="none"
+                autoComplete="off"
+                data-1p-ignore
+                data-lpignore="true"
                 className={cn(
                   "rounded-xl border-white/10 bg-white/4 pr-12 transition-[filter] duration-150 focus-visible:border-accent/50 focus-visible:ring-0",
                   currentMode === 'encrypt' && !showTextSecret && textSecret && "blur-xs",
@@ -1139,7 +1236,12 @@ export function EncryptorTool() {
                   </button>
                 </TooltipTrigger>
                 <TooltipContent>
-                  <p>Min 24 chars with upper/lowercase, number &amp; symbol — or a 4+ word passphrase (diceware-style passphrases count as strong).</p>
+                  <p>
+                    Minimum policy: 24+ characters with upper/lowercase, a number and a
+                    symbol — or a passphrase of several distinct words. This is a floor,
+                    not a strength measurement: Keymaker cannot tell how you chose a
+                    password. For a figure it can actually stand behind, use Generate.
+                  </p>
                 </TooltipContent>
               </Tooltip>
             </div>
@@ -1150,6 +1252,13 @@ export function EncryptorTool() {
                 type={showPassword ? "text" : "password"}
                 onChange={(e) => handlePasswordChange(e.target.value)}
                 placeholder={currentMode === 'encrypt' ? "Enter a strong password" : "Enter decryption password"}
+                // A password field reveals its contents whenever "Show" is
+                // pressed, at which point spellcheck and autocorrect apply to
+                // it like any other text. Off for the same reasons as above.
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="none"
+                autoComplete={currentMode === 'encrypt' ? "new-password" : "current-password"}
                 className={cn(
                   "h-11 rounded-xl border border-white/10 bg-white/4 pr-[74px] text-[15px] transition-colors focus-visible:border-accent/50 focus-visible:ring-0",
                   getPasswordStrengthColor()
@@ -1193,6 +1302,36 @@ export function EncryptorTool() {
                 </Button>
               )}
             </div>
+
+            {/*
+              Two different statements, deliberately worded differently.
+
+              A generated password gets a number, because the sampling is ours
+              and the arithmetic is exact. A typed one gets "policy met" and an
+              explicit disclaimer — Keymaker has no way to know whether a
+              passphrase was drawn from a word list or picked because it was
+              memorable, and the two look identical once typed.
+            */}
+            {currentMode === 'encrypt' && password && (
+              passwordWasGenerated ? (
+                <p className="text-[11px] leading-snug text-success">
+                  Generated · {PASSWORD_LENGTH} random characters from a{' '}
+                  {PASSWORD_CHARSET.length}-character set ≈{' '}
+                  <strong>{PASSWORD_ENTROPY_BITS} bits</strong> of entropy.
+                </p>
+              ) : passwordMeetsPolicy ? (
+                <p className="text-[11px] leading-snug text-muted-foreground">
+                  Minimum policy met. This is a floor, not a strength rating — Keymaker
+                  cannot tell how you chose this password. Use <strong>Generate</strong> for
+                  a figure it can stand behind.
+                </p>
+              ) : (
+                <p className="text-[11px] leading-snug text-destructive">
+                  Below the minimum policy: 24+ characters with mixed classes, or a
+                  passphrase of several distinct words.
+                </p>
+              )
+            )}
           </div>
 
           {currentMode === 'decrypt' && keyFileControls}
@@ -1442,7 +1581,7 @@ export function EncryptorTool() {
                       </DialogDescription>
                     </DialogHeader>
                     <div className="flex flex-col items-center gap-4 py-4">
-                      {outputText.length <= QR_MAX_CHARS ? (
+                      {qrByteLength(outputText) <= QR_MAX_BYTES ? (
                         <>
                           <div className="rounded-lg bg-white p-4">
                             <QRCodeCanvas value={outputText} size={256} level="L" marginSize={0} />
@@ -1458,7 +1597,7 @@ export function EncryptorTool() {
                       ) : (
                         <div className="rounded-md bg-yellow-900/20 p-3 text-center text-sm text-yellow-400">
                           <p className="font-medium">QR code unavailable</p>
-                          <p className="mt-1">Output is {outputText.length.toLocaleString()} characters, which exceeds the QR code capacity of {QR_MAX_CHARS.toLocaleString()} characters. Use the copy button instead.</p>
+                          <p className="mt-1">Output is {qrByteLength(outputText).toLocaleString()} bytes, which exceeds the QR code capacity of {QR_MAX_BYTES.toLocaleString()} bytes. Use the copy button instead.</p>
                         </div>
                       )}
                     </div>
@@ -1510,7 +1649,7 @@ export function EncryptorTool() {
                           warning="Anyone who scans this QR can recover your seed. Show only on a trusted device and screen."
                           caption={`Standard SeedQR · ${decryptedQrStatus.words.length} words · ${decryptedQrStatus.words.length * 4} digits`}
                         />
-                      ) : outputText.length <= QR_MAX_CHARS ? (
+                      ) : qrByteLength(outputText) <= QR_MAX_BYTES ? (
                         <RevealableQr
                           getValue={() => outputText}
                           revealed={isDecryptedQrRevealed}
@@ -1523,8 +1662,8 @@ export function EncryptorTool() {
                         <div className="rounded-md bg-yellow-900/20 p-3 text-center text-sm text-yellow-400">
                           <p className="font-medium">QR code unavailable</p>
                           <p className="mt-1">
-                            Decrypted text is {outputText.length.toLocaleString()} characters,
-                            which exceeds the QR code capacity of {QR_MAX_CHARS.toLocaleString()}{' '}
+                            Decrypted text is {qrByteLength(outputText).toLocaleString()} bytes,
+                            which exceeds the QR code capacity of {QR_MAX_BYTES.toLocaleString()}{' '}
                             characters.
                           </p>
                         </div>
