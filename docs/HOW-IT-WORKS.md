@@ -37,7 +37,7 @@ flowchart TB
     end
 
     net(["Any network"])
-    tab -.->|"blocked by connect-src self"| net
+    tab -.->|"blocked by connect-src none"| net
 
     style net stroke-dasharray: 5 5
 ```
@@ -48,7 +48,7 @@ This is enforced structurally rather than by policy:
 |---|---|
 | `output: 'export'` | No server runtime exists. The build is static files. |
 | `default-src 'none'` | Nothing loads unless explicitly allowed. |
-| `connect-src 'self'` | `fetch`, XHR, and WebSocket to any other origin are blocked. |
+| `connect-src 'none'` | `fetch`, XHR, EventSource and WebSocket are blocked outright — including to our own origin. |
 | No third-party assets | No fonts, analytics, or CDN scripts to phone home. |
 | Per-file script hashes | Inline scripts are pinned by SHA-256; injected ones will not run. |
 

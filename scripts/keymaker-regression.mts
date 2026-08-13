@@ -61,9 +61,14 @@ function hexToArrayBuffer(hex: string): ArrayBuffer {
   return out.buffer as ArrayBuffer;
 }
 
-// Faster-than-default KDF params for the live round-trips (params are stored
-// in the header, so any value is a valid test of the wire format).
-const PBKDF2_FAST: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 50_000 } };
+// Cheaper-than-default KDF params for the live round-trips (params live in the
+// header, so any accepted value exercises the wire format just as well).
+//
+// PBKDF2 sits at the encryption-time floor rather than below it: encryptData()
+// now refuses to *write* a container weaker than the OWASP minimum, so the
+// suite has to respect the same policy it ships. Decryption stays deliberately
+// permissive, which is why the 100k-iteration fixtures below still open.
+const PBKDF2_FAST: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 600_000 } };
 const ARGON_FAST: KdfParams = {
   kdf: KdfId.ARGON2ID,
   params: { timeCost: 2, memoryKiB: 16384, parallelism: 2 },
@@ -198,6 +203,104 @@ async function main() {
     }
   }
   check(aadFails === 0, `all ${71 - 4} header byte flips rejected (${aadFails} leaks)`);
+
+  // ---- KDF cost-parameter bounds (KM-01) ----
+  //
+  // A KEYM header is unauthenticated until the AEAD tag is verified, and the
+  // tag cannot be verified until the key has been derived using the very
+  // parameters the header supplies. AAD stops a tampered header from yielding
+  // valid plaintext; it cannot stop those parameters from being executed on
+  // the way to discovering the tamper. So the parser must bound them itself.
+  //
+  // Each case below builds a syntactically valid header requesting an absurd
+  // cost and asserts we reject it *without* invoking the KDF. The wall-clock
+  // assertion is the real test: an unbounded implementation would grind here
+  // rather than return.
+  console.log("\nKDF parameter bounds (hostile headers must be refused, not executed):");
+
+  const hostileHeader = (opts: {
+    kdfId: number;
+    params: number[];
+    saltLen: number;
+  }): ArrayBuffer => {
+    const { kdfId, params, saltLen } = opts;
+    const total = 7 + params.length + 1 + saltLen + 12 + 16 + 8;
+    const h = new Uint8Array(total);
+    h.set([0x4b, 0x45, 0x59, 0x4d], 0); // "KEYM"
+    h[4] = 1; // version
+    h[5] = kdfId;
+    h[6] = 0; // AES-256-GCM
+    h.set(params, 7);
+    // flags, salt, nonce and ciphertext are left as zeroes: parsing must fail
+    // on the cost parameters before any of it is reached.
+    return h.buffer as ArrayBuffer;
+  };
+
+  const u32 = (n: number) => [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff];
+  const u16 = (n: number) => [(n >>> 8) & 0xff, n & 0xff];
+
+  const hostile: Array<[string, ArrayBuffer]> = [
+    [
+      "PBKDF2 iterations 0xFFFFFFFF",
+      hostileHeader({ kdfId: 0, params: u32(0xffffffff), saltLen: 16 }),
+    ],
+    ["PBKDF2 iterations 0", hostileHeader({ kdfId: 0, params: u32(0), saltLen: 16 })],
+    [
+      "Argon2id memory 0xFFFFFFFF KiB",
+      hostileHeader({ kdfId: 1, params: [...u16(3), ...u32(0xffffffff), 4], saltLen: 32 }),
+    ],
+    [
+      "Argon2id timeCost 65535",
+      hostileHeader({ kdfId: 1, params: [...u16(0xffff), ...u32(65536), 4], saltLen: 32 }),
+    ],
+    [
+      "Argon2id parallelism 255",
+      hostileHeader({ kdfId: 1, params: [...u16(3), ...u32(65536), 0xff], saltLen: 32 }),
+    ],
+  ];
+
+  for (const [label, buf] of hostile) {
+    const started = process.hrtime.bigint();
+    let rejected = false;
+    try {
+      await decryptData(buf, PASSWORD, null);
+    } catch {
+      rejected = true;
+    }
+    const elapsedMs = Number(process.hrtime.bigint() - started) / 1e6;
+    // Generous ceiling: a real derivation at these settings takes minutes to
+    // forever. Anything under a second proves the KDF was never entered.
+    check(rejected && elapsedMs < 1000, `${label} refused in ${elapsedMs.toFixed(1)}ms`);
+  }
+
+  // The encryption path validates caller-supplied options too, so a non-UI
+  // caller cannot write a container below the policy floor.
+  await rejects("encrypt refused below the PBKDF2 floor", () =>
+    encryptData(enc.encode("x").buffer as ArrayBuffer, PASSWORD, null, {
+      kdf: { kdf: KdfId.PBKDF2, params: { iterations: 1000 } },
+      cipher: CipherId.AES_256_GCM,
+    })
+  );
+  await rejects("encrypt refused above the Argon2id memory ceiling", () =>
+    encryptData(enc.encode("x").buffer as ArrayBuffer, PASSWORD, null, {
+      kdf: { kdf: KdfId.ARGON2ID, params: { timeCost: 3, memoryKiB: 4_294_967_295, parallelism: 4 } },
+      cipher: CipherId.AES_256_GCM,
+    })
+  );
+
+  // Legacy-friendly: decryption still accepts historically weak-but-sane
+  // parameters, since refusing them would strand real files.
+  const lowIter = await encryptData(
+    enc.encode(PLAINTEXT).buffer as ArrayBuffer,
+    PASSWORD,
+    null,
+    { kdf: { kdf: KdfId.PBKDF2, params: { iterations: 600_000 } }, cipher: CipherId.AES_256_GCM }
+  );
+  const lowIterOut = await decryptData(lowIter.slice(0), PASSWORD, null);
+  check(
+    dec.decode(lowIterOut.data) === PLAINTEXT,
+    "decrypt still opens containers at the policy floor"
+  );
 
   // Missing key file must fail for a file encrypted with one.
   const ctKf = await encryptData(

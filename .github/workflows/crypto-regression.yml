@@ -24,11 +24,14 @@ jobs:
         with:
           persist-credentials: false
 
-      # Node 22.6+ is required: the suite is TypeScript run directly via
-      # native type stripping, which avoids adding a transpiler dependency.
+      # Node 22 across every workflow — build, test and deploy. The suite is
+      # TypeScript executed directly via native type stripping (on by default
+      # since 22.18), which avoids adding a transpiler dependency. Keeping one
+      # runtime everywhere removes a class of "green in CI, different on
+      # deploy" divergence from a pipeline that ships cryptographic software.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 24
+          node-version: 22
 
       # No `npm ci` — the suite imports src/lib/crypto.ts directly and that
       # module has zero dependencies, so nothing needs installing. This also

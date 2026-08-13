@@ -1,142 +1,191 @@
-# IttyBitz Security Audit
+# Keymaker Security Audit
 
-**Date:** April 23, 2026
-**Scope:** Full codebase review of IttyBitz v2.2.0 (client-side encryption tool)
-**Files reviewed:** `src/lib/crypto.ts`, `src/components/encryptor-tool.tsx`, `src/app/layout.tsx`, `src/components/ui/*`, `next.config.js`, `package.json`, `public/sw.js`, `public/manifest.json`, `README.md`
+**Scope:** Keymaker v2 — the KEYM v1 container, `src/lib/keymaker-crypto.ts`,
+the encryptor UI, the dice entropy tool, the CSP build pipeline, and CI.
+**Baseline reviewed:** `ddedfaf`
+**Predecessor:** [SECURITY-AUDIT-ITTYBITZ-2026-04.md](SECURITY-AUDIT-ITTYBITZ-2026-04.md),
+which covers only the frozen legacy core and does **not** cover anything below.
 
----
-
-## Summary
-
-IttyBitz v2.2.0 is a static, client-side-only encryption tool with a minimal attack surface and a solid cryptographic core. This review found **no exploitable vulnerabilities** of High or Medium severity in the current code. Every finding raised in the prior audit (v1.3.0, March 2026) has been remediated — see the Remediation History section below.
-
-The app's security posture is genuinely strong for its threat model:
-
-- Static Next.js export (`output: 'export'`) — no server, no API routes, no server actions.
-- Zero outbound network requests at runtime (no fonts, analytics, CDNs, or trackers).
-- All cryptography uses the Web Crypto API with conservative parameters.
-- No user-controlled HTML rendering; the only `dangerouslySetInnerHTML` in the codebase is a static, hardcoded service-worker registration script.
-- No secrets in the client bundle; no `process.env` / `NEXT_PUBLIC_*` references in `src/`.
-
-Findings are grouped by severity below.
+External review found no Critical or High severity vulnerabilities. It found
+three Medium issues, several Low, and a set of informational items. Each is
+listed below with its disposition and, where fixed, the test that holds it
+fixed.
 
 ---
 
-## High Severity
+## Findings and disposition
 
-_None._
-
----
-
-## Medium Severity
-
-_None._
-
----
-
-## Low Severity / Defense-in-Depth
-
-### 1. PBKDF2 instead of a memory-hard KDF
-
-**Location:** `src/lib/crypto.ts`, `deriveKey()`
-
-PBKDF2-HMAC-SHA-256 at 1,000,000 iterations is acceptable and meets current OWASP recommendations. It is not resistant to GPU or ASIC-based attacks the way memory-hard KDFs like Argon2id or scrypt are. This is a "good vs. better" gap, not a vulnerability.
-
-**Recommendation:** Consider migrating to Argon2id when browser support allows (a WebAssembly Argon2 implementation is feasible today but adds bundle size). If staying on PBKDF2, document the rationale.
-
-### 2. `secureErase` is best-effort, not a guarantee
-
-**Location:** `src/lib/crypto.ts`, `secureErase()`
-
-JavaScript's garbage collector can copy buffer contents to new memory locations at any time, and JIT compilers may optimize away writes to "dead" buffers. `TextEncoder.encode()` also creates intermediate copies the app cannot reach. The current implementation (random overwrite + zero-fill, with a zero-fill fallback when `crypto.getRandomValues` is unavailable) is sound, and the `Math.random()` fallback flagged in the prior audit has been removed.
-
-**Recommendation:** Continue to treat memory erasure as best-effort. The README already frames it accurately; keep it that way.
-
----
-
-## Informational
-
-### 3. Content Security Policy — shipped via meta tag (production-only)
-
-A strict CSP is now emitted via a `<meta http-equiv="Content-Security-Policy">` tag in `src/app/layout.tsx`, gated on `process.env.NODE_ENV === 'production'` so React's dev-mode `eval()` usage is unaffected.
-
-Shipped policy:
-
-```
-default-src 'none';
-script-src 'self' 'unsafe-inline';
-style-src 'self' 'unsafe-inline';
-img-src 'self' data:;
-font-src 'self';
-connect-src 'self';
-worker-src 'self';
-manifest-src 'self';
-object-src 'none';
-base-uri 'self';
-form-action 'none'
-```
-
-Notes on the tradeoffs:
-
-- `'unsafe-inline'` in `script-src` is required because Next.js emits several inline hydration scripts per page whose content changes every build, making nonces/hashes impractical for a static export. The exposure is small given the app renders no user-controlled HTML.
-- `'unsafe-inline'` in `style-src` is required because React and Tailwind emit `style="..."` attributes.
-- `frame-ancestors` is **not** enforceable via meta — CSP L3 restricts it to real headers. Since the app is hosted on GitHub Pages (no custom header support), the only way to add clickjacking protection would be to front the site with a CDN like Cloudflare that can inject headers via a Transform Rule. Not currently in scope.
-- Report-only reporting (`report-uri` / `report-to`) is also meta-ineligible; violations won't phone home, which is consistent with the app's no-network-egress posture anyway.
-
-### 4. Subresource integrity for any future CDN assets
-
-The app currently loads **no** external resources, which is ideal. If any CDN dependency is ever added, it should use SRI hashes.
-
-### 5. Legacy (v0) ciphertext / `IBTZ` magic collision — accepted, documented only
-
-The v1 container format is detected by a 4-byte magic prefix (`IBTZ`, bytes `49 42 54 5A`) followed by a version byte. Legacy v0 ciphertexts are headerless and begin directly with the random 16-byte PBKDF2 salt. If a v0 blob's salt happens to start with those same 4 bytes (probability 2⁻³² per ciphertext), the decoder misparses it as a versioned container:
-
-- If the 5th byte is `0x01`, it is parsed as v1 with wrong offsets; AES-GCM authentication then fails and the user gets the generic "Decryption failed" error.
-- If the 5th byte is greater than `0x01`, the user gets a misleading "encrypted with a newer version" error.
-- (If the 5th byte is `0x00`, the version resolves to 0 and the blob still parses correctly.)
-
-Impact is availability only for the affected blob — no key or plaintext exposure — and the workaround is trivial (any hex editor can confirm the blob is v0). At p≈2⁻³² this will essentially never occur in practice, and fixing it would require changing `src/lib/crypto.ts`, which is frozen for backward compatibility with long-horizon ciphertexts. Accepted as a documented non-issue.
-
----
-
-## Remediation History (from the v1.3.0 audit, March 2026)
-
-For continuity, every finding from the previous audit has been addressed:
-
-| # | Prior finding | Status | Evidence |
+| ID | Severity | Finding | Status |
 |---|---|---|---|
-| 1 | Google Fonts loaded from `fonts.googleapis.com` | **Fixed** | No external font imports in `src/app/layout.tsx`; no `fonts.googleapis.com` references anywhere in `src/` or `public/`. |
-| 2 | Misleading FIPS 140-2 / NSA Suite B / GDPR certification claims | **Fixed** | `README.md` now uses "uses AES-256-GCM and PBKDF2-HMAC-SHA-256, which are approved under FIPS 140-2 (note: this app has not undergone formal FIPS certification)". Suite B and GDPR claims removed. |
-| 3 | `Math.random()` fallback in `secureErase` | **Fixed** | `src/lib/crypto.ts` now zero-fills on CSPRNG failure — no `Math.random` in any security path. |
-| 4 | No format version identifier in encrypted output | **Fixed** | Output now begins with `IBTZ\x01` magic + version byte. Decryption is backward-compatible with v0 blobs. |
-| 5 | PBKDF2 instead of memory-hard KDF | **Open (Low)** | Re-logged as Low-severity item above. |
-| 6 | Clipboard auto-clear overstated | **Fixed** | Toast copy softened to reflect best-effort behavior ("may not work if tab loses focus"). |
-| 7 | `secureErase` mutates caller's buffer | **Fixed (documented)** | JSDoc on `encryptFile` / `decryptFile` now explicitly warns the caller's `keyFileBuffer` is zeroed in-place. Behavior unchanged — the erase is intentional for secure cleanup. |
-| 8 | Version mismatch between `package.json` and UI | **Fixed** | Both report `2.2.0`. |
-| 9 | Error message sanitization fragile | **Fixed** | Allow-list of known-safe messages with generic fallback in `encryptor-tool.tsx`. |
-| 10 | No CSP | **Fixed (meta tag)** | Strict CSP now emitted from `src/app/layout.tsx` in production builds. See Informational #3 for policy details and `frame-ancestors` caveat. |
-| 11 | Unused `placehold.co` remote image pattern | **Fixed** | `next.config.js` no longer configures `images.remotePatterns`. |
-| 12 | "No External Dependencies" claim imprecise | **Fixed** | Claim is now accurate — app makes zero external network requests. |
+| KM-01 | Medium | Unbounded KDF parameters executed before authentication | **Fixed** |
+| KM-02 | Medium | Password gate accepted trivially guessable phrases | **Fixed** |
+| KM-03 | Medium | Dice calculator counted impossible rolls as entropy | **Fixed** |
+| KM-04 | Low | No ciphertext size ceiling on the decrypt path | **Fixed** |
+| KM-05 | Low | Password + key file concatenation is ambiguous | **Deferred to KEYM v2** |
+| KM-06 | Low | PBKDF2 is the effective default despite Argon2id being recommended | **Open** |
+| KM-07 | Low | `connect-src 'self'` did not enforce the zero-egress claim | **Fixed** |
+| KM-08 | Low | Service worker caching scope broader than necessary | **Open** |
+| KM-09 | Low | Prior audit was stale and could be misread as covering KEYM | **Fixed** |
+| KM-10 | Info | Encryption did not validate caller-supplied KDF parameters | **Fixed** |
+| KM-11 | Info | CSP postprocessor skipped HTML with no CSP meta tag | **Fixed** |
+| KM-12 | Info | CI, legacy test, and deploy used three Node majors | **Fixed** |
+| KM-13 | Info | Chained-cipher wording claimed more than was established | **Fixed** |
 
 ---
 
-## What the app continues to do well
+## KM-01 — KDF parameters executed before authentication
 
-- AES-256-GCM for authenticated encryption.
-- 1,000,000 PBKDF2 iterations — high end of current OWASP guidance.
-- `crypto.getRandomValues()` exclusively; no `Math.random()` in any security-relevant code path.
-- Password generator uses rejection sampling to avoid modulo bias.
-- Thorough input validation: filename sanitization (blocks `..`, `/`, `\`, null bytes, >255 chars), file size limits, password length bounds.
-- `CryptoKey` created with `extractable: false`.
-- Generic decryption error messages to avoid oracle leaks.
-- Static export — no server-side code, eliminating an entire class of vulnerabilities (SSRF, injection, auth bypass, SSRF, deserialization).
-- No `dangerouslySetInnerHTML` on user input. The single occurrence in `src/app/layout.tsx` is a static, hardcoded service-worker registration script with no interpolation.
-- Service-worker `message` handler uses `textContent` (not `innerHTML`), and SW `postMessage` is same-origin-only by browser design.
-- External links use `rel="noopener noreferrer"`.
-- Zero third-party runtime scripts, fonts, analytics, or trackers.
+**The issue.** A KEYM header states how to derive the key, so it must be read
+before the key exists — and the AEAD tag that authenticates it cannot be
+checked until after derivation. `parseKeym()` read a `uint32` iteration count
+and `uint16`/`uint32`/`uint8` Argon2id parameters and passed them straight to
+the KDF with no bounds.
+
+AAD prevents a tampered header from yielding valid plaintext. It does not
+prevent attacker-chosen parameters from being *executed* on the way to
+discovering the tamper. A 200-byte hostile file could request 4,294,967,295
+PBKDF2 iterations or 4 TiB of Argon2id memory and hang or OOM the tab.
+
+**Fix.** `validateKdfParams()` runs inside `parseKeym()`, before any derivation,
+and again in `encryptData()` on caller-supplied options.
+
+| Parameter | Accepted on decrypt | Accepted on encrypt |
+|---|---|---|
+| PBKDF2 iterations | 1 .. 10,000,000 | 600,000 .. 10,000,000 |
+| Argon2id timeCost | 1 .. 10 | 1 .. 10 |
+| Argon2id memoryKiB | 1 .. 262,144 | 8,192 .. 262,144 |
+| Argon2id parallelism | 1 .. 8 | 1 .. 8 |
+
+Ceilings are the security control and apply everywhere. Floors are policy for
+new encryptions only — decryption stays permissive so that files created with
+older or lower settings still open. The encrypt floor follows OWASP's current
+PBKDF2-HMAC-SHA-256 recommendation.
+
+**Tests.** Five hostile headers requesting maximal costs, each asserted to be
+refused in under a second — a timing assertion, because an unbounded
+implementation would grind rather than return. Observed: 0.0–0.2 ms. Plus two
+encrypt-side rejections and one test confirming policy-floor containers still
+decrypt.
+
+**Note on how this was hiding.** The AAD sweep flips every header byte and
+attempts decryption. On the Argon2id test container, byte 7 is the high byte of
+`timeCost` — flipping it turned 2 passes into 16,386, and byte 10 turned memory
+into roughly 4 GiB. The suite was executing hostile parameters on every run,
+and took 3m33s. With bounds enforced it takes 11.8s, while running *more* tests
+and a slower PBKDF2 setting. The test suite had been demonstrating the finding
+for its whole existence.
+
+## KM-02 — Password gate certified guessable phrases
+
+**The issue.** `isPasswordStrong()` returned true for any input of six or more
+whitespace-separated tokens, justified in a comment as "6 diceware words ≈ 77
+bits". That inference holds only for words drawn independently and uniformly
+from a list. For typed text it is false, and it accepted `a a a a a a`,
+`password password password password`, and `one one one one one one`.
+
+**Fix.** Word count is not treated as entropy. The passphrase path now counts
+*distinct* words of at least three characters and applies a length floor, which
+removes the degenerate repetition cases without rejecting real passphrases.
+A genuine phrase containing a repeated word still passes on length.
+
+This gate is advisory and lives only in the UI. `encryptData()` has never
+consulted it, and still does not — cryptographic behaviour must not depend on
+a heuristic.
+
+**Not done:** a built-in Diceware generator. That is the only way to state a
+passphrase's entropy honestly, since it requires controlling the sampling. The
+existing generator produces rejection-sampled random passwords, which is a
+sound alternative; a word-list generator remains a reasonable enhancement.
+
+## KM-03 — Dice calculator counted impossible rolls
+
+**The issue.** Any token the parser could not interpret fell through to
+`rolls += 1`. A 9 on a d6, a 25 on a d20, `0`, and `hello` each contributed a
+full roll of entropy. For a tool whose only output is an entropy estimate,
+this inflated the number the user was relying on.
+
+**Fix.** Every entry must be an integer in `1..sides`. Run-together digits
+(`46231` on a d6) still expand to individual rolls, but only when every digit
+is a valid face and the die has single-digit faces. `sides` is validated as an
+integer in 2..1000 in code, not left to HTML `min`/`max`. Rejected entries are
+counted and displayed rather than silently dropped — silent rejection would
+trade one wrong number for another.
+
+## KM-04 / KM-10 — Missing limits at API boundaries
+
+The 100 MB cap applied only to encryption, so a large pasted base64 blob
+reached `decryptData()` and its KDF without one; and `encryptData()` trusted
+whatever options a caller supplied. Both now validate independently of the UI,
+so a CLI, a test, or a future refactor cannot bypass them.
+
+## KM-07 — Zero-egress is now structurally enforced
+
+The policy was `connect-src 'self'`, which permits same-origin `fetch`, XHR,
+and WebSocket. The zero-egress property was therefore a property of the code,
+not of the policy.
+
+Tested and tightened to `connect-src 'none'`. Verified in Chromium: PBKDF2 and
+Argon2id round-trips, service-worker registration, and a reload all succeed
+with no CSP violations — the page needs no connections at all. The build now
+fails if `connect-src` is anything other than `'none'`.
+
+## KM-05 — Deferred to KEYM v2
+
+Key material is `password_bytes || keyfile_bytes` with no length prefix or
+domain separation, so `("ab","c")` and `("a","bc")` produce identical KDF
+input. This is not a practical key-recovery path, but it is not how a format
+should combine two secrets. Fixing it changes derivation and therefore the wire
+format, so it belongs in v2 alongside length-prefixed, domain-separated inputs
+and pre-hashing of key files. **KEYM v1 must remain readable exactly as-is.**
+
+## KM-06 / KM-08 — Open
+
+**KM-06:** the UI still initialises to PBKDF2 while labelling Argon2id
+recommended, so the least technical user gets the weaker KDF. Changing the
+default needs a WASM capability probe and a visible fallback, given that
+Argon2id is unavailable where WebAssembly is blocked. Deliberately left as a
+product decision rather than changed unilaterally.
+
+**KM-08:** the service worker caches any same-origin GET. Correct for the
+current static bundle, but broad enough that future same-origin resources would
+be persisted without anyone deciding they should be.
 
 ---
 
-## Overall assessment
+## Recommended next steps
 
-For the threat model the app targets — a user who wants to encrypt a file or secret locally, without trusting a server or a third party — IttyBitz v2.2.0 is well-built. The codebase does not currently contain any vulnerability that a security engineer would flag as blocking.
+Roughly in order of value:
+
+1. **Independent reference implementation.** The KEYM fixtures were generated
+   by the implementation they test, so a specification bug could be frozen into
+   both. A small Rust or Python implementation written only from `FORMAT.md`,
+   cross-tested in both directions across all six KDF/cipher combinations,
+   would turn the fixtures into a real conformance suite.
+2. **Browser-based CI.** The Argon2id/CSP failure was invisible to a green Node
+   suite because Node has no CSP. Playwright against the production export, in
+   Chromium/Firefox/WebKit, online and offline, closes that whole class.
+3. **Parser fuzzing.** `parseKeym()` consumes attacker-controlled binary.
+   Fuzz version, IDs, integer boundaries, flags, and truncation at every byte,
+   asserting no crash, no uncontrolled allocation, no KDF invocation, and
+   deterministic rejection.
+4. **KEYM v2** with streaming/chunked encryption, addressing KM-05 and the
+   whole-file memory cost that makes the 100 MB cap necessary.
+
+---
+
+## What holds up well
+
+Primitives are well chosen and correctly assembled: AES-256-GCM via WebCrypto
+with non-extractable keys, ChaCha20-Poly1305 via `@noble/ciphers`, Argon2id via
+`hash-wasm` at RFC 9106's second recommended profile (64 MiB, t=3, p=4), HKDF
+with distinct `keymaker-aes` / `keymaker-chacha` labels giving proper domain
+separation between the two chained keys. Fresh salt and nonces per message from
+`crypto.getRandomValues`, so every file gets a distinct derived key.
+
+The AAD rule is right, and the byte-flip sweep across the whole header proves
+it rather than asserting it. BIP-39 validation checks the actual checksum, not
+just word membership. Decryption failures are generic, avoiding an oracle.
+
+The CI split is unusually good: the job guarding legacy decryption runs with no
+`npm ci` at all, so no dependency install script can execute in the job that
+protects users' existing files. Actions are SHA-pinned with minimal permissions.

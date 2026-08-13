@@ -81,8 +81,11 @@ entirely on WebCrypto and needs no WebAssembly.
 </p>
 
 Chained mode encrypts with AES-256-GCM, then encrypts that ciphertext again with
-ChaCha20-Poly1305 under an independent subkey derived via HKDF. An attacker must break
-both AEAD constructions, and neither key is derivable from the other.
+ChaCha20-Poly1305 under an independent subkey derived via HKDF. This is algorithmic
+defence in depth: recovering the plaintext means defeating both constructions, and
+neither key is derivable from the other. It reduces reliance on any single cipher —
+it is not a quantified guarantee, and it does nothing for a guessable password,
+where the KDF is the bottleneck.
 
 ---
 
@@ -190,7 +193,7 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 
 | Property | Strength of guarantee |
 |---|---|
-| Data never leaves the device | **Structural.** Static export, `connect-src 'self'`, no telemetry. |
+| Data never leaves the device | **Structural.** Static export, `connect-src 'none'` — the page cannot open a connection at all — and no telemetry. Gated in the build. |
 | Header cannot be downgraded | **Cryptographic.** The full header is AAD on every AEAD layer. |
 | Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
@@ -233,7 +236,8 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
-| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Cumulative audit and remediation history |
+| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Current Keymaker v2 audit, findings and disposition |
+| [`SECURITY-AUDIT-ITTYBITZ-2026-04.md`](SECURITY-AUDIT-ITTYBITZ-2026-04.md) | Historical IttyBitz audit — legacy core only |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
 ---

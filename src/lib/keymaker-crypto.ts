@@ -81,6 +81,91 @@ const NONCE_LEN = 12;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100 MB
 const MAX_PASSWORD_LENGTH = 1024;
 
+/**
+ * Largest container we will even attempt to decrypt: the 100 MB plaintext cap
+ * plus the largest possible header (71 B) and tags (32 B), rounded up.
+ *
+ * The file picker already refuses oversized files, but pasted base64 reaches
+ * decryptData() without passing that check. A core crypto API should enforce
+ * its own resource limits rather than trusting whichever UI calls it.
+ */
+const MAX_CIPHERTEXT_SIZE = MAX_FILE_SIZE + 4096;
+
+/**
+ * Bounds on KDF cost parameters.
+ *
+ * These matter because a KEYM header is unauthenticated until the AEAD tag is
+ * checked, and the tag cannot be checked until after the key is derived. That
+ * ordering is forced by the format: the parameters say how to derive the key,
+ * so they must be read first. AAD therefore stops an attacker from tampering
+ * with parameters and still obtaining valid plaintext — but it cannot stop
+ * those attacker-chosen values from being *executed* on the way to finding
+ * that out.
+ *
+ * Unbounded, a hostile 200-byte file could request PBKDF2 with 4,294,967,295
+ * iterations, or Argon2id with 4 TiB of memory, and the tab would hang or the
+ * allocation would abort long before authentication ever ran.
+ *
+ * MAX values are the security control and apply everywhere. MIN values are
+ * policy for *new* encryptions only — decryption deliberately accepts weaker
+ * historical parameters, since refusing them would strand files that were
+ * legitimately created with older or lower settings.
+ */
+export const KDF_LIMITS = {
+  pbkdf2: {
+    /** OWASP's current floor for PBKDF2-HMAC-SHA-256. Enforced on encrypt. */
+    minIterations: 600_000,
+    /** 10x the default. Beyond this, refuse rather than hang. */
+    maxIterations: 10_000_000,
+  },
+  argon2id: {
+    minTimeCost: 1,
+    maxTimeCost: 10,
+    /** 8 MiB .. 256 MiB, matching the range the UI exposes. */
+    minMemoryKiB: 8 * 1024,
+    maxMemoryKiB: 256 * 1024,
+    minParallelism: 1,
+    maxParallelism: 8,
+  },
+} as const;
+
+/**
+ * Reject KDF parameters we are not willing to execute.
+ *
+ * Called immediately after parsing a header and before any key derivation, and
+ * again on caller-supplied encryption options so that a non-UI caller (a CLI, a
+ * test, a future refactor) cannot bypass the validation the sliders imply.
+ */
+export function validateKdfParams(kdf: KdfParams, mode: "encrypt" | "decrypt"): void {
+  const enforceMinimums = mode === "encrypt";
+
+  const check = (name: string, value: number, min: number, max: number) => {
+    if (!Number.isInteger(value)) {
+      throw new Error(`Invalid KDF parameter: ${name} must be an integer.`);
+    }
+    // On decrypt, only the ceiling is a security control; the floor is policy.
+    // Still require >= 1 — zero or negative is malformed under any reading.
+    const effectiveMin = enforceMinimums ? min : 1;
+    if (value < effectiveMin || value > max) {
+      throw new Error(
+        `KDF parameter out of range: ${name} is ${value}, expected ${effectiveMin}..${max}. ` +
+          `Refusing to run a key derivation with unsafe cost parameters.`
+      );
+    }
+  };
+
+  if (kdf.kdf === KdfId.PBKDF2) {
+    const { minIterations, maxIterations } = KDF_LIMITS.pbkdf2;
+    check("PBKDF2 iterations", kdf.params.iterations, minIterations, maxIterations);
+    return;
+  }
+
+  const a = KDF_LIMITS.argon2id;
+  check("Argon2id timeCost", kdf.params.timeCost, a.minTimeCost, a.maxTimeCost);
+  check("Argon2id memoryKiB", kdf.params.memoryKiB, a.minMemoryKiB, a.maxMemoryKiB);
+  check("Argon2id parallelism", kdf.params.parallelism, a.minParallelism, a.maxParallelism);
+}
+
 const textEncoder = new TextEncoder();
 
 /** Best-effort secure erase: zero-fill. Never uses Math.random. */
@@ -120,6 +205,12 @@ function validateCommon(dataBuffer: ArrayBuffer, password: string, isEncryption:
   }
   if (isEncryption && dataBuffer.byteLength > MAX_FILE_SIZE) {
     throw new Error(`File is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
+  }
+  // Decryption needs its own ceiling. The file picker enforces one, but pasted
+  // base64 reaches decryptData() without going through it, and by then the
+  // bytes have already been allocated and are about to hit a KDF.
+  if (!isEncryption && dataBuffer.byteLength > MAX_CIPHERTEXT_SIZE) {
+    throw new Error(`Encrypted data is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
   }
   if (typeof password !== "string") {
     throw new Error("Password must be a string.");
@@ -268,6 +359,15 @@ export async function encryptData(
   const kdf: KdfParams = options.kdf ?? { kdf: KdfId.PBKDF2, params: { ...DEFAULT_PBKDF2 } };
   const cipher = options.cipher ?? CipherId.AES_256_GCM;
 
+  // Validate caller-supplied options rather than trusting that a UI slider
+  // constrained them. Encryption enforces the policy floor as well as the
+  // ceiling: writing a new file at 1,000 PBKDF2 iterations is a mistake worth
+  // refusing, even though we will still *read* such a file.
+  validateKdfParams(kdf, "encrypt");
+  if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+    throw new Error(`Invalid cipher id: ${cipher}.`);
+  }
+
   const saltLen = kdf.kdf === KdfId.PBKDF2 ? SALT_LEN_PBKDF2 : SALT_LEN_ARGON2ID;
   const salt = crypto.getRandomValues(new Uint8Array(saltLen));
   const nonceCount = cipher === CipherId.CHAINED ? 2 : 1;
@@ -398,6 +498,13 @@ function parseKeym(data: Uint8Array): ParsedKeym {
     };
     o += 7;
   }
+  // Bound the cost parameters the moment they are read, and before any caller
+  // can reach deriveMasterKey() with them. Everything above this line is
+  // attacker-controlled: the AEAD tag that authenticates these bytes cannot be
+  // verified until after the key has been derived from them, so the header is
+  // untrusted input right up to that point.
+  validateKdfParams(kdf, "decrypt");
+
   const flags = data[o++]!;
   const saltLen = kdfId === KdfId.PBKDF2 ? SALT_LEN_PBKDF2 : SALT_LEN_ARGON2ID;
   const nonceCount = cipherId === CipherId.CHAINED ? 2 : 1;

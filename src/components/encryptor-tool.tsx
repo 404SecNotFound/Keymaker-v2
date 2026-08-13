@@ -95,18 +95,45 @@ function base64ToUint8Array(base64: string): Uint8Array {
 // renders instead of allocating a fresh style object each time.
 const OFFSCREEN_STYLE = { position: 'absolute', left: '-9999px', top: '-9999px' } as const;
 
-// Password strength gate, entropy-aware. Two paths count as strong:
-//  1. The classic class rule: ≥24 chars with upper, lower, number, symbol.
-//     The symbol class is kept in sync with the generatePassword charset so
-//     a generated password can never be rejected by this check.
-//  2. The diceware rule: a long passphrase of 4+ words (e.g. an all-lowercase
-//     "correct horse battery staple"-style phrase) carries its entropy in
-//     word count, not character classes. 6+ words is accepted regardless of
-//     length (6 diceware words ≈ 77 bits minimum).
+// Password strength gate.
+//
+// An earlier version accepted any input of 6+ whitespace-separated tokens on
+// the reasoning that "6 diceware words is about 77 bits". That inference only
+// holds when the words were drawn independently and uniformly from a word
+// list. For text a human typed, it is false — and it let "a a a a a a" and
+// "password password password password" through the gate.
+//
+// Word count is not entropy. What a passphrase rule can cheaply check is that
+// the words are *distinct* and *substantial*, which does not prove entropy but
+// does eliminate the degenerate repetition cases. Two paths count as strong:
+//
+//  1. Character-class rule: >= 24 chars with upper, lower, number, and symbol.
+//     The symbol class is kept in sync with the generatePassword charset, so a
+//     generated password can never be rejected by this check.
+//  2. Passphrase rule: enough *distinct* words of >= 3 characters, plus a total
+//     length floor. Repeats are counted once, so padding a phrase by repeating
+//     a word does not buy past the gate.
+//
+// This gate is advisory and lives only in the UI. encryptData() does not
+// consult it — cryptographic behaviour must not depend on a heuristic.
+const PASSPHRASE_MIN_WORD_LEN = 3;
+
 function isPasswordStrong(pwd: string): boolean {
-  const wordCount = pwd.trim().split(/\s+/).filter(Boolean).length;
-  if (wordCount >= 6) return true;
-  if (wordCount >= 4 && pwd.length >= 24) return true;
+  const trimmed = pwd.trim();
+
+  const distinctSubstantialWords = new Set(
+    trimmed
+      .split(/\s+/)
+      .filter(Boolean)
+      .map((w) => w.toLowerCase())
+      .filter((w) => w.length >= PASSPHRASE_MIN_WORD_LEN)
+  ).size;
+
+  // A genuine diceware phrase clears one of these even with a repeated word,
+  // because the length floor carries it.
+  if (distinctSubstantialWords >= 6 && trimmed.length >= 20) return true;
+  if (distinctSubstantialWords >= 4 && trimmed.length >= 24) return true;
+
   const hasUpperCase = /[A-Z]/.test(pwd);
   const hasLowerCase = /[a-z]/.test(pwd);
   const hasNumbers = /\d/.test(pwd);
@@ -391,7 +418,7 @@ const CIPHER_OPTIONS = [
   {
     id: CipherId.CHAINED,
     name: "AES → ChaCha (chained)",
-    blurb: "Maximum: encrypts with AES-256-GCM, then ChaCha20-Poly1305 with an independent key. An attacker must break both.",
+    blurb: "Defence in depth: encrypts with AES-256-GCM, then ChaCha20-Poly1305 under an independently derived key.",
   },
 ] as const;
 
