@@ -15,10 +15,23 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
+        {/*
+          'wasm-unsafe-eval' is load-bearing for Argon2id: hash-wasm compiles a
+          WebAssembly module, and browsers refuse to instantiate WASM unless
+          script-src allows it. Without this token the Argon2id path dies
+          silently in the production build while PBKDF2 keeps working.
+
+          Note this meta tag is only emitted for production, so `npm run dev`
+          has no CSP at all — which is precisely how the omission escaped
+          notice. The Node test suite has no CSP either.
+
+          The token permits WASM compilation *only*. It does not enable eval()
+          for JavaScript the way 'unsafe-eval' would.
+        */}
         {process.env.NODE_ENV === 'production' && (
           <meta
             httpEquiv="Content-Security-Policy"
-            content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'"
+            content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; form-action 'none'"
           />
         )}
         <link rel="icon" type="image/svg+xml" href="/logo.svg" />

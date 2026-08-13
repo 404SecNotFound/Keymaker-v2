@@ -146,4 +146,37 @@ if (leaked.length > 0) {
   process.exit(1);
 }
 
-console.log(`csp-hashes: done (${processed} file(s) tightened, ${skipped} skipped, 0 with residual unsafe-inline)`);
+// Fail-closed the other way too: the policy must stay permissive enough to
+// actually run the app. Argon2id needs WebAssembly, and a script-src without
+// 'wasm-unsafe-eval' blocks it. That failure is silent in the UI and
+// invisible to the Node test suite, which runs under no CSP at all — this
+// shipped once already. The build now refuses to repeat it.
+const wasmless = [];
+for (const file of htmlFiles(OUT_DIR)) {
+  const html = readFileSync(file, 'utf8');
+  const metaMatch = html.match(metaRe);
+  if (!metaMatch) continue;
+  const policy = metaMatch[2]
+    .replace(/&#x27;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, '&');
+  const scriptSrc = policy.split(';').find((d) => /^\s*script-src\b/.test(d)) || '';
+  // 'unsafe-eval' also permits WASM compilation, so accept either token.
+  if (!/'wasm-unsafe-eval'|'unsafe-eval'/.test(scriptSrc)) {
+    wasmless.push(file.replace(OUT_DIR + '/', ''));
+  }
+}
+
+if (wasmless.length > 0) {
+  console.error(
+    `csp-hashes: ERROR — script-src lacks 'wasm-unsafe-eval' in: ${wasmless.join(', ')}. ` +
+      'Argon2id (hash-wasm) cannot instantiate its WebAssembly module under that policy ' +
+      'and fails silently at runtime. Refusing to ship a dead KDF.'
+  );
+  process.exit(1);
+}
+
+console.log(
+  `csp-hashes: done (${processed} file(s) tightened, ${skipped} skipped, ` +
+    `0 with residual unsafe-inline, 0 missing wasm-unsafe-eval)`
+);
