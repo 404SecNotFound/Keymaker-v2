@@ -1,0 +1,49 @@
+name: CI
+
+# Build + typecheck + the KEYM v1 regression suite.
+#
+# This is deliberately separate from crypto-regression.yml. That workflow
+# gates the frozen IBTZ core and runs with no `npm ci` at all, so no
+# untrusted install script can ever execute in the job that guards
+# decryption of users' existing files. This one needs the dependency tree
+# (hash-wasm, @noble/ciphers, esbuild, next), so it is kept apart.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions: {}
+
+env:
+  # A zero-egress tool should not phone home from its own build either.
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't leave GITHUB_TOKEN in .git/config where a dependency
+          # install script could read it.
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: KEYM v1 regression suite
+        run: npm run test:keymaker
+
+      - name: Production build (static export + CSP hashes)
+        run: npm run build

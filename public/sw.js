@@ -30,22 +30,29 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
-      return Promise.all(
-        keys
-          .filter((key) => key !== CACHE_VERSION)
-          .map((key) => caches.delete(key))
-      );
+      const stale = keys.filter((key) => key !== CACHE_VERSION);
+
+      // `activate` also fires on the very first install, when there is no
+      // previous version to have replaced. Only a run that finds and evicts
+      // a cache from an older CACHE_VERSION is a genuine update — otherwise
+      // a first-time visitor is told a new version is available before they
+      // have ever loaded one.
+      const isUpgrade = stale.length > 0;
+
+      return Promise.all(stale.map((key) => caches.delete(key)))
+        // Take control of all open tabs immediately
+        .then(() => self.clients.claim())
+        .then(() => {
+          if (!isUpgrade) return;
+          // Notify all open tabs that a new version is active
+          return self.clients.matchAll({ type: 'window' }).then((clients) => {
+            clients.forEach((client) => {
+              client.postMessage({ type: 'SW_UPDATED' });
+            });
+          });
+        });
     })
   );
-  // Take control of all open tabs immediately
-  self.clients.claim();
-
-  // Notify all open tabs that a new version is active
-  self.clients.matchAll({ type: 'window' }).then((clients) => {
-    clients.forEach((client) => {
-      client.postMessage({ type: 'SW_UPDATED' });
-    });
-  });
 });
 
 // ---- Fetch strategies ----
