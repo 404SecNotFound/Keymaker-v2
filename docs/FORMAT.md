@@ -6,6 +6,11 @@ self-describing, tamper-authenticated file format modeled on the Morpheus
 project's format. It supersedes (but can read) the legacy IttyBitz formats
 IBTZ v1 and headerless v0.
 
+> For the reasoning behind these choices — the pipeline, the AAD rule, the
+> chained-cipher construction, and the attacks they close — see
+> [HOW-IT-WORKS.md](HOW-IT-WORKS.md), which covers the same ground with
+> diagrams. This document is the contract; that one is the explanation.
+
 All multi-byte integers are **big-endian**. All byte offsets below are
 absolute, counted from the first byte of the file.
 

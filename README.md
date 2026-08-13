@@ -1,79 +1,248 @@
-# 🔑 Keymaker
+# Keymaker
 
-<br/>
+**Client-side encryption for files and text. Nothing ever leaves your browser.**
 
-**Tired of worrying where your private files and notes end up?**
+Keymaker encrypts confidential documents, personal notes, and seed phrases entirely
+in the browser tab. There is no server, no account, and no upload — the production
+build is a static export that makes zero network requests after load, enforced by a
+`default-src 'none'` Content Security Policy rather than promised in a privacy page.
 
-Keymaker locks down your sensitive information right in your browser — nothing ever leaves your device. Whether you're protecting confidential documents before sharing them, or storing personal notes you don't want synced to the cloud, Keymaker makes strong encryption effortless.
-
-<p align=center>
-<img width="800" alt="Keymaker" src="docs/hero.svg" />
+<p align="center">
+  <img alt="Keymaker — Encrypt everything. Trust nothing." src="docs/screenshots/01-landing.png" width="820" />
 </p>
 
-<br/>
+---
 
-## ⚙️ Core features
+## Contents
 
-- **Client-side encryption/decryption**: all cryptographic operations happen in your browser. Your files and secrets are never sent to a server.
-- **Self-describing KEYM v1 container**: every encrypted payload carries an authenticated header (KDF, cipher, and parameters), so decryption needs no knobs — the format describes itself.
-- **Argon2id key derivation**: memory-hard KDF (time cost, memory, and parallelism tunable) that resists GPU/ASIC password cracking — or classic PBKDF2 (1M iterations) for maximum speed and compatibility.
-- **Cipher choice, including chaining**: AES-256-GCM (hardware-accelerated), ChaCha20-Poly1305, or **chained AES → ChaCha** with independent subkeys — an attacker must break both.
-- **Password & key file protection**: secure your data with a strong password, an optional key file, or both. Generate a cryptographically secure key file in-app.
-- **Dice entropy calculator** (Tools tab): computes how many physical dice rolls you need for 128/256 bits of entropy — because physical dice survive vendor RNG failures (the COLDCARD lesson). It computes bits; it does not generate seeds.
-- **File & text support**: encrypted files use the `.keym` extension; encrypted text is prefixed `KEYM1:` so blobs are self-identifying. Optional filename obscuring (`keymaker-<random>.keym`).
-- **Legacy IttyBitz import**: `.ibitz` files and bare IBTZ base64 blobs (v0 and v1) decrypt transparently, with a nudge to re-encrypt in Keymaker format.
-- **QR code sharing & SeedQR export**: share encrypted text via QR; decrypted BIP-39 seed phrases are auto-detected and can be shown as a Standard SeedQR for hardware-wallet import (Coldcard, SeedSigner, Sparrow, Specter, Krux, Keystone, Jade).
-- **Installable PWA with full offline support**: after the first visit Keymaker works with zero network connectivity — ideal for air-gapped machines.
-- **Privacy-focused UI**: secret input and decrypted output are blurred by default, QRs are mount-gated until deliberately revealed, and the clipboard is auto-cleared after 60 seconds (best-effort).
-- **No accounts required**: works entirely without user accounts or sign-ins.
+- [What's new in v2](#whats-new-in-v2)
+- [The Advanced panel](#the-advanced-panel)
+- [Self-describing containers](#self-describing-containers)
+- [Seed-phrase awareness](#seed-phrase-awareness)
+- [Dice entropy calculator](#dice-entropy-calculator)
+- [Full feature list](#full-feature-list)
+- [Security model](#security-model)
+- [Run it locally](#run-it-locally)
+- [Documentation](#documentation)
+- [Attribution and license](#attribution-and-license)
 
-<br/>
+---
 
-## 🥤 How to use Keymaker
+## What's new in v2
 
-At the top you'll find three tabs: **Encrypt**, **Decrypt**, and **Tools**.
+v2 is a fork of [IttyBitz](https://github.com/seQRets/ittybitz) with the crypto design
+from the Morpheus project ported in. IttyBitz offered exactly one configuration:
+PBKDF2 at 1,000,000 iterations with AES-256-GCM, in a headerless container. v2 makes
+the algorithm a choice, and writes that choice into the file.
 
-- **Encrypt**: pick a file or enter text, set a strong password (24+ chars with mixed classes, or a 4+ word diceware-style passphrase), optionally open **Advanced** to choose Argon2id parameters, the cipher (AES / ChaCha / chained), a key file, and filename obscuring. Encrypted files download as `.keym`; encrypted text is prefixed `KEYM1:`.
-- **Decrypt**: drop in a `.keym` or legacy `.ibitz` file (or paste a `KEYM1:` / base64 blob) with the same password and key file. Format and parameters are detected automatically and shown after decryption.
-- **Tools**: the dice entropy calculator — set your dice sides, log your rolls, and track progress toward the 128-bit floor and 256-bit target.
+| | IttyBitz (v1) | Keymaker (v2) |
+|---|---|---|
+| Key derivation | PBKDF2-SHA-256 only | PBKDF2 **or Argon2id** (memory-hard) |
+| Cipher | AES-256-GCM only | AES-256-GCM, **ChaCha20-Poly1305**, or **both chained** |
+| Container | headerless / `IBTZ` | self-describing **`KEYM`** with authenticated header |
+| Tamper protection | ciphertext only | **entire header authenticated as AAD** |
+| Unicode passwords | no normalization | **NFC-normalized** before derivation |
+| Filenames | leaked in plaintext | optional **filename obscuring** |
+| Seed phrases | BIP-39 validity hint | validity hint plus **Standard SeedQR export** |
+| Entropy tooling | none | **dice entropy calculator** |
+| Reading old files | n/a | **decrypts IBTZ v0 and v1 transparently** |
 
-<br/>
+Everything IttyBitz could open, Keymaker still opens. That is enforced by a fixture
+corpus of real ciphertexts from earlier releases, gated in CI.
 
-## 🛡️ Security
+---
 
-- **KDF**: Argon2id (recommended; configurable time/memory/parallelism) or PBKDF2-HMAC-SHA-256 with 1,000,000 iterations.
-- **Ciphers**: AES-256-GCM, ChaCha20-Poly1305, or chained AES-256-GCM → ChaCha20-Poly1305 with HKDF-derived independent subkeys.
-- **Authenticated settings**: the KEYM header (KDF/cipher/params/flags/salt/nonces) is passed as AAD to every AEAD layer, so tampering with any parameter fails decryption.
-- **Entropy**: all randomness comes from `crypto.getRandomValues`; the password generator uses rejection sampling to avoid modulo bias.
-- **Memory hygiene**: derived keys, key-file buffers, and intermediate ciphertexts are zero-filled after use (best-effort in JavaScript).
-- **Threat model**: Keymaker protects data at rest. It cannot defend against a compromised device, malicious browser extensions, or weak passwords.
+## The Advanced panel
+
+Every new cryptographic choice lives behind one collapsible section, so the default
+path stays a password field and a button.
+
+<p align="center">
+  <img alt="Advanced panel showing key derivation, cipher selection, key file and filename options" src="docs/screenshots/05-advanced-panel.png" width="620" />
+</p>
+
+### Key derivation
+
+Argon2id is the recommended default for new data. Time cost, memory, and parallelism
+are all adjustable, with a live estimate of derivation cost per attempt — which is
+also the cost imposed on anyone brute-forcing the password.
+
+<p align="center">
+  <img alt="Argon2id parameters: time cost, memory, parallelism" src="docs/screenshots/03-kdf-argon2id.png" width="620" />
+</p>
+
+PBKDF2 at 1,000,000 iterations remains available for maximum compatibility. It runs
+entirely on WebCrypto and needs no WebAssembly.
+
+### Cipher
+
+<p align="center">
+  <img alt="Cipher selection: AES-256-GCM, ChaCha20-Poly1305, or chained" src="docs/screenshots/04-cipher-chained.png" width="620" />
+</p>
+
+Chained mode encrypts with AES-256-GCM, then encrypts that ciphertext again with
+ChaCha20-Poly1305 under an independent subkey derived via HKDF. An attacker must break
+both AEAD constructions, and neither key is derivable from the other.
+
+---
+
+## Self-describing containers
+
+A KEYM file carries its own parameters. Decryption needs no configuration — you supply
+the password, and the container states which KDF, which cipher, and which parameters
+were used. Those bytes are authenticated, so they cannot be rewritten to force a
+downgrade.
+
+<p align="center">
+  <img alt="Decrypting a KEYM container; the format and parameters are read back from the header" src="docs/screenshots/07-decrypt-detection.png" width="620" />
+</p>
+
+The readback line above is not a guess. It is the header the file itself declares,
+after that header has been verified as additional authenticated data by every AEAD
+layer. Flip one bit of it and decryption fails, rather than silently doing something
+weaker.
+
+See [`docs/FORMAT.md`](docs/FORMAT.md) for the byte-level specification and
+[`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) for the diagrams.
+
+---
+
+## Seed-phrase awareness
+
+Keymaker recognizes BIP-39 seed phrases and signals validity through border color
+alone — never with a label. A shoulder-surfer sees a green outline, not the words
+"valid seed phrase", so the screen does not announce that it is holding a wallet.
+
+<p align="center">
+  <img alt="Secret text field showing BIP-39 validity through border color only" src="docs/screenshots/02-seed-detection.png" width="620" />
+</p>
+
+A phrase that is seed-shaped but fails its checksum turns red *before* you encrypt it,
+catching a transcription error while it is still fixable, rather than after a bad
+backup has been sealed and stored.
+
+On decryption, a recovered seed can be exported as a **Standard SeedQR** for direct
+import into Coldcard, SeedSigner, Sparrow, Specter, Krux, Keystone, or Jade.
+
+<p align="center">
+  <img alt="Standard SeedQR export dialog, with the QR hidden behind an explicit reveal step" src="docs/screenshots/08-seedqr.png" width="520" />
+</p>
+
+Note what this dialog does *not* do: the QR is not rendered until you press Reveal.
+Plaintext QR codes are mount-gated and blurred, while ciphertext QR codes are shown
+immediately — the interface treats "this pixel pattern is your seed" as a different
+category of risk from "this pixel pattern is encrypted".
+
+---
+
+## Dice entropy calculator
+
+Under the Tools tab. It answers one question: how many physical dice rolls do you need
+for 128 or 256 bits of entropy?
+
+<p align="center">
+  <img alt="Dice entropy calculator showing bits per roll, rolls counted, and progress to target" src="docs/screenshots/09-dice-entropy.png" width="620" />
+</p>
+
+Bits per roll is log2(sides); total entropy is rolls times bits per roll. 128 bits is
+treated as a floor and 256 bits as the target.
+
+This tool **computes bits — it does not generate seeds**. It exists because hardware
+RNGs have failed in the field, and physical dice derive their entropy from mechanics
+you can watch rather than from silicon you have to trust. Generate the actual seed
+from your recorded rolls on an air-gapped device, using dedicated, audited software.
+
+---
+
+## Full feature list
+
+**Cryptography**
+
+- Argon2id (RFC 9106, via hash-wasm) or PBKDF2-HMAC-SHA-256 at 1,000,000 iterations
+- AES-256-GCM, ChaCha20-Poly1305 (RFC 8439), or the two chained with HKDF-derived
+  independent subkeys
+- Self-describing KEYM v1 container with the full header authenticated as AAD
+- NFC password normalization, so a password typed in a different Unicode form on
+  macOS still decrypts elsewhere
+- Optional key file, usable alongside a password; key files can be generated in-app
+  from `crypto.getRandomValues`
+- Rejection-sampled password generator with no modulo bias
+
+**Files and transport**
+
+- Files and text. Encrypted files use `.keym`; encrypted text is prefixed `KEYM1:` so
+  blobs are self-identifying
+- Optional filename obscuring, replacing the name with `keymaker-<random>.keym`
+- QR export for encrypted text, and Standard SeedQR export for recovered seeds
+- Transparent import of legacy IttyBitz `.ibitz` files and bare IBTZ blobs
+
+**Privacy and operation**
+
+- Static export with a `default-src 'none'` CSP and per-file inline-script hashes
+- Installable PWA with full offline support; works air-gapped after first load
+- Secret input and decrypted output blurred by default
+- Clipboard auto-clear after 60 seconds (best-effort)
+- No accounts, no analytics, no fonts or assets from third-party origins
+
+---
+
+## Security model
+
+| Property | Strength of guarantee |
+|---|---|
+| Data never leaves the device | **Structural.** Static export, `connect-src 'self'`, no telemetry. |
+| Header cannot be downgraded | **Cryptographic.** The full header is AAD on every AEAD layer. |
+| Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
+| Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
+| Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
+| Clipboard is cleared | **Best-effort.** The browser may refuse the write. |
+
+Keymaker protects **data at rest**. It cannot defend against a compromised device, a
+malicious browser extension, a keylogger, or a weak password. For the highest-value
+secrets, run it offline on a machine that never rejoins a network.
 
 Report vulnerabilities via the contact in [SECURITY.md](SECURITY.md).
 
-<br/>
+---
 
-## 💻 Run it locally
+## Run it locally
 
-Requires Node.js 20+.
+Requires Node.js 20 or newer.
 
 ```bash
-npm install
-npm run dev        # development server on :9002
-npm run build      # static export to out/ (includes CSP hash post-processing)
-npm run test:keymaker  # crypto regression suite
+npm ci                 # reproducible install from the lockfile
+npm run dev            # development server on :9002
+npm run build          # static export to out/, with CSP hash post-processing
 npm run typecheck
+npm run test:keymaker  # KEYM v1 suite — round-trips, tamper rejection, fixtures
+npm run test:crypto    # frozen IBTZ core — the legacy decryption contract
 ```
 
-The production build is a fully static export — serve `out/` from any static host, or open it offline.
+`npm run build` produces a fully static `out/` directory. Serve it from any static
+host, or open it from disk on a machine with no network connection.
 
-<br/>
+The Argon2id suite is deliberately slow. It runs real memory-hard derivations across
+every KDF and cipher combination, and takes a few minutes.
 
-## 🧾 Attribution
+---
 
-Keymaker is a fork of [IttyBitz](https://github.com/seQRets/ittybitz) by seQRets, GPL-3. Crypto design influenced by Morpheus.
+## Documentation
 
-<br/>
+| Document | Contents |
+|---|---|
+| [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
+| [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
+| [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
+| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Cumulative audit and remediation history |
+| [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
-## 📜 License
+---
 
-This project is licensed under the **GNU General Public License v3.0** — see [LICENSE](LICENSE) for details.
+## Attribution and license
+
+Keymaker is a fork of [IttyBitz](https://github.com/seQRets/ittybitz) by seQRets,
+licensed GPL-3. The cryptographic design — Argon2id, chained AEAD ciphers, the
+self-describing authenticated container, and the dice entropy calculator — is ported
+from the Morpheus project.
+
+Licensed under the **GNU General Public License v3.0**. See [LICENSE](LICENSE).
