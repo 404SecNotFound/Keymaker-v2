@@ -187,6 +187,40 @@ function loadHashWasm(): Promise<typeof import("hash-wasm")> {
   return hashWasmPromise;
 }
 
+/**
+ * Can Argon2id actually run in this environment?
+ *
+ * Argon2id needs WebAssembly, and WebAssembly needs a CSP that permits it.
+ * A policy of `script-src 'self'` without 'wasm-unsafe-eval' blocks module
+ * compilation outright, and the failure surfaces deep inside a lazy import()
+ * — which once meant the Encrypt button silently did nothing.
+ *
+ * So availability is *probed*, not assumed: compile an empty module to test
+ * the policy, then actually load the library. Callers that offer Argon2id as
+ * the default must await this and fall back rather than presenting an option
+ * that cannot work.
+ *
+ * The result is cached — the answer cannot change within a page lifetime.
+ */
+let argon2AvailabilityPromise: Promise<boolean> | null = null;
+export function isArgon2idAvailable(): Promise<boolean> {
+  if (!argon2AvailabilityPromise) {
+    argon2AvailabilityPromise = (async () => {
+      try {
+        if (typeof WebAssembly === "undefined") return false;
+        // Smallest valid module: the 8-byte header alone. Compiling it costs
+        // nothing and fails precisely when CSP forbids WASM.
+        await WebAssembly.instantiate(new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]));
+        await loadHashWasm();
+        return true;
+      } catch {
+        return false;
+      }
+    })();
+  }
+  return argon2AvailabilityPromise;
+}
+
 type NobleCiphers = typeof import("@noble/ciphers/chacha.js");
 let noblePromise: Promise<NobleCiphers> | null = null;
 function loadNoble(): Promise<NobleCiphers> {

@@ -8,20 +8,24 @@
  * and execute that.
  *
  *   node scripts/keymaker-test.mjs            → run the regression suite
+ *   node scripts/keymaker-test.mjs fuzz       → run the parser fuzzer
  *   node scripts/keymaker-test.mjs generate   → regenerate fixtures
  */
 import { build } from "esbuild";
 import { pathToFileURL, fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 const HERE = dirname(fileURLToPath(import.meta.url));
-const generate = process.argv[2] === "generate";
-const entry = join(
-  HERE,
-  generate ? "keymaker-generate-fixtures.mts" : "keymaker-regression.mts"
-);
+
+const ENTRY_BY_MODE = {
+  generate: "keymaker-generate-fixtures.mts",
+  fuzz: "keymaker-fuzz.mts",
+  regression: "keymaker-regression.mts",
+};
+const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
+const entry = join(HERE, ENTRY_BY_MODE[mode]);
 // Output lives next to the entries so import.meta.url-based fixture paths
 // (scripts/, scripts/fixtures/) keep working in the bundle.
-const outfile = join(HERE, generate ? ".generate.build.mjs" : ".regression.build.mjs");
+const outfile = join(HERE, `.${mode}.build.mjs`);
 
 await build({
   entryPoints: [entry],

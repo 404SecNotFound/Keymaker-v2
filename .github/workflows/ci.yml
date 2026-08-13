@@ -45,5 +45,11 @@ jobs:
       - name: KEYM v1 regression suite
         run: npm run test:keymaker
 
+      # parseKeym() consumes fully attacker-controlled binary before any of it
+      # has been authenticated. Seeded and deterministic, so a CI failure
+      # reproduces exactly.
+      - name: Parser fuzzing
+        run: npm run test:fuzz
+
       - name: Production build (static export + CSP hashes)
         run: npm run build

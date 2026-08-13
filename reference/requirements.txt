@@ -1,0 +1,5 @@
+# Dependencies for the independent KEYM v1 reference implementation.
+# Deliberately minimal and mainstream — the point of the reference is to be
+# obviously correct against docs/FORMAT.md, not to be clever.
+cryptography>=41.0.0
+argon2-cffi>=23.1.0

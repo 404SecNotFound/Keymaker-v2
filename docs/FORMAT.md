@@ -79,6 +79,45 @@ Defaults at encryption time: time_cost 3, memory_kib 65536 (64 MiB),
 parallelism 4. Salt length 32 bytes. Output (hashLength) 32 bytes.
 Version is always Argon2 v1.3 (0x13), the only version hash-wasm emits.
 
+## 3.1 Parameter bounds (NORMATIVE)
+
+An implementation **MUST** bound the cost parameters in §3 *before* invoking
+any key derivation.
+
+This requirement is not an optimisation. It follows from the format's own
+structure: the header states how to derive the key, so it must be read before
+a key exists, and the AEAD tag that authenticates it (§7) cannot be verified
+until after derivation. Every byte of the header is therefore attacker-
+controlled at the moment it is used. AAD prevents a tampered header from
+yielding valid plaintext; it does **not** prevent attacker-chosen parameters
+from being *executed* on the way to discovering the tamper.
+
+Without bounds, a 200-byte file can request 4,294,967,295 PBKDF2 iterations or
+4 TiB of Argon2id memory and the reader will attempt it. Note this needs no
+crafted file at all: flipping the single `kdf_id` byte of a valid PBKDF2
+container makes its iteration bytes be re-read as Argon2id parameters, which
+in practice lands on a multi-gigabyte allocation.
+
+| Parameter | Reading (MUST reject outside) | Writing (SHOULD also enforce) |
+|---|---|---|
+| PBKDF2 `iterations` | 1 .. 10,000,000 | ≥ 600,000 |
+| Argon2id `time_cost` | 1 .. 10 | 1 .. 10 |
+| Argon2id `memory_kib` | 1 .. 262,144 | ≥ 8,192 |
+| Argon2id `parallelism` | 1 .. 8 | 1 .. 8 |
+
+The **upper** bounds are the security control and MUST be enforced when
+reading. The **lower** bounds are policy for newly written containers: a
+reader MUST remain permissive about weak historical parameters, because
+refusing them would strand files that were legitimately created with older or
+lower settings.
+
+Rejection MUST happen without invoking the KDF, and MUST be reported as an
+ordinary decryption failure.
+
+Bounding parameters does not make a hostile container free to process — it
+caps the cost at what the most expensive *legitimate* setting would have cost.
+That residual is accepted and bounded; unbounded execution is not.
+
 ## 4. Flags (1 byte)
 
 | Bit | Meaning |
