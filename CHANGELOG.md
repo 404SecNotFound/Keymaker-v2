@@ -25,9 +25,21 @@
   button.
 - The update banner is a `<button>` rather than a `<div>` with a click handler,
   so the update path is reachable from the keyboard.
+- The build emits a precache manifest and the service worker installs every
+  content-hashed chunk, rather than caching whatever the fetch handler happens
+  to intercept.
 
 ### Fixed
 - `resetState()` did not clear the "this password came from the CSPRNG" flag.
+- **Offline support was resting on the browser's HTTP cache** (KM-26). With the
+  worker no longer seizing control on install, chunks fetched before it took
+  over were never cached: 3 of 17 on a first visit. The offline tests passed
+  anyway, because Chromium's HTTP cache answered — a cache the browser may
+  evict at any time. Now 17 of 17, with a browser test that counts what the
+  worker itself holds.
+- Screenshots in the README showed a password row that no longer exists.
+  `scripts/capture-screenshots.mjs` regenerates them from the production
+  export, so the next UI change is cheap to reflect.
 
 ## Keymaker v1.0.0
 

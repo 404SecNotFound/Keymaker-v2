@@ -59,6 +59,35 @@ corpus of real ciphertexts from earlier releases, gated in CI.
 
 ---
 
+## Two ways to get a password you can trust
+
+<p align="center">
+  <img alt="The password row — Copy, Clear, Random and Passphrase — showing a generated seven-word passphrase with its exact entropy stated beneath" src="docs/screenshots/10-passphrase-generator.png" width="620" />
+</p>
+
+**Random** draws 32 characters from a 91-character set — 208 bits, and
+completely unmemorable. **Passphrase** draws 7 words from the EFF Long
+Wordlist — 90 bits, and you can copy it off a card without a transcription
+error.
+
+The second is not the weaker option. There is no server here and no account
+recovery, so a password nobody can write down correctly is its own kind of
+failure mode. 90 bits against a memory-hard KDF is not the number an attacker
+goes after.
+
+Both use rejection sampling, so neither inherits modulo bias, and the entropy
+figures are exact rather than estimated. Keymaker states a figure **only** for
+a password it generated itself: a typed one gets "minimum policy met" and a
+plain admission that a string carries no evidence of how it was chosen.
+
+The wordlist is the part that could go quietly wrong — a single duplicate entry
+would make every printed bit-count an overstatement. So it is not transcribed
+from memory. It is fetched from three independent redistributions that must
+agree on the full ordered 7,776-word sequence, and CI re-derives EFF's own file
+checksum from the shipped array offline on every run.
+
+---
+
 ## The Advanced panel
 
 Every new cryptographic choice lives behind one collapsible section, so the default
@@ -195,7 +224,13 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 **Privacy and operation**
 
 - Static export with a `default-src 'none'` CSP and per-file inline-script hashes
-- Installable PWA with full offline support; works air-gapped after first load
+- Installable PWA with full offline support; works air-gapped after first load.
+  Every chunk the build emits is precached by the service worker at install, so
+  offline does not depend on the browser's own HTTP cache still holding what you
+  need days later
+- Updates never install themselves over a live page. A new version waits and
+  asks; you choose when to reload, because a page may be mid-derivation holding
+  key material
 - Secret input and decrypted output blurred by default
 - Clipboard auto-clear after 60 seconds (best-effort)
 - No accounts, no analytics, no fonts or assets from third-party origins

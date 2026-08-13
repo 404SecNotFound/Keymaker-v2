@@ -12,7 +12,7 @@ change proposed here may alter how a v1 container is parsed or decrypted.
 
 ## 1. Why a new version at all
 
-Four items, three of them carried over from
+Five items, three of them carried over from
 [SECURITY-AUDIT.md](../SECURITY-AUDIT.md#remaining-work).
 
 | # | Problem | Source |
@@ -21,6 +21,7 @@ Four items, three of them carried over from
 | 2 | A 100 MB key file becomes a 100 MB KDF input | KM-05 follow-on |
 | 3 | Encryption holds the whole plaintext, whole ciphertext and both in memory at once, which is what forces the 100 MB cap | audit remaining-work |
 | 4 | Parameter bounds arrived as an amendment (§3.1) after an implementation had already reproduced the vulnerability from the prose | KM-14 |
+| 5 | The text-armor prefix `KEYM1:` shares its first four bytes with the binary magic, so a text backup is misread as a raw container (§7) | found in use |
 
 Only the first is a soundness complaint, and even that one is not a practical
 key-recovery path. The honest summary is that v1 is *correct but awkward*, and
@@ -29,8 +30,8 @@ That is the argument for v2 — not that v1 is broken.
 
 **It is also the argument against rushing.** A format change costs every user a
 migration and costs the project a second decryption path it must support
-forever. If items 1–4 were the only motivation, deferring indefinitely would be
-defensible. Item 3 is what tips it: the 100 MB cap is a user-visible limit that
+forever. If items 1, 2, 4 and 5 were the only motivation, deferring indefinitely
+would be defensible. Item 3 is what tips it: the 100 MB cap is a user-visible limit that
 exists purely because of how the code holds data, and no amount of tuning
 removes it without changing the container.
 
@@ -314,7 +315,35 @@ Additionally, a reader MUST:
 - report every rejection as an ordinary decryption failure, with no detail that
   distinguishes which check failed.
 
-## 7. What this does not fix
+## 7. Text armor
+
+v1 armors a container for copy-paste as `KEYM1:<base64>`. The first four ASCII
+bytes of that prefix are `K`, `E`, `Y`, `M` — byte-identical to the binary
+magic. Format detection that sniffs four bytes therefore classifies a text
+backup as a raw container and fails on the version byte, which is `'1'` (0x31),
+with `unsupported version 49`. Both wrong and baffling, and it was hit in
+practice by a text backup pasted back into the app.
+
+The shipped fix checks the text prefix before the magic. That works, but it
+makes correctness depend on the order of two checks in every implementation
+that will ever read the format — exactly the kind of unwritten obligation the
+Python reference exists to catch, and exactly what KM-14 was about.
+
+v2 removes the ambiguity from the encoding instead:
+
+```
+keym2:<base64url-unpadded>
+```
+
+Lowercase `k` is 0x6B; the magic's `K` is 0x4B. One byte at offset 0
+distinguishes the two encodings, so detection is a switch on the first byte
+with no ordering dependency and no way for a reader to get it subtly wrong.
+
+Base64url without padding, so the armored form survives being pasted into a
+URL, a filename, or a QR code without escaping — and so `=` never has to be
+stripped by hand from a backup someone is trying to recover.
+
+## 8. What this does not fix
 
 - **Chained mode remains unproven as a combiner.** v2 does not change that and
   the wording in FORMAT.md §10 should carry over verbatim (this was KM-13).
@@ -333,7 +362,7 @@ Additionally, a reader MUST:
   proposed here, because a padding scheme is its own design with its own
   trade-offs and bundling it would make this proposal harder to review.
 
-## 8. Migration
+## 9. Migration
 
 1. `decryptData()` dispatches on the version byte. v1 containers keep the
    existing code path, byte for byte. The frozen fixtures guarantee it.
@@ -350,7 +379,7 @@ Additionally, a reader MUST:
 5. New fixtures are **added** to `scripts/fixtures/keymaker/`, never
    substituted, and the v1 fixtures stay exactly as they are.
 
-## 9. Review checklist
+## 10. Review checklist
 
 Before any of this becomes code:
 
@@ -368,3 +397,6 @@ Before any of this becomes code:
       to justify a header field after all?
 - [ ] Does the Python reference, written only from this document, arrive at the
       same bytes as the TypeScript?
+- [ ] Does format detection distinguish `keym2:`, the binary magic, and every
+      legacy prefix by inspecting bytes alone, with no dependence on the order
+      the checks are written in?

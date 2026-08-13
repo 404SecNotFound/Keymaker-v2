@@ -19,9 +19,8 @@ const CACHE_VERSION = 'keymaker-__BUILD_ID__';
 // with reality the way a hardcoded prefix could.
 const BASE = new URL('./', self.location).pathname.replace(/\/$/, '');
 
-// App shell files to precache on install.
-// For a static Next.js export the HTML entry point and key assets are enough;
-// the rest (JS chunks, CSS) are picked up at runtime via the fetch handler.
+// App shell files to precache on install: the HTML entry point, the icons and
+// the manifest. The build output is handled separately, below.
 const APP_SHELL = [
   `${BASE}/`,
   `${BASE}/logo.svg`,
@@ -32,11 +31,32 @@ const APP_SHELL = [
   `${BASE}/icon-512x512.png`,
 ];
 
-// ---- Install: precache the app shell ----
+// Every JS and CSS chunk the export emitted. The build replaces this
+// placeholder with the real list — see scripts/apply-build-id.mjs.
+//
+// These are precached rather than left to the fetch handler to pick up as the
+// page requests them. Runtime caching cannot carry the offline guarantee: a
+// chunk fetched *before* this worker controls the page is never seen by the
+// fetch handler, so it never enters the cache. Measured on a first visit with
+// runtime caching alone, 3 of 17 shipped chunks reached the cache — and the
+// offline tests still passed, because Chromium's HTTP cache answered the rest.
+// That is a cache the browser may evict whenever it likes, not a guarantee.
+// The user who loads the page, closes the tab, and comes back next week on a
+// plane gets a blank screen.
+//
+// The chunks are content-hashed and therefore immutable, which is what makes
+// precaching all of them safe rather than a staleness risk.
+const PRECACHE_ASSETS = __PRECACHE_ASSETS__;
+
+// ---- Install: precache the app shell and the whole build ----
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then((cache) => {
-      return cache.addAll(APP_SHELL);
+      // Shell first, so a partial install still renders something; then the
+      // chunks, which include the lazily imported crypto dependencies
+      // (hash-wasm for Argon2id, @noble/ciphers for ChaCha, the EFF wordlist)
+      // that a user may not touch until after the network is gone.
+      return cache.addAll(APP_SHELL).then(() => cache.addAll(PRECACHE_ASSETS));
     })
   );
 

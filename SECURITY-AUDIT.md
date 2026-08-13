@@ -48,6 +48,7 @@ fixed.
 | ID | Severity | Finding | Status |
 |---|---|---|---|
 | KM-25 | Low | Service-worker update could swap versions mid-encryption | **Fixed** |
+| KM-26 | Medium | Offline support rested on the browser's HTTP cache, not the service worker (3 of 17 chunks cached) | **Fixed** |
 
 **KM-02b — the same mistake, twice removed.** The first version accepted
 `a a a a a a`. Tightened to distinct, substantial words, it still accepted
@@ -287,12 +288,39 @@ in the project that tests the specification rather than the code.
 | `test:keymaker` | 78 KEYM v1 checks, incl. hostile-parameter timing | Node |
 | `test:fuzz` | 2,059 assertions over malformed containers | Node |
 | `test:wordlist` | EFF wordlist integrity against the upstream checksum | Node, no network |
-| `test:browser` | 26 tests on the production export | Chromium, Firefox, WebKit |
+| `test:browser` | 27 tests on the production export | Chromium, Firefox, WebKit |
 | `test:conformance` | 44 cross-implementation checks | Node + Python |
+| `test:recovery` | 22 checks executing docs/RECOVERY.md as written | Python |
 
 The browser suite was validated against the bug it exists for: stripping
 `'wasm-unsafe-eval'` from the built output fails four tests, two of them
 naming the cause directly.
+
+## KM-26 — The offline guarantee was resting on the browser's HTTP cache
+
+Found by counting rather than by reading. Removing `skipWaiting()` (KM-25) was
+correct, but it also removed the thing that had been making runtime caching
+appear to work: a worker that seizes control on install sees the page's chunk
+requests, and one that politely waits does not. Chunks fetched before the
+worker controls the page never reach the fetch handler, so they never enter the
+cache.
+
+The offline matrix did not notice, and could not. Measured on a first visit,
+**3 of 17 shipped chunks** were in Cache Storage — and all six offline cases
+still passed, because Playwright's offline emulation leaves Chromium's HTTP
+disk cache able to answer, and that cache was warm from the load a moment
+earlier. The suite was testing the wrong cache.
+
+The distinction is the whole offline claim. The HTTP cache is evictable and
+heuristic; a Cache Storage entry is not. Load the page, close the tab, come
+back next week on a plane, and only what the *worker* kept is still there.
+
+The build now emits a precache manifest of every content-hashed chunk and the
+worker installs all of them, taking coverage to 17 of 17. Chunks are immutable
+by construction, so precaching them wholesale is safe rather than a staleness
+risk. A new browser test counts what the worker holds and fails on any chunk
+that is missing — the offline matrix stays, but it is no longer the only thing
+standing behind the word "offline".
 
 ---
 
