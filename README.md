@@ -3,8 +3,7 @@
 ### [→ Launch the app](https://404secnotfound.github.io/Keymaker-v2/)
 
 <sub>Runs entirely in the browser. Nothing is uploaded, no account is needed, and it keeps
-working offline once loaded. Requires GitHub Pages to be enabled for this repository —
-see [Publishing](#publishing).</sub>
+working offline once loaded.</sub>
 
 ---
 
@@ -273,13 +272,11 @@ a documented format, not on one program continuing to exist.
 
 ## Publishing
 
-The **Launch the app** link at the top points at GitHub Pages. To make it live:
-
-1. **Settings → Pages → Source: GitHub Actions.** On a private repository this
-   also requires a paid plan.
-2. Run the **Deploy to GitHub Pages** workflow from the Actions tab, or
-   uncomment the `push` trigger in [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml)
-   so every merge to `main` publishes.
+The **Launch the app** link at the top points at GitHub Pages. Every merge to
+`main` publishes via [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml);
+the workflow can also be run by hand from the Actions tab to redeploy without a
+new commit. Enabling it once, on a fresh clone or fork, is
+**Settings → Pages → Source: GitHub Actions**.
 
 A Pages project site is served from `/Keymaker-v2/` rather than the domain root, so
 the deploy builds with `KEYMAKER_BASE_PATH=/Keymaker-v2`. Without it the exported

@@ -3,14 +3,12 @@ name: Deploy to GitHub Pages
 # Publishes the static export to GitHub Pages, which is what the "Launch the
 # app" link in README.md points at.
 #
-# One-time setup: Settings → Pages → Source: GitHub Actions. On a *private*
-# repository Pages also needs a paid plan; until it is enabled this workflow
-# fails on every push, so the push trigger stays commented and the deploy is
-# run manually from the Actions tab. Uncomment the two lines below once Pages
-# is on and every merge to main will publish.
+# Requires Settings → Pages → Source: GitHub Actions to have been enabled once.
+# Every merge to main then publishes; the manual trigger stays available for
+# re-running a deploy without a new commit.
 on:
-  # push:
-  #   branches: [main]
+  push:
+    branches: [main]
   workflow_dispatch:
 
 # No workflow-level permissions — each job requests only what it needs, so the
