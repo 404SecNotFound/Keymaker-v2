@@ -124,10 +124,17 @@ if (processed === 0) {
 // main loop skipped (e.g. a future page whose meta tag didn't match the
 // regex) instead of silently shipping a loose policy for it.
 const leaked = [];
+const uncovered = [];
 for (const file of htmlFiles(OUT_DIR)) {
   const html = readFileSync(file, 'utf8');
   const metaMatch = html.match(metaRe);
-  if (!metaMatch) continue; // a page with no CSP meta is a separate concern
+  if (!metaMatch) {
+    // A shipped page with no CSP at all is strictly worse than one with a
+    // loose CSP, so it cannot be the one case we wave through. If a future
+    // route stops emitting the meta tag, that is a build failure.
+    uncovered.push(file.replace(OUT_DIR + '/', ''));
+    continue;
+  }
   const policy = metaMatch[2]
     .replace(/&#x27;/gi, "'")
     .replace(/&quot;/gi, '"')
@@ -136,6 +143,14 @@ for (const file of htmlFiles(OUT_DIR)) {
   if (scriptSrc.includes("'unsafe-inline'")) {
     leaked.push(file.replace(OUT_DIR + '/', ''));
   }
+}
+
+if (uncovered.length > 0) {
+  console.error(
+    `csp-hashes: ERROR — no Content-Security-Policy meta tag in: ${uncovered.join(', ')}. ` +
+      'Every shipped page must carry a CSP. Refusing to ship an unprotected page.'
+  );
+  process.exit(1);
 }
 
 if (leaked.length > 0) {
@@ -172,6 +187,37 @@ if (wasmless.length > 0) {
     `csp-hashes: ERROR — script-src lacks 'wasm-unsafe-eval' in: ${wasmless.join(', ')}. ` +
       'Argon2id (hash-wasm) cannot instantiate its WebAssembly module under that policy ' +
       'and fails silently at runtime. Refusing to ship a dead KDF.'
+  );
+  process.exit(1);
+}
+
+// The product claim is that nothing a user types can leave the device. That is
+// only structurally true while the page cannot open a connection at all —
+// connect-src 'self' would still permit same-origin fetch/XHR/WebSocket, which
+// downgrades the guarantee from "impossible" to "we didn't write that code".
+// Verified: the app needs no page-initiated connections. The service worker
+// fetches under its own policy and is unaffected.
+const connectable = [];
+for (const file of htmlFiles(OUT_DIR)) {
+  const html = readFileSync(file, 'utf8');
+  const metaMatch = html.match(metaRe);
+  if (!metaMatch) continue; // already fatal above
+  const policy = metaMatch[2]
+    .replace(/&#x27;/gi, "'")
+    .replace(/&quot;/gi, '"')
+    .replace(/&amp;/gi, '&');
+  const connectSrc = policy.split(';').find((d) => /^\s*connect-src\b/.test(d)) || '';
+  if (!/connect-src\s+'none'\s*$/.test(connectSrc.trim())) {
+    connectable.push(`${file.replace(OUT_DIR + '/', '')} (${connectSrc.trim() || 'missing'})`);
+  }
+}
+
+if (connectable.length > 0) {
+  console.error(
+    `csp-hashes: ERROR — connect-src is not 'none' in: ${connectable.join(', ')}. ` +
+      "Keymaker's zero-egress claim depends on the page being unable to open any " +
+      'connection. If a future feature genuinely needs one, change this check ' +
+      'deliberately and update the claim in README.md at the same time.'
   );
   process.exit(1);
 }

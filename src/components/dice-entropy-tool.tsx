@@ -22,6 +22,11 @@ import { cn } from "@/lib/utils";
 const FLOOR_BITS = 128;
 const TARGET_BITS = 256;
 
+// Bounds on the die itself. HTML min/max attributes are a UI affordance, not
+// validation — the value still has to be checked here.
+const MIN_SIDES = 2;
+const MAX_SIDES = 1000;
+
 type Verdict = "below" | "floor" | "target";
 
 export function DiceEntropyTool() {
@@ -31,27 +36,50 @@ export function DiceEntropyTool() {
   const [manualRolls, setManualRolls] = useState("");
 
   const calc = useMemo(() => {
-    const validSides = Number.isFinite(sides) && sides >= 2 ? sides : 6;
+    const validSides =
+      Number.isInteger(sides) && sides >= MIN_SIDES && sides <= MAX_SIDES ? sides : 6;
     const bitsPerRoll = Math.log2(validSides);
 
-    // Count rolls: prefer the roll log (whitespace/comma-separated entries,
-    // run-together digits like "46231" also count as individual rolls when
-    // every character is a valid die face); otherwise the manual count.
+    // Count rolls from the log (whitespace/comma/semicolon separated).
+    //
+    // Every entry must be a physically possible outcome for this die. An
+    // earlier version incremented the count for any token it could not parse,
+    // so "hello", "0", a 9 on a d6, or a 25 on a d20 each contributed a full
+    // roll's worth of entropy to the total. For a tool whose entire output is
+    // an entropy estimate, silently counting impossible observations is the
+    // one bug that matters most: it inflates the number the user is trusting.
     const tokens = rollLog.split(/[\s,;]+/).filter(Boolean);
     let rolls = 0;
+    const invalidEntries: string[] = [];
+
     for (const token of tokens) {
-      if (/^\d+$/.test(token) && token.length > 1 && validSides <= 9) {
-        // "46231" → five individual rolls, if each digit is a valid face.
+      // Run-together digits like "46231" mean five rolls — but only for dice
+      // whose faces are all single digits, otherwise "12" is ambiguous.
+      if (validSides <= 9 && /^\d+$/.test(token) && token.length > 1) {
         const digits = token.split("").map(Number);
         if (digits.every((d) => d >= 1 && d <= validSides)) {
           rolls += digits.length;
+        } else {
+          invalidEntries.push(token);
+        }
+        continue;
+      }
+
+      // Otherwise the token must be a single face value within range.
+      if (/^\d+$/.test(token)) {
+        const value = Number(token);
+        if (value >= 1 && value <= validSides) {
+          rolls += 1;
           continue;
         }
       }
-      rolls += 1;
+      invalidEntries.push(token);
     }
-    const manual = parseInt(manualRolls, 10);
-    if (rolls === 0 && Number.isFinite(manual) && manual > 0) {
+
+    // The manual count is a fallback for people who tallied on paper. It only
+    // applies when no rolls were logged, and must itself be a positive integer.
+    const manual = Number(manualRolls.trim());
+    if (rolls === 0 && invalidEntries.length === 0 && Number.isInteger(manual) && manual > 0) {
       rolls = manual;
     }
 
@@ -74,6 +102,7 @@ export function DiceEntropyTool() {
       rollsNeeded,
       progress,
       verdict,
+      invalidEntries,
     };
   }, [sides, targetBits, rollLog, manualRolls]);
 
@@ -208,6 +237,26 @@ export function DiceEntropyTool() {
             </p>
           </div>
         </div>
+
+        {calc.invalidEntries.length > 0 && (
+          <div
+            role="alert"
+            className="animate-in fade-in-50 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-[12px] text-destructive"
+          >
+            <p className="font-semibold">
+              {calc.invalidEntries.length} entr{calc.invalidEntries.length === 1 ? "y" : "ies"} ignored —
+              not a possible result for a {calc.validSides}-sided die
+            </p>
+            <p className="mt-1 break-all font-mono text-[11px] opacity-80">
+              {calc.invalidEntries.slice(0, 12).join("  ")}
+              {calc.invalidEntries.length > 12 && ` … +${calc.invalidEntries.length - 12} more`}
+            </p>
+            <p className="mt-1.5 opacity-80">
+              These contribute no entropy. Correct or remove them so the total reflects
+              only real rolls.
+            </p>
+          </div>
+        )}
 
         <div>
           <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">

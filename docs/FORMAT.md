@@ -162,8 +162,11 @@ AES-256-GCM, **no** AAD and **no** NFC normalization — see
   ChaCha20-Poly1305 (audited @noble/ciphers, pure JS), Argon2id per
   RFC 9106 (hash-wasm, WASM with inlined base64 — fully offline), HKDF and
   PBKDF2 per RFC 5869 / RFC 8018.
-- **Chained mode** provides defense in depth: an attacker must break both
-  AEAD layers (with independent keys) to recover plaintext.
+- **Chained mode** provides algorithmic defense in depth using independently
+  derived keys: recovering the plaintext requires defeating both AEAD layers,
+  and neither subkey is derivable from the other. This is a design property,
+  not a formally proven combiner-security result — treat it as reducing
+  reliance on any single construction, not as a quantified guarantee.
 - **Argon2id** is the recommended KDF for new data (memory-hard; resistant
   to GPU/ASIC cracking). PBKDF2 at 1M iterations remains for WebCrypto-only
   environments and legacy parity.
