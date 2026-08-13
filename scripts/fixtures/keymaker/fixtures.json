@@ -1,0 +1,57 @@
+{
+  "format": "KEYM",
+  "version": 1,
+  "password": "correct horse battery staple — test only",
+  "keyFileHex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
+  "note": "APPEND-ONLY corpus. Test-only credentials — never use for real data.",
+  "fixtures": [
+    {
+      "name": "pbkdf2-aes256gcm",
+      "file": "pbkdf2-aes256gcm.keym",
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — pbkdf2 / aes-256-gcm"
+    },
+    {
+      "name": "pbkdf2-chacha20poly1305",
+      "file": "pbkdf2-chacha20poly1305.keym",
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": true,
+      "plaintext": "Keymaker fixture — pbkdf2 / chacha20-poly1305"
+    },
+    {
+      "name": "pbkdf2-chained",
+      "file": "pbkdf2-chained.keym",
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — pbkdf2 / chained"
+    },
+    {
+      "name": "argon2id-aes256gcm",
+      "file": "argon2id-aes256gcm.keym",
+      "kdf": "argon2id",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — argon2id / aes-256-gcm"
+    },
+    {
+      "name": "argon2id-chacha20poly1305",
+      "file": "argon2id-chacha20poly1305.keym",
+      "kdf": "argon2id",
+      "cipher": "chacha20-poly1305",
+      "keyFile": true,
+      "plaintext": "Keymaker fixture — argon2id / chacha20-poly1305"
+    },
+    {
+      "name": "argon2id-chained",
+      "file": "argon2id-chained.keym",
+      "kdf": "argon2id",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — argon2id / chained"
+    }
+  ]
+}
