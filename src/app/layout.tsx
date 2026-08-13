@@ -2,16 +2,82 @@ import type {Metadata} from 'next';
 import './globals.css';
 import { Toaster } from "@/components/ui/toaster"
 
-export const metadata: Metadata = {
-  title: 'Keymaker',
-  description: 'Client-side file and text encryption with Argon2id and chained ciphers. Nothing leaves your browser.',
-};
-
 // Subdirectory the app is served from — "" at a domain root, "/Keymaker-v2"
 // on a GitHub Pages project site. Next prefixes its own asset URLs from
 // next.config.js, but not <link> tags we write by hand or a path passed to
 // serviceWorker.register(), so those are prefixed here.
 const BASE = process.env.KEYMAKER_BASE_PATH || '';
+
+// Absolute origin, needed only for social-card metadata: Open Graph requires
+// fully-qualified URLs, and a crawler has no page context to resolve a
+// relative one against. Overridable so a fork or a custom domain does not
+// advertise someone else's host.
+const SITE_URL =
+  process.env.KEYMAKER_SITE_URL || `https://404secnotfound.github.io${BASE || '/Keymaker-v2'}`;
+
+const DESCRIPTION =
+  'Encrypt files, notes and seed phrases entirely in your browser. Argon2id or ' +
+  'PBKDF2, AES-256-GCM, ChaCha20-Poly1305 or both chained, in a self-describing ' +
+  'authenticated container. No server, no account, no upload — and it keeps working offline.';
+
+export const metadata: Metadata = {
+  metadataBase: new URL(SITE_URL),
+  title: {
+    default: 'Keymaker — client-side encryption that never leaves your browser',
+    template: '%s · Keymaker',
+  },
+  description: DESCRIPTION,
+  applicationName: 'Keymaker',
+  category: 'security',
+  keywords: [
+    'client-side encryption',
+    'browser encryption',
+    'Argon2id',
+    'AES-256-GCM',
+    'ChaCha20-Poly1305',
+    'authenticated encryption',
+    'AEAD',
+    'PBKDF2',
+    'BIP-39',
+    'SeedQR',
+    'seed phrase backup',
+    'offline encryption',
+    'zero knowledge',
+    'file encryption',
+    'PWA',
+    'open source',
+  ],
+  authors: [{ name: '404SecNotFound', url: 'https://github.com/404SecNotFound' }],
+  creator: '404SecNotFound',
+  // The app has no backend and stores nothing, so there is nothing to index
+  // beyond the landing page — but it should be findable.
+  robots: { index: true, follow: true },
+  openGraph: {
+    type: 'website',
+    url: SITE_URL,
+    siteName: 'Keymaker',
+    title: 'Keymaker — encrypt everything, trust nothing',
+    description: DESCRIPTION,
+    images: [
+      {
+        url: '/og-card.png',
+        width: 1200,
+        height: 630,
+        alt: 'Keymaker — client-side encryption with Argon2id, AES-256-GCM and ChaCha20-Poly1305.',
+      },
+    ],
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'Keymaker — encrypt everything, trust nothing',
+    description:
+      'Client-side encryption for files, notes and seed phrases. Argon2id and chained AEAD ciphers. Nothing ever leaves your browser.',
+    images: ['/og-card.png'],
+  },
+  // Icons and the manifest stay as hand-written <link> tags in <head> below:
+  // they already carry the basePath prefix, and declaring them here too would
+  // emit a duplicate set.
+};
 
 export default function RootLayout({
   children,
