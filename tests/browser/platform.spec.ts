@@ -1,3 +1,5 @@
+import { readdirSync, statSync } from "node:fs";
+import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 import {
   encryptText,
@@ -166,3 +168,72 @@ for (const [kdf, cipher] of OFFLINE_MATRIX) {
     }
   });
 }
+
+/**
+ * Every shipped chunk must be in the *service worker* cache after a first
+ * visit — not merely reachable.
+ *
+ * The offline matrix above cannot see this. It passed at 3 of 17 chunks
+ * cached, because Playwright's offline emulation still lets Chromium's HTTP
+ * disk cache answer, and that cache had everything from the load a moment
+ * earlier. So the suite reported full offline support while the service worker
+ * was holding almost none of the app.
+ *
+ * The difference matters on the timescale users actually experience. The HTTP
+ * cache is evictable and heuristic; the Cache Storage entry is not. Load the
+ * page today, come back next week on a plane, and only what the worker kept is
+ * still there. Testing against a warm HTTP cache measures the wrong one.
+ *
+ * This counts what the worker itself holds, which is the thing the offline
+ * claim in the README is actually about.
+ */
+test("the service worker caches every shipped chunk on a first visit", async ({
+  browser,
+  browserName,
+}) => {
+  test.skip(browserName === "webkit", "service worker offline mode is not testable in WebKit here");
+
+  const outDir = join(process.cwd(), "out");
+  const walk = (dir: string): string[] =>
+    readdirSync(dir).flatMap((name) => {
+      const p = join(dir, name);
+      return statSync(p).isDirectory() ? walk(p) : [p];
+    });
+  const shipped = walk(join(outDir, "_next", "static"))
+    .filter((f) => /\.(js|css)$/.test(f))
+    .map((f) => f.slice(outDir.length));
+
+  expect(shipped.length, "expected the export to have emitted chunks").toBeGreaterThan(0);
+
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto("/");
+    await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, null, {
+      timeout: 30_000,
+    });
+    // The install precaches; give it room to finish writing before counting.
+    await page.waitForTimeout(4_000);
+
+    const cached = new Set(
+      await page.evaluate(async () => {
+        const paths: string[] = [];
+        for (const key of await caches.keys()) {
+          const cache = await caches.open(key);
+          for (const req of await cache.keys()) paths.push(new URL(req.url).pathname);
+        }
+        return paths;
+      })
+    );
+
+    const missing = shipped.filter((f) => !cached.has(f));
+    expect(
+      missing,
+      `${missing.length}/${shipped.length} shipped chunks are absent from the service worker ` +
+        `cache. Offline support for these depends on the browser's HTTP cache, which it may ` +
+        `evict at any time: ${missing.join(", ")}`
+    ).toEqual([]);
+  } finally {
+    await context.close();
+  }
+});

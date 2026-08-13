@@ -121,22 +121,69 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: `
+              // The new worker waits rather than taking over (see public/sw.js).
+              // This side of the handoff spots it waiting, offers the swap, and
+              // performs it only when the user accepts — so a version change can
+              // never land in the middle of an encryption.
               if ('serviceWorker' in navigator) {
-                window.addEventListener('load', function() {
-                  navigator.serviceWorker.register('${BASE}/sw.js');
+                var reloading = false;
+
+                function offerUpdate(registration) {
+                  if (document.getElementById('sw-update-banner')) return;
+
+                  var banner = document.createElement('button');
+                  banner.id = 'sw-update-banner';
+                  banner.type = 'button';
+                  banner.setAttribute('role', 'alert');
+                  banner.style.cssText = 'position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:9999;background:#c07f2e;color:#000;padding:0.75rem 1.25rem;border:0;border-radius:0.5rem;font:inherit;font-size:0.875rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+                  banner.textContent = 'A new version of Keymaker is ready — tap to reload';
+                  banner.onclick = function() {
+                    // Nothing swaps until this click. Promoting the waiting
+                    // worker triggers controllerchange, which reloads the page
+                    // onto the new version.
+                    banner.disabled = true;
+                    banner.textContent = 'Updating…';
+                    reloading = true;
+                    if (registration.waiting) {
+                      registration.waiting.postMessage({ type: 'SKIP_WAITING' });
+                    } else {
+                      window.location.reload();
+                    }
+                  };
+                  document.body.appendChild(banner);
+                }
+
+                // Guarded by the flag the banner sets, because controllerchange
+                // also fires on a first install when the new worker claims a
+                // page that had no controller — reloading there would bounce a
+                // first-time visitor for no reason.
+                navigator.serviceWorker.addEventListener('controllerchange', function() {
+                  if (!reloading) return;
+                  reloading = false;
+                  window.location.reload();
                 });
 
-                // Listen for the service worker's update notification
-                navigator.serviceWorker.addEventListener('message', function(event) {
-                  if (event.data && event.data.type === 'SW_UPDATED') {
-                    // Show a non-intrusive update banner
-                    var banner = document.createElement('div');
-                    banner.setAttribute('role', 'alert');
-                    banner.style.cssText = 'position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:9999;background:#c07f2e;color:#000;padding:0.75rem 1.25rem;border-radius:0.5rem;font-size:0.875rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
-                    banner.textContent = 'A new version of Keymaker is available — tap to reload';
-                    banner.onclick = function() { window.location.reload(); };
-                    document.body.appendChild(banner);
-                  }
+                window.addEventListener('load', function() {
+                  navigator.serviceWorker.register('${BASE}/sw.js').then(function(registration) {
+                    // Already waiting when this page loaded — an update landed
+                    // during a previous visit that was never accepted.
+                    if (registration.waiting) offerUpdate(registration);
+
+                    registration.addEventListener('updatefound', function() {
+                      var installing = registration.installing;
+                      if (!installing) return;
+                      installing.addEventListener('statechange', function() {
+                        // 'installed' with a controller present means this is a
+                        // replacement waiting its turn, not the first install.
+                        if (installing.state === 'installed' && navigator.serviceWorker.controller) {
+                          offerUpdate(registration);
+                        }
+                      });
+                    });
+                  }).catch(function() {
+                    // Registration failing costs offline support, nothing else.
+                    // The app runs entirely in the page.
+                  });
                 });
               }
             `,

@@ -1,5 +1,46 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **Diceware passphrase generator.** Seven words drawn uniformly from the EFF
+  Long Wordlist with rejection sampling — 90 bits, stated exactly. The wordlist
+  is fetched from three independent redistributions that must agree on the full
+  ordered sequence, and `npm run test:wordlist` re-derives EFF's own file
+  checksum from the shipped array, offline, in CI. Closes the enhancement left
+  open under KM-02.
+- **`docs/FORMAT-V2-DESIGN.md`** — the proposed KEYM v2 container. Design only:
+  no code reads or writes it, and KEYM v1 is unchanged and stays readable.
+
+### Changed
+- **Service-worker updates now wait for the user.** A new version installs and
+  stops; the page offers a reload and only the user's click promotes it.
+  Previously `skipWaiting()` plus `clients.claim()` replaced the running
+  version underneath an open tab and evicted its cache, which could break a
+  lazily imported crypto chunk part-way through an encryption (KM-25).
+- The password policy gate now accepts a secret on provenance when Keymaker
+  generated it, instead of re-judging it on morphology. Without this, a uniform
+  seven-word draw that happened to repeat a word — about one in 370 — would
+  have been certified at 90 bits in the UI and then refused by the Encrypt
+  button.
+- The update banner is a `<button>` rather than a `<div>` with a click handler,
+  so the update path is reachable from the keyboard.
+- The build emits a precache manifest and the service worker installs every
+  content-hashed chunk, rather than caching whatever the fetch handler happens
+  to intercept.
+
+### Fixed
+- `resetState()` did not clear the "this password came from the CSPRNG" flag.
+- **Offline support was resting on the browser's HTTP cache** (KM-26). With the
+  worker no longer seizing control on install, chunks fetched before it took
+  over were never cached: 3 of 17 on a first visit. The offline tests passed
+  anyway, because Chromium's HTTP cache answered — a cache the browser may
+  evict at any time. Now 17 of 17, with a browser test that counts what the
+  worker itself holds.
+- Screenshots in the README showed a password row that no longer exists.
+  `scripts/capture-screenshots.mjs` regenerates them from the production
+  export, so the next UI change is cheap to reflect.
+
 ## Keymaker v1.0.0
 
 First Keymaker release, forked from IttyBitz v2.8.0 (the previous

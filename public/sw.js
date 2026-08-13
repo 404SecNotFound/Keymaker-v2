@@ -19,9 +19,8 @@ const CACHE_VERSION = 'keymaker-__BUILD_ID__';
 // with reality the way a hardcoded prefix could.
 const BASE = new URL('./', self.location).pathname.replace(/\/$/, '');
 
-// App shell files to precache on install.
-// For a static Next.js export the HTML entry point and key assets are enough;
-// the rest (JS chunks, CSS) are picked up at runtime via the fetch handler.
+// App shell files to precache on install: the HTML entry point, the icons and
+// the manifest. The build output is handled separately, below.
 const APP_SHELL = [
   `${BASE}/`,
   `${BASE}/logo.svg`,
@@ -32,15 +31,61 @@ const APP_SHELL = [
   `${BASE}/icon-512x512.png`,
 ];
 
-// ---- Install: precache the app shell ----
+// Every JS and CSS chunk the export emitted. The build replaces this
+// placeholder with the real list — see scripts/apply-build-id.mjs.
+//
+// These are precached rather than left to the fetch handler to pick up as the
+// page requests them. Runtime caching cannot carry the offline guarantee: a
+// chunk fetched *before* this worker controls the page is never seen by the
+// fetch handler, so it never enters the cache. Measured on a first visit with
+// runtime caching alone, 3 of 17 shipped chunks reached the cache — and the
+// offline tests still passed, because Chromium's HTTP cache answered the rest.
+// That is a cache the browser may evict whenever it likes, not a guarantee.
+// The user who loads the page, closes the tab, and comes back next week on a
+// plane gets a blank screen.
+//
+// The chunks are content-hashed and therefore immutable, which is what makes
+// precaching all of them safe rather than a staleness risk.
+const PRECACHE_ASSETS = __PRECACHE_ASSETS__;
+
+// ---- Install: precache the app shell and the whole build ----
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_VERSION).then((cache) => {
-      return cache.addAll(APP_SHELL);
+      // Shell first, so a partial install still renders something; then the
+      // chunks, which include the lazily imported crypto dependencies
+      // (hash-wasm for Argon2id, @noble/ciphers for ChaCha, the EFF wordlist)
+      // that a user may not touch until after the network is gone.
+      return cache.addAll(APP_SHELL).then(() => cache.addAll(PRECACHE_ASSETS));
     })
   );
-  // Activate immediately instead of waiting for existing tabs to close
-  self.skipWaiting();
+
+  // Deliberately NOT skipWaiting().
+  //
+  // A new worker that activates immediately replaces the running version under
+  // whatever the page is in the middle of. For this app that middle can be an
+  // Argon2id derivation: the crypto libraries are lazily imported, so a chunk
+  // may still be fetched after the swap — and the activate handler below has by
+  // then evicted the old cache, whose content-hashed URLs the new build does
+  // not contain. Online that is a slow re-fetch of the wrong version's chunk;
+  // offline, which is the supported way to use this tool, it is a failed import
+  // part-way through encrypting a seed phrase.
+  //
+  // So the new worker waits. The page notices it waiting and offers a reload,
+  // and the swap happens when the user says so — see the SKIP_WAITING handler
+  // below and the registration script in src/app/layout.tsx. On a first install
+  // there is no active worker to wait behind, so this costs a first-time
+  // visitor nothing: install proceeds straight to activate.
+});
+
+// ---- Update handoff ----
+// Sent by the page when the user accepts the update. This is the only thing
+// that promotes a waiting worker, which is what keeps the version stable for
+// the lifetime of a page that never accepts.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // ---- Activate: clean up old caches ----
@@ -49,25 +94,15 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) => {
       const stale = keys.filter((key) => key !== CACHE_VERSION);
 
-      // `activate` also fires on the very first install, when there is no
-      // previous version to have replaced. Only a run that finds and evicts
-      // a cache from an older CACHE_VERSION is a genuine update — otherwise
-      // a first-time visitor is told a new version is available before they
-      // have ever loaded one.
-      const isUpgrade = stale.length > 0;
-
+      // Evicting here is safe now in a way it was not before: activation can
+      // only be reached on a first install (nothing to evict) or because the
+      // user accepted the update, in which case the page reloads onto this
+      // version the moment control changes.
       return Promise.all(stale.map((key) => caches.delete(key)))
-        // Take control of all open tabs immediately
-        .then(() => self.clients.claim())
-        .then(() => {
-          if (!isUpgrade) return;
-          // Notify all open tabs that a new version is active
-          return self.clients.matchAll({ type: 'window' }).then((clients) => {
-            clients.forEach((client) => {
-              client.postMessage({ type: 'SW_UPDATED' });
-            });
-          });
-        });
+        // Take control of open tabs. On a first install this is what makes the
+        // app work offline without a reload; on an accepted update the page is
+        // reloading anyway.
+        .then(() => self.clients.claim());
     })
   );
 });

@@ -43,6 +43,13 @@ fixed.
 | KM-23 | Low | `encryptData` silently defaulted to PBKDF2 | **Fixed** |
 | KM-24 | Low | Dice tool collected roll outcomes it has no use for | **Fixed** |
 
+### Found in-house while closing the open items
+
+| ID | Severity | Finding | Status |
+|---|---|---|---|
+| KM-25 | Low | Service-worker update could swap versions mid-encryption | **Fixed** |
+| KM-26 | Medium | Offline support rested on the browser's HTTP cache, not the service worker (3 of 17 chunks cached) | **Fixed** |
+
 **KM-02b — the same mistake, twice removed.** The first version accepted
 `a a a a a a`. Tightened to distinct, substantial words, it still accepted
 `password qwerty letmein monkey dragon football`. No morphology check fixes
@@ -133,10 +140,66 @@ This gate is advisory and lives only in the UI. `encryptData()` has never
 consulted it, and still does not — cryptographic behaviour must not depend on
 a heuristic.
 
-**Not done:** a built-in Diceware generator. That is the only way to state a
-passphrase's entropy honestly, since it requires controlling the sampling. The
-existing generator produces rejection-sampled random passwords, which is a
-sound alternative; a word-list generator remains a reasonable enhancement.
+**Now done:** a built-in Diceware generator. Controlling the sampling is the
+only way to state a passphrase's entropy honestly, so the generator draws seven
+words uniformly from the EFF Long Wordlist with the same rejection sampling the
+password generator uses — 90 bits, exactly.
+
+The wordlist is the part that needed care, because its size is the denominator
+of every figure the UI prints: one duplicate entry and the claim is an
+overstatement, which is the KM-02/KM-03 failure class again. So it is fetched
+rather than transcribed. `scripts/generate-wordlist.mjs` pulls it from three
+independent redistributions across two package registries, pinned by version
+and archive hash, and refuses to emit anything unless all three agree on the
+full ordered 7,776-word sequence; two of the three carry EFF's file
+byte-for-byte, so the recorded SHA-256 is the upstream artifact's.
+`npm run test:wordlist` re-derives that hash offline in CI by rebuilding EFF's
+exact file layout from the shipped array, which checks content, order and
+completeness in one comparison. It earned its place immediately: it caught the
+generated module splitting on a single space, which fused the word pair
+straddling each line break and silently shortened the list to 7,047 entries.
+
+`meetsPasswordPolicy()` now takes provenance, which fixes a defect the
+generator would otherwise have introduced. A uniform seven-word draw repeats a
+word about once in 370; repetition costs nothing when the draw is uniform, but
+the distinct-word rule reads it as padding — so roughly one generated
+passphrase in 370 would have been certified at 90 bits in the UI and then
+refused by the Encrypt button. Provenance is the correct basis anyway: it is
+KM-02b pointed where it helps, since a typed string can only be judged on
+morphology *because* its provenance is unknown, and here it is known.
+
+## KM-25 — Service-worker updates could swap versions mid-encryption *(new)*
+
+Not in either external review. Found while closing out the open items above.
+
+The worker called `skipWaiting()` on install and `clients.claim()` on activate,
+so a deployment replaced the running version underneath any open tab, and the
+activate handler evicted the old cache on its way in.
+
+That combination is a mid-encryption version swap. The crypto libraries are
+lazily imported — the reason `warmCryptoDependencies` exists at all — so a tab
+part-way through an Argon2id derivation can still fetch a content-hashed chunk,
+and the new build does not contain the old build's chunk URLs. Online that is a
+re-fetch of the wrong version's asset; offline, which is the supported way to
+use this tool, the import simply fails while the user is encrypting a seed
+phrase.
+
+**Fix.** The replacement installs and stops. The page detects it waiting, offers
+a reload, and only the user's click promotes it. Until then nothing about the
+running version changes — in particular its cache is not evicted, so every lazy
+import still resolves. `clients.claim()` stays, because activation is now
+reachable only on a first install (nothing to displace, and claiming is what
+makes the app work offline without a reload) or on an accepted update (the page
+is reloading anyway).
+
+**Tests.** A real update cycle against a private copy of the export on its own
+port: both caches coexist while the update waits, the waiting worker has not
+taken control, and the old cache is evicted only after the click. Validated by
+reinstating `skipWaiting()` and confirming the tests fail. Two things had to be
+worked around: Playwright's request interception never sees the browser's
+service-worker script fetch, and a `waitForFunction` predicate that returns a
+Promise reads as truthy — so the first version of the test passed while
+asserting nothing.
 
 ## KM-03 — Dice calculator counted impossible rolls
 
@@ -224,26 +287,65 @@ in the project that tests the specification rather than the code.
 | `test:crypto` | 45 frozen-core checks, legacy IBTZ decryption | no dependencies installed |
 | `test:keymaker` | 78 KEYM v1 checks, incl. hostile-parameter timing | Node |
 | `test:fuzz` | 2,059 assertions over malformed containers | Node |
-| `test:browser` | 14 tests on the production export | Chromium, Firefox, WebKit |
+| `test:wordlist` | EFF wordlist integrity against the upstream checksum | Node, no network |
+| `test:browser` | 27 tests on the production export | Chromium, Firefox, WebKit |
 | `test:conformance` | 44 cross-implementation checks | Node + Python |
+| `test:recovery` | 22 checks executing docs/RECOVERY.md as written | Python |
 
 The browser suite was validated against the bug it exists for: stripping
 `'wasm-unsafe-eval'` from the built output fails four tests, two of them
 naming the cause directly.
 
+## KM-26 — The offline guarantee was resting on the browser's HTTP cache
+
+Found by counting rather than by reading. Removing `skipWaiting()` (KM-25) was
+correct, but it also removed the thing that had been making runtime caching
+appear to work: a worker that seizes control on install sees the page's chunk
+requests, and one that politely waits does not. Chunks fetched before the
+worker controls the page never reach the fetch handler, so they never enter the
+cache.
+
+The offline matrix did not notice, and could not. Measured on a first visit,
+**3 of 17 shipped chunks** were in Cache Storage — and all six offline cases
+still passed, because Playwright's offline emulation leaves Chromium's HTTP
+disk cache able to answer, and that cache was warm from the load a moment
+earlier. The suite was testing the wrong cache.
+
+The distinction is the whole offline claim. The HTTP cache is evictable and
+heuristic; a Cache Storage entry is not. Load the page, close the tab, come
+back next week on a plane, and only what the *worker* kept is still there.
+
+The build now emits a precache manifest of every content-hashed chunk and the
+worker installs all of them, taking coverage to 17 of 17. Chunks are immutable
+by construction, so precaching them wholesale is safe rather than a staleness
+risk. A new browser test counts what the worker holds and fails on any chunk
+that is missing — the offline matrix stays, but it is no longer the only thing
+standing behind the word "offline".
+
 ---
 
 ## Remaining work
 
-**KEYM v2.** The one substantial item left, and deliberately not started here —
-a new wire format needs design review before code, not after. It should carry:
+**KEYM v2.** The one substantial item left. Still no code, deliberately — a
+wire format needs design review before implementation, not after — but the
+design is now written up in
+[docs/FORMAT-V2-DESIGN.md](docs/FORMAT-V2-DESIGN.md) rather than living as a
+bullet list. It carries:
 
 - length-prefixed, domain-separated key material, closing KM-05
 - key files hashed to a fixed size before derivation, so a 100 MB key file is
   not a 100 MB KDF input
-- chunked/streaming encryption, removing the whole-file memory cost that makes
-  the current 100 MB cap necessary
+- chunked AEAD with counter nonces and a final-chunk flag, removing the
+  whole-file memory cost that makes the current 100 MB cap necessary
 - the §3.1 bounds as part of the format from the start
+
+Three things the write-up added that the bullet list did not imply: truncation
+of a chunked payload is undetectable without an explicit final-chunk marker; a
+prefix of verified chunks is not a verified prefix of a file, so streaming
+output must not be committed until the last chunk authenticates; and the format
+change alone does not lift the size cap, because a browser assembling a Blob to
+download still holds the whole ciphertext. The document ends with a review
+checklist rather than a conclusion.
 
 KEYM v1 should be frozen as it now stands once v2 exists.
 

@@ -45,6 +45,7 @@ import {
   type KdfParams,
   type DetectedFormat,
 } from "@/lib/keymaker-crypto";
+import { EFF_LARGE_WORDLIST, EFF_LARGE_WORDLIST_SIZE } from "@/lib/eff-wordlist";
 import { DiceEntropyTool } from "@/components/dice-entropy-tool";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -142,7 +143,55 @@ const PASSWORD_LENGTH = 32;
 // state: it knows the alphabet, the length, and that the draw was unbiased.
 const PASSWORD_ENTROPY_BITS = Math.floor(PASSWORD_LENGTH * Math.log2(PASSWORD_CHARSET.length));
 
-function meetsPasswordPolicy(pwd: string): boolean {
+// The passphrase generator's parameters, kept here for the same reason: the
+// figure the UI prints is computed from the values the generator uses.
+//
+// Seven words rather than EFF's headline six. Six is 77.5 bits, which is sound
+// behind Argon2id at RFC 9106's second profile — but the KDF settings are the
+// user's to lower, and a seventh word buys 13 bits for one more word to
+// remember. The list itself is fetched and checksummed rather than transcribed;
+// see src/lib/eff-wordlist.ts and scripts/verify-wordlist.mjs.
+const PASSPHRASE_WORDS = 7;
+const PASSPHRASE_SEPARATOR = " ";
+
+// Exact, for the same reason PASSWORD_ENTROPY_BITS is exact: uniform,
+// independent draws from a list whose size is known. log2(7776) = 12.925 bits
+// per word.
+//
+// "Independent" means with replacement, which is what makes this a plain
+// multiplication and what diceware specifies. A repeated word in a generated
+// phrase is therefore not a defect and does not reduce the count — drawing
+// without replacement would be a different, slightly smaller number.
+const PASSPHRASE_ENTROPY_BITS = Math.floor(
+  PASSPHRASE_WORDS * Math.log2(EFF_LARGE_WORDLIST_SIZE)
+);
+
+/**
+ * What the CSPRNG produced, when the current password is exactly that.
+ *
+ * A descriptor rather than a boolean beside a separate bit count: the claim
+ * that there *is* an entropy figure and the figure itself have to travel
+ * together, or they can drift apart.
+ */
+type GeneratedSecret =
+  | { kind: "password"; bits: number }
+  | { kind: "passphrase"; words: number; bits: number };
+
+function meetsPasswordPolicy(pwd: string, wasGenerated = false): boolean {
+  // Provenance settles it whenever provenance is known — which is the KM-02b
+  // lesson pointed in the direction where it actually helps. A typed string
+  // carries no evidence of how it was chosen, so morphology is all there is to
+  // go on. A string this component drew from the CSPRNG a moment ago has a
+  // known sampling process and an exact bit count, and needs no inference.
+  //
+  // This also removes a defect the rules below would otherwise introduce. A
+  // uniform seven-word draw repeats a word about once in 370, and with
+  // replacement that repetition costs nothing — the phrase is still 90 bits.
+  // The distinct-word rule cannot tell that from padding, so without this it
+  // would occasionally refuse to encrypt under a passphrase Keymaker had
+  // itself just certified in the line above the field.
+  if (wasGenerated) return true;
+
   const trimmed = pwd.trim();
 
   const distinctSubstantialWords = new Set(
@@ -485,9 +534,9 @@ export function EncryptorTool() {
   const [textSecret, setTextSecret] = useState('');
   const [outputText, setOutputText] = useState('');
   const [password, setPassword] = useState('');
-  // True only while `password` is exactly what generatePassword() produced.
+  // Non-null only while `password` is exactly what a generator produced.
   // Gates the entropy figure, which is meaningless for a typed password.
-  const [passwordWasGenerated, setPasswordWasGenerated] = useState(false);
+  const [generated, setGenerated] = useState<GeneratedSecret | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [showTextSecret, setShowTextSecret] = useState(false);
   // Advanced encryption options (Encrypt tab only — the KEYM container is
@@ -547,7 +596,7 @@ export function EncryptorTool() {
 
   // Derived, not stored — cheap (5 regex tests) and always consistent with
   // `password`, removing a state variable and its sync points.
-  const passwordMeetsPolicy = meetsPasswordPolicy(password);
+  const passwordMeetsPolicy = meetsPasswordPolicy(password, generated !== null);
 
   // Probe Argon2id support once, and demote the default if WebAssembly is
   // unavailable — a locked-down CSP, an exotic browser, or an embedded
@@ -634,14 +683,15 @@ export function EncryptorTool() {
   const handlePasswordChange = useCallback((pwd: string) => {
     setPassword(pwd);
     // Any edit invalidates the entropy claim — it only holds for the exact
-    // string the CSPRNG produced. generatePassword() re-sets the flag after
+    // string the CSPRNG produced. The generators re-set the descriptor after
     // calling this.
-    setPasswordWasGenerated(false);
+    setGenerated(null);
   }, []);
 
   const resetState = useCallback(() => {
     setFile(null);
     setPassword('');
+    setGenerated(null);
     setShowPassword(false);
     setUseKeyFile(false);
     setKeyFile(null);
@@ -754,12 +804,41 @@ export function EncryptorTool() {
     }
     handlePasswordChange(newPassword);
     // Record that *this* password came from the CSPRNG. Any subsequent typing
-    // clears the flag (see handlePasswordChange), because the entropy claim
-    // only holds for the exact string we generated.
-    setPasswordWasGenerated(true);
+    // clears the descriptor (see handlePasswordChange), because the entropy
+    // claim only holds for the exact string we generated.
+    setGenerated({ kind: "password", bits: PASSWORD_ENTROPY_BITS });
     toast({
       title: "Password generated",
       description: `${passwordLength} random characters — ${PASSWORD_ENTROPY_BITS} bits of entropy.`,
+    });
+  }, [toast, handlePasswordChange]);
+
+  const generatePassphrase = useCallback(() => {
+    const listSize = EFF_LARGE_WORDLIST_SIZE;
+    // Rejection sampling, the same shape as generatePassword above and for the
+    // same reason: 2^32 is not a multiple of 7,776, so a bare modulus would
+    // make the first 4,096 words very slightly likelier than the rest and the
+    // figure below would become an upper bound rather than the count.
+    const limit = Math.floor(0x100000000 / listSize) * listSize;
+    const words: string[] = [];
+    while (words.length < PASSPHRASE_WORDS) {
+      const array = new Uint32Array(PASSPHRASE_WORDS - words.length);
+      window.crypto.getRandomValues(array);
+      for (let i = 0; i < array.length && words.length < PASSPHRASE_WORDS; i++) {
+        if (array[i]! < limit) {
+          words.push(EFF_LARGE_WORDLIST[array[i]! % listSize]!);
+        }
+      }
+    }
+    handlePasswordChange(words.join(PASSPHRASE_SEPARATOR));
+    setGenerated({
+      kind: "passphrase",
+      words: PASSPHRASE_WORDS,
+      bits: PASSPHRASE_ENTROPY_BITS,
+    });
+    toast({
+      title: "Passphrase generated",
+      description: `${PASSPHRASE_WORDS} words from the EFF long list — ${PASSPHRASE_ENTROPY_BITS} bits of entropy.`,
     });
   }, [toast, handlePasswordChange]);
 
@@ -879,7 +958,7 @@ export function EncryptorTool() {
         return;
     }
     
-    if (mode === "encrypt" && !meetsPasswordPolicy(mutablePassword)) {
+    if (mode === "encrypt" && !meetsPasswordPolicy(mutablePassword, generated !== null)) {
         toast({
           title: "Weak Password",
           description: "Use at least 24 characters with mixed character classes, or a 4+ word passphrase (diceware-style).",
@@ -1046,7 +1125,7 @@ export function EncryptorTool() {
       setPassword('');
       setIsLoading(false);
     }
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -1292,38 +1371,62 @@ export function EncryptorTool() {
                 <X className="mr-1.5 h-3.5 w-3.5" />Clear
               </Button>
               {currentMode === 'encrypt' && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={generatePassword}
-                  className="flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
-                >
-                  <RefreshCw className="mr-1.5 h-3.5 w-3.5" />Generate
-                </Button>
+                <>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={generatePassword}
+                    title={`${PASSWORD_LENGTH} random characters — ${PASSWORD_ENTROPY_BITS} bits`}
+                    className="flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
+                  >
+                    <RefreshCw className="mr-1.5 h-3.5 w-3.5" />Random
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={generatePassphrase}
+                    title={`${PASSPHRASE_WORDS} words from the EFF long list — ${PASSPHRASE_ENTROPY_BITS} bits`}
+                    className="flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
+                  >
+                    <Dices className="mr-1.5 h-3.5 w-3.5" />Passphrase
+                  </Button>
+                </>
               )}
             </div>
 
             {/*
               Two different statements, deliberately worded differently.
 
-              A generated password gets a number, because the sampling is ours
+              A generated secret gets a number, because the sampling is ours
               and the arithmetic is exact. A typed one gets "policy met" and an
               explicit disclaimer — Keymaker has no way to know whether a
               passphrase was drawn from a word list or picked because it was
-              memorable, and the two look identical once typed.
+              memorable, and the two look identical once typed. That is why the
+              passphrase button states a bit count and typing the very same
+              words does not.
             */}
             {currentMode === 'encrypt' && password && (
-              passwordWasGenerated ? (
+              generated ? (
                 <p className="text-[11px] leading-snug text-success">
-                  Generated · {PASSWORD_LENGTH} random characters from a{' '}
-                  {PASSWORD_CHARSET.length}-character set ≈{' '}
-                  <strong>{PASSWORD_ENTROPY_BITS} bits</strong> of entropy.
+                  {generated.kind === 'passphrase' ? (
+                    <>
+                      Generated · {generated.words} words drawn uniformly from the{' '}
+                      {EFF_LARGE_WORDLIST_SIZE.toLocaleString()}-word EFF long list ={' '}
+                      <strong>{generated.bits} bits</strong> of entropy.
+                    </>
+                  ) : (
+                    <>
+                      Generated · {PASSWORD_LENGTH} random characters from a{' '}
+                      {PASSWORD_CHARSET.length}-character set ≈{' '}
+                      <strong>{generated.bits} bits</strong> of entropy.
+                    </>
+                  )}
                 </p>
               ) : passwordMeetsPolicy ? (
                 <p className="text-[11px] leading-snug text-muted-foreground">
                   Minimum policy met. This is a floor, not a strength rating — Keymaker
-                  cannot tell how you chose this password. Use <strong>Generate</strong> for
-                  a figure it can stand behind.
+                  cannot tell how you chose this password. Use <strong>Random</strong> or{' '}
+                  <strong>Passphrase</strong> for a figure it can stand behind.
                 </p>
               ) : (
                 <p className="text-[11px] leading-snug text-destructive">
