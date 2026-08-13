@@ -50,3 +50,9 @@ jobs:
 
       - name: Bidirectional conformance
         run: npm run test:conformance
+
+      # docs/RECOVERY.md tells someone holding a years-old backup that this
+      # script and two libraries will get their data back. That promise has to
+      # be executable, or it decays silently into a page of stale instructions.
+      - name: Recovery procedure works as documented
+        run: npm run test:recovery

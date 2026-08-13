@@ -231,6 +231,7 @@ npm run test:keymaker     # KEYM v1 — round-trips, tamper rejection, fixtures
 npm run test:fuzz         # malformed containers against the parser
 npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference
+npm run test:recovery     # the documented recovery procedure, end to end
 ```
 
 `test:browser` needs `npx playwright install` once. `test:conformance` needs
@@ -238,6 +239,35 @@ npm run test:conformance  # cross-test vs the independent Python reference
 
 `npm run build` produces a fully static `out/` directory. Serve it from any static
 host, or open it from disk on a machine with no network connection.
+
+---
+
+## Recovering a file without Keymaker
+
+A backup is only as durable as your ability to open it. If this app is gone,
+unreachable, or you no longer trust the copy in front of you, your data is
+still recoverable — the format is specified, and a second implementation of it
+ships in this repository.
+
+```bash
+pip install cryptography argon2-cffi
+
+python3 reference/keym.py inspect --in backup.keym    # what is this file?
+python3 reference/keym.py decrypt --in backup.keym    # prompts for the password
+```
+
+No browser, no Node, no npm, no network. It reads both backup forms — a
+`.keym` file or pasted `KEYM1:` text — and `inspect` reports the container's
+KDF, cipher, and whether a key file is needed **without** asking for a
+password.
+
+[`docs/RECOVERY.md`](docs/RECOVERY.md) is the full procedure, written to be
+printed and stored alongside your backups. `npm run test:recovery` executes
+those instructions on every push, so the page cannot quietly stop being true.
+
+This is the point of specifying the format in [`docs/FORMAT.md`](docs/FORMAT.md)
+and building a second implementation from that spec alone: your data depends on
+a documented format, not on one program continuing to exist.
 
 ---
 
@@ -275,6 +305,7 @@ every KDF and cipher combination, and takes a few minutes.
 |---|---|
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
+| [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
 | [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Current Keymaker v2 audit, findings and disposition |

@@ -11,6 +11,7 @@
     "test:fuzz": "node scripts/keymaker-test.mjs fuzz",
     "test:browser": "playwright test",
     "test:conformance": "python3 reference/crosstest.py",
+    "test:recovery": "python3 reference/recovery_test.py",
     "analyze": "ANALYZE=true next build --webpack"
   },
   "dependencies": {

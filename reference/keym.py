@@ -372,16 +372,132 @@ def _selftest() -> int:
     return 1 if failures else 0
 
 
+KDF_NAMES = {KDF_PBKDF2: "PBKDF2-HMAC-SHA-256", KDF_ARGON2ID: "Argon2id"}
+CIPHER_NAMES = {
+    CIPHER_AES_256_GCM: "AES-256-GCM",
+    CIPHER_CHACHA20_POLY1305: "ChaCha20-Poly1305",
+    CIPHER_CHAINED: "AES-256-GCM then ChaCha20-Poly1305 (chained)",
+}
+
+
+def read_container(path: str | None) -> bytes:
+    """
+    Load a container from a file or stdin, accepting either wire form.
+
+    Keymaker writes files as raw bytes (.keym) but text as base64 behind a
+    "KEYM1:" prefix, and people back up whichever they were handed — a pasted
+    blob in a password manager is as likely as a downloaded file. A recovery
+    tool that only understood one of them would fail for reasons the person
+    holding it could not diagnose.
+    """
+    raw = open(path, "rb").read() if path else sys.stdin.buffer.read()
+
+    # Check the text prefix *before* the magic bytes: "KEYM1:" begins with the
+    # same four ASCII characters as the binary magic, so a magic-first test
+    # misreads a text backup as a raw container and then rejects it for having
+    # version 0x31 ("1"). A binary container has 0x01 at that offset.
+    is_text = raw[:6].upper() == b"KEYM1:"
+    if not is_text and raw[:4] == MAGIC:
+        return raw
+
+    # Text form, tolerating the prefix and any wrapping whitespace.
+    import base64
+
+    try:
+        text = raw.decode("utf-8").strip()
+    except UnicodeDecodeError as exc:
+        raise KeymError("input is neither a KEYM file nor KEYM1: base64 text") from exc
+    if text.upper().startswith("KEYM1:"):
+        text = text[len("KEYM1:") :]
+    text = "".join(text.split())
+    try:
+        decoded = base64.b64decode(text, validate=True)
+    except Exception as exc:  # noqa: BLE001
+        raise KeymError(
+            "input is neither a KEYM file nor KEYM1: base64 text"
+        ) from exc
+    if decoded[:4] != MAGIC:
+        raise KeymError("decoded data is not a KEYM container (bad magic)")
+    return decoded
+
+
+def resolve_password(supplied: str | None, confirm: bool = False) -> str:
+    """
+    Prefer an interactive prompt over --password.
+
+    A password passed as an argument lands in shell history and is visible in
+    the process list to every other user on the machine, for as long as the
+    KDF runs — which for Argon2id is seconds, by design. That is the wrong
+    default for a tool whose entire job is handling someone's real secret.
+    """
+    if supplied is not None:
+        print(
+            "warning: --password was read from the command line, so it is now in "
+            "your shell history and was visible in the process list. Prefer the "
+            "interactive prompt for real secrets.",
+            file=sys.stderr,
+        )
+        return supplied
+
+    import getpass
+
+    pw = getpass.getpass("Password: ")
+    if confirm and pw != getpass.getpass("Confirm password: "):
+        raise KeymError("passwords did not match")
+    return pw
+
+
+def _inspect(container: bytes) -> int:
+    """
+    Describe a container without decrypting it.
+
+    Everything printed here comes from the header, which is readable before
+    any key exists — that is the point of a self-describing format. It is also
+    authenticated (FORMAT.md section 7), so a successful later decryption
+    proves these values were not tampered with. Before that, treat them as
+    claims the file makes about itself.
+    """
+    h = parse(container)
+    print(f"format          KEYM v{VERSION}")
+    print(f"key derivation  {KDF_NAMES[h.kdf_id]}")
+    if h.kdf_id == KDF_PBKDF2:
+        print(f"                iterations {h.params.iterations:,}")
+    else:
+        print(
+            f"                time cost {h.params.time_cost}, "
+            f"memory {h.params.memory_kib // 1024} MiB, "
+            f"parallelism {h.params.parallelism}"
+        )
+    print(f"cipher          {CIPHER_NAMES[h.cipher_id]}")
+    print(f"key file        {'required' if h.flags & FLAG_KEYFILE else 'not used'}")
+    print(f"salt            {len(h.salt)} bytes")
+    print(f"nonces          {len(h.nonces)} x {NONCE_LEN} bytes")
+    print(f"header          {len(h.settings_block)} bytes (authenticated as AAD)")
+    print(f"ciphertext      {len(h.ciphertext)} bytes")
+    return 0
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="KEYM v1 reference implementation")
+    ap = argparse.ArgumentParser(
+        prog="keym",
+        description=(
+            "KEYM v1 reference implementation and offline recovery tool. "
+            "Decrypts any Keymaker container without a browser."
+        ),
+        epilog="See docs/RECOVERY.md for the standalone recovery procedure.",
+    )
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     for name in ("encrypt", "decrypt"):
-        p = sub.add_parser(name)
-        p.add_argument("--password", required=True)
-        p.add_argument("--key-file")
-        p.add_argument("--in", dest="infile")
-        p.add_argument("--out", dest="outfile")
+        p = sub.add_parser(name, help=f"{name} a KEYM container")
+        p.add_argument(
+            "--password",
+            help="not recommended: leaks to shell history and the process list. "
+            "Omit to be prompted.",
+        )
+        p.add_argument("--key-file", help="path to the key file, if one was used")
+        p.add_argument("--in", dest="infile", help="input path (default: stdin)")
+        p.add_argument("--out", dest="outfile", help="output path (default: stdout)")
         if name == "encrypt":
             p.add_argument("--kdf", choices=["pbkdf2", "argon2id"], default="argon2id")
             p.add_argument("--cipher", choices=["aes", "chacha", "chained"], default="aes")
@@ -390,14 +506,36 @@ def main() -> int:
             p.add_argument("--memory-kib", type=int, default=65536)
             p.add_argument("--parallelism", type=int, default=4)
 
-    sub.add_parser("selftest")
+    insp = sub.add_parser("inspect", help="describe a container without decrypting it")
+    insp.add_argument("--in", dest="infile", help="input path (default: stdin)")
+
+    sub.add_parser("selftest", help="round-trip this implementation against itself")
     args = ap.parse_args()
 
     if args.cmd == "selftest":
         return _selftest()
 
-    data = open(args.infile, "rb").read() if args.infile else sys.stdin.buffer.read()
-    key_file = open(args.key_file, "rb").read() if args.key_file else None
+    if args.cmd == "inspect":
+        try:
+            return _inspect(read_container(args.infile))
+        except KeymError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 1
+
+    try:
+        data = (
+            read_container(args.infile)
+            if args.cmd == "decrypt"
+            else (open(args.infile, "rb").read() if args.infile else sys.stdin.buffer.read())
+        )
+        key_file = open(args.key_file, "rb").read() if args.key_file else None
+        password = resolve_password(args.password, confirm=(args.cmd == "encrypt"))
+    except KeymError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except OSError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
 
     if args.cmd == "encrypt":
         kdf_id = KDF_PBKDF2 if args.kdf == "pbkdf2" else KDF_ARGON2ID
@@ -407,12 +545,25 @@ def main() -> int:
             else Argon2idParams(args.time_cost, args.memory_kib, args.parallelism)
         )
         cipher_id = {"aes": CIPHER_AES_256_GCM, "chacha": CIPHER_CHACHA20_POLY1305, "chained": CIPHER_CHAINED}[args.cipher]
-        out = encrypt(data, args.password, key_file, kdf_id, params, cipher_id)
-    else:
         try:
-            out = decrypt(data, args.password, key_file)
+            out = encrypt(data, password, key_file, kdf_id, params, cipher_id)
         except KeymError as exc:
             print(f"error: {exc}", file=sys.stderr)
+            return 1
+    else:
+        try:
+            out = decrypt(data, password, key_file)
+        except KeymError as exc:
+            # Deliberately undifferentiated (FORMAT.md section 10). The hint
+            # below is about *inputs the user controls*, not about which check
+            # failed — it must not become an oracle.
+            print(f"error: {exc}", file=sys.stderr)
+            print(
+                "hint: this means the password, the key file, or the data itself is "
+                "not right. Run `inspect` to see whether the container expects a key "
+                "file.",
+                file=sys.stderr,
+            )
             return 1
 
     if args.outfile:
