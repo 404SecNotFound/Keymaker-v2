@@ -39,8 +39,33 @@ self.addEventListener('install', (event) => {
       return cache.addAll(APP_SHELL);
     })
   );
-  // Activate immediately instead of waiting for existing tabs to close
-  self.skipWaiting();
+
+  // Deliberately NOT skipWaiting().
+  //
+  // A new worker that activates immediately replaces the running version under
+  // whatever the page is in the middle of. For this app that middle can be an
+  // Argon2id derivation: the crypto libraries are lazily imported, so a chunk
+  // may still be fetched after the swap — and the activate handler below has by
+  // then evicted the old cache, whose content-hashed URLs the new build does
+  // not contain. Online that is a slow re-fetch of the wrong version's chunk;
+  // offline, which is the supported way to use this tool, it is a failed import
+  // part-way through encrypting a seed phrase.
+  //
+  // So the new worker waits. The page notices it waiting and offers a reload,
+  // and the swap happens when the user says so — see the SKIP_WAITING handler
+  // below and the registration script in src/app/layout.tsx. On a first install
+  // there is no active worker to wait behind, so this costs a first-time
+  // visitor nothing: install proceeds straight to activate.
+});
+
+// ---- Update handoff ----
+// Sent by the page when the user accepts the update. This is the only thing
+// that promotes a waiting worker, which is what keeps the version stable for
+// the lifetime of a page that never accepts.
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 // ---- Activate: clean up old caches ----
@@ -49,25 +74,15 @@ self.addEventListener('activate', (event) => {
     caches.keys().then((keys) => {
       const stale = keys.filter((key) => key !== CACHE_VERSION);
 
-      // `activate` also fires on the very first install, when there is no
-      // previous version to have replaced. Only a run that finds and evicts
-      // a cache from an older CACHE_VERSION is a genuine update — otherwise
-      // a first-time visitor is told a new version is available before they
-      // have ever loaded one.
-      const isUpgrade = stale.length > 0;
-
+      // Evicting here is safe now in a way it was not before: activation can
+      // only be reached on a first install (nothing to evict) or because the
+      // user accepted the update, in which case the page reloads onto this
+      // version the moment control changes.
       return Promise.all(stale.map((key) => caches.delete(key)))
-        // Take control of all open tabs immediately
-        .then(() => self.clients.claim())
-        .then(() => {
-          if (!isUpgrade) return;
-          // Notify all open tabs that a new version is active
-          return self.clients.matchAll({ type: 'window' }).then((clients) => {
-            clients.forEach((client) => {
-              client.postMessage({ type: 'SW_UPDATED' });
-            });
-          });
-        });
+        // Take control of open tabs. On a first install this is what makes the
+        // app work offline without a reload; on an accepted update the page is
+        // reloading anyway.
+        .then(() => self.clients.claim());
     })
   );
 });
