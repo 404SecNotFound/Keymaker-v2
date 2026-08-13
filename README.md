@@ -176,7 +176,13 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
   macOS still decrypts elsewhere
 - Optional key file, usable alongside a password; key files can be generated in-app
   from `crypto.getRandomValues`
-- Rejection-sampled password generator with no modulo bias
+- Rejection-sampled generators with no modulo bias: a 32-character random
+  password, or a seven-word Diceware passphrase drawn from the EFF Long Wordlist
+  (90 bits). An entropy figure is stated only for what Keymaker generated
+  itself — a typed password gets "minimum policy met" and nothing more, because
+  a string carries no evidence of how it was chosen
+- The bundled wordlist is fetched from three independent redistributions that
+  must agree, and checksummed against EFF's file in CI rather than trusted
 
 **Files and transport**
 
@@ -302,6 +308,7 @@ every KDF and cipher combination, and takes a few minutes.
 |---|---|
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
+| [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Proposed KEYM v2 — design only, nothing implemented |
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |

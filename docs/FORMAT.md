@@ -10,6 +10,11 @@ IBTZ v1 and headerless v0.
 > chained-cipher construction, and the attacks they close — see
 > [HOW-IT-WORKS.md](HOW-IT-WORKS.md), which covers the same ground with
 > diagrams. This document is the contract; that one is the explanation.
+>
+> A successor format is under design in
+> [FORMAT-V2-DESIGN.md](FORMAT-V2-DESIGN.md). It is a proposal only — no code
+> reads or writes it. **KEYM v1 as specified here is frozen**, and v2 does not
+> change how any existing container is parsed or decrypted.
 
 All multi-byte integers are **big-endian**. All byte offsets below are
 absolute, counted from the first byte of the file.
