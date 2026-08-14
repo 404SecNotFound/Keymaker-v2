@@ -64,7 +64,7 @@ dice math untested (B7), UI logic untested (B1–B3).
 Everything here is **independent of the wire format**, so it can proceed in
 parallel with Phase 3's design work and ship without a migration.
 
-### 2.1 Crypto in a Web Worker *(the single highest-leverage change)*
+### 2.1 Crypto in a Web Worker — **shipped**
 
 Argon2id freezes the tab for 1–3 s today. A Worker buys four things at once:
 a responsive UI, real cancel/progress, transferable `ArrayBuffer`s that kill
@@ -72,7 +72,7 @@ the double copies, and — the part that matters most — **a separate heap** fo
 key material, away from React state and DOM strings. `worker-src 'self'` is
 already in the CSP. This also unblocks 2.2 and 2.5.
 
-### 2.2 Signed build provenance
+### 2.2 Signed build provenance — **shipped**
 
 The README concedes that "whoever serves the bundle is the trust anchor". Emit
 `SHA256SUMS` of `out/`, sign with **Sigstore keyless** (the deploy job already
@@ -80,29 +80,57 @@ has OIDC), publish as a release asset, document `cosign verify-blob`. This
 converts the project's central honesty admission into something a user can
 check. For a zero-server tool this is the highest-value trust item that exists.
 
-### 2.3 Verify-only mode
+### 2.3 Verify-only mode — **shipped**
 
 "Prove this backup still opens with this password" — decrypt, authenticate,
 discard the plaintext, never render it. Tiny to build, and it makes backup
 hygiene a first-class flow. Nobody ships this.
 
-### 2.4 In-app recovery kit
+Worth stating precisely, because the honest version is narrower than the pitch:
+authenticating an AEAD ciphertext *requires producing the plaintext*. Neither
+AES-GCM nor ChaCha20-Poly1305 has a verify-the-tag-only operation and WebCrypto
+exposes no such API, so the plaintext exists in the worker heap for the length
+of one call. What verify-only removes is the part under the user's control — it
+never reaches the DOM, a Blob, the clipboard, or a file. The result reports the
+byte count as well as a tick, because "it opens" alone does not catch the right
+password on the wrong backup.
+
+### 2.4 In-app recovery kit — **shipped**
 
 Footer link → the bundled `RECOVERY.md` and `keym.py`. Near-zero cost, and it
 means the recovery path travels with the container instead of living in a repo
 the user may never find.
+
+Both are copied into the export at build time (`scripts/build-recovery-kit.mjs`,
+fail-closed on a missing or truncated source) and precached via the service
+worker's `APP_SHELL`. The precaching is the point: the moment someone needs
+these is the moment the website is unreachable, so a recovery document that
+requires the site to be up is not a recovery document.
 
 ### 2.5 KDF auto-calibration
 
 Benchmark ~300 ms in the Worker, pick the strongest Argon2id parameters that
 fit a chosen unlock-time budget. KeePass does this; no browser tool does.
 
-### 2.6 Session auto-lock and clipboard hardening
+### 2.6 Session auto-lock and clipboard hardening — **shipped**
 
 Inactivity timer clearing password/plaintext state, a "Wipe now" button, and an
 unconditional clipboard overwrite with a visible countdown (drop the failing
 `readText` comparison). Small, and they close the gap between what the threat
 model claims and what the UI actually does.
+
+The `readText` comparison was worse than useless: it needs permission and
+document focus, Firefox does not offer it to page script at all, and it sat
+inside a bare `catch {}` — so the read threw, the overwrite never ran, and the
+toast said the clipboard would be cleared while the seed phrase stayed in it.
+The overwrite is now unconditional, which has a real cost — anything copied in
+the meantime is cleared too — so the countdown is on screen with a **Clear now**
+control rather than the behaviour being a surprise.
+
+Auto-lock fires after five minutes idle and spends the last 30 seconds visibly
+counting down with **Keep open**, because someone transcribing a 24-word phrase
+onto paper is doing exactly the thing a silent wipe would ruin. A wipe is
+deliberately not a reset: cipher, KDF and input-type choices survive it.
 
 ### 2.7 Accessibility
 
@@ -110,7 +138,12 @@ Non-colour cue for BIP-39 validity (it is colour-only today, invisible to
 colour-blind users), aria states, `axe-core` in CI.
 
 **Gate:** Worker landed with cancel working; `cosign verify-blob` documented
-and demonstrated against a real release.
+and demonstrated against a real release. **Both met** — the signing job ran
+against a real OIDC token on the first deploy after 2.2 merged, and verifies its
+own signature before publishing it.
+
+**Remaining in this phase:** 2.5 (KDF auto-calibration) and 2.7 (accessibility).
+Neither blocks Phase 3.
 
 ---
 
