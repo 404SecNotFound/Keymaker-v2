@@ -1388,6 +1388,7 @@ export function EncryptorTool() {
         // Info line + legacy-format nudge.
         const formatLabels: Record<DetectedFormat, string> = {
           "keym-v1": "Keymaker v1",
+          "keym-v2": "Keymaker v2",
           "ibtz-v1": "IttyBitz v1 (legacy)",
           "ibtz-v0": "IttyBitz v0 (legacy)",
         };

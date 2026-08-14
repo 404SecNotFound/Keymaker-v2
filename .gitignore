@@ -27,6 +27,7 @@ yarn-error.log*
 scripts/.regression.build.mjs
 scripts/.fuzz.build.mjs
 scripts/.generate.build.mjs
+scripts/.keym2-dispatch.build.mjs
 *.tsbuildinfo
 
 # playwright
