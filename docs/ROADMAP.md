@@ -107,10 +107,37 @@ worker's `APP_SHELL`. The precaching is the point: the moment someone needs
 these is the moment the website is unreachable, so a recovery document that
 requires the site to be up is not a recovery document.
 
-### 2.5 KDF auto-calibration
+### 2.5 KDF auto-calibration — **shipped**
 
 Benchmark ~300 ms in the Worker, pick the strongest Argon2id parameters that
 fit a chosen unlock-time budget. KeePass does this; no browser tool does.
+
+Three things were less obvious than "time it and scale":
+
+**A one-point model always under-provisions.** The first Argon2id call in a
+worker pays for instantiating the wasm module, and there is a fixed per-call
+cost besides. A single measurement cannot separate that from the per-byte cost,
+so it attributes the overhead to memory and concludes the device is roughly
+three times slower than it is. Two points at different memory sizes separate
+the intercept from the slope; a discarded warm-up keeps wasm instantiation out
+of both.
+
+**The ceiling is a portability decision, not a cryptographic one.** §6 permits
+256 MiB and calibration stops at 128, because *the device you encrypt on is not
+the device you recover on*. A container calibrated to a desktop can be painful
+to open on the phone someone reaches for in ten years.
+
+**"8 MiB" means two different things.** It is a different answer when it is the
+floor a slow device could not beat than when it is what the budget bought, so
+the result carries which constraint bound it and the UI says so rather than
+printing a number. A device that cannot reach the target is told it will be
+slower, not shown the target it missed.
+
+The solver is pure and takes measurements as data, which is what lets it be
+tested against devices that do not exist — one fast enough to exhaust the
+ceiling, one too slow to reach the floor, one whose samples are incoherent.
+Every result is pushed through `validateKdfParams` rather than compared against
+a second copy of §6's numbers.
 
 ### 2.6 Session auto-lock and clipboard hardening — **shipped**
 
@@ -142,9 +169,7 @@ and demonstrated against a real release. **Both met** — the signing job ran
 against a real OIDC token on the first deploy after 2.2 merged, and verifies its
 own signature before publishing it.
 
-**Remaining in this phase:** 2.5 (KDF auto-calibration) alone. It is the
-largest of the phase and the least load-bearing — the fixed 64 MiB Argon2id
-defaults are already sound — so it does not block Phase 3.
+**Remaining in this phase:** nothing. 2.5 was the last item.
 
 ### What 2.7 actually found
 

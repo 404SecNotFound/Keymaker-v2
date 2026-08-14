@@ -53,10 +53,16 @@ import {
 } from "@/lib/keymaker-crypto";
 import {
   encryptViaWorker,
+  calibrateViaWorker,
   decryptViaWorker,
   cancelAllCryptoWork,
   warmCryptoWorker,
 } from "@/lib/crypto-client";
+import {
+  describeCalibration,
+  predictArgon2Ms,
+  type DeviceFit,
+} from "@/lib/kdf-calibration";
 import { EFF_LARGE_WORDLIST, EFF_LARGE_WORDLIST_SIZE } from "@/lib/eff-wordlist";
 import { DiceEntropyTool } from "@/components/dice-entropy-tool";
 import { Switch } from "@/components/ui/switch";
@@ -654,6 +660,54 @@ export function EncryptorTool() {
   const [argonTimeCost, setArgonTimeCost] = useState(DEFAULT_ARGON2ID.timeCost);
   const [argonMemoryMiB, setArgonMemoryMiB] = useState(DEFAULT_ARGON2ID.memoryKiB / 1024);
   const [argonParallelism, setArgonParallelism] = useState(DEFAULT_ARGON2ID.parallelism);
+  // Roadmap 2.5. `deviceFit` outlives the calibration itself on purpose: once
+  // this device has been measured, every slider position can be priced against
+  // it, not just the one calibration happened to pick.
+  const [deviceFit, setDeviceFit] = useState<DeviceFit | null>(null);
+  const [calibrating, setCalibrating] = useState(false);
+  const [calibrationNote, setCalibrationNote] = useState<string | null>(null);
+
+  /**
+   * One second, and it is a judgement rather than a measurement.
+   *
+   * Long enough that brute force costs an attacker real money, short enough
+   * that someone unlocking a backup on a phone does not think it has hung. The
+   * fixed 64 MiB default was aiming at roughly this on a mid-range laptop;
+   * calibration aims at the same target on whatever machine is actually here.
+   */
+  const CALIBRATION_BUDGET_MS = 1000;
+
+  const runCalibration = useCallback(async () => {
+    setCalibrating(true);
+    setCalibrationNote(null);
+    try {
+      const result = await calibrateViaWorker(
+        CALIBRATION_BUDGET_MS,
+        argonTimeCost,
+        argonParallelism
+      );
+      if (!result) {
+        setDeviceFit(null);
+        setCalibrationNote(
+          "Calibration needs a Web Worker, and this browser did not provide one. Your current settings are unchanged."
+        );
+        return;
+      }
+      setDeviceFit(result.fit);
+      // Only the memory slider moves. Time cost and parallelism are what the
+      // user asked to solve *for*, and quietly overwriting a deliberate choice
+      // is worse than a slightly-off answer.
+      if (result.params.kdf === KdfId.ARGON2ID) {
+        setArgonMemoryMiB(result.params.params.memoryKiB / 1024);
+      }
+      setCalibrationNote(describeCalibration(result, CALIBRATION_BUDGET_MS));
+    } catch {
+      setDeviceFit(null);
+      setCalibrationNote("Calibration did not finish. Your current settings are unchanged.");
+    } finally {
+      setCalibrating(false);
+    }
+  }, [argonTimeCost, argonParallelism]);
   const [cipherChoice, setCipherChoice] = useState<CipherId>(CipherId.AES_256_GCM);
   const [obscureFilename, setObscureFilename] = useState(false);
   // Post-decrypt info line: which container format/params were detected.
@@ -2038,9 +2092,32 @@ export function EncryptorTool() {
                               />
                             </div>
                           ))}
-                          <p className="text-[11px] text-muted-foreground">
-                            Estimated derivation time: ≈{Math.max(1, Math.round((argonTimeCost * argonMemoryMiB) / 64))}s per attempt on a typical laptop (varies by device).
-                          </p>
+                          <div className="space-y-2 pt-1">
+                            <button
+                              type="button"
+                              onClick={runCalibration}
+                              disabled={calibrating || isLoading}
+                              className={cn(
+                                "w-full rounded-lg border px-3 py-2 text-[12px] font-medium transition-colors",
+                                "border-white/10 bg-white/2 hover:border-white/20",
+                                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+                                "disabled:cursor-not-allowed disabled:opacity-50"
+                              )}
+                            >
+                              {calibrating ? "Measuring this device…" : "Calibrate for this device"}
+                            </button>
+                            <p className="text-[11px] text-muted-foreground">
+                              {deviceFit
+                                ? `Derivation time: ≈${(predictArgon2Ms(deviceFit, argonTimeCost, argonMemoryMiB * 1024) / 1000).toFixed(1)}s per attempt, measured on this device.`
+                                : `Estimated derivation time: ≈${Math.max(1, Math.round((argonTimeCost * argonMemoryMiB) / 64))}s per attempt on a typical laptop (varies by device).`}
+                            </p>
+                            {/* Announced, because the result is the whole point
+                                of pressing the button and a sighted user sees
+                                the memory slider jump. */}
+                            <p className="text-[11px] text-muted-foreground" role="status" aria-live="polite">
+                              {calibrationNote ?? ""}
+                            </p>
+                          </div>
                         </div>
                       )}
                     </div>
