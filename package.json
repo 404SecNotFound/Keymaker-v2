@@ -11,6 +11,7 @@
     "test:fuzz": "node scripts/keymaker-test.mjs fuzz",
     "test:browser": "playwright test",
     "test:conformance": "python3 reference/crosstest.py",
+    "test:keym2": "python3 reference/keym2.py selftest",
     "test:recovery": "python3 reference/recovery_test.py",
     "test:wordlist": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-wordlist.mjs",
     "analyze": "ANALYZE=true next build --webpack",

@@ -45,8 +45,19 @@ jobs:
       - name: Install reference dependencies
         run: pip install -r reference/requirements.txt
 
-      - name: Reference self-test
+      - name: Reference self-test (KEYM v1)
         run: python3 reference/keym.py selftest
+
+      # KEYM v2 has no TypeScript yet, so there is nothing to cross-test
+      # against — which is the point. The reference is written from
+      # docs/FORMAT-V2-DESIGN.md *first*, so the specification is what gets
+      # debugged, before an implementation exists to enshrine its gaps. It has
+      # already found four (see §11 of that document, and §A of keym2.py).
+      #
+      # Running it in CI from now keeps those findings from rotting as the
+      # proposal is edited.
+      - name: Reference self-test (KEYM v2, spec-first)
+        run: npm run test:keym2
 
       - name: Bidirectional conformance
         run: npm run test:conformance
