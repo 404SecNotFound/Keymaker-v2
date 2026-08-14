@@ -277,15 +277,14 @@ against a build predating Phases 1 and 2.
 | U7 — colour-only BIP-39 signalling | **Shipped** as 2.7. This is the finding 2.7 records as the one **axe could not see**: a red border produces zero violations. |
 | U2, first half — tab round-trip wipes in-progress work | **Already fixed.** `handleModeChange` skips `resetState()` for the Tools tab, with a comment saying why. |
 | B7 — dice invalid-sides entropy | **Shipped.** |
+| U9 — 320px header overflow, "Tools" clipped off-screen | **Shipped**, and now measured rather than assumed: `platform.spec.ts` asserts no horizontal overflow at 320, 360, 375, 393 and 430px, and all five pass. |
 | "Add axe-core to the Playwright suite" | **Shipped** as 2.7, across six scans in CI. |
 
-Two need re-measuring rather than fixing or closing:
+One is still open but is not the finding it is filed under:
 
-- **U9** — 320px header overflow. A mobile overflow fix shipped after this
-  build; whether it covers 320px specifically has not been measured.
 - **U2, second half** — the dice roll log dying on a tab switch. Confirmed
   still true (`TabsContent` carries no `forceMount`, so Radix unmounts it), but
-  a different defect from the one U2 leads with.
+  a different defect from the one U2 leads with. Queued as U2b in 5.2.
 
 ### 5.1 The crash, first
 
