@@ -177,3 +177,105 @@ test.describe("oversized paste", () => {
     await expect(page.getByText(/Text mode is for secrets up to/i)).toBeVisible();
   });
 });
+
+/**
+ * Armor is wrapped, and wrapping is what closes the self-inflicted half of U4.
+ *
+ * The gate above stops a hostile paste. This stops Keymaker handing the user
+ * input it then chokes on: its own armored output, copied out and pasted back
+ * into Decrypt, was a single unbroken line — the exact shape that costs
+ * ~12 400 ms per MiB to lay out.
+ *
+ * Line breaks are not part of the encoding. Every reader strips whitespace
+ * (v2's `dearmorKeym2` explicitly, v1's `atob` via the HTML spec's
+ * forgiving-base64 decode), so this changes no cryptographic property and no
+ * existing backup.
+ */
+test.describe("armored output", () => {
+  test("is wrapped, and round-trips back through the app", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+
+    const secret = "abandon ability able about above absent absorb abstract 🔑";
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(
+      "correct-horse-battery-staple-9271!X"
+    );
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await page.waitForFunction(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement | null)
+        ?.value?.startsWith("keym2:"),
+      null,
+      { timeout: 90_000 }
+    );
+
+    const armored = await page.evaluate(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+    );
+
+    expect(armored, "armor is still one unbroken line").toContain("\n");
+    const bodyLines = armored.slice("keym2:".length).split("\n");
+    expect(
+      Math.max(...bodyLines.map((l) => l.length)),
+      "a line exceeds the 64-column width"
+    ).toBeLessThanOrEqual(64);
+
+    // The claim that matters: the app can read back exactly what it wrote.
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(
+      "correct-horse-battery-staple-9271!X"
+    );
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+
+    await expect(visible(page.locator("#output-text"))).toHaveValue(secret);
+  });
+
+  test("wrapped armor for the largest legal secret still fits the decrypt cap", async ({
+    page,
+  }) => {
+    await page.goto("/");
+    await useTextMode(page);
+
+    // The trap the asymmetric caps exist to prevent, now with wrapping in the
+    // way: armor expands by 4/3 and gains a newline every 64 columns, so the
+    // app must not be able to produce text it then refuses to take back.
+    // Computed rather than asserted: 32 KiB plaintext -> ~44 543 armored chars
+    // against a 64 KiB cap.
+    await page.evaluate(() => {
+      const el = document.querySelector("#text-secret") as HTMLTextAreaElement;
+      const setter = Object.getOwnPropertyDescriptor(
+        window.HTMLTextAreaElement.prototype, "value")!.set!;
+      setter.call(el, "x".repeat(32 * 1024));
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await expect(
+      visible(page.getByPlaceholder("Enter text to encrypt")),
+      "the largest legal text-mode secret was refused by the encrypt cap"
+    ).toHaveValue("x".repeat(32 * 1024));
+
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(
+      "correct-horse-battery-staple-9271!X"
+    );
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await page.waitForFunction(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement | null)
+        ?.value?.startsWith("keym2:"),
+      null,
+      { timeout: 90_000 }
+    );
+    const armored = await page.evaluate(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+    );
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await expect(
+      visible(page.getByPlaceholder("Enter text to decrypt")),
+      `the app produced ${armored.length} chars of armor its own field refuses`
+    ).toHaveValue(armored);
+    await expect(page.getByText(/Encrypted text is accepted up to/i)).toHaveCount(0);
+  });
+});
