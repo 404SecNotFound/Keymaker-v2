@@ -38,9 +38,20 @@ export function DiceEntropyTool() {
   const [showValidator, setShowValidator] = useState(false);
 
   const calc = useMemo(() => {
-    const validSides =
-      Number.isInteger(sides) && sides >= MIN_SIDES && sides <= MAX_SIDES ? sides : 6;
-    const bitsPerRoll = Math.log2(validSides);
+    // Whether the die size is usable at all, kept as a value rather than
+    // silently repaired.
+    //
+    // This used to read `... ? sides : 6`, so clearing the field (which yields
+    // Number("") === 0) or typing 1 quietly computed everything for a six-sided
+    // die and displayed the result with no indication that the die shown was
+    // not the die used. A user who cleared the box and entered 99 rolls was
+    // told "256 bits" about a d6 they had never rolled. For a tool whose only
+    // output is an entropy figure the user is asked to trust, inventing the
+    // input is the worst thing it can do — and it is exactly the failure class
+    // the comment below already warned about for roll tokens.
+    const sidesValid = Number.isInteger(sides) && sides >= MIN_SIDES && sides <= MAX_SIDES;
+    const validSides = sidesValid ? sides : 0;
+    const bitsPerRoll = sidesValid ? Math.log2(validSides) : 0;
 
     // Count rolls from the log (whitespace/comma/semicolon separated).
     //
@@ -95,6 +106,7 @@ export function DiceEntropyTool() {
       totalBits >= TARGET_BITS ? "target" : totalBits >= FLOOR_BITS ? "floor" : "below";
 
     return {
+      sidesValid,
       validSides,
       bitsPerRoll,
       rolls,
@@ -158,10 +170,23 @@ export function DiceEntropyTool() {
             type="number"
             min={2}
             max={1000}
-            value={sides}
-            onChange={(e) => setSides(Number(e.target.value))}
-            className="h-11 rounded-xl border-white/10 bg-white/4 text-[15px] focus-visible:border-accent/50 focus-visible:ring-0"
+            value={Number.isFinite(sides) ? sides : ""}
+            onChange={(e) => setSides(e.target.value === "" ? NaN : Number(e.target.value))}
+            aria-invalid={!calc.sidesValid}
+            aria-describedby={calc.sidesValid ? undefined : "dice-sides-error"}
+            className={cn(
+              "h-11 rounded-xl bg-white/4 text-[15px] focus-visible:ring-0",
+              calc.sidesValid
+                ? "border-white/10 focus-visible:border-accent/50"
+                : "border-destructive/60 focus-visible:border-destructive"
+            )}
           />
+          {!calc.sidesValid && (
+            <p id="dice-sides-error" role="alert" className="text-[11px] leading-snug text-destructive">
+              Enter the number of sides on your die, between {MIN_SIDES} and {MAX_SIDES}. No
+              entropy is calculated until this is a real die.
+            </p>
+          )}
         </div>
         <div className="space-y-1.5">
           <Label className="text-[13px] font-medium text-muted-foreground">Target</Label>

@@ -35,6 +35,8 @@ import {
   decryptData,
   inspectKeym,
   isArgon2idAvailable,
+  isUserFacingError,
+  KeymakerError,
   warmCryptoDependencies,
   MAX_PLAINTEXT_SIZE,
   MAX_CONTAINER_SIZE,
@@ -80,12 +82,15 @@ function loadBip39(): Promise<Bip39Module> {
 // maximum call stack size for buffers larger than ~65KB.
 function uint8ArrayToBase64(bytes: Uint8Array): string {
   const CHUNK_SIZE = 0x8000; // 32KB — well under any engine's argument limit
-  let binary = '';
+  // Collected and joined once rather than accumulated with `+=`. At the 100 MB
+  // ceiling that is ~3,200 fragments, and an engine that flattens the rope on
+  // every concatenation turns this into O(n²).
+  const parts: string[] = [];
   for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
     const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-    binary += String.fromCharCode.apply(null, chunk as unknown as number[]);
+    parts.push(String.fromCharCode.apply(null, chunk as unknown as number[]));
   }
-  return btoa(binary);
+  return btoa(parts.join(''));
 }
 
 function base64ToUint8Array(base64: string): Uint8Array {
@@ -565,6 +570,15 @@ export function EncryptorTool() {
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
   const clipboardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  /**
+   * Monotonic id of the crypto operation that currently owns the UI.
+   *
+   * A ref, not state: it must be readable synchronously from inside an async
+   * closure that started several renders ago, and bumping it must not itself
+   * trigger a render.
+   */
+  const opSeqRef = useRef(0);
+
   // Decrypted-result QR modal state. This is purely a display-side concern —
   // the QR is generated from the already-decrypted `outputText`. It does not
   // touch the cryptography or the encrypted file format.
@@ -689,6 +703,13 @@ export function EncryptorTool() {
   }, []);
 
   const resetState = useCallback(() => {
+    // Disown any operation still running. A KDF cannot be cancelled from here —
+    // that needs the Worker in Phase 2 — but it can be made harmless: once the
+    // counter moves, the in-flight operation's completion path goes quiet
+    // instead of writing its result, its toast, and a password wipe into a UI
+    // that has moved on.
+    opSeqRef.current++;
+    setIsLoading(false);
     setFile(null);
     setPassword('');
     setGenerated(null);
@@ -716,6 +737,12 @@ export function EncryptorTool() {
   }, [resetState]);
   
   const handleInputTypeChange = useCallback((newType: string) => {
+      // Same reasoning as resetState: an operation started against File mode
+      // must not deliver its result into Text mode. This was the reproducible
+      // half of the bug — switch input type mid-derivation and the finished
+      // operation announced "Success!" on a panel that had never run it.
+      opSeqRef.current++;
+      setIsLoading(false);
       setInputType(newType as InputType);
       // Clear any previous result when the input type changes. The blur and
       // reveal controls on the decrypted output are scoped to text mode, so
@@ -938,7 +965,34 @@ export function EncryptorTool() {
   }, [toast, decryptedQrStatus.kind]);
 
   const processData = useCallback(async () => {
+    // Reentrancy guard.
+    //
+    // The Process button disables itself while `isLoading`, but that only
+    // covers the button. Keyboard submit, a double-fire, or any future caller
+    // reaches this function directly, and a second derivation racing the first
+    // produces exactly the state corruption the sequence guard below exists to
+    // prevent — so refuse at the door as well.
+    if (isLoading) return;
+
+    // Claim this operation's sequence number.
+    //
+    // Everything after an `await` here runs in a world that may have moved on:
+    // the user can switch tab, switch File/Text, or start typing a new password
+    // while Argon2id is grinding for several seconds. When that happened, the
+    // stale operation still ran its completion path — writing output and firing
+    // a "Success!" toast onto whichever tab was now showing, and, worst of all,
+    // hitting the `setPassword('')` in its `finally` and wiping a password the
+    // user had typed in the meantime.
+    //
+    // `resetState` and every mode/input switch bump this counter, so a stale
+    // operation can detect that it no longer speaks for the UI and fall silent.
+    const opId = ++opSeqRef.current;
+    const isStale = () => opSeqRef.current !== opId;
+
     let mutablePassword = password;
+    // Set when a legacy IttyBitz container is opened, so the completion toast
+    // can mention it (see below).
+    let legacyNotice = false;
 
     const hasInput = inputType === 'file' ? !!file : !!textSecret;
     if (!hasInput) {
@@ -1000,9 +1054,11 @@ export function EncryptorTool() {
             const outName = obscureFilename
               ? `keymaker-${randomFilenameSuffix()}.keym`
               : `${file!.name}.keym`;
+            if (isStale()) return;
             triggerDownload(blob, outName);
             setFile(null);
         } else {
+            if (isStale()) return;
             const base64String = uint8ArrayToBase64(new Uint8Array(resultBuffer));
             setOutputText(KEYM_TEXT_PREFIX + base64String);
             setTextSecret('');
@@ -1023,7 +1079,11 @@ export function EncryptorTool() {
             // string before decryptData() has a buffer it can measure, so the
             // core size check cannot protect this step — only preceding it can.
             if (blobText.length > MAX_BASE64_INPUT_CHARS) {
-              throw new Error(
+              // Typed, so a size limit is reported as a size limit. As a plain
+              // Error this fell through the catch below and told the user their
+              // password might be wrong — about a paste they could see was huge.
+              throw new KeymakerError(
+                "too-large",
                 `Encrypted text is too large. Maximum is ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)}MB of original data.`
               );
             }
@@ -1046,13 +1106,13 @@ export function EncryptorTool() {
           if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
         }
         if (decryptResult.keyFileUsed) info += " · key file";
+        if (isStale()) return;
         setDecryptInfo(info);
-        if (decryptResult.format !== "keym-v1") {
-          toast({
-            title: "Imported from IttyBitz",
-            description: "This is a legacy IttyBitz container. Consider re-encrypting in Keymaker format.",
-          });
-        }
+        // Deliberately not a toast of its own. TOAST_LIMIT is 1, so the
+        // unconditional "Success!" below replaced this one the instant it
+        // appeared and nobody ever read the re-encryption nudge. One toast,
+        // both facts.
+        legacyNotice = decryptResult.format !== "keym-v1";
 
         if (inputType === 'file') {
              const stripped = file!.name.replace(/\.(keym|ibitz)$/i, '');
@@ -1074,12 +1134,14 @@ export function EncryptorTool() {
             try {
               const { validateBip39 } = await loadBip39();
               const result = await validateBip39(decryptedText);
+              if (isStale()) return;
               setDecryptedQrStatus(
                 result.valid
                   ? { kind: "seed", words: result.words }
                   : { kind: "plain", seedShaped: result.seedShaped }
               );
             } catch {
+              if (isStale()) return;
               setDecryptedQrStatus({ kind: "plain", seedShaped: false });
             }
         }
@@ -1091,41 +1153,52 @@ export function EncryptorTool() {
       // decrypt, where this buffer held the plaintext.
       new Uint8Array(resultBuffer).fill(0);
 
-      toast({
-        title: "Success!",
-        description: `Your ${inputType} has been successfully ${mode === 'encrypt' ? 'encrypted' : 'decrypted'}.`,
-      });
-    } catch (error: any) {
-        const knownSafeMessages = [
-          'Invalid encrypted data format.',
-          'Cannot process empty data.',
-          'Password must be a string.',
-          'Password is too long.',
-          'Password contains invalid characters.',
-          'A password is required for encryption.',
-          'A password or key file is required for decryption.',
-          'Web Crypto API not available.',
-          'This file was encrypted with a newer version of IttyBitz. Please update the app.',
-          'This file was encrypted with a newer KEYM version. Please update the app.',
-        ];
-        const raw = error.message || '';
-        const safeMessage = knownSafeMessages.includes(raw)
-          ? raw
+      if (!isStale()) {
+        const done = `Your ${inputType} has been successfully ${mode === 'encrypt' ? 'encrypted' : 'decrypted'}.`;
+        toast({
+          title: legacyNotice ? "Decrypted — legacy container" : "Success!",
+          description: legacyNotice
+            ? `${done} This was a legacy IttyBitz file; consider re-encrypting it in Keymaker format.`
+            : done,
+        });
+      }
+    } catch (error: unknown) {
+        // Which failures may be shown verbatim is decided by the crypto core's
+        // error *type*, not by matching its message text here.
+        //
+        // The previous exact-match array could never match an interpolated
+        // message, so "KDF parameter out of range: PBKDF2 iterations is
+        // 10000001, expected 1..10000000" — a tampered container — fell through
+        // to "the password may be incorrect". Same for an oversized paste. The
+        // app told people their password was wrong when their file was broken.
+        //
+        // KeymakerError is only ever raised for structural or configuration
+        // faults, which describe the file or the call rather than the secret.
+        // A genuine authentication failure is a plain Error and still collapses
+        // to one generic string, so wrong-password and corrupt-ciphertext stay
+        // indistinguishable.
+        const safeMessage = isUserFacingError(error)
+          ? error.message
           : mode === 'decrypt'
             ? 'Decryption failed. The password or key file may be incorrect, or the data may be corrupted.'
             : 'Processing failed. Please try again.';
 
-        toast({
-            title: "Processing Error",
-            description: safeMessage,
-            variant: "destructive",
-        });
+        if (!isStale()) {
+          toast({
+              title: "Processing Error",
+              description: safeMessage,
+              variant: "destructive",
+          });
+        }
     } finally {
-      // Clear sensitive data
-      setPassword('');
-      setIsLoading(false);
+      // Only the operation that still owns the UI may touch it. A stale one
+      // clearing the password here is the data-loss half of the bug above.
+      if (!isStale()) {
+        setPassword('');
+        setIsLoading(false);
+      }
     }
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
