@@ -50,6 +50,7 @@ fixed.
 | KM-25 | Low | Service-worker update could swap versions mid-encryption | **Fixed** |
 | KM-26 | Medium | Offline support rested on the browser's HTTP cache, not the service worker (3 of 17 chunks cached) | **Fixed** |
 | KM-27 | Medium | Argon2id on the main thread froze the tab for the whole derivation (22.3 s measured), making Cancel unreachable | **Fixed** |
+| KM-28 | Medium | Deployed artifact was unverifiable — no manifest, no signature, and the build was not reproducible | **Fixed** |
 
 ### Third-party audit, 2026-08-13 (four-agent swarm)
 
@@ -141,6 +142,56 @@ bootstrap config"; as a classic worker it copies raw TypeScript into
 `out/_next/static/media/` and the build fails typechecking its own output. The
 worker is therefore bundled explicitly by `scripts/build-crypto-worker.mjs` and
 served from the origin root, like `sw.js`.
+
+## KM-28 — the deployed bundle could not be checked (Phase 2)
+
+The README has always said, plainly, that "whoever serves the bundle is the
+trust anchor". That honesty was the right instinct and also the largest
+unaddressed risk in the project: reading the source on GitHub establishes
+nothing about the JavaScript that Pages served this morning, and this is a tool
+people are asked to paste seed phrases into.
+
+Two claims now replace it, and they are deliberately kept separate because they
+fail for different reasons:
+
+- **Provenance.** Every deployment publishes `SHA256SUMS` covering every file,
+  signed with Sigstore keyless by the deploy workflow's own OIDC identity.
+  Verification asks "did *this repository's workflow* sign this", not "do you
+  trust this key" — which would only relocate the problem to however the key
+  was obtained. `cosign verify-blob` reads the bundle, or
+  `scripts/verify-manifest.mjs` checks hashes and identity together.
+- **Reproducibility.** Two clean builds of a commit now produce byte-identical
+  output, so anyone can rebuild and compare manifests.
+
+The second is what makes the first worth having. A signature alone proves CI
+built *something*; only reproducibility connects that artifact to the source a
+reader can audit.
+
+**The build was not reproducible, and one value was the entire cause.** Next
+generates a random build id per build, which appears both in
+`_next/static/<buildId>/` paths and inside the emitted HTML — every JS and CSS
+chunk already hashed identically across builds. It is pinned to the commit SHA
+now, and `npm run verify:reproducible` builds twice and compares every file, in
+its own CI job. Removing the pin makes that check fail with 24 differences
+across 44 files, which is how it was validated.
+
+Two design points worth recording:
+
+- **Signing runs in its own job.** deploy.yml keeps the build job on
+  `contents: read` precisely so the job running untrusted transitive install
+  scripts via `npm ci` can never mint an OIDC identity. Signing needs
+  `id-token: write`, so it happens in a separate job that installs with
+  `--ignore-scripts` — it holds the token, so nothing it installs may run code.
+- **No unpinned action was introduced.** Every action in this repository is
+  pinned to a commit SHA, and adding an unpinned one in order to introduce
+  supply-chain verification would be a poor trade. The `sigstore` npm package is
+  pinned through package-lock.json with an integrity hash, the same mechanism
+  the rest of the toolchain relies on, and it emits an interoperable bundle.
+
+What this does **not** prove is stated in docs/VERIFYING.md rather than left
+implied: it does not audit the code, and it does not help against a compromised
+repository — a malicious commit merged to main would be signed honestly and
+reproduce perfectly. Public history and reviewable diffs are what cover that.
 
 ## What testing B1 actually revealed
 

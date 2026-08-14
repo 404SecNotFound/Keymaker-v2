@@ -49,12 +49,60 @@ jobs:
           KEYMAKER_BASE_PATH: /Keymaker-v2
           NEXT_TELEMETRY_DISABLED: "1"
 
+      # A plain artifact, not the Pages one: the signing job below adds a file
+      # to out/ before it becomes the thing that gets published.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: site
+          path: out
+          retention-days: 1
+          include-hidden-files: true
+
+  # Signing is a separate job so that the token which can assert this
+  # repository's identity is never held by the job that runs `npm ci`, and
+  # therefore never held while untrusted transitive install scripts execute.
+  # The same reasoning gives this job `--ignore-scripts`: it holds the token,
+  # so nothing it installs is allowed to run code.
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # No lifecycle scripts, for the reason above. The signer needs the
+      # `sigstore` package and nothing else to have executed.
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: site
+          path: out
+
+      - name: Sign the build manifest
+        run: node scripts/sign-manifest.mjs
+
+      # Verify the signature we just produced, from the bundle alone, before
+      # publishing it. A signature nobody checks is decoration; one that is
+      # checked in the same run cannot silently be malformed.
+      - name: Verify the signature before publishing
+        run: node scripts/verify-manifest.mjs
+
       - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: out
 
   deploy:
-    needs: build
+    needs: sign
     runs-on: ubuntu-latest
     permissions:
       pages: write
