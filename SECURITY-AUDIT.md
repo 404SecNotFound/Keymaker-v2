@@ -50,6 +50,67 @@ fixed.
 | KM-25 | Low | Service-worker update could swap versions mid-encryption | **Fixed** |
 | KM-26 | Medium | Offline support rested on the browser's HTTP cache, not the service worker (3 of 17 chunks cached) | **Fixed** |
 
+### Third-party audit, 2026-08-13 (four-agent swarm)
+
+| ID | Severity | Finding | Status |
+|---|---|---|---|
+| B1 | High | Async race: a stale operation wrote output, toasted on the wrong tab, and wiped a newly typed password | **Fixed** |
+| B2 | Medium | "Imported from IttyBitz" notice was replaced by "Success!" before it could be read | **Fixed** |
+| B3 | Medium | Oversized pasted base64 reported as "wrong password" | **Fixed** |
+| B4 | Medium | Tampered KDF parameters reported as "wrong password" | **Fixed** |
+| B5 | Medium | Legacy IBTZ path skipped NFC normalization, bricking canonically-equivalent passwords | **Fixed** |
+| B6 | Low | `parseKeym` read KDF params before the length check, raising RangeError on 8–13-byte input | **Fixed** |
+| B7 | Low-Med | Dice tool silently substituted a d6 for an invalid die size, inflating the entropy shown | **Fixed** |
+| B8 | Low | `processData` had no reentrancy guard outside the button's disabled state | **Fixed** |
+| B9 | Low | `uint8ArrayToBase64` concatenated ~3,200 fragments with `+=` | **Fixed** |
+| C-L3 | Low | Short "KEYM" prefixes fell through to the legacy path and ran 1M PBKDF2 iterations | **Fixed** |
+| W-L1 | Low | `base-uri 'self'` where `'none'` is strictly tighter | **Fixed** |
+| W-M1 | Medium | No `frame-ancestors` — impossible via `<meta>` CSP on GitHub Pages | **Accepted, documented** |
+| C-L1 | Low | Bounded pre-auth KDF cost (≈6 s worst case) | **Accepted** — §3.1 documents the residual |
+| C-I1 | Info | Unseparated `password‖keyfile` | **Deferred to v2** — designed in FORMAT-V2-DESIGN §4.1 |
+
+Two of the audit's claims did not survive verification and are corrected here:
+the fixture corpus it reported missing is **present and tracked** (7 files — its
+sandbox `npm ci` failed), and its Wave 2 precache item had **already shipped**
+as KM-26.
+
+## The diagnosis bugs (B3, B4, B6, C-L3) were one bug
+
+All four surfaced as the same lie — *"the password may be incorrect"* — for
+files whose password was never the problem. The cause was that both the library
+and the UI decided which errors were safe to show by **matching error strings**:
+a regex in `decryptData`, an exact-match array in the component. Neither could
+match `KDF parameter out of range: …`, whose text is interpolated, so a
+deliberately tampered container was reported as a possible wrong password.
+
+Error classification is now carried by a type. `KeymakerError` is raised only
+for structural and configuration faults — truncated container, unknown KDF id,
+out-of-range parameters, oversized input — which describe the *file* or the
+*call*, both of which an attacker submitting a container already knows. A
+genuine authentication failure stays a plain `Error` with the single generic
+message, so wrong-password and corrupt-ciphertext remain indistinguishable.
+That distinction is asserted in both directions in `test:keymaker`.
+
+## What testing B1 actually revealed
+
+The audit rated B1 High on the strength of a code reading. Reproducing it in a
+browser turned up something the reading could not: **the race is unreachable on
+the Argon2id path.** hash-wasm runs on the main thread, so the page is frozen
+for the whole derivation — an interrupting click issued 200 ms into a
+22-second run did not resolve until 22.5 s, by which time the operation had
+completed legitimately. The user cannot interrupt what has already stopped
+responding.
+
+On PBKDF2 it is entirely real. WebCrypto derives off the main thread, the tab
+stays responsive, and on the unguarded build the sequence is: spinner at 185 ms,
+interrupt lands at 359 ms, password field empty by 937 ms.
+
+So B1 is confirmed, with a narrower trigger than reported and an unreported
+second defect standing behind it: a multi-second UI freeze on the default KDF.
+That freeze is why moving crypto into a Worker is the first item of Phase 2 —
+and when it lands, this race becomes reachable on *both* paths, so the guard
+must stay.
+
 **KM-02b — the same mistake, twice removed.** The first version accepted
 `a a a a a a`. Tightened to distinct, substantial words, it still accepted
 `password qwerty letmein monkey dragon football`. No morphology check fixes

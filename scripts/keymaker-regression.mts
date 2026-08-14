@@ -27,10 +27,13 @@ import {
   decryptData,
   detectFormat,
   inspectKeym,
+  isUserFacingError,
+  KeymakerError,
   KdfId,
   CipherId,
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
+import { encryptFile as legacyEncryptFile } from "../src/lib/crypto.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LEGACY = JSON.parse(readFileSync(join(HERE, "crypto-fixtures.json"), "utf8"));
@@ -361,6 +364,155 @@ async function main() {
     );
   } catch (err) {
     check(false, `v0 raw-primitive layout — threw: ${(err as Error).message}`);
+  }
+
+
+  // ---- Phase 1 audit fixes: the error a user is shown must be true ----
+  //
+  // Three separate defects all surfaced as the same lie: "the password may be
+  // incorrect", for files whose password was never the problem. In a backup
+  // tool that is the worst available wrong answer — it sends someone hunting
+  // for a password when the real fault is a truncated or tampered file.
+  console.log("\nDiagnosis accuracy (audit B3/B4/B6, C-L3):");
+
+  const goodCt = await encryptData(enc.encode(PLAINTEXT).buffer as ArrayBuffer, PASSWORD, null, {
+    kdf: PBKDF2_FAST,
+    cipher: CipherId.AES_256_GCM,
+  });
+
+  // B4: a header whose PBKDF2 iteration count has been pushed past the ceiling
+  // is a *tampered container*, and must say so rather than blaming the password.
+  const overCost = new Uint8Array(goodCt.slice(0));
+  new DataView(overCost.buffer).setUint32(7, 10_000_001, false);
+  try {
+    await decryptData(overCost.buffer as ArrayBuffer, PASSWORD, null);
+    check(false, "out-of-range KDF params rejected (unexpectedly succeeded)");
+  } catch (err) {
+    check(
+      isUserFacingError(err) && err.code === "kdf-params-out-of-range",
+      `tampered KDF params report the real cause, not "wrong password"`
+    );
+    check(
+      !/password/i.test((err as Error).message),
+      "the out-of-range message does not mention the password"
+    );
+  }
+
+  // B6: 8..13 bytes claiming Argon2id used to read a uint32 past the end and
+  // raise a DataView RangeError, which was then re-wrapped as wrong-password.
+  for (const len of [8, 9, 10, 11, 12, 13]) {
+    const runt = new Uint8Array(len);
+    runt.set([0x4b, 0x45, 0x59, 0x4d, 0x01, KdfId.ARGON2ID, CipherId.AES_256_GCM]);
+    try {
+      await decryptData(runt.buffer as ArrayBuffer, PASSWORD, null);
+      check(false, `${len}-byte Argon2id header rejected (unexpectedly succeeded)`);
+    } catch (err) {
+      check(
+        isUserFacingError(err) && err.code === "malformed-container",
+        `${len}-byte Argon2id header → malformed-container, not RangeError`
+      );
+    }
+  }
+
+  // C-L3: a 1..4 byte blob that begins "KEYM" is a truncated KEYM file, not a
+  // headerless v0 container. It must be rejected without running a KDF at all;
+  // the old path burned 1,000,000 PBKDF2 iterations first.
+  for (const len of [1, 2, 3, 4]) {
+    const stub = new Uint8Array([0x4b, 0x45, 0x59, 0x4d].slice(0, len));
+    const t0 = Date.now();
+    try {
+      await decryptData(stub.buffer as ArrayBuffer, PASSWORD, null);
+      check(false, `${len}-byte "KEYM" prefix rejected (unexpectedly succeeded)`);
+    } catch (err) {
+      const ms = Date.now() - t0;
+      check(
+        isUserFacingError(err) && err.code === "malformed-container",
+        `${len}-byte "KEYM" prefix → malformed-container`
+      );
+      check(ms < 250, `${len}-byte "KEYM" prefix rejected without a KDF run (${ms} ms)`);
+    }
+  }
+
+  // The other half of the contract: a genuine authentication failure must stay
+  // generic. If this ever becomes a KeymakerError, the oracle is back.
+  try {
+    await decryptData(goodCt.slice(0), PASSWORD + "x", null);
+    check(false, "wrong password rejected (unexpectedly succeeded)");
+  } catch (err) {
+    check(!isUserFacingError(err), "a wrong password is NOT a user-facing error code");
+    check(
+      /may be incorrect, or the data may be corrupted/.test((err as Error).message),
+      "wrong password still yields the single generic message"
+    );
+  }
+  // ...and so must a flipped ciphertext byte, indistinguishably.
+  const flipped = new Uint8Array(goodCt.slice(0));
+  flipped[flipped.length - 1]! ^= 0xff;
+  try {
+    await decryptData(flipped.buffer as ArrayBuffer, PASSWORD, null);
+    check(false, "flipped ciphertext rejected (unexpectedly succeeded)");
+  } catch (err) {
+    check(!isUserFacingError(err), "corrupted ciphertext is NOT a user-facing error code");
+  }
+
+  // ---- B5: legacy Unicode normalization ----
+  //
+  // The KEYM path normalizes to NFC; the frozen legacy core never has. A
+  // password typed as NFD on one OS and NFC on another is the same password to
+  // every human and a different key to PBKDF2.
+  console.log("\nLegacy Unicode normalization (audit B5):");
+
+  const NFC_PASSWORD = "caf\u00e9-Espa\u00f1a-M\u00fcller-2026!";      // composed
+  const NFD_PASSWORD = NFC_PASSWORD.normalize("NFD");                     // decomposed
+  check(NFC_PASSWORD !== NFD_PASSWORD, "the two normalization forms really do differ as strings");
+  check(
+    NFC_PASSWORD.normalize("NFC") === NFD_PASSWORD.normalize("NFC"),
+    "...and really are canonically equivalent"
+  );
+
+  for (const [writeAs, readAs, label] of [
+    [NFC_PASSWORD, NFD_PASSWORD, "written NFC, re-typed NFD"],
+    [NFD_PASSWORD, NFC_PASSWORD, "written NFD, re-typed NFC"],
+  ] as const) {
+    const legacy = await legacyEncryptFile(
+      enc.encode(PLAINTEXT).buffer as ArrayBuffer,
+      writeAs,
+      null
+    );
+    try {
+      const res = await decryptData(legacy.slice(0), readAs, null);
+      check(dec.decode(res.data) === PLAINTEXT, `legacy IBTZ opens when ${label}`);
+    } catch (err) {
+      check(false, `legacy IBTZ opens when ${label} — threw: ${(err as Error).message}`);
+    }
+  }
+
+  // The fallback must not turn a genuinely wrong password into a success.
+  const legacyNfc = await legacyEncryptFile(
+    enc.encode(PLAINTEXT).buffer as ArrayBuffer,
+    NFC_PASSWORD,
+    null
+  );
+  await rejects("a wrong password is still wrong after the normalization retry", () =>
+    decryptData(legacyNfc.slice(0), "some-entirely-different-password", null)
+  );
+
+  // Key files are zeroed by the frozen core's finally block, so the retry has
+  // to hand each attempt its own copy. If it does not, this fails.
+  const legacyKf = await legacyEncryptFile(
+    enc.encode(PLAINTEXT).buffer as ArrayBuffer,
+    NFC_PASSWORD,
+    KEYFILE.slice(0).buffer as ArrayBuffer
+  );
+  try {
+    const res = await decryptData(
+      legacyKf.slice(0),
+      NFD_PASSWORD,
+      KEYFILE.slice(0).buffer as ArrayBuffer
+    );
+    check(dec.decode(res.data) === PLAINTEXT, "legacy IBTZ + key file survives the retry");
+  } catch (err) {
+    check(false, `legacy IBTZ + key file survives the retry — threw: ${(err as Error).message}`);
   }
 
   // ---- Summary ----

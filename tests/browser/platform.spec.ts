@@ -34,7 +34,7 @@ test("the production page ships a strict CSP", async ({ page }) => {
   // "nothing leaves your browser" a property of the policy, not of the code.
   expect(csp).toContain("connect-src 'none'");
   expect(csp).toContain("object-src 'none'");
-  expect(csp).toContain("base-uri 'self'");
+  expect(csp).toContain("base-uri 'none'");
   const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src")) ?? "";
   // script-src is tightened at build time from 'unsafe-inline' to per-file hashes.
   expect(scriptSrc).not.toContain("'unsafe-inline'");

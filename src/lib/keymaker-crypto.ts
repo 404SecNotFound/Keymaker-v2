@@ -159,6 +159,62 @@ export const KDF_LIMITS = {
 } as const;
 
 /**
+ * An error that is safe to show the user verbatim.
+ *
+ * The distinction this class encodes is the whole point of it, so it is worth
+ * stating precisely. There are two kinds of failure here:
+ *
+ *  1. **Structural or configuration failures.** The container is truncated, its
+ *     KDF id is unknown, its cost parameters are outside the permitted range,
+ *     the input is larger than the ceiling, the password is not a string. These
+ *     describe the *file* or the *call*, both of which an attacker submitting a
+ *     container already knows everything about. Reporting them precisely leaks
+ *     nothing and saves the user from a wrong diagnosis.
+ *
+ *  2. **Authentication failures.** The AEAD tag did not verify. Wrong password,
+ *     wrong key file, and flipped ciphertext bits are indistinguishable here and
+ *     must stay that way — telling them apart is the oracle.
+ *
+ * Only the first kind is a KeymakerError. The second is a plain Error carrying
+ * the single generic message, and callers must not try to look inside it.
+ *
+ * Before this existed, both the library and the UI decided which was which by
+ * matching error strings — the library with a regex, the UI with an exact-match
+ * array. Neither could match `KDF parameter out of range: …`, whose text is
+ * interpolated, so a *tampered* container was reported to the user as a wrong
+ * password. In a tool people use for backups, telling someone their password is
+ * wrong when the file is actually corrupt is the worst possible wrong answer.
+ */
+export type KeymakerErrorCode =
+  | "invalid-input"
+  | "empty-input"
+  | "too-large"
+  | "password-invalid"
+  | "credential-required"
+  | "webcrypto-unavailable"
+  | "unsupported-version"
+  | "malformed-container"
+  | "kdf-params-out-of-range"
+  | "unsupported-config";
+
+export class KeymakerError extends Error {
+  readonly code: KeymakerErrorCode;
+
+  constructor(code: KeymakerErrorCode, message: string) {
+    super(message);
+    this.name = "KeymakerError";
+    this.code = code;
+    // Preserve instanceof across the esbuild/Next transpile targets used here.
+    Object.setPrototypeOf(this, KeymakerError.prototype);
+  }
+}
+
+/** True for failures whose message may be shown to the user as-is. */
+export function isUserFacingError(error: unknown): error is KeymakerError {
+  return error instanceof KeymakerError;
+}
+
+/**
  * Reject KDF parameters we are not willing to execute.
  *
  * Called immediately after parsing a header and before any key derivation, and
@@ -170,13 +226,14 @@ export function validateKdfParams(kdf: KdfParams, mode: "encrypt" | "decrypt"): 
 
   const check = (name: string, value: number, min: number, max: number) => {
     if (!Number.isInteger(value)) {
-      throw new Error(`Invalid KDF parameter: ${name} must be an integer.`);
+      throw new KeymakerError("kdf-params-out-of-range", `Invalid KDF parameter: ${name} must be an integer.`);
     }
     // On decrypt, only the ceiling is a security control; the floor is policy.
     // Still require >= 1 — zero or negative is malformed under any reading.
     const effectiveMin = enforceMinimums ? min : 1;
     if (value < effectiveMin || value > max) {
-      throw new Error(
+      throw new KeymakerError(
+        "kdf-params-out-of-range",
         `KDF parameter out of range: ${name} is ${value}, expected ${effectiveMin}..${max}. ` +
           `Refusing to run a key derivation with unsafe cost parameters.`
       );
@@ -286,28 +343,28 @@ function loadNoble(): Promise<NobleCiphers> {
 
 function validateCommon(dataBuffer: ArrayBuffer, password: string, isEncryption: boolean): void {
   if (!dataBuffer || !(dataBuffer instanceof ArrayBuffer)) {
-    throw new Error("Valid data buffer is required.");
+    throw new KeymakerError("invalid-input", "Valid data buffer is required.");
   }
   if (dataBuffer.byteLength === 0) {
-    throw new Error("Cannot process empty data.");
+    throw new KeymakerError("empty-input", "Cannot process empty data.");
   }
   if (isEncryption && dataBuffer.byteLength > MAX_FILE_SIZE) {
-    throw new Error(`File is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
+    throw new KeymakerError("too-large", `File is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
   }
   // Decryption needs its own ceiling. The file picker enforces one, but pasted
   // base64 reaches decryptData() without going through it, and by then the
   // bytes have already been allocated and are about to hit a KDF.
   if (!isEncryption && dataBuffer.byteLength > MAX_CIPHERTEXT_SIZE) {
-    throw new Error(`Encrypted data is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
+    throw new KeymakerError("too-large", `Encrypted data is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
   }
   if (typeof password !== "string") {
-    throw new Error("Password must be a string.");
+    throw new KeymakerError("password-invalid", "Password must be a string.");
   }
   if (password.length > MAX_PASSWORD_LENGTH) {
-    throw new Error("Password is too long.");
+    throw new KeymakerError("password-invalid", "Password is too long.");
   }
   if (password.includes("\0")) {
-    throw new Error("Password contains invalid characters.");
+    throw new KeymakerError("password-invalid", "Password contains invalid characters.");
   }
 }
 
@@ -438,10 +495,10 @@ export async function encryptData(
 ): Promise<ArrayBuffer> {
   validateCommon(dataBuffer, password, true);
   if (!password) {
-    throw new Error("A password is required for encryption.");
+    throw new KeymakerError("credential-required", "A password is required for encryption.");
   }
   if (!crypto.subtle) {
-    throw new Error("Web Crypto API not available.");
+    throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
   }
 
   // No fallback: the caller states the algorithms, or this throws. See the
@@ -460,7 +517,7 @@ export async function encryptData(
   // refusing, even though we will still *read* such a file.
   validateKdfParams(kdf, "encrypt");
   if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
-    throw new Error(`Invalid cipher id: ${cipher}.`);
+    throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
   }
 
   const saltLen = kdf.kdf === KdfId.PBKDF2 ? SALT_LEN_PBKDF2 : SALT_LEN_ARGON2ID;
@@ -568,18 +625,36 @@ interface ParsedKeym {
 }
 
 function parseKeym(data: Uint8Array): ParsedKeym {
-  if (data.length < 8) throw new Error("Invalid KEYM data: too short.");
+  if (data.length < 8) throw new KeymakerError("malformed-container", "Invalid KEYM data: too short.");
   if (data[4] !== KEYM_VERSION) {
-    throw new Error("This file was encrypted with a newer KEYM version. Please update the app.");
+    throw new KeymakerError("unsupported-version", "This file was encrypted with a newer KEYM version. Please update the app.");
   }
   const kdfId = data[5]!;
   const cipherId = data[6]!;
   if (kdfId !== KdfId.PBKDF2 && kdfId !== KdfId.ARGON2ID) {
-    throw new Error("Invalid KEYM data: unknown KDF id.");
+    throw new KeymakerError("malformed-container", "Invalid KEYM data: unknown KDF id.");
   }
   if (cipherId < 0 || cipherId > 2) {
-    throw new Error("Invalid KEYM data: unknown cipher id.");
+    throw new KeymakerError("malformed-container", "Invalid KEYM data: unknown cipher id.");
   }
+  // Establish the full length requirement *before* reading a single field.
+  //
+  // The layout is fully determined by kdf_id and cipher_id, both already
+  // validated above, so the exact size can be computed up front. Doing it here
+  // rather than after the parameter reads is the fix for a real defect: the
+  // old code checked only `length < 8`, then read a uint16 at offset 7, a
+  // uint32 at 9 and a byte at 13 for Argon2id — so an 8-to-13-byte container
+  // threw a DataView RangeError, which the caller then re-wrapped as "the
+  // password may be incorrect". A truncated file was reported as a bad
+  // password. Bounds first, reads second.
+  const kdfParamLen = kdfId === KdfId.PBKDF2 ? 4 : 7;
+  const saltLen = kdfId === KdfId.PBKDF2 ? SALT_LEN_PBKDF2 : SALT_LEN_ARGON2ID;
+  const nonceCount = cipherId === CipherId.CHAINED ? 2 : 1;
+  const headerLen = 7 + kdfParamLen + 1 /* flags */ + saltLen + nonceCount * NONCE_LEN;
+  if (data.length < headerLen + 16 /* at least one AEAD tag */) {
+    throw new KeymakerError("malformed-container", "Invalid KEYM data: too short.");
+  }
+
   const dv = new DataView(data.buffer, data.byteOffset, data.byteLength);
   let o = 7;
   let kdf: KdfParams;
@@ -601,10 +676,6 @@ function parseKeym(data: Uint8Array): ParsedKeym {
   validateKdfParams(kdf, "decrypt");
 
   const flags = data[o++]!;
-  const saltLen = kdfId === KdfId.PBKDF2 ? SALT_LEN_PBKDF2 : SALT_LEN_ARGON2ID;
-  const nonceCount = cipherId === CipherId.CHAINED ? 2 : 1;
-  const minLen = o + saltLen + nonceCount * NONCE_LEN + 16; // + AEAD tag
-  if (data.length < minLen) throw new Error("Invalid KEYM data: too short.");
   const salt = data.slice(o, o + saltLen);
   o += saltLen;
   const nonces: Uint8Array[] = [];
@@ -617,25 +688,49 @@ function parseKeym(data: Uint8Array): ParsedKeym {
   return { kdf, cipher: cipherId as CipherId, flags, salt, nonces, settingsBlock, ciphertext };
 }
 
-/** Detect the wire format of an encrypted blob. */
+/** How many leading bytes of `data` equal the corresponding bytes of `magic`. */
+function magicPrefixLen(data: Uint8Array, magic: ArrayLike<number>): number {
+  const n = Math.min(data.length, magic.length);
+  let i = 0;
+  while (i < n && data[i] === magic[i]) i++;
+  return i;
+}
+
+const IBTZ_MAGIC = [0x49, 0x42, 0x54, 0x5a]; // "IBTZ"
+
+/**
+ * Detect the wire format of an encrypted blob.
+ *
+ * The legacy v0 format is headerless, so it is the fallback for anything that
+ * does not announce itself — which makes "unrecognised" and "v0" the same
+ * answer. That is unavoidable for real v0 files, but it should not swallow
+ * input that was *clearly* trying to be something else.
+ *
+ * A blob whose first bytes match "KEYM" but which is too short to carry a
+ * header used to fall through to v0 and run a full 1,000,000-iteration PBKDF2
+ * derivation before failing — a free CPU burn for a caller who supplies four
+ * bytes, and a second, less accurate error channel for the user. A partial
+ * magic match is now treated as a malformed container of that format, which is
+ * what it is.
+ */
 export function detectFormat(data: Uint8Array): DetectedFormat {
-  if (
-    data.length >= 5 &&
-    data[0] === KEYM_MAGIC[0] &&
-    data[1] === KEYM_MAGIC[1] &&
-    data[2] === KEYM_MAGIC[2] &&
-    data[3] === KEYM_MAGIC[3]
-  ) {
+  if (data.length >= 5 && magicPrefixLen(data, KEYM_MAGIC) === KEYM_MAGIC.length) {
     return "keym-v1";
   }
-  if (
-    data.length >= 5 &&
-    data[0] === 0x49 && // I
-    data[1] === 0x42 && // B
-    data[2] === 0x54 && // T
-    data[3] === 0x5a // Z
-  ) {
+  if (data.length >= 5 && magicPrefixLen(data, IBTZ_MAGIC) === IBTZ_MAGIC.length) {
     return "ibtz-v1";
+  }
+  // Fewer than five bytes, but every one of them matches the start of "KEYM".
+  // A real v0 container is salt(16) || IV(12) || ciphertext, so it can never be
+  // this short; the only thing this can be is a truncated KEYM file. Classify
+  // it as such and let parseKeym say "too short", which is both true and
+  // instant. Left as v0 it ran a 1,000,000-iteration PBKDF2 derivation on four
+  // bytes before reporting a wrong password.
+  //
+  // Deliberately total: this function stays a pure classifier so that every
+  // existing caller keeps working. The rejection belongs to the parser.
+  if (data.length > 0 && data.length < 5 && magicPrefixLen(data, KEYM_MAGIC) === data.length) {
+    return "keym-v1";
   }
   return "ibtz-v0";
 }
@@ -684,6 +779,87 @@ export interface DecryptResult {
  * auto-detected; legacy formats are delegated to the frozen crypto.ts.
  * NOTE: the caller's keyFileBuffer is zeroed in-place after use.
  */
+/**
+ * Open a legacy IBTZ container, retrying across Unicode normalization forms.
+ *
+ * KEYM normalizes the password to NFC before derivation; the legacy core never
+ * did, and it must not start — it is frozen, and changing what bytes it feeds
+ * the KDF would strand every file it has ever produced. So the retry lives
+ * here, outside it.
+ *
+ * The failure this repairs is real and unpleasant. A password containing any
+ * composed character — "café", "Müller", most non-Latin scripts — is delivered
+ * as NFC by some input methods and NFD by others. macOS filesystems and some
+ * IMEs favour NFD; most Linux and Windows paths produce NFC. The two are
+ * canonically equivalent and visually identical, and they hash to different
+ * keys. A user who encrypted on one machine and re-typed the same password on
+ * another got "wrong password" for a password that was, in every sense a human
+ * cares about, right.
+ *
+ * Trying each distinct form costs one extra KDF run per form only on the
+ * failure path, and the forms are deduplicated so ASCII passwords — where all
+ * four normalizations are identical — cost exactly nothing.
+ *
+ * This does not weaken anything: every candidate is a canonical form of the
+ * password the user actually supplied, not a mutation of it. An attacker
+ * guessing passwords gains no new candidates, only the same small constant
+ * factor the legitimate user gets.
+ */
+async function legacyDecryptWithNormalizationFallback(
+  encryptedBuffer: ArrayBuffer,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null
+): Promise<ArrayBuffer> {
+  // As-typed first, so the overwhelmingly common case is unchanged and costs
+  // no extra work.
+  const candidates: string[] = [password];
+  for (const form of ["NFC", "NFD", "NFKC", "NFKD"] as const) {
+    let normalized: string;
+    try {
+      normalized = password.normalize(form);
+    } catch {
+      continue; // Environment without full ICU; skip rather than fail.
+    }
+    if (!candidates.includes(normalized)) candidates.push(normalized);
+  }
+
+  // An ASCII password normalizes to itself under all four forms, so there is
+  // exactly one candidate and nothing changes: same call, same buffer, no copy.
+  if (candidates.length === 1) {
+    return await legacyDecryptFile(encryptedBuffer, password, keyFileBuffer);
+  }
+
+  // Past this point we may call the legacy core more than once, and its
+  // `finally` block zeroes the key-file buffer it is handed — the caller's
+  // buffer, not a copy. Retrying with the same one would derive the second
+  // candidate against an all-zero key file and fail for the wrong reason. So
+  // each attempt gets its own copy, taken before the first call.
+  //
+  // The ciphertext needs no such care: the legacy core slices salt, IV and body
+  // out of it, and slices are copies.
+  const keyFileSnapshot = keyFileBuffer ? new Uint8Array(keyFileBuffer).slice() : null;
+
+  try {
+    let firstError: unknown;
+    for (const candidate of candidates) {
+      const attemptKeyFile = keyFileSnapshot
+        ? (keyFileSnapshot.slice().buffer as ArrayBuffer)
+        : null;
+      try {
+        return await legacyDecryptFile(encryptedBuffer, candidate, attemptKeyFile);
+      } catch (error) {
+        // A structural complaint means the *file* is wrong, not the password,
+        // so no other normalization will help. Fail immediately.
+        if (isUserFacingError(error)) throw error;
+        if (firstError === undefined) firstError = error;
+      }
+    }
+    throw firstError ?? new Error("Decryption failed.");
+  } finally {
+    if (keyFileSnapshot) secureErase(keyFileSnapshot);
+  }
+}
+
 export async function decryptData(
   encryptedBuffer: ArrayBuffer,
   password: string,
@@ -691,7 +867,7 @@ export async function decryptData(
 ): Promise<DecryptResult> {
   validateCommon(encryptedBuffer, password, false);
   if (!password && !keyFileBuffer) {
-    throw new Error("A password or key file is required for decryption.");
+    throw new KeymakerError("credential-required", "A password or key file is required for decryption.");
   }
   if (!crypto.subtle) {
     throw new Error("Web Crypto API not available.");
@@ -701,7 +877,11 @@ export async function decryptData(
   const format = detectFormat(fullData);
 
   if (format !== "keym-v1") {
-    const data = await legacyDecryptFile(encryptedBuffer, password, keyFileBuffer);
+    const data = await legacyDecryptWithNormalizationFallback(
+      encryptedBuffer,
+      password,
+      keyFileBuffer
+    );
     return { data, format, keyFileUsed: keyFileBuffer !== null };
   }
 
@@ -751,9 +931,12 @@ export async function decryptData(
         : plain;
     return { data: out, format, keyFileUsed: (parsed.flags & 0x01) !== 0 };
   } catch (error) {
-    if (error instanceof Error && /required|not available|newer KEYM version/i.test(error.message)) {
-      throw error;
-    }
+    // Structural and configuration failures pass through with their real
+    // message; everything else collapses to the one generic string. This used
+    // to be a regex over error text, which could not match the interpolated
+    // "KDF parameter out of range: …" and so reported a *tampered* container as
+    // a possible wrong password. The type carries the distinction now.
+    if (isUserFacingError(error)) throw error;
     throw new Error(
       "Decryption failed. The password or key file may be incorrect, or the data may be corrupted."
     );
