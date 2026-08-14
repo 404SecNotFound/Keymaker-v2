@@ -37,9 +37,30 @@ export async function selectCrypto(page: Page, kdf: Kdf, cipher: Cipher): Promis
 }
 
 /**
- * Encrypt `secret` and return the KEYM container as the UI produced it.
- * Waits on the Result field carrying a KEYM payload rather than on a timeout,
- * so a silently-failing crypto path shows up as a timeout instead of passing.
+ * Every armor prefix the app has ever written.
+ *
+ * `KEYM1:` for v1, `keym2:` for v2 — and the case difference is the point of
+ * FORMAT-V2-DESIGN §7 rather than an inconsistency: lowercase `k` (0x6B) is
+ * what separates armored text from the binary magic `KEYM` (0x4B) in a single
+ * byte, with no ordering dependency between checks.
+ *
+ * This helper matches any of them deliberately. Its job is "some armored
+ * output appeared", so that a silently-failing crypto path surfaces as a
+ * timeout. **Which** format the app writes is a separate assertion and lives
+ * in crypto.spec.ts, where it can fail with a message that names the prefix.
+ *
+ * Hard-coding `KEYM` here is what broke the suite when the app started writing
+ * v2: `"keym2:…".startsWith("KEYM")` is false, so every test routed through
+ * this helper waited its full 90 s and failed on a timeout — 60 of them across
+ * three engines, none of the messages mentioning a prefix.
+ */
+export const ARMOR_PREFIXES = ["KEYM1:", "keym2:"] as const;
+
+/**
+ * Encrypt `secret` and return the container as the UI produced it.
+ * Waits on the Result field carrying an armored payload rather than on a
+ * timeout, so a silently-failing crypto path shows up as a timeout instead of
+ * passing.
  */
 export async function encryptText(page: Page, secret: string, password: string): Promise<string> {
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
@@ -47,8 +68,11 @@ export async function encryptText(page: Page, secret: string, password: string):
   await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
 
   await page.waitForFunction(
-    () => (document.querySelector("#output-text") as HTMLTextAreaElement | null)?.value?.startsWith("KEYM"),
-    null,
+    (prefixes: readonly string[]) => {
+      const value = (document.querySelector("#output-text") as HTMLTextAreaElement | null)?.value;
+      return !!value && prefixes.some((p) => value.startsWith(p));
+    },
+    ARMOR_PREFIXES,
     { timeout: 90_000 }
   );
   return page.evaluate(() => (document.querySelector("#output-text") as HTMLTextAreaElement).value);
@@ -62,12 +86,17 @@ export async function decryptText(page: Page, container: string, password: strin
   await visible(page.getByPlaceholder("Enter decryption password")).fill(password);
   await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
 
+  // "Output exists and is not still the container." The exclusion has to cover
+  // every armor prefix, not just v1's: `"keym2:…".startsWith("KEYM")` is false,
+  // so the old check would have accepted a leftover v2 container as though it
+  // were recovered plaintext — a test helper handing back its own input and
+  // calling it a round-trip.
   await page.waitForFunction(
-    () => {
+    (prefixes: readonly string[]) => {
       const el = document.querySelector("#output-text") as HTMLTextAreaElement | null;
-      return !!el && el.value.length > 0 && !el.value.startsWith("KEYM");
+      return !!el && el.value.length > 0 && !prefixes.some((p) => el.value.startsWith(p));
     },
-    null,
+    ARMOR_PREFIXES,
     { timeout: 90_000 }
   );
   return page.evaluate(() => (document.querySelector("#output-text") as HTMLTextAreaElement).value);

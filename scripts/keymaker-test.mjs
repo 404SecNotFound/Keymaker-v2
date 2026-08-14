@@ -22,6 +22,7 @@ const ENTRY_BY_MODE = {
   fuzz: "keymaker-fuzz.mts",
   regression: "keymaker-regression.mts",
   "keym2-dispatch": "keym2-dispatch.mts",
+  calibration: "kdf-calibration-test.mts",
 };
 const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
 const entry = join(HERE, ENTRY_BY_MODE[mode]);

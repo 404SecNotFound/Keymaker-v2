@@ -89,7 +89,7 @@ test("a generated passphrase can encrypt and decrypt", async ({ page }) => {
   const secret = "seed phrase behind a generated passphrase";
 
   const container = await encryptText(page, secret, phrase);
-  expect(container.startsWith("KEYM1:")).toBe(true);
+  expect(container.startsWith("keym2:")).toBe(true);
 
   expect(await decryptText(page, container, phrase)).toBe(secret);
 });
