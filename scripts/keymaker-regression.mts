@@ -325,17 +325,31 @@ async function main() {
       const blob = readFileSync(join(fixtureDir, fx.file));
       const ab = blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength) as ArrayBuffer;
       const keyFile = fx.keyFile ? KEYFILE.slice(0).buffer as ArrayBuffer : null;
+      // A fixture with no `version` field predates v2 joining the corpus. The
+      // default lives here rather than in the JSON so the six v1 entries could
+      // stay byte-identical when v2 was added — see the generator's note.
+      const version = fx.version ?? 1;
+      const expected = version === 2 ? "keym-v2" : "keym-v1";
       try {
         const res = await decryptData(ab, meta.password, keyFile);
         check(
-          res.format === "keym-v1" && dec.decode(res.data) === fx.plaintext,
-          `${fx.name} (${fx.kdf} / ${fx.cipher}${fx.keyFile ? " / +keyfile" : ""})`
+          res.format === expected && dec.decode(res.data) === fx.plaintext,
+          `v${version} ${fx.name} (${fx.kdf} / ${fx.cipher}${fx.keyFile ? " / +keyfile" : ""})`
         );
       } catch (err) {
         check(false, `${fx.name} — threw: ${(err as Error).message}`);
       }
     }
-    check(fixtureCount === 6, `fixture corpus has one vector per KDF/cipher combo (${fixtureCount}/6)`);
+    // Asserting the format as well as the plaintext is what makes these
+    // fixtures a dispatch test too: a v1 vector that started coming back as
+    // "keym-v2" would mean detectFormat had begun misreading the version byte,
+    // and the plaintext alone would not notice.
+    const v1Count = meta.fixtures.filter((f: any) => (f.version ?? 1) === 1).length;
+    const v2Count = meta.fixtures.filter((f: any) => f.version === 2).length;
+    check(
+      fixtureCount === 12 && v1Count === 6 && v2Count === 6,
+      `corpus covers both versions (${v1Count} v1 + ${v2Count} v2 = ${fixtureCount}/12)`
+    );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);
   }

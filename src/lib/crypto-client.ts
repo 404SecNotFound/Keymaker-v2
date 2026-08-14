@@ -3,8 +3,8 @@
 /**
  * Main-thread client for the crypto worker.
  *
- * Presents the same shape as calling `encryptData`/`decryptData` directly, so
- * the UI does not have to know which side of the boundary the work happened on,
+ * Presents the same shape as calling `encryptContainer`/`decryptData` directly,
+ * so the UI does not have to know which side of the boundary the work happened on,
  * and adds the one thing the in-thread version could never offer: a cancel that
  * actually stops the derivation.
  *
@@ -21,7 +21,7 @@
  */
 
 import {
-  encryptData,
+  encryptContainer,
   decryptData,
   KeymakerError,
   type KeymakerErrorCode,
@@ -202,7 +202,7 @@ export async function encryptViaWorker(
   const w = (await ready()) ? spawn() : null;
   if (!w) {
     lastRunUsedWorker = false;
-    return encryptData(data, password, keyFile, options);
+    return encryptContainer(data, password, keyFile, options);
   }
   lastRunUsedWorker = true;
 

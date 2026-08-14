@@ -36,6 +36,7 @@ them.
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import subprocess
@@ -144,6 +145,30 @@ def main() -> int:
         keyfile_path = tmp / "key.bin"
         keyfile_path.write_bytes(KEYFILE)
         keyfile_hex = KEYFILE.hex()
+
+        # ---------------------------------------------------------------
+        # 0. Frozen v2 fixtures, read by the independent implementation
+        # ---------------------------------------------------------------
+        #
+        # The other half of crosstest.py's section 1, which now filters the
+        # corpus to v1 because the v1 reference cannot read a v2 container. The
+        # v2 vectors would otherwise be written by the generator and checked by
+        # nothing but the TypeScript that produced them.
+        print("\nFrozen v2 fixtures decrypted by the Python reference:")
+        corpus = ROOT / "scripts" / "fixtures" / "keymaker"
+        meta = json.loads((corpus / "fixtures.json").read_text())
+        fx_pw, fx_kf = meta["password"], bytes.fromhex(meta["keyFileHex"])
+        v2_fixtures = [f for f in meta["fixtures"] if f.get("version") == 2]
+        for f in v2_fixtures:
+            blob = (corpus / f["file"]).read_bytes()
+            try:
+                got = keym2.decrypt(blob, fx_pw,
+                                    keyfile_bytes=fx_kf if f["keyFile"] else None)
+                check(f["name"], got.decode() == f["plaintext"])
+            except keym2.KeymError as e:
+                check(f["name"], False, str(e))
+        check("v2 corpus has all six vectors", len(v2_fixtures) == 6,
+              f"found {len(v2_fixtures)}")
 
         # ---------------------------------------------------------------
         # 1. Byte equality — the check that catches a writer disagreement

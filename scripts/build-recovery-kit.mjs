@@ -45,11 +45,21 @@ const KIT = [
     from: join(ROOT, 'docs', 'RECOVERY.md'),
     to: 'RECOVERY.md',
     minBytes: 2_000,
-    mustContain: 'keym.py',
+    mustContain: 'keym2.py',
   },
   {
     from: join(ROOT, 'reference', 'keym.py'),
     to: 'keym.py',
+    minBytes: 5_000,
+    mustContain: 'def decrypt',
+  },
+  // Both decryptors ship, and both have to. The app writes v2 now, but every
+  // container written before Phase 3 is v1 and v1 is readable forever — a kit
+  // carrying only the current script would strand exactly the oldest backups,
+  // which are the ones most likely to need it.
+  {
+    from: join(ROOT, 'reference', 'keym2.py'),
+    to: 'keym2.py',
     minBytes: 5_000,
     mustContain: 'def decrypt',
   },

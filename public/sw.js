@@ -29,12 +29,17 @@ const APP_SHELL = [
   // Missing it would mean the app loads offline and then cannot encrypt.
   `${BASE}/crypto-worker.js`,
   // The recovery kit — the printed procedure and the standalone Python
-  // decryptor, copied in by scripts/build-recovery-kit.mjs. Precached
+  // decryptors, copied in by scripts/build-recovery-kit.mjs. Precached
   // deliberately: the moment someone needs these is the moment the website is
   // unreachable, so a recovery document that requires the site to be up is not
   // a recovery document.
+  //
+  // Both decryptors, not only the current one. The app writes v2 now, but every
+  // container written before Phase 3 is v1 and stays readable forever — caching
+  // only keym2.py would strand precisely the oldest backups.
   `${BASE}/recovery/RECOVERY.md`,
   `${BASE}/recovery/keym.py`,
+  `${BASE}/recovery/keym2.py`,
   `${BASE}/logo.svg`,
   `${BASE}/favicon.ico`,
   `${BASE}/manifest.json`,

@@ -1,18 +1,41 @@
 /**
- * One-shot generator for the frozen KEYM fixture corpus under
- * scripts/fixtures/keymaker/. Run ONLY when intentionally adding new
- * fixtures (append-only tradition — never regenerate existing ones):
+ * Generator for the frozen KEYM fixture corpus under scripts/fixtures/keymaker/.
  *
  *     npx tsx scripts/keymaker-generate-fixtures.mts
  *
- * Produces one ciphertext per (KDF × cipher) combo. KDF params are
- * intentionally modest (PBKDF2 100k, Argon2id 16 MiB) — the wire format
- * stores them, so they remain valid vectors.
+ * Produces one ciphertext per (version × KDF × cipher) combo. KDF params are
+ * intentionally modest (PBKDF2 100k, Argon2id 16 MiB) — the wire format stores
+ * them, so they remain valid vectors.
+ *
+ * ## Additive by construction, not by discipline
+ *
+ * The corpus is append-only: a fixture is a promise that a container written on
+ * a particular day still opens, and regenerating one silently retires the
+ * evidence it existed to provide.
+ *
+ * The first version of this script rewrote every `.keym` file and the whole of
+ * `fixtures.json` on each run, so honouring append-only meant remembering not
+ * to run it. That is the wrong place for the guarantee. Now a combo whose file
+ * already exists is skipped and its metadata entry is carried through
+ * untouched — running this twice is a no-op, and adding v2 vectors could not
+ * disturb the v1 ones even deliberately.
+ *
+ * Existing entries are also passed through *exactly* as parsed rather than
+ * rebuilt from the combo table, which is why v1 entries have no `version` field
+ * and the reader defaults it to 1. Adding the field would have meant editing
+ * six entries that are supposed to be frozen, to record something already
+ * implied by their bytes.
  */
-import { writeFileSync, mkdirSync } from "node:fs";
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { encryptData, KdfId, CipherId, type KdfParams } from "../src/lib/keymaker-crypto.ts";
+import {
+  encryptData,
+  encryptContainer,
+  KdfId,
+  CipherId,
+  type KdfParams,
+} from "../src/lib/keymaker-crypto.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIR = join(HERE, "fixtures", "keymaker");
@@ -27,60 +50,125 @@ function hexToArrayBuffer(hex: string): ArrayBuffer {
   return out.buffer as ArrayBuffer;
 }
 
-const PBKDF2_PARAMS: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 100_000 } };
+// v1's vectors were written before §6's *lower* bound existed, at 100k PBKDF2
+// iterations. They still open, and must — a reader stays permissive so that
+// files written with older or lower settings are not stranded, and proving
+// exactly that is half of what those fixtures are for.
+//
+// New vectors cannot use those numbers: `validateKdfParams(kdf, "encrypt")`
+// refuses to *write* below the policy floor, which is the asymmetry working as
+// intended. So v2's PBKDF2 vectors sit at the floor itself. Argon2id's 16 MiB
+// was already above its floor and is unchanged, which keeps the two versions
+// comparable on the axis that did not have to move.
+const PBKDF2_V1_PARAMS: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 100_000 } };
+const PBKDF2_V2_PARAMS: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 600_000 } };
 const ARGON_PARAMS: KdfParams = {
   kdf: KdfId.ARGON2ID,
   params: { timeCost: 2, memoryKiB: 16384, parallelism: 2 },
 };
 
-const combos = [
-  { name: "pbkdf2-aes256gcm", kdf: PBKDF2_PARAMS, cipher: CipherId.AES_256_GCM, kdfName: "pbkdf2", cipherName: "aes-256-gcm" },
-  { name: "pbkdf2-chacha20poly1305", kdf: PBKDF2_PARAMS, cipher: CipherId.CHACHA20_POLY1305, kdfName: "pbkdf2", cipherName: "chacha20-poly1305" },
-  { name: "pbkdf2-chained", kdf: PBKDF2_PARAMS, cipher: CipherId.CHAINED, kdfName: "pbkdf2", cipherName: "chained" },
-  { name: "argon2id-aes256gcm", kdf: ARGON_PARAMS, cipher: CipherId.AES_256_GCM, kdfName: "argon2id", cipherName: "aes-256-gcm" },
-  { name: "argon2id-chacha20poly1305", kdf: ARGON_PARAMS, cipher: CipherId.CHACHA20_POLY1305, kdfName: "argon2id", cipherName: "chacha20-poly1305" },
-  { name: "argon2id-chained", kdf: ARGON_PARAMS, cipher: CipherId.CHAINED, kdfName: "argon2id", cipherName: "chained" },
+interface Combo {
+  name: string;
+  version: 1 | 2;
+  kdf: KdfParams;
+  cipher: CipherId;
+  kdfName: string;
+  cipherName: string;
+}
+
+// `slug` is what appears in the file name. It is spelled out rather than
+// derived from `cipherName`, because the v1 names are load-bearing — they are
+// the names of files that already exist and must not be renamed.
+const CIPHERS: Array<{ id: CipherId; name: string; slug: string }> = [
+  { id: CipherId.AES_256_GCM, name: "aes-256-gcm", slug: "aes256gcm" },
+  { id: CipherId.CHACHA20_POLY1305, name: "chacha20-poly1305", slug: "chacha20poly1305" },
+  { id: CipherId.CHAINED, name: "chained", slug: "chained" },
 ];
+const combos: Combo[] = [];
+for (const version of [1, 2] as const) {
+  const kdfs: Array<{ params: KdfParams; name: string }> = [
+    { params: version === 1 ? PBKDF2_V1_PARAMS : PBKDF2_V2_PARAMS, name: "pbkdf2" },
+    { params: ARGON_PARAMS, name: "argon2id" },
+  ];
+  for (const kdf of kdfs) {
+    for (const cipher of CIPHERS) {
+      const base = `${kdf.name}-${cipher.slug}`;
+      combos.push({
+        name: version === 1 ? base : `v2-${base}`,
+        version,
+        kdf: kdf.params,
+        cipher: cipher.id,
+        kdfName: kdf.name,
+        cipherName: cipher.name,
+      });
+    }
+  }
+}
 
 async function main() {
+  const metaPath = join(DIR, "fixtures.json");
+  const existing = existsSync(metaPath)
+    ? JSON.parse(readFileSync(metaPath, "utf8"))
+    : { fixtures: [] };
+  const byName = new Map<string, any>(existing.fixtures.map((f: any) => [f.name, f]));
+
   const fixtures: any[] = [];
+  let wrote = 0;
+  let kept = 0;
+
   for (const c of combos) {
-    const plaintext = `Keymaker fixture — ${c.kdfName} / ${c.cipherName}`;
+    const file = `${c.name}.keym`;
+    const prior = byName.get(c.name);
+
+    if (prior && existsSync(join(DIR, file))) {
+      // Append-only: the ciphertext and its metadata are both left alone.
+      fixtures.push(prior);
+      kept++;
+      continue;
+    }
+
+    const plaintext = `Keymaker fixture — v${c.version} ${c.kdfName} / ${c.cipherName}`;
     const keyFile = c.cipherName === "chacha20-poly1305" ? hexToArrayBuffer(KEYFILE_HEX) : null;
-    const ct = await encryptData(
+    const write = c.version === 1 ? encryptData : encryptContainer;
+    const ct = await write(
       new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
       PASSWORD,
       keyFile ? keyFile.slice(0) : null,
       { kdf: c.kdf, cipher: c.cipher }
     );
-    const file = `${c.name}.keym`;
     writeFileSync(join(DIR, file), Buffer.from(ct));
     fixtures.push({
       name: c.name,
       file,
+      version: c.version,
       kdf: c.kdfName,
       cipher: c.cipherName,
       keyFile: keyFile !== null,
       plaintext,
     });
+    wrote++;
     console.log(`wrote ${file} (${ct.byteLength} bytes)`);
   }
+
   writeFileSync(
-    join(DIR, "fixtures.json"),
+    metaPath,
     JSON.stringify(
       {
         format: "KEYM",
         version: 1,
         password: PASSWORD,
         keyFileHex: KEYFILE_HEX,
-        note: "APPEND-ONLY corpus. Test-only credentials — never use for real data.",
+        note:
+          "APPEND-ONLY corpus. Test-only credentials — never use for real data. " +
+          "A fixture with no `version` field is v1; the field was added when v2 " +
+          "vectors joined the corpus and the v1 entries were left untouched.",
         fixtures,
       },
       null,
       2
     ) + "\n"
   );
-  console.log("wrote fixtures.json");
+  console.log(`wrote fixtures.json — ${kept} kept, ${wrote} new, ${fixtures.length} total`);
 }
 
 main().catch((err) => {

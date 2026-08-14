@@ -11,7 +11,13 @@
  *                   --cipher aes|chacha|chained --in FILE --out FILE
  *   bridge decrypt  --password P [--keyfile HEX] --in FILE --out FILE
  *   bridge encrypt2 ... --salt HEX --master-key HEX   (KEYM v2, deterministic)
+ *   bridge encryptapp ...                             (KEYM v2, the real writer)
  *   bridge decrypt2 ...                               (KEYM v2)
+ *
+ * `encryptapp` goes through `encryptContainer` — the function the worker and
+ * the UI actually call, with real random secrets. `recovery_test.py` uses it,
+ * because the promise docs/RECOVERY.md makes is about containers the *app*
+ * wrote, and a conformance entry point with pinned secrets is not that.
  *
  * ## Why encrypt2 takes a salt *and* a master key
  *
@@ -33,7 +39,14 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
-import { encryptData, decryptData, CipherId, KdfId, type KdfParams } from "../src/lib/keymaker-crypto.ts";
+import {
+  encryptData,
+  encryptContainer,
+  decryptData,
+  CipherId,
+  KdfId,
+  type KdfParams,
+} from "../src/lib/keymaker-crypto.ts";
 import { encryptKeym2WithExplicitSecrets, decryptKeym2 } from "../src/lib/keym-v2.ts";
 
 if (!globalThis.crypto) {
@@ -110,6 +123,24 @@ try {
       Uint8Array.from(Buffer.from(flag("salt")!, "hex")),
       Uint8Array.from(Buffer.from(flag("master-key")!, "hex"))
     );
+    writeFileSync(outFile, Buffer.from(out));
+  } else if (cmd === "encryptapp") {
+    const kdf: KdfParams =
+      flag("kdf") === "argon2id"
+        ? {
+            kdf: KdfId.ARGON2ID,
+            params: {
+              timeCost: Number(flag("time") ?? 2),
+              memoryKiB: Number(flag("mem") ?? 16384),
+              parallelism: Number(flag("par") ?? 2),
+            },
+          }
+        : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
+
+    const out = await encryptContainer(inputBuf, password, keyFile, {
+      kdf,
+      cipher: CIPHERS[flag("cipher") ?? "aes"]!,
+    });
     writeFileSync(outFile, Buffer.from(out));
   } else if (cmd === "decrypt2") {
     // Deliberately the v2 module directly rather than decryptData(), so a
