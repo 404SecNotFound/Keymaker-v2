@@ -9,6 +9,7 @@
     "test:crypto": "node scripts/crypto-regression.mts",
     "test:keymaker": "node scripts/keymaker-test.mjs",
     "test:keym2-dispatch": "node scripts/keymaker-test.mjs keym2-dispatch",
+    "test:calibration": "node scripts/keymaker-test.mjs calibration",
     "test:fuzz": "node scripts/keymaker-test.mjs fuzz",
     "test:browser": "playwright test",
     "test:conformance": "python3 reference/crosstest.py",

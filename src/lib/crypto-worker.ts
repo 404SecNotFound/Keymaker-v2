@@ -36,9 +36,11 @@ import {
   encryptContainer,
   decryptData,
   isUserFacingError,
+  loadHashWasm,
   type KeymakerOptions,
   type DetectedFormat,
 } from "./keymaker-crypto";
+import type { Argon2Sample } from "./kdf-calibration";
 
 export type CryptoRequest =
   /**
@@ -60,11 +62,22 @@ export type CryptoRequest =
       data: ArrayBuffer;
       password: string;
       keyFile: ArrayBuffer | null;
-    };
+    }
+  /**
+   * Time Argon2id at two memory sizes so the caller can solve for parameters
+   * that fit an unlock budget (roadmap 2.5).
+   *
+   * The worker measures and returns raw samples; it does not choose. Choosing
+   * is `kdf-calibration.ts`, which is pure and therefore testable against
+   * devices that do not exist. Keeping the judgement out of here preserves what
+   * this file claims to be — a transport, not a second implementation.
+   */
+  | { id: number; op: "calibrate"; parallelism: number };
 
 export type CryptoResponse =
   | { id: number; ok: true; op: "ping" }
   | { id: number; ok: true; op: "encrypt"; data: ArrayBuffer }
+  | { id: number; ok: true; op: "calibrate"; low: Argon2Sample; high: Argon2Sample }
   | {
       id: number;
       ok: true;
@@ -87,12 +100,73 @@ export type CryptoResponse =
 
 const ctx = self as unknown as DedicatedWorkerGlobalScope;
 
+/** Memory sizes for the two calibration points, in KiB. */
+const CALIBRATE_LOW_KIB = 8 * 1024;
+const CALIBRATE_HIGH_KIB = 32 * 1024;
+
+/**
+ * Time one Argon2id derivation. Random password and salt, discarded output —
+ * nothing here touches the user's secret.
+ */
+async function timeArgon2(memoryKiB: number, parallelism: number): Promise<number> {
+  const { argon2id } = await loadHashWasm();
+  const password = crypto.getRandomValues(new Uint8Array(32));
+  const salt = crypto.getRandomValues(new Uint8Array(32));
+  const started = performance.now();
+  await argon2id({
+    password,
+    salt,
+    iterations: 1,
+    memorySize: memoryKiB,
+    parallelism,
+    hashLength: 32,
+    outputType: "binary",
+  });
+  return performance.now() - started;
+}
+
+/**
+ * Two timed points, plus a discarded warm-up.
+ *
+ * The warm-up is not politeness, it is correctness. The first Argon2id call in
+ * a worker pays for instantiating the wasm module, and that cost lands entirely
+ * in whichever sample happens to be first — inflating the low point, which is
+ * exactly the one the model uses to estimate fixed overhead. Left in, it makes
+ * a fast device look slow, and can invert the slope badly enough that
+ * `calibrateArgon2` rejects the whole measurement and falls back.
+ *
+ * Each point is the *minimum* of two runs. Scheduling noise only ever adds
+ * time, so the minimum is the better estimate of what the device can do; an
+ * average would drag every measurement toward whatever else the machine was
+ * doing.
+ */
+async function calibrate(parallelism: number): Promise<{ low: Argon2Sample; high: Argon2Sample }> {
+  await timeArgon2(CALIBRATE_LOW_KIB, parallelism);
+
+  const sample = async (memoryKiB: number): Promise<Argon2Sample> => ({
+    timeCost: 1,
+    memoryKiB,
+    elapsedMs: Math.min(
+      await timeArgon2(memoryKiB, parallelism),
+      await timeArgon2(memoryKiB, parallelism)
+    ),
+  });
+
+  return { low: await sample(CALIBRATE_LOW_KIB), high: await sample(CALIBRATE_HIGH_KIB) };
+}
+
 ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
   const req = event.data;
 
   try {
     if (req.op === "ping") {
       ctx.postMessage({ id: req.id, ok: true, op: "ping" } satisfies CryptoResponse);
+      return;
+    }
+
+    if (req.op === "calibrate") {
+      const { low, high } = await calibrate(req.parallelism);
+      ctx.postMessage({ id: req.id, ok: true, op: "calibrate", low, high } satisfies CryptoResponse);
       return;
     }
 

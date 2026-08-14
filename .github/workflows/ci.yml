@@ -54,6 +54,13 @@ jobs:
       - name: KEYM version dispatch
         run: npm run test:keym2-dispatch
 
+      # The Argon2id calibration solver, against synthetic devices. Pure, so it
+      # belongs here rather than in the browser job — and so a runner ten times
+      # slower than a laptop measures the same fixtures and reaches the same
+      # answers.
+      - name: KDF calibration solver
+        run: npm run test:calibration
+
       # parseKeym() consumes fully attacker-controlled binary before any of it
       # has been authenticated. Seeded and deterministic, so a CI failure
       # reproduces exactly.

@@ -29,6 +29,7 @@ import {
   type DetectedFormat,
 } from "./keymaker-crypto";
 import type { CryptoRequest, CryptoResponse } from "./crypto-worker";
+import { calibrateArgon2, type Calibration } from "./kdf-calibration";
 
 export interface DecryptOutcome {
   data: ArrayBuffer;
@@ -218,6 +219,38 @@ export async function encryptViaWorker(
     transfer
   );
   return res.data;
+}
+
+/**
+ * Measure this device and choose Argon2id parameters for an unlock budget.
+ *
+ * Returns `null` when there is no Worker to measure in. That is deliberately
+ * not a silent fallback to a main-thread measurement: every other operation
+ * here degrades to the in-thread path because losing encryption entirely would
+ * be worse than a frozen tab, and none of that reasoning applies to a
+ * convenience that the user can simply decline. A second timing path, running
+ * under conditions the solver was never given, is a worse answer than "not
+ * available here" — so the caller is told, and the existing settings stand.
+ */
+export async function calibrateViaWorker(
+  budgetMs: number,
+  timeCost: number,
+  parallelism: number
+): Promise<Calibration | null> {
+  const w = (await ready()) ? spawn() : null;
+  if (!w) {
+    lastRunUsedWorker = false;
+    return null;
+  }
+  lastRunUsedWorker = true;
+
+  const id = nextId++;
+  const res = await post<Extract<CryptoResponse, { op: "calibrate"; ok: true }>>(
+    w,
+    { id, op: "calibrate", parallelism },
+    []
+  );
+  return calibrateArgon2({ low: res.low, high: res.high, budgetMs, timeCost, parallelism });
 }
 
 export async function decryptViaWorker(
