@@ -530,6 +530,42 @@ const AUTO_LOCK_MS = 5 * 60_000;
 const LOCK_WARN_SECONDS = 30;
 
 /**
+ * The little ⓘ next to a setting.
+ *
+ * Three copies of this existed inline, and all three shared two defects that
+ * axe reports as critical:
+ *
+ *  1. **No accessible name.** An icon-only `<button>` with an SVG inside is
+ *     announced as "button" and nothing else. These are the controls that
+ *     explain the key file, the password policy and filename privacy — the
+ *     security-relevant choices — so "button" is the least useful thing a
+ *     screen reader could say about them.
+ *  2. **`focus:outline-hidden`.** The focus ring was removed and nothing put
+ *     back, so a keyboard user tabbing through the form simply loses track of
+ *     where they are. That is WCAG 2.4.7, and it is invisible to anyone who
+ *     drives the page with a mouse — which is why it survived this long.
+ *
+ * Radix wires the tooltip content up as `aria-describedby` while it is open,
+ * so `label` is the short name and the tooltip carries the detail.
+ */
+function InfoTip({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label={label}
+          className="rounded-sm text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+        >
+          <Info className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent>{children}</TooltipContent>
+    </Tooltip>
+  );
+}
+
+/**
  * Subdirectory this build is served from, or "" at a domain root.
  *
  * Next rewrites its own asset URLs but not ones written by hand, so any link
@@ -1523,16 +1559,9 @@ export function EncryptorTool() {
           <Label htmlFor="use-keyfile" className="cursor-pointer text-sm text-foreground">
             Use key file <span className="text-muted-foreground">(optional)</span>
           </Label>
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <button type="button" className="focus:outline-hidden">
-                <Info className="h-3.5 w-3.5 text-muted-foreground/60" />
-              </button>
-            </TooltipTrigger>
-            <TooltipContent>
-              <p>For additional security, you can use a key file. Use the generator to create a new, highly secure key file (recommended), or select an existing file. This file will be required along with your password to decrypt data.</p>
-            </TooltipContent>
-          </Tooltip>
+          <InfoTip label="What is a key file?">
+            <p>For additional security, you can use a key file. Use the generator to create a new, highly secure key file (recommended), or select an existing file. This file will be required along with your password to decrypt data.</p>
+          </InfoTip>
         </div>
       </div>
 
@@ -1605,9 +1634,51 @@ export function EncryptorTool() {
           />
         ) : (
           <div className="space-y-2">
-            <Label htmlFor="text-secret" className="text-[13px] font-medium text-muted-foreground">
-              Secret text
-            </Label>
+            <div className="flex items-center justify-between gap-3">
+              <Label htmlFor="text-secret" className="text-[13px] font-medium text-muted-foreground">
+                Secret text
+              </Label>
+              {/*
+                The recovery-phrase check, said out loud instead of only tinted.
+
+                This was a border colour and nothing else: green for a valid
+                BIP-39 phrase, red for one that is phrase-shaped but has a word
+                the list does not contain. That red border is the warning that
+                a word has been mistyped *before* it gets encrypted into a
+                backup someone may not open for a decade — and roughly one man
+                in twelve cannot distinguish it from the green one. A screen
+                reader got nothing at all.
+
+                It was colour-only on purpose: the original note reasoned that
+                a text badge would tell someone reading over your shoulder that
+                the blurred field holds a seed phrase. That concern is real but
+                it does not bite here, because the indicator only appears for
+                phrase-shaped input in the first place — an icon leaks exactly
+                what the coloured border already leaked, no more. The wording
+                is kept deliberately generic for the same reason: "a word isn't
+                recognised" is a spellcheck result, not an announcement that
+                this is a wallet seed.
+              */}
+              {currentMode === 'encrypt' && textSecretSeedStatus !== 'none' && (
+                <span
+                  id="text-secret-seed-status"
+                  role="status"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 text-[11px] font-medium",
+                    textSecretSeedStatus === 'valid' ? "text-success" : "text-destructive"
+                  )}
+                >
+                  {textSecretSeedStatus === 'valid' ? (
+                    <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {textSecretSeedStatus === 'valid'
+                    ? 'All words recognised'
+                    : "A word isn't recognised"}
+                </span>
+              )}
+            </div>
             <div className="relative">
               <Textarea
                 id="text-secret"
@@ -1627,6 +1698,15 @@ export function EncryptorTool() {
                 autoComplete="off"
                 data-1p-ignore
                 data-lpignore="true"
+                // Ties the field to the status above, so the check is part of
+                // the field's description rather than a floating scrap of text
+                // a screen reader user has to go looking for.
+                aria-describedby={
+                  currentMode === 'encrypt' && textSecretSeedStatus !== 'none'
+                    ? "text-secret-seed-status"
+                    : undefined
+                }
+                aria-invalid={currentMode === 'encrypt' && textSecretSeedStatus === 'invalid'}
                 className={cn(
                   "rounded-xl border-white/10 bg-white/4 pr-12 transition-[filter] duration-150 focus-visible:border-accent/50 focus-visible:ring-0",
                   currentMode === 'encrypt' && !showTextSecret && textSecret && "blur-xs",
@@ -1658,21 +1738,14 @@ export function EncryptorTool() {
               <Label htmlFor="password" className="text-[13px] font-medium text-muted-foreground">
                 Password
               </Label>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button type="button" className="focus:outline-hidden">
-                    <Info className="h-3.5 w-3.5 text-muted-foreground/60" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  <p>
-                    Minimum policy: 24+ characters with upper/lowercase, a number and a
-                    symbol — or a passphrase of several distinct words. This is a floor,
-                    not a strength measurement: Keymaker cannot tell how you chose a
-                    password. For a figure it can actually stand behind, use Generate.
-                  </p>
-                </TooltipContent>
-              </Tooltip>
+              <InfoTip label="Password requirements">
+                <p>
+                  Minimum policy: 24+ characters with upper/lowercase, a number and a
+                  symbol — or a passphrase of several distinct words. This is a floor,
+                  not a strength measurement: Keymaker cannot tell how you chose a
+                  password. For a figure it can actually stand behind, use Generate.
+                </p>
+              </InfoTip>
             </div>
             <div className="relative">
               <Input
@@ -1978,16 +2051,9 @@ export function EncryptorTool() {
                         <Label htmlFor="obscure-filename" className="cursor-pointer text-sm text-foreground">
                           Obscure filename
                         </Label>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <button type="button" className="focus:outline-hidden">
-                              <Info className="h-3.5 w-3.5 text-muted-foreground/60" />
-                            </button>
-                          </TooltipTrigger>
-                          <TooltipContent>
-                            <p>Encrypted downloads are named keymaker-&lt;random&gt;.keym so the original filename stays private.</p>
-                          </TooltipContent>
-                        </Tooltip>
+                        <InfoTip label="What does obscuring the filename do?">
+                          <p>Encrypted downloads are named keymaker-&lt;random&gt;.keym so the original filename stays private.</p>
+                        </InfoTip>
                       </div>
                     </div>
 
@@ -2045,9 +2111,39 @@ export function EncryptorTool() {
 
       {outputText && (
         <div className="animate-in fade-in-50 space-y-2">
-          <Label htmlFor="output-text" className="text-[13px] font-medium text-muted-foreground">
-            Result
-          </Label>
+          <div className="flex items-center justify-between gap-3">
+            <Label htmlFor="output-text" className="text-[13px] font-medium text-muted-foreground">
+              Result
+            </Label>
+            {/*
+              Same colour-only problem as the encrypt side, and here it is the
+              more consequential half: a red border on a *decrypted* backup
+              means the phrase you stored years ago has a word the list does
+              not contain, so it may not restore. That is not something to
+              signal in hue alone.
+            */}
+            {currentMode === 'decrypt' && inputType === 'text' && decryptedQrStatus.kind !== 'idle' && (
+              (decryptedQrStatus.kind === 'seed' || decryptedQrStatus.seedShaped) && (
+                <span
+                  id="output-seed-status"
+                  role="status"
+                  className={cn(
+                    "flex shrink-0 items-center gap-1 text-[11px] font-medium",
+                    decryptedQrStatus.kind === 'seed' ? "text-success" : "text-destructive"
+                  )}
+                >
+                  {decryptedQrStatus.kind === 'seed' ? (
+                    <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
+                  ) : (
+                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                  )}
+                  {decryptedQrStatus.kind === 'seed'
+                    ? 'All words recognised'
+                    : "A word isn't recognised"}
+                </span>
+              )
+            )}
+          </div>
           <div className="relative">
             <Textarea
               id="output-text"
