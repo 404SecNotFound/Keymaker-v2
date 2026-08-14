@@ -24,6 +24,7 @@ import {
 } from "../src/lib/keymaker-crypto.ts";
 import {
   KEYM2_ARMOR_PREFIX,
+  KEYM2_CORE_HEADER_LEN,
   armorKeym2,
   dearmorKeym2,
   encryptKeym2,
@@ -114,8 +115,14 @@ await expectReject("wrong password on v2 is refused", () =>
 await expectReject("a truncated v2 container is refused", () =>
   decryptData(toArrayBuffer(v2.subarray(0, v2.length - 1)), PASSWORD, null)
 );
+// Core header plus the slot-count byte and nothing else. Since the slot
+// amendment the header is no longer a fixed 48 bytes, so this is written from
+// the constant rather than from a number that used to be right.
 await expectReject("a header-only v2 container is refused", () =>
-  decryptData(toArrayBuffer(v2.subarray(0, 48)), PASSWORD, null)
+  decryptData(toArrayBuffer(v2.subarray(0, KEYM2_CORE_HEADER_LEN + 1)), PASSWORD, null)
+);
+await expectReject("a v2 container with no payload is refused", () =>
+  decryptData(toArrayBuffer(v2.subarray(0, KEYM2_CORE_HEADER_LEN + 1 + 96)), PASSWORD, null)
 );
 
 {

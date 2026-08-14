@@ -10,10 +10,10 @@
  *   bridge encrypt  --password P [--keyfile HEX] --kdf pbkdf2|argon2id
  *                   --cipher aes|chacha|chained --in FILE --out FILE
  *   bridge decrypt  --password P [--keyfile HEX] --in FILE --out FILE
- *   bridge encrypt2 ... --salt HEX          (KEYM v2, deterministic salt)
- *   bridge decrypt2 ...                     (KEYM v2)
+ *   bridge encrypt2 ... --salt HEX --master-key HEX   (KEYM v2, deterministic)
+ *   bridge decrypt2 ...                               (KEYM v2)
  *
- * ## Why encrypt2 takes a salt
+ * ## Why encrypt2 takes a salt *and* a master key
  *
  * For v1, bidirectional round-trips are a sufficient cross-check. For v2 they
  * are not, and the reference proved why: the original §5.1 admitted two
@@ -22,16 +22,19 @@
  * the other would round-trip perfectly in both directions while producing
  * different files.
  *
- * Only comparing bytes catches that, and comparing bytes needs a shared salt.
+ * Only comparing bytes catches that, and comparing bytes needs both random
+ * inputs pinned. Before the slot amendment the salt was the only one; since
+ * §4.3 the payload is encrypted under a random master key, so that has to be
+ * fixed too or two runs differ in every payload byte.
+ *
  * The v2 module keeps this behind a separately named export whose doc comment
- * spells out that reusing a salt reuses every nonce in the container — in v2
- * the nonces are a deterministic counter, so salt reuse is far worse than it
- * was in v1, where they were random.
+ * spells out the hazard: §4.5 forbids caller-supplied values for either on real
+ * data, because reusing a master key reuses every nonce in the container.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { webcrypto } from "node:crypto";
 import { encryptData, decryptData, CipherId, KdfId, type KdfParams } from "../src/lib/keymaker-crypto.ts";
-import { encryptKeym2WithExplicitSalt, decryptKeym2 } from "../src/lib/keym-v2.ts";
+import { encryptKeym2WithExplicitSecrets, decryptKeym2 } from "../src/lib/keym-v2.ts";
 
 if (!globalThis.crypto) {
   (globalThis as { crypto?: Crypto }).crypto = webcrypto as unknown as Crypto;
@@ -99,12 +102,13 @@ try {
           }
         : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
 
-    const out = await encryptKeym2WithExplicitSalt(
+    const out = await encryptKeym2WithExplicitSecrets(
       new Uint8Array(inputBuf),
       password,
       keyFile ? new Uint8Array(keyFile) : null,
       { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
-      Uint8Array.from(Buffer.from(flag("salt")!, "hex"))
+      Uint8Array.from(Buffer.from(flag("salt")!, "hex")),
+      Uint8Array.from(Buffer.from(flag("master-key")!, "hex"))
     );
     writeFileSync(outFile, Buffer.from(out));
   } else if (cmd === "decrypt2") {

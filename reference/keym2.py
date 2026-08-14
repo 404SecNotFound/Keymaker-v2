@@ -2,11 +2,11 @@
 """
 Independent reference implementation of the **KEYM v2** container format.
 
-Written from ``docs/FORMAT-V2-DESIGN.md`` alone, before any TypeScript exists
-for v2 — which is the entire point of it. The v1 reference caught KM-14 this
-way: the specification documented the KDF cost parameters and never said to
-bound them, so an implementer working faithfully from the prose reproduced a
-vulnerability the TypeScript had already fixed. The document was the defect.
+Written from ``docs/FORMAT-V2-DESIGN.md`` alone — which is the entire point of
+it. The v1 reference caught KM-14 this way: the specification documented the KDF
+cost parameters and never said to bound them, so an implementer working
+faithfully from the prose reproduced a vulnerability the TypeScript had already
+fixed. The document was the defect.
 
 So this file is not a port. Nothing here was read off an implementation, and
 where the specification failed to determine the bytes, that is recorded as a
@@ -15,11 +15,12 @@ finding rather than resolved by looking at what some other code happens to do.
   Reading order for a reviewer:
     §A  what the specification did not pin down  (the findings)
     §B  constants and bounds
-    §C  header
-    §D  key derivation
+    §C  core header and slot table
+    §D  key derivation and the envelope
     §E  payload
-    §F  armor and format detection
-    §G  CLI and self-test
+    §F  slot mutation
+    §G  armor and format detection
+    §H  CLI and self-test
 
 Two dependencies, pinned in requirements.txt, both for primitives only:
 ``cryptography`` and ``argon2-cffi``. Every format decision is in this file.
@@ -29,8 +30,12 @@ Two dependencies, pinned in requirements.txt, both for primitives only:
 §A  WHAT THE SPECIFICATION DID NOT PIN DOWN
 ================================================================================
 
-Four gaps. Only the first can make two conforming implementations disagree on
-the bytes, and it is the reason this exercise exists.
+Six gaps across two passes. A1–A4 came from the first draft of the document.
+A5–A6 came from the multi-slot amendment (document §4) and are new; they are
+recorded in the document as F6 and F7.
+
+Only A1 can make two conforming implementations disagree on the bytes, and it is
+the reason this exercise exists.
 
 --------------------------------------------------------------------------------
 A1. BLOCKING — the chunk count for a plaintext that is an exact multiple of the
@@ -46,69 +51,106 @@ bytes, both of these satisfy that sentence:
 They differ in length by 16 bytes (32 chained) and in every nonce after the
 first. Two conforming writers therefore produce different containers for the
 same input, which breaks the cross-implementation byte-equality check the
-project relies on — the one in §10's checklist: "Does the Python reference,
-written only from this document, arrive at the same bytes as the TypeScript?"
+project relies on.
 
 Note the decoder is *not* ambiguous: both forms parse, unambiguously, to the
-same plaintext (see ``_chunk_layout``). This is a writer-side gap only, which
-is what makes it easy to miss — a round-trip test inside one implementation
-passes either way.
+same plaintext (see ``_chunk_layout``). This is a writer-side gap only, which is
+what makes it easy to miss — a round-trip test inside one implementation passes
+either way.
 
     RESOLVED HERE AS (a): the fewest chunks that can hold the plaintext,
-    i.e. ``max(1, ceil(n / CHUNK_SIZE))``.
-
-    Reasoning: §5.1's upper bound on the final chunk is inclusive ("0 to
-    1,048,576"), so a full final chunk is explicitly allowed; and the one
-    boundary case the section *does* pin — "a zero-length plaintext is encoded
-    as exactly one chunk" — chooses the minimum chunk count. (a) is the rule
-    that generalises it. (b) requires reading the inclusive bound as exclusive,
-    which contradicts the sentence.
-
-    The specification needs one added sentence. Suggested wording:
-
-        The number of chunks is ``max(1, ceil(len(plaintext) / 1048576))``.
-        A plaintext whose length is a positive multiple of the chunk size ends
-        with a full final chunk; no empty trailing chunk is emitted.
+    i.e. ``max(1, ceil(n / CHUNK_SIZE))``. The document now says so.
 
 --------------------------------------------------------------------------------
 A2. MINOR — the armor prefix's case sensitivity is not stated.
 
 §7's whole argument is that one byte at offset 0 distinguishes armor from the
-binary magic: lowercase ``k`` (0x6B) versus ``K`` (0x4B). A reader that
-accepted ``KEYM2:`` case-insensitively would reintroduce precisely the
-collision the section exists to remove, and would do so while believing it was
-being helpful. The document never says the prefix is case-sensitive.
+binary magic: lowercase ``k`` (0x6B) versus ``K`` (0x4B). A reader that accepted
+``KEYM2:`` case-insensitively would reintroduce precisely the collision the
+section exists to remove, and would do so while believing it was being helpful.
 
     RESOLVED HERE AS: byte-exact, case-sensitive ``keym2:``. See ``dearmor``.
 
 --------------------------------------------------------------------------------
 A3. MINOR — "Bit 0" is not defined as least- or most-significant.
 
-§3.3 numbers the flag bits 0..7 without saying which end. Inherited from
-FORMAT.md §4, which does the same. Universally read as LSB-first, and both
-documents are almost certainly intended that way, but a specification that
-turns on rejecting non-zero reserved bits should say which bits those are.
+Inherited from FORMAT.md §4, which does the same. Universally read as LSB-first,
+but a specification that turns on rejecting non-zero reserved bits should say
+which bits those are.
 
     RESOLVED HERE AS: bit 0 is the least significant bit, value 0x01.
 
 --------------------------------------------------------------------------------
 A4. MINOR — the character encoding of the context strings is not stated.
 
-§4.1 writes ``LP("keymaker.v2.kdf-input")`` and ``SHA-256("keymaker.v2.keyfile"
-|| ...)`` without saying how the literals become bytes. Both are pure ASCII so
-every plausible choice agrees, but the password in the same expression *is*
-given an explicit encoding ("NFC_UTF8"), which invites the reader to wonder
-whether the omission next to it is meaningful.
+§4.1 writes ``LP("keymaker.v2.kdf-input")`` without saying how the literal
+becomes bytes, while the password in the same expression *is* given an explicit
+encoding ("NFC_UTF8"), which invites the reader to wonder whether the omission
+next to it is meaningful.
 
-    RESOLVED HERE AS: ASCII, which is byte-identical to UTF-8 for these
-    literals.
+    RESOLVED HERE AS: ASCII, byte-identical to UTF-8 for these literals.
 
 --------------------------------------------------------------------------------
-Not a defect, but worth a sentence in the document: ``keyfile_digest`` is the
-one place §4.1 concatenates without a length prefix, in a section whose subject
-is that unprefixed concatenation is ambiguous. It is fine — the prefix is a
-fixed constant, so ``k -> "keymaker.v2.keyfile" || k`` is injective — but every
-careful reader will stop on it, and saying so costs one line.
+A5. SUBSTANTIVE (new; document F6) — "no slot it implements" is the wrong
+    rejection condition, and the document states it twice in incompatible ways.
+
+§6 requires a reader to "reject a container in which no slot carries a
+``slot_type`` it implements". But §6 also says bounds apply per slot, and that a
+slot whose parameters are out of bounds is "unusable, which is the same outcome
+as a slot whose secret the reader does not hold".
+
+Those two sentences disagree about a container holding exactly one slot, of type
+0x00, with ``memory_kib`` above the cap. Its type *is* implemented, so the first
+sentence does not reject it — but it cannot be attempted either, so the reader
+reaches the end of the slot table with no master key and no rule telling it what
+to do.
+
+    RESOLVED HERE AS: the condition is **no slot the reader can attempt**, which
+    subsumes both unknown types and unusable parameters. A reader fails when the
+    slot table is exhausted without a master key, whatever the reason each
+    individual slot was passed over. See ``decrypt``.
+
+    The document is corrected to state the exhaustion rule once, rather than
+    stating a proxy for it in two places that disagree at the edges.
+
+--------------------------------------------------------------------------------
+A6. SUBSTANTIVE (new; document F7) — whether a skipped slot's reserved fields
+    must still be rejected is unstated, and the two plausible answers have
+    opposite forward-compatibility consequences.
+
+§3.3 says reserved fields MUST be rejected when non-zero. §4.4 says a reader
+MUST skip a slot whose ``slot_type`` it does not implement. Neither says which
+rule wins for the reserved bytes *inside* a slot that is being skipped.
+
+It matters, and not subtly. If a reader validates the internals of slots it
+skips, then any future slot type that gives meaning to a currently-reserved byte
+makes every container carrying one unopenable by every reader shipped before it
+— including through its own passphrase slot, which is untouched and valid. That
+is the exact data-loss outcome §4.4's skip rule exists to prevent, reintroduced
+by a rule from a different section.
+
+    RESOLVED HERE AS: **a reader validates only the slots it attempts.** A
+    skipped slot is checked for nothing but the space it occupies. This is safe
+    because a slot that is never attempted cannot contribute to the master key
+    or to the payload — it is inert bytes inside a length the reader already
+    knows.
+
+    §3.3's argument survives unchanged for every slot that is attempted, which
+    is the only place it was ever doing work.
+
+--------------------------------------------------------------------------------
+Not a defect, but worth a sentence in the document: ``keyfile_digest``
+concatenates without a length prefix, in a section whose subject is that
+unprefixed concatenation is ambiguous. It is fine — the prefix is a fixed
+constant, so ``k -> "keymaker.v2.keyfile" || k`` is injective — but every
+careful reader will stop on it.
+
+Also not a defect, but worth knowing: this reader stops at the first slot that
+unwraps. The document does not require it to, and the alternative (attempt every
+slot regardless) would hide *which* slot matched from an observer timing the
+unlock. Stopping early is chosen because eight Argon2id invocations to open a
+file that opened on the first one is not a cost worth paying to conceal an index
+from someone who is already holding the container.
 """
 
 from __future__ import annotations
@@ -122,7 +164,7 @@ import struct
 import sys
 import unicodedata
 from dataclasses import dataclass
-from typing import Iterator, Optional
+from typing import Optional
 
 from argon2.low_level import Type as Argon2Type, hash_secret_raw
 from cryptography.hazmat.primitives import hashes
@@ -138,12 +180,26 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 MAGIC = b"KEYM"
 VERSION = 2
 
-HEADER_LEN = 48          # §3, fixed — no length field, by design
-SALT_LEN = 32            # §3, both KDFs
+# §3. The header is in two parts and the split is load-bearing (§5.3): the core
+# header is authenticated by the payload, each slot prefix by its own wrap, and
+# slot_count by neither.
+CORE_HEADER_LEN = 8      # bytes [0, 8) — the payload AAD
+SLOT_COUNT_OFFSET = 8
+SLOT_TABLE_OFFSET = 9
+
+SLOT_PREFIX_LEN = 48     # §4.4, bytes [0, 48) of a slot
+SLOT_SALT_OFFSET = 8     # within the slot
+SLOT_PARAMS_OFFSET = 40  # within the slot
+
+SALT_LEN = 32            # §4.4, both KDFs
 KDF_PARAM_LEN = 8        # §3.2
 MASTER_KEY_LEN = 32      # §4.3
+SLOT_KEY_LEN = 32        # §4.3
 NONCE_LEN = 12           # §5.2, uint88 counter || flag byte
 TAG_LEN = 16             # AES-GCM and Poly1305 alike
+
+# §6. Bounded by a constant of the format, never by another field.
+SLOT_COUNT_MIN, SLOT_COUNT_MAX = 1, 8
 
 # §5.1. A constant of the format, deliberately not a header field: a header
 # field would be an attacker-controlled allocation size read before
@@ -156,8 +212,25 @@ CIPHER_AES = 0x00
 CIPHER_CHACHA = 0x01
 CIPHER_CHAINED = 0x02
 
-FLAG_KEYFILE = 0x01      # §3.3 bit 0 — see finding A3
-FLAG_RESERVED_MASK = 0xFE
+# §4.4. Only 0x00 is implemented; 0x01 and 0x02 are reserved for Phase 4 and
+# their wire layouts are deliberately unspecified until something implements
+# them. A reader skips what it does not implement (§4.4, finding A6).
+SLOT_TYPE_PASSPHRASE = 0x00
+SLOT_TYPE_PASSKEY_PRF = 0x01     # reserved, unimplemented
+SLOT_TYPE_SHAMIR = 0x02          # reserved, unimplemented
+IMPLEMENTED_SLOT_TYPES = frozenset({SLOT_TYPE_PASSPHRASE})
+
+# §3.3. The container flags byte is entirely reserved now; the key-file hint
+# moved to slot_flags, because it describes a slot and not a container.
+CORE_FLAGS_RESERVED_MASK = 0xFF
+SLOT_FLAG_KEYFILE = 0x01         # §4.4 bit 0 — see finding A3
+SLOT_FLAGS_RESERVED_MASK = 0xFE
+
+# §4.3. Constant, and deliberately not the slot index: binding a wrap to its
+# position would mean removing a slot forces every later slot to be re-wrapped,
+# and re-wrapping needs that slot's secret. The 0xFF final byte puts it outside
+# §5.2's nonce space, where every payload nonce ends in 0x00 or 0x01.
+WRAP_NONCE = (0).to_bytes(11, "big") + b"\xff"
 
 ARMOR_PREFIX = b"keym2:"  # §7 — case-sensitive, see finding A2
 
@@ -166,10 +239,12 @@ CTX_KDF_INPUT = b"keymaker.v2.kdf-input"
 CTX_KEYFILE = b"keymaker.v2.keyfile"
 INFO_AES = b"keymaker-v2-aes"
 INFO_CHACHA = b"keymaker-v2-chacha"
+INFO_SLOT_AES = b"keymaker-v2-slot-aes"
+INFO_SLOT_CHACHA = b"keymaker-v2-slot-chacha"
 
 # §6. Upper bounds are the security control and are enforced on read; lower
-# bounds are policy for new containers only, so that files written with older
-# or lower settings still open.
+# bounds are policy for new containers only, so that files written with older or
+# lower settings still open.
 PBKDF2_ITER_MIN, PBKDF2_ITER_MAX = 1, 10_000_000
 PBKDF2_ITER_POLICY_MIN = 600_000
 ARGON2_TIME_MIN, ARGON2_TIME_MAX = 1, 10
@@ -183,10 +258,10 @@ class KeymError(Exception):
     Every rejection, with one message.
 
     §6: "report every rejection as an ordinary decryption failure, with no
-    detail that distinguishes which check failed." A caller cannot learn
-    whether the password was wrong, a reserved bit was set, or the payload
-    length was malformed — the string is fixed at the raise site below and the
-    reason never reaches it.
+    detail that distinguishes which check failed." A caller cannot learn whether
+    the password was wrong, a reserved bit was set, or the payload length was
+    malformed — the string is fixed at the raise site below and the reason never
+    reaches it.
     """
 
 
@@ -200,22 +275,59 @@ def _reject() -> "KeymError":
 class UsageError(Exception):
     """Caller error — bad CLI arguments, a policy violation when writing.
 
-    Deliberately distinct from KeymError: refusing to *write* a container with
-    a 5-iteration PBKDF2 is a message to the operator, not an oracle for an
+    Deliberately distinct from KeymError: refusing to *write* a container with a
+    5-iteration PBKDF2 is a message to the operator, not an oracle for an
     attacker holding someone else's file.
     """
 
 
+def tag_overhead(cipher_id: int) -> int:
+    """Bytes of tag per AEAD invocation. §5.1: 16, or 32 for chained."""
+    return TAG_LEN * 2 if cipher_id == CIPHER_CHAINED else TAG_LEN
+
+
+def slot_len(cipher_id: int) -> int:
+    """§3. 48-byte prefix + the wrapped master key and its tag(s)."""
+    return SLOT_PREFIX_LEN + MASTER_KEY_LEN + tag_overhead(cipher_id)
+
+
 # =============================================================================
-# §C  HEADER
+# §C  CORE HEADER AND SLOT TABLE
 # =============================================================================
 
 @dataclass(frozen=True)
-class Header:
-    kdf_id: int
+class CoreHeader:
+    """§3, bytes [0, 8). The payload AAD, and the only part every AEAD
+    invocation in the container agrees on."""
+
     cipher_id: int
-    flags: int
+    flags: int = 0
+
+    @property
+    def tag_overhead(self) -> int:
+        return tag_overhead(self.cipher_id)
+
+    def pack(self) -> bytes:
+        out = MAGIC + bytes([VERSION, self.cipher_id, self.flags, 0])
+        assert len(out) == CORE_HEADER_LEN
+        return out
+
+
+@dataclass(frozen=True)
+class Slot:
+    """§4.4, a parsed and fully bounds-checked slot.
+
+    As with the v1 reference's Header, parsing *is* validation: there is no way
+    to obtain a Slot whose KDF parameters have not been bounded, so no caller
+    can forget to check them before deriving. That is the structural answer to
+    KM-14.
+    """
+
+    slot_type: int
+    kdf_id: int
+    slot_flags: int
     salt: bytes
+    wrapped_key: bytes
     # PBKDF2
     iterations: int = 0
     # Argon2id
@@ -225,14 +337,9 @@ class Header:
 
     @property
     def keyfile_used(self) -> bool:
-        return bool(self.flags & FLAG_KEYFILE)
+        return bool(self.slot_flags & SLOT_FLAG_KEYFILE)
 
-    @property
-    def tag_overhead(self) -> int:
-        """Bytes of tag per chunk. §5.1: 16, or 32 for chained."""
-        return TAG_LEN * 2 if self.cipher_id == CIPHER_CHAINED else TAG_LEN
-
-    def pack(self) -> bytes:
+    def pack_prefix(self) -> bytes:
         if self.kdf_id == KDF_PBKDF2:
             params = struct.pack(">I4x", self.iterations)
         elif self.kdf_id == KDF_ARGON2ID:
@@ -240,58 +347,116 @@ class Header:
         else:
             raise UsageError(f"unknown kdf_id {self.kdf_id}")
         assert len(params) == KDF_PARAM_LEN
-        out = MAGIC + bytes([VERSION, self.kdf_id, self.cipher_id, self.flags]) + self.salt + params
-        assert len(out) == HEADER_LEN
+        out = bytes([self.slot_type, self.kdf_id, self.slot_flags]) + b"\x00" * 5 \
+            + self.salt + params
+        assert len(out) == SLOT_PREFIX_LEN
         return out
 
+    def pack(self) -> bytes:
+        return self.pack_prefix() + self.wrapped_key
 
-def parse_header(data: bytes) -> Header:
-    """
-    Parse and fully validate the 48-byte header.
 
-    §6 requires every one of these checks to run *before* the KDF is invoked,
-    which is why parsing and validation are the same function: there is no way
-    to obtain a Header that has not been bounds-checked, so no caller can
-    forget. That is the structural answer to KM-14 — the v1 reference bounded
-    nothing because the prose never told it to, and nothing about the shape of
-    the code made the omission visible.
+def parse_core_header(data: bytes) -> CoreHeader:
     """
-    if len(data) < HEADER_LEN:
+    §3 and §6, everything that can be checked before the slot table is located.
+
+    Every check here runs before any KDF is invoked, and before a single byte is
+    allocated on the strength of something the container claims.
+    """
+    if len(data) < SLOT_TABLE_OFFSET:
         raise _reject()
-
     if data[:4] != MAGIC:
         raise _reject()
     if data[4] != VERSION:
         raise _reject()
 
-    kdf_id = data[5]
-    cipher_id = data[6]
-    flags = data[7]
-    salt = data[8:40]
-    params = data[40:48]
+    cipher_id = data[5]
+    flags = data[6]
 
     if cipher_id not in (CIPHER_AES, CIPHER_CHACHA, CIPHER_CHAINED):
         raise _reject()
+    # §3.3 — the container flags byte is entirely reserved since the slot
+    # amendment; the key-file hint lives in slot_flags now.
+    if flags & CORE_FLAGS_RESERVED_MASK:
+        raise _reject()
+    if data[7] != 0:  # §3 reserved
+        raise _reject()
 
-    # §3.3 — stricter than v1, which says ignore. A non-zero reserved bit
-    # cannot be attacker-introduced without failing authentication (the header
-    # is AAD), so it can only have been written deliberately by a writer that
-    # believed it meant something. Decrypting anyway would be decrypting under
-    # an interpretation the author did not intend.
-    if flags & FLAG_RESERVED_MASK:
+    return CoreHeader(cipher_id=cipher_id, flags=flags)
+
+
+def parse_container(data: bytes) -> tuple[CoreHeader, list[bytes], bytes]:
+    """
+    Split a container into (core header, raw slot records, payload).
+
+    Slot *contents* are deliberately not parsed here — see finding A6. A reader
+    validates only the slots it attempts, because validating a slot it is going
+    to skip would let a future slot type make old readers reject containers they
+    could otherwise open through a perfectly valid passphrase slot.
+
+    What is checked here is structural and applies to every container: the
+    declared slot count is in range, and the container is long enough to hold
+    the slot table plus the smallest possible payload.
+    """
+    core = parse_core_header(data)
+
+    slot_count = data[SLOT_COUNT_OFFSET]
+    if not (SLOT_COUNT_MIN <= slot_count <= SLOT_COUNT_MAX):
+        raise _reject()
+
+    width = slot_len(core.cipher_id)
+    payload_offset = SLOT_TABLE_OFFSET + slot_count * width
+
+    # §6: shorter than payload_offset plus the minimum payload for one chunk.
+    # The minimum chunk is zero plaintext bytes and its tag(s).
+    if len(data) < payload_offset + core.tag_overhead:
+        raise _reject()
+
+    slots = [
+        data[SLOT_TABLE_OFFSET + i * width: SLOT_TABLE_OFFSET + (i + 1) * width]
+        for i in range(slot_count)
+    ]
+    return core, slots, data[payload_offset:]
+
+
+def parse_slot(record: bytes) -> Slot:
+    """
+    §4.4 and §6, for one slot. Raises rather than returning None so that the
+    bounds checks read the same way the v1 reference's do.
+
+    Callers that are walking the slot table use ``_attemptable`` instead, which
+    turns a rejection into "skip this one" — per finding A5, an unusable slot
+    and an unknown slot type have the same consequence for the reader.
+    """
+    if len(record) < SLOT_PREFIX_LEN:
+        raise _reject()
+
+    slot_type = record[0]
+    kdf_id = record[1]
+    slot_flags = record[2]
+    salt = record[SLOT_SALT_OFFSET:SLOT_SALT_OFFSET + SALT_LEN]
+    params = record[SLOT_PARAMS_OFFSET:SLOT_PARAMS_OFFSET + KDF_PARAM_LEN]
+    wrapped_key = record[SLOT_PREFIX_LEN:]
+
+    if slot_type not in IMPLEMENTED_SLOT_TYPES:
+        raise _reject()
+    if record[3:8] != b"\x00" * 5:          # §4.4 reserved
+        raise _reject()
+    if slot_flags & SLOT_FLAGS_RESERVED_MASK:  # §4.4 reserved bits
         raise _reject()
 
     if kdf_id == KDF_PBKDF2:
         (iterations,) = struct.unpack(">I", params[:4])
-        if params[4:] != b"\x00\x00\x00\x00":        # §3.2 reserved
+        if params[4:] != b"\x00\x00\x00\x00":   # §3.2 reserved
             raise _reject()
         if not (PBKDF2_ITER_MIN <= iterations <= PBKDF2_ITER_MAX):
             raise _reject()
-        return Header(kdf_id, cipher_id, flags, salt, iterations=iterations)
+        return Slot(slot_type, kdf_id, slot_flags, salt, wrapped_key,
+                    iterations=iterations)
 
     if kdf_id == KDF_ARGON2ID:
         time_cost, memory_kib, parallelism = struct.unpack(">HIB", params[:7])
-        if params[7] != 0:                            # §3.2 reserved
+        if params[7] != 0:                      # §3.2 reserved
             raise _reject()
         if not (ARGON2_TIME_MIN <= time_cost <= ARGON2_TIME_MAX):
             raise _reject()
@@ -299,30 +464,38 @@ def parse_header(data: bytes) -> Header:
             raise _reject()
         if not (ARGON2_PAR_MIN <= parallelism <= ARGON2_PAR_MAX):
             raise _reject()
-        return Header(
-            kdf_id, cipher_id, flags, salt,
-            time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
-        )
+        return Slot(slot_type, kdf_id, slot_flags, salt, wrapped_key,
+                    time_cost=time_cost, memory_kib=memory_kib,
+                    parallelism=parallelism)
 
     raise _reject()
 
 
-def check_write_policy(header: Header) -> None:
+def _attemptable(record: bytes) -> Optional[Slot]:
+    """Finding A5: unknown type and out-of-bounds parameters are the same
+    outcome — this slot cannot be tried. Neither condemns the container."""
+    try:
+        return parse_slot(record)
+    except KeymError:
+        return None
+
+
+def check_write_policy(slot: Slot) -> None:
     """§6's lower bounds. Writing only — a reader stays permissive."""
-    if header.kdf_id == KDF_PBKDF2 and header.iterations < PBKDF2_ITER_POLICY_MIN:
+    if slot.kdf_id == KDF_PBKDF2 and slot.iterations < PBKDF2_ITER_POLICY_MIN:
         raise UsageError(
-            f"refusing to write PBKDF2 with {header.iterations} iterations; "
+            f"refusing to write PBKDF2 with {slot.iterations} iterations; "
             f"policy minimum is {PBKDF2_ITER_POLICY_MIN}"
         )
-    if header.kdf_id == KDF_ARGON2ID and header.memory_kib < ARGON2_MEM_POLICY_MIN:
+    if slot.kdf_id == KDF_ARGON2ID and slot.memory_kib < ARGON2_MEM_POLICY_MIN:
         raise UsageError(
-            f"refusing to write Argon2id with memory_kib={header.memory_kib}; "
+            f"refusing to write Argon2id with memory_kib={slot.memory_kib}; "
             f"policy minimum is {ARGON2_MEM_POLICY_MIN}"
         )
 
 
 # =============================================================================
-# §D  KEY DERIVATION
+# §D  KEY DERIVATION AND THE ENVELOPE
 # =============================================================================
 
 def lp(x: bytes) -> bytes:
@@ -341,7 +514,8 @@ def keyfile_digest(keyfile_bytes: bytes) -> bytes:
 
 def build_kdf_input(password: str, keyfile_bytes: Optional[bytes]) -> bytes:
     """
-    §4.1. Injective over ``(password, key file)`` pairs.
+    §4.1, the slot secret for ``slot_type = 0x00``. Injective over
+    ``(password, key file)`` pairs.
 
     v1 used ``password_bytes || keyfile_bytes``, under which ("ab", "c") and
     ("a", "bc") are the same KDF input. Length prefixes remove that.
@@ -356,24 +530,24 @@ def build_kdf_input(password: str, keyfile_bytes: Optional[bytes]) -> bytes:
     return lp(CTX_KDF_INPUT) + lp(normalized) + lp(digest)
 
 
-def derive_master_key(header: Header, kdf_input: bytes) -> bytes:
-    """§4.3. Assumes `header` came from parse_header, i.e. is already bounded."""
-    if header.kdf_id == KDF_PBKDF2:
+def derive_slot_key(slot: Slot, kdf_input: bytes) -> bytes:
+    """§4.3. Assumes `slot` came from parse_slot, i.e. is already bounded."""
+    if slot.kdf_id == KDF_PBKDF2:
         return PBKDF2HMAC(
             algorithm=hashes.SHA256(),
-            length=MASTER_KEY_LEN,
-            salt=header.salt,
-            iterations=header.iterations,
+            length=SLOT_KEY_LEN,
+            salt=slot.salt,
+            iterations=slot.iterations,
         ).derive(kdf_input)
 
-    if header.kdf_id == KDF_ARGON2ID:
+    if slot.kdf_id == KDF_ARGON2ID:
         return hash_secret_raw(
             secret=kdf_input,
-            salt=header.salt,
-            time_cost=header.time_cost,
-            memory_cost=header.memory_kib,
-            parallelism=header.parallelism,
-            hash_len=MASTER_KEY_LEN,
+            salt=slot.salt,
+            time_cost=slot.time_cost,
+            memory_cost=slot.memory_kib,
+            parallelism=slot.parallelism,
+            hash_len=SLOT_KEY_LEN,
             type=Argon2Type.ID,
             version=0x13,  # RFC 9106 / Argon2 v1.3
         )
@@ -381,29 +555,89 @@ def derive_master_key(header: Header, kdf_input: bytes) -> bytes:
     raise _reject()
 
 
-def subkeys(header: Header, master_key: bytes) -> tuple[bytes, bytes]:
+def _expand(cipher_id: int, key: bytes, info_aes: bytes,
+            info_chacha: bytes) -> tuple[bytes, bytes]:
     """
     §4.3. For chained mode, two independent 32-byte subkeys.
 
     "Zero salt" is passed explicitly rather than as ``salt=None``. The two are
-    identical by construction — RFC 5869 substitutes HashLen zeros for an
-    absent salt, and HMAC pads any short key with zeros to the block size, so
-    an empty salt and a 32-zero-byte salt produce the same PRK — but writing it
-    out means a second implementer does not have to work that out to be sure
-    they match.
+    identical by construction — RFC 5869 substitutes HashLen zeros for an absent
+    salt, and HMAC pads any short key with zeros to the block size, so an empty
+    salt and a 32-zero-byte salt produce the same PRK — but writing it out means
+    a second implementer does not have to work that out to be sure they match.
     """
-    if header.cipher_id != CIPHER_CHAINED:
-        return master_key, master_key
+    if cipher_id != CIPHER_CHAINED:
+        return key, key
 
     def expand(info: bytes) -> bytes:
         return HKDF(
             algorithm=hashes.SHA256(),
-            length=MASTER_KEY_LEN,
+            length=32,
             salt=b"\x00" * 32,
             info=info,
-        ).derive(master_key)
+        ).derive(key)
 
-    return expand(INFO_AES), expand(INFO_CHACHA)
+    return expand(info_aes), expand(info_chacha)
+
+
+def payload_keys(cipher_id: int, master_key: bytes) -> tuple[bytes, bytes]:
+    """§4.3. The keys the chunks are sealed under."""
+    return _expand(cipher_id, master_key, INFO_AES, INFO_CHACHA)
+
+
+def wrap_keys(cipher_id: int, slot_key: bytes) -> tuple[bytes, bytes]:
+    """
+    §4.3. The keys one slot's wrap is sealed under.
+
+    Distinct info strings from ``payload_keys``. A collision would need the slot
+    key and the master key to be equal, and they cannot be — one is a KDF output
+    and the other is CSPRNG — but separating them costs nothing and means the
+    property holds without needing that argument.
+    """
+    return _expand(cipher_id, slot_key, INFO_SLOT_AES, INFO_SLOT_CHACHA)
+
+
+def slot_aad(core: CoreHeader, slot_prefix: bytes) -> bytes:
+    """
+    §5.3 ``slot_aad_j = core header || slot j's prefix``.
+
+    Both halves are contiguous ranges of real container bytes, which is
+    deliberate: an AAD assembled out of fields a reader has to reconstruct is an
+    AAD two implementations can quietly disagree about.
+
+    ``slot_count`` is not here, and not in the payload AAD either. §5.3 explains
+    why — including it would mean adding a slot invalidates every other slot's
+    wrap, and re-wrapping those requires their secrets.
+    """
+    if len(slot_prefix) != SLOT_PREFIX_LEN:
+        raise _reject()
+    return core.pack() + slot_prefix
+
+
+def wrap_master_key(core: CoreHeader, slot_prefix: bytes, slot_key: bytes,
+                    master_key: bytes) -> bytes:
+    """§4.3. Seal the master key under one slot's key."""
+    aes_key, chacha_key = wrap_keys(core.cipher_id, slot_key)
+    return _seal(core.cipher_id, aes_key, chacha_key, WRAP_NONCE,
+                 master_key, slot_aad(core, slot_prefix))
+
+
+def unwrap_master_key_from_slot(core: CoreHeader, record: bytes, slot: Slot,
+                                kdf_input: bytes) -> Optional[bytes]:
+    """
+    §4.3, one slot's attempt. None means "this slot did not open it", which is
+    not yet a failure — the caller tries the next one.
+    """
+    slot_key = derive_slot_key(slot, kdf_input)
+    aes_key, chacha_key = wrap_keys(core.cipher_id, slot_key)
+    try:
+        master = _open(core.cipher_id, aes_key, chacha_key, WRAP_NONCE,
+                       slot.wrapped_key, slot_aad(core, record[:SLOT_PREFIX_LEN]))
+    except KeymError:
+        return None
+    if len(master) != MASTER_KEY_LEN:
+        return None
+    return master
 
 
 # =============================================================================
@@ -416,19 +650,20 @@ def nonce_for(index: int, is_final: bool) -> bytes:
 
     11 bytes of counter and one flag byte. The counter cannot overflow within
     any container this implementation will accept: 2^88 chunks of 1 MiB is
-    2^108 bytes, so the checklist's "no counter overflow reachable" holds by
-    an enormous margin rather than by an argument.
+    2^108 bytes, so the checklist's "no counter overflow reachable" holds by an
+    enormous margin rather than by an argument.
 
-    Deterministic counter nonces are safe because the key is per-file: a fresh
-    random salt gives a fresh master key for every container, so no
-    (key, nonce) pair is ever reused.
+    Deterministic counter nonces are safe because the payload key is per
+    container: the master key is fresh CSPRNG for every container (§4.5), so no
+    (key, nonce) pair is ever reused. Before the slot amendment this rested on
+    the salt being fresh instead — see the document's §11.1.
     """
     if index < 0 or index >= (1 << 88):
         raise _reject()
     return index.to_bytes(11, "big") + (b"\x01" if is_final else b"\x00")
 
 
-def _chunk_layout(payload_len: int, tag_overhead: int) -> list[int]:
+def _chunk_layout(payload_len: int, tag: int) -> list[int]:
     """
     Recover the plaintext length of each chunk from the payload length alone.
 
@@ -442,16 +677,15 @@ def _chunk_layout(payload_len: int, tag_overhead: int) -> list[int]:
 
     so with ``q, rem = divmod(payload_len - tag, CHUNK_SIZE + tag)`` we get
     m-1 = q and r = rem, valid exactly when rem <= CHUNK_SIZE. A remainder in
-    (CHUNK_SIZE, CHUNK_SIZE + tag) is a truncated or padded payload and is
-    rejected.
+    (CHUNK_SIZE, CHUNK_SIZE + tag) is a truncated or padded payload.
 
     This parse accepts both encodings described in finding A1, and does so
     unambiguously — which is why A1 is a writer-side gap that a round-trip test
     inside a single implementation cannot detect.
     """
-    if payload_len < tag_overhead:
+    if payload_len < tag:
         raise _reject()
-    q, rem = divmod(payload_len - tag_overhead, CHUNK_SIZE + tag_overhead)
+    q, rem = divmod(payload_len - tag, CHUNK_SIZE + tag)
     if rem > CHUNK_SIZE:
         raise _reject()
     return [CHUNK_SIZE] * q + [rem]
@@ -461,10 +695,9 @@ def _split_plaintext(plaintext: bytes) -> list[bytes]:
     """
     §5.1, resolved per finding A1: the fewest chunks that can hold it.
 
-    A zero-length plaintext is one chunk of zero bytes, which §5.1 states
-    outright; a plaintext that is a positive multiple of CHUNK_SIZE ends with a
-    *full* final chunk and no empty trailing chunk, which §5.1 does not state
-    and should.
+    A zero-length plaintext is one chunk of zero bytes; a plaintext that is a
+    positive multiple of CHUNK_SIZE ends with a *full* final chunk and no empty
+    trailing chunk.
     """
     if not plaintext:
         return [b""]
@@ -472,30 +705,106 @@ def _split_plaintext(plaintext: bytes) -> list[bytes]:
     return [plaintext[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE] for i in range(count)]
 
 
-def _seal(header: Header, aes_key: bytes, chacha_key: bytes,
-          nonce: bytes, chunk: bytes, aad: bytes) -> bytes:
+def _seal(cipher_id: int, aes_key: bytes, chacha_key: bytes,
+          nonce: bytes, plaintext: bytes, aad: bytes) -> bytes:
     """§5.4. Chained is AES inner, ChaCha outer — both under the same nonce,
     which is not a reuse because the keys are independently derived."""
-    if header.cipher_id == CIPHER_AES:
-        return AESGCM(aes_key).encrypt(nonce, chunk, aad)
-    if header.cipher_id == CIPHER_CHACHA:
-        return ChaCha20Poly1305(chacha_key).encrypt(nonce, chunk, aad)
-    inner = AESGCM(aes_key).encrypt(nonce, chunk, aad)
+    if cipher_id == CIPHER_AES:
+        return AESGCM(aes_key).encrypt(nonce, plaintext, aad)
+    if cipher_id == CIPHER_CHACHA:
+        return ChaCha20Poly1305(chacha_key).encrypt(nonce, plaintext, aad)
+    inner = AESGCM(aes_key).encrypt(nonce, plaintext, aad)
     return ChaCha20Poly1305(chacha_key).encrypt(nonce, inner, aad)
 
 
-def _open(header: Header, aes_key: bytes, chacha_key: bytes,
+def _open(cipher_id: int, aes_key: bytes, chacha_key: bytes,
           nonce: bytes, blob: bytes, aad: bytes) -> bytes:
     """§5.4. Chained verifies the outer layer before the inner one."""
     try:
-        if header.cipher_id == CIPHER_AES:
+        if cipher_id == CIPHER_AES:
             return AESGCM(aes_key).decrypt(nonce, blob, aad)
-        if header.cipher_id == CIPHER_CHACHA:
+        if cipher_id == CIPHER_CHACHA:
             return ChaCha20Poly1305(chacha_key).decrypt(nonce, blob, aad)
         inner = ChaCha20Poly1305(chacha_key).decrypt(nonce, blob, aad)
         return AESGCM(aes_key).decrypt(nonce, inner, aad)
+    except KeymError:
+        raise
     except Exception:
         raise _reject() from None
+
+
+def build_passphrase_slot(
+    core: CoreHeader,
+    master_key: bytes,
+    password: str,
+    *,
+    kdf_id: int = KDF_ARGON2ID,
+    keyfile_bytes: Optional[bytes] = None,
+    iterations: int = 1_000_000,
+    time_cost: int = 3,
+    memory_kib: int = 65_536,
+    parallelism: int = 4,
+    salt: Optional[bytes] = None,
+    enforce_write_policy: bool = True,
+) -> bytes:
+    """
+    §4.3 / §4.4. Build one ``slot_type = 0x00`` record wrapping ``master_key``.
+
+    The prefix is built first because it is part of its own wrap's AAD (§5.3),
+    so the bytes have to exist before the seal that authenticates them.
+    """
+    if salt is None:
+        salt = os.urandom(SALT_LEN)
+    if len(salt) != SALT_LEN:
+        raise UsageError("slot salt must be 32 bytes")
+    if len(master_key) != MASTER_KEY_LEN:
+        raise UsageError("master key must be 32 bytes")
+
+    draft = Slot(
+        slot_type=SLOT_TYPE_PASSPHRASE,
+        kdf_id=kdf_id,
+        slot_flags=SLOT_FLAG_KEYFILE if keyfile_bytes is not None else 0,
+        salt=salt,
+        wrapped_key=b"",
+        iterations=iterations,
+        time_cost=time_cost,
+        memory_kib=memory_kib,
+        parallelism=parallelism,
+    )
+    if enforce_write_policy:
+        check_write_policy(draft)
+
+    prefix = draft.pack_prefix()
+    # Round-trip the prefix through the reader's own validator before using it.
+    # A writer that can emit a slot its own parser rejects is a bug worth
+    # catching here rather than in a user's hands.
+    parse_slot(prefix + b"\x00" * (MASTER_KEY_LEN + core.tag_overhead))
+
+    slot_key = derive_slot_key(draft, build_kdf_input(password, keyfile_bytes))
+    return prefix + wrap_master_key(core, prefix, slot_key, master_key)
+
+
+def assemble(core: CoreHeader, slots: list[bytes], payload: bytes) -> bytes:
+    """§3. Core header, slot count, slot table, payload."""
+    if not (SLOT_COUNT_MIN <= len(slots) <= SLOT_COUNT_MAX):
+        raise UsageError(f"slot_count must be {SLOT_COUNT_MIN}..{SLOT_COUNT_MAX}")
+    width = slot_len(core.cipher_id)
+    for record in slots:
+        if len(record) != width:
+            raise UsageError("slot record has the wrong width for this cipher")
+    return core.pack() + bytes([len(slots)]) + b"".join(slots) + payload
+
+
+def encrypt_payload(core: CoreHeader, master_key: bytes, plaintext: bytes) -> bytes:
+    """§5. The chunk sequence, sealed under the master key."""
+    aes_key, chacha_key = payload_keys(core.cipher_id, master_key)
+    aad = core.pack()
+    chunks = _split_plaintext(plaintext)
+    out = []
+    for i, chunk in enumerate(chunks):
+        out.append(_seal(core.cipher_id, aes_key, chacha_key,
+                         nonce_for(i, i == len(chunks) - 1), chunk, aad))
+    return b"".join(out)
 
 
 def encrypt(
@@ -510,38 +819,64 @@ def encrypt(
     memory_kib: int = 65_536,
     parallelism: int = 4,
     salt: Optional[bytes] = None,
+    master_key: Optional[bytes] = None,
     enforce_write_policy: bool = True,
 ) -> bytes:
-    header = Header(
-        kdf_id=kdf_id,
-        cipher_id=cipher_id,
-        flags=FLAG_KEYFILE if keyfile_bytes is not None else 0,
-        salt=salt if salt is not None else os.urandom(SALT_LEN),
-        iterations=iterations,
-        time_cost=time_cost,
-        memory_kib=memory_kib,
-        parallelism=parallelism,
+    """
+    Write a single-slot v2 container.
+
+    ``salt`` and ``master_key`` exist for cross-implementation byte comparison
+    and nothing else. §4.5 forbids caller-supplied values for either in any
+    interface meant for real data: reusing a master key reuses every (key,
+    nonce) pair in the container, which for an AEAD means recoverable plaintext
+    and forgeable tags. The CLI exposes them behind ``--salt`` / ``--master-key``
+    with the same warning.
+    """
+    core = CoreHeader(cipher_id=cipher_id)
+    if cipher_id not in (CIPHER_AES, CIPHER_CHACHA, CIPHER_CHAINED):
+        raise UsageError(f"unknown cipher_id {cipher_id}")
+
+    if master_key is None:
+        master_key = os.urandom(MASTER_KEY_LEN)
+    elif len(master_key) != MASTER_KEY_LEN:
+        raise UsageError("master key must be 32 bytes")
+
+    record = build_passphrase_slot(
+        core, master_key, password,
+        kdf_id=kdf_id, keyfile_bytes=keyfile_bytes, iterations=iterations,
+        time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
+        salt=salt, enforce_write_policy=enforce_write_policy,
     )
-    if len(header.salt) != SALT_LEN:
-        raise UsageError("salt must be 32 bytes")
-    if enforce_write_policy:
-        check_write_policy(header)
+    return assemble(core, [record], encrypt_payload(core, master_key, plaintext))
 
-    aad = header.pack()
-    # Round-trip the header through the reader's own validator before using it.
-    # A writer that can emit a container its own parser rejects is a bug worth
-    # catching here rather than in a user's hands.
-    parse_header(aad)
 
-    master = derive_master_key(header, build_kdf_input(password, keyfile_bytes))
-    aes_key, chacha_key = subkeys(header, master)
+def recover_master_key(
+    container: bytes,
+    password: str,
+    *,
+    keyfile_bytes: Optional[bytes] = None,
+) -> tuple[CoreHeader, list[bytes], bytes, bytes]:
+    """
+    Walk the slot table until one opens, returning everything the caller needs
+    to either decrypt or rewrite the container.
 
-    chunks = _split_plaintext(plaintext)
-    out = [aad]
-    for i, chunk in enumerate(chunks):
-        out.append(_seal(header, aes_key, chacha_key,
-                         nonce_for(i, i == len(chunks) - 1), chunk, aad))
-    return b"".join(out)
+    §4.4 and finding A5: a slot is passed over when its type is not implemented,
+    when its parameters are out of bounds, or when its secret is not the one we
+    hold. All three are the same event from here — this slot did not open it —
+    and only exhausting the table is a failure.
+    """
+    core, records, payload = parse_container(container)
+    kdf_input = build_kdf_input(password, keyfile_bytes)
+
+    for record in records:
+        slot = _attemptable(record)
+        if slot is None:
+            continue
+        master = unwrap_master_key_from_slot(core, record, slot, kdf_input)
+        if master is not None:
+            return core, records, payload, master
+
+    raise _reject()
 
 
 def decrypt(
@@ -557,18 +892,14 @@ def decrypt(
     of verified chunks is not a verified prefix of the file". Nothing is
     returned until the final chunk has verified *and* carried final_flag, so a
     caller cannot accidentally treat 899 good chunks out of 900 as a result.
-    A streaming caller must write to a temporary destination and commit only on
-    a clean return.
     """
-    header = parse_header(container)          # every §6 check, before the KDF
-    aad = container[:HEADER_LEN]
-    payload = container[HEADER_LEN:]
+    core, _records, payload, master = recover_master_key(
+        container, password, keyfile_bytes=keyfile_bytes)
 
-    tag = header.tag_overhead
-    sizes = _chunk_layout(len(payload), tag)  # also before the KDF
-
-    master = derive_master_key(header, build_kdf_input(password, keyfile_bytes))
-    aes_key, chacha_key = subkeys(header, master)
+    tag = core.tag_overhead
+    sizes = _chunk_layout(len(payload), tag)
+    aes_key, chacha_key = payload_keys(core.cipher_id, master)
+    aad = core.pack()
 
     out = []
     offset = 0
@@ -583,9 +914,9 @@ def decrypt(
         # Enforced by *construction* rather than by inspection — there is no
         # flag to read, only a nonce to get right. Chunk `last` is opened with
         # final_flag = 1, so a truncated container (whose surviving last chunk
-        # was sealed with 0) fails authentication. Truncation exactly on a
-        # chunk boundary is the case this catches that a length check cannot.
-        out.append(_open(header, aes_key, chacha_key,
+        # was sealed with 0) fails authentication. Truncation exactly on a chunk
+        # boundary is the case this catches that a length check cannot.
+        out.append(_open(core.cipher_id, aes_key, chacha_key,
                          nonce_for(i, i == last), blob, aad))
 
     if offset != len(payload):
@@ -594,7 +925,97 @@ def decrypt(
 
 
 # =============================================================================
-# §F  ARMOR AND FORMAT DETECTION
+# §F  SLOT MUTATION
+# =============================================================================
+#
+# The document's §4.3 and §5.3 both turn on one requirement: a slot table must
+# be editable by someone holding exactly one slot's secret. It is why the wrap
+# nonce is a constant rather than the slot index, and why slot_count is outside
+# both AADs. A requirement that shapes two design decisions should be executed
+# rather than asserted, so these three functions exist and the selftest uses
+# them.
+#
+# Note what none of them need: any other slot's password, and any access to the
+# payload. The payload bytes are copied through untouched.
+
+def add_slot(
+    container: bytes,
+    unlock_password: str,
+    new_password: str,
+    *,
+    unlock_keyfile: Optional[bytes] = None,
+    new_keyfile: Optional[bytes] = None,
+    kdf_id: int = KDF_ARGON2ID,
+    iterations: int = 1_000_000,
+    time_cost: int = 3,
+    memory_kib: int = 65_536,
+    parallelism: int = 4,
+    salt: Optional[bytes] = None,
+    enforce_write_policy: bool = True,
+) -> bytes:
+    """Enrol a second secret, holding only the first. §5.3."""
+    core, records, payload, master = recover_master_key(
+        container, unlock_password, keyfile_bytes=unlock_keyfile)
+    if len(records) >= SLOT_COUNT_MAX:
+        raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
+
+    record = build_passphrase_slot(
+        core, master, new_password,
+        kdf_id=kdf_id, keyfile_bytes=new_keyfile, iterations=iterations,
+        time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
+        salt=salt, enforce_write_policy=enforce_write_policy,
+    )
+    return assemble(core, records + [record], payload)
+
+
+def remove_slot(container: bytes, index: int) -> bytes:
+    """
+    Drop a slot by position. Needs no secret at all — which is correct: removing
+    an unlock path is not a privileged operation on a file you already hold, and
+    the remaining slots are untouched because no wrap depends on its position.
+    """
+    core, records, payload = parse_container(container)
+    if not (0 <= index < len(records)):
+        raise UsageError(f"no slot at index {index}")
+    if len(records) == 1:
+        raise UsageError("refusing to remove the last slot; the container would be unopenable")
+    return assemble(core, records[:index] + records[index + 1:], payload)
+
+
+def rewrap_slot(
+    container: bytes,
+    index: int,
+    unlock_password: str,
+    new_password: str,
+    *,
+    unlock_keyfile: Optional[bytes] = None,
+    new_keyfile: Optional[bytes] = None,
+    kdf_id: int = KDF_ARGON2ID,
+    iterations: int = 1_000_000,
+    time_cost: int = 3,
+    memory_kib: int = 65_536,
+    parallelism: int = 4,
+    salt: Optional[bytes] = None,
+    enforce_write_policy: bool = True,
+) -> bytes:
+    """Re-password in place. The payload is not re-encrypted — §4's first
+    consequence, and the cheapest thing the envelope buys."""
+    core, records, payload, master = recover_master_key(
+        container, unlock_password, keyfile_bytes=unlock_keyfile)
+    if not (0 <= index < len(records)):
+        raise UsageError(f"no slot at index {index}")
+
+    record = build_passphrase_slot(
+        core, master, new_password,
+        kdf_id=kdf_id, keyfile_bytes=new_keyfile, iterations=iterations,
+        time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
+        salt=salt, enforce_write_policy=enforce_write_policy,
+    )
+    return assemble(core, records[:index] + [record] + records[index + 1:], payload)
+
+
+# =============================================================================
+# §G  ARMOR AND FORMAT DETECTION
 # =============================================================================
 
 def armor(container: bytes) -> str:
@@ -626,9 +1047,9 @@ def detect(data: bytes) -> str:
 
     The three cases are disjoint on byte 0 — ``k`` (0x6B) for v2 armor, ``K``
     (0x4B) for the binary magic, ``I`` for legacy IBTZ — so this returns the
-    same answer under any permutation of the branches. That is the property
-    §7 was written to buy, and it is worth asserting rather than assuming:
-    v1's ``KEYM1:`` armor shares all four magic bytes, which is the bug.
+    same answer under any permutation of the branches. That is the property §7
+    was written to buy, and it is worth asserting rather than assuming: v1's
+    ``KEYM1:`` armor shares all four magic bytes, which is the bug.
     """
     if data.startswith(ARMOR_PREFIX):
         return "keym2-armor"
@@ -642,37 +1063,51 @@ def detect(data: bytes) -> str:
 
 
 # =============================================================================
-# §G  CLI AND SELF-TEST
+# §H  CLI AND SELF-TEST
 # =============================================================================
 
-def _inspect(container: bytes) -> str:
-    h = parse_header(container)
-    payload = len(container) - HEADER_LEN
-    sizes = _chunk_layout(payload, h.tag_overhead)
+def _describe_slot(index: int, record: bytes) -> list[str]:
+    slot = _attemptable(record)
+    if slot is None:
+        # Finding A6: a reader does not validate slots it cannot attempt, so
+        # inspect does not pretend to know more about one than a reader would.
+        return [f"  slot {index}     type 0x{record[0]:02x}, not usable by this implementation"]
     kdf = (
-        f"PBKDF2-HMAC-SHA-256, iterations={h.iterations}"
-        if h.kdf_id == KDF_PBKDF2
-        else f"Argon2id, t={h.time_cost} m={h.memory_kib}KiB p={h.parallelism}"
+        f"PBKDF2-HMAC-SHA-256, iterations={slot.iterations}"
+        if slot.kdf_id == KDF_PBKDF2
+        else f"Argon2id, t={slot.time_cost} m={slot.memory_kib}KiB p={slot.parallelism}"
     )
+    return [
+        f"  slot {index}     type 0x{slot.slot_type:02x} (passphrase)",
+        f"    kdf       {kdf}",
+        f"    key file  {'yes' if slot.keyfile_used else 'no'}",
+        f"    salt      {slot.salt.hex()}",
+    ]
+
+
+def _inspect(container: bytes) -> str:
+    core, records, payload = parse_container(container)
+    sizes = _chunk_layout(len(payload), core.tag_overhead)
     cipher = {
         CIPHER_AES: "AES-256-GCM",
         CIPHER_CHACHA: "ChaCha20-Poly1305",
         CIPHER_CHAINED: "chained (AES-256-GCM then ChaCha20-Poly1305)",
-    }[h.cipher_id]
-    return "\n".join([
+    }[core.cipher_id]
+    lines = [
         "KEYM v2",
-        f"  kdf         {kdf}",
         f"  cipher      {cipher}",
-        f"  key file    {'yes' if h.keyfile_used else 'no'}",
-        f"  salt        {h.salt.hex()}",
-        f"  chunks      {len(sizes)} ({sum(sizes)} plaintext bytes)",
-    ])
+        f"  slots       {len(records)}",
+    ]
+    for i, record in enumerate(records):
+        lines.extend(_describe_slot(i, record))
+    lines.append(f"  chunks      {len(sizes)} ({sum(sizes)} plaintext bytes)")
+    return "\n".join(lines)
 
 
 def _selftest() -> int:
     """
-    Round-trips, plus the four questions in §10's checklist that can be
-    answered by execution rather than by reading.
+    Round-trips, plus the questions in §10's checklist that can be answered by
+    execution rather than by reading.
 
     Cheap parameters throughout: this exercises the *format*, and paying for
     real Argon2id costs would only make it something nobody runs.
@@ -682,7 +1117,28 @@ def _selftest() -> int:
     def check(name: str, ok: bool) -> None:
         checks.append((name, ok))
 
+    def rejects(name: str, fn) -> None:
+        try:
+            fn()
+            check(f"reject {name}", False)
+        except KeymError:
+            check(f"reject {name}", True)
+
+    def opens(name: str, fn, expected: bytes) -> None:
+        """Like check(), but a rejection is a failed check rather than a crash.
+
+        Negative controls need this. A control that breaks slot skipping should
+        report *which* checks noticed; without this it aborts the run on the
+        first KeymError and leaves the rest of the suite unmeasured, which reads
+        as "the control bit" while proving nothing about coverage.
+        """
+        try:
+            check(name, fn() == expected)
+        except KeymError:
+            check(name, False)
+
     pw = "correct horse battery staple"
+    pw2 = "a second, entirely different secret"
     kf = b"\x01\x02\x03" * 100
     fast = dict(iterations=1000, time_cost=1, memory_kib=8, parallelism=1,
                 enforce_write_policy=False)
@@ -709,27 +1165,44 @@ def _selftest() -> int:
     # A1: an exact multiple must be the minimum chunk count, not a full chunk
     # plus an empty one. Asserted on the container length, which is the thing
     # two implementations have to agree on.
-    blob = encrypt(b"\x00" * CHUNK_SIZE, pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, **fast)
+    one_slot_aes = SLOT_TABLE_OFFSET + slot_len(CIPHER_AES)
     check("A1: exact multiple is one chunk",
-          len(blob) == HEADER_LEN + CHUNK_SIZE + TAG_LEN)
+          len(encrypt(b"\x00" * CHUNK_SIZE, pw, kdf_id=KDF_PBKDF2,
+                      cipher_id=CIPHER_AES, **fast))
+          == one_slot_aes + CHUNK_SIZE + TAG_LEN)
     check("A1: one chunk over is two chunks",
           len(encrypt(b"\x00" * (CHUNK_SIZE + 1), pw, kdf_id=KDF_PBKDF2,
                       cipher_id=CIPHER_AES, **fast))
-          == HEADER_LEN + CHUNK_SIZE + TAG_LEN + 1 + TAG_LEN)
+          == one_slot_aes + CHUNK_SIZE + TAG_LEN + 1 + TAG_LEN)
+
+    # --- §3: the layout constants two implementations must agree on ---
+    check("slot is 96 bytes for aes", slot_len(CIPHER_AES) == 96)
+    check("slot is 96 bytes for chacha", slot_len(CIPHER_CHACHA) == 96)
+    check("slot is 112 bytes for chained", slot_len(CIPHER_CHAINED) == 112)
+    check("core header is 8 bytes", len(CoreHeader(CIPHER_AES).pack()) == CORE_HEADER_LEN)
+    check("wrap nonce is outside the payload nonce space",
+          WRAP_NONCE[-1] not in (0x00, 0x01)
+          and WRAP_NONCE != nonce_for(0, False) and WRAP_NONCE != nonce_for(0, True))
+
+    # §4.3's domain separation between the wrap's subkeys and the payload's.
+    # This restates a pair of constants rather than exercising a behaviour, and
+    # it is here for exactly that reason: reusing the payload's info strings for
+    # the wrap is self-consistent, so every round-trip in this file passes with
+    # the separation removed. A negative control confirmed it — nothing else in
+    # the suite noticed. Cross-implementation byte equality is the other place
+    # this is caught, and that lives in crosstest2.py.
+    _probe = bytes(range(32))
+    check("wrap and payload subkeys are domain-separated",
+          wrap_keys(CIPHER_CHAINED, _probe) != payload_keys(CIPHER_CHAINED, _probe))
 
     # --- checklist: is kdf_input injective? ---
     #
     # Tested at the layer that actually carries the property. Comparing two
-    # build_kdf_input() results is not that layer: §4.2 hashes the key file to
-    # a fixed 32 bytes, and a fixed-width field cannot slide, so the classic
-    # ("ab","c") vs ("a","bc") collision is already closed by the digest alone
-    # — those two inputs differ whether or not lp() prefixes anything. A
-    # negative control proved it: stubbing lp() to the identity left all 46
-    # checks green.
-    #
-    # What the length prefixes buy is injectivity of the *concatenation* for
-    # variable-length fields, which is what keeps the encoding sound as fields
-    # are added, and which does fail without them.
+    # build_kdf_input() results is not that layer: §4.2 hashes the key file to a
+    # fixed 32 bytes, and a fixed-width field cannot slide, so the classic
+    # ("ab","c") vs ("a","bc") collision is already closed by the digest alone.
+    # A negative control proved it: stubbing lp() to the identity left every
+    # check green.
     check("injective: lp() concatenation cannot be re-split",
           lp(b"ab") + lp(b"c") != lp(b"a") + lp(b"bc"))
     check("injective: lp() distinguishes empty from absent",
@@ -746,46 +1219,210 @@ def _selftest() -> int:
     blob = encrypt(msg, pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, **fast)
     for label, cut in (
         ("truncated mid-chunk", len(blob) - 100),
-        ("truncated on a chunk boundary", HEADER_LEN + 2 * (CHUNK_SIZE + TAG_LEN)),
-        ("truncated to one chunk", HEADER_LEN + CHUNK_SIZE + TAG_LEN),
-        ("payload removed entirely", HEADER_LEN),
+        ("truncated on a chunk boundary", one_slot_aes + 2 * (CHUNK_SIZE + TAG_LEN)),
+        ("truncated to one chunk", one_slot_aes + CHUNK_SIZE + TAG_LEN),
+        ("payload removed entirely", one_slot_aes),
     ):
-        try:
-            decrypt(blob[:cut], pw)
-            check(f"reject {label}", False)
-        except KeymError:
-            check(f"reject {label}", True)
+        rejects(label, lambda c=cut: decrypt(blob[:c], pw))
 
     # Appending a plausible extra chunk must fail too — the previously-final
     # chunk was sealed with final_flag = 1 and is now opened with 0.
-    try:
-        decrypt(blob + b"\x00" * (CHUNK_SIZE + TAG_LEN), pw)
-        check("reject appended chunk", False)
-    except KeymError:
-        check("reject appended chunk", True)
+    rejects("appended chunk", lambda: decrypt(blob + b"\x00" * (CHUNK_SIZE + TAG_LEN), pw))
 
     # --- checklist: can a chunk from container A verify inside container B? ---
+    #
+    # Both halves matter now. The core headers of two same-cipher containers are
+    # byte-identical since the salt moved into the slot table, so the only thing
+    # standing between them is that the master keys are independent randoms —
+    # which is why the document's §5.3 dropped the "the headers differ" clause.
     a = encrypt(b"A" * 64, pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, **fast)
     b = encrypt(b"B" * 64, pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, **fast)
-    spliced = b[:HEADER_LEN] + a[HEADER_LEN:]
-    try:
-        decrypt(spliced, pw)
-        check("reject chunk spliced between containers", False)
-    except KeymError:
-        check("reject chunk spliced between containers", True)
+    check("two containers share a core header",
+          a[:CORE_HEADER_LEN] == b[:CORE_HEADER_LEN])
+    rejects("payload spliced between containers",
+            lambda: decrypt(b[:one_slot_aes] + a[one_slot_aes:], pw))
+    rejects("slot table spliced between containers",
+            lambda: decrypt(a[:SLOT_TABLE_OFFSET] + b[SLOT_TABLE_OFFSET:one_slot_aes]
+                            + a[one_slot_aes:], pw))
 
-    # --- header tamper sweep: every byte of the header is AAD ---
+    # --- §5.3: the split byte-flip sweep ---
+    #
+    # v1 had one AAD and one sweep. There are two AADs now, so the sweep is
+    # split to match: every byte of the core header must be caught by the
+    # payload, every byte of every slot prefix by that slot's own wrap. The one
+    # byte deliberately covered by neither is slot_count, and it gets its own
+    # check below rather than being quietly excluded from this one.
     base = encrypt(b"tamper me", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, **fast)
-    survivors = []
-    for i in range(HEADER_LEN):
+
+    def survives(index: int) -> bool:
         mutated = bytearray(base)
-        mutated[i] ^= 0x01
+        mutated[index] ^= 0x01
         try:
             decrypt(bytes(mutated), pw)
-            survivors.append(i)
+            return True
         except KeymError:
-            pass
-    check(f"every header byte is authenticated (survivors: {survivors})", not survivors)
+            return False
+
+    core_survivors = [i for i in range(CORE_HEADER_LEN) if survives(i)]
+    check(f"every core header byte is authenticated (survivors: {core_survivors})",
+          not core_survivors)
+
+    prefix_survivors = [
+        i for i in range(SLOT_TABLE_OFFSET, SLOT_TABLE_OFFSET + SLOT_PREFIX_LEN)
+        if survives(i)
+    ]
+    check(f"every slot prefix byte is authenticated (survivors: {prefix_survivors})",
+          not prefix_survivors)
+
+    wrap_survivors = [
+        i for i in range(SLOT_TABLE_OFFSET + SLOT_PREFIX_LEN, one_slot_aes)
+        if survives(i)
+    ]
+    check(f"every wrapped-key byte is authenticated (survivors: {wrap_survivors})",
+          not wrap_survivors)
+
+    # --- §5.3: slot_count is outside both AADs, and that is bounded to DoS ---
+    #
+    # The document concedes this byte is unauthenticated. The claim it makes in
+    # exchange is specific — no tampered slot_count can ever yield a master key
+    # — so that is what gets tested, rather than the weaker "it fails somehow".
+    def with_slot_count(value: int) -> bytes:
+        m = bytearray(base)
+        m[SLOT_COUNT_OFFSET] = value
+        return bytes(m)
+
+    for value in (0, 2, 3, 8, 9, 0xFF):
+        rejects(f"tampered slot_count = {value}",
+                lambda v=value: decrypt(with_slot_count(v), pw))
+        try:
+            recover_master_key(with_slot_count(value), pw)
+            check(f"tampered slot_count = {value} yields no master key", False)
+        except KeymError:
+            check(f"tampered slot_count = {value} yields no master key", True)
+
+    # --- §4.4: unknown slot types are skipped, not rejected ---
+    #
+    # The data-loss case. A container carrying a slot type from a later version
+    # must still open through the passphrase slot it already had, or enrolling a
+    # passkey in Phase 4 bricks every container for every reader shipped before
+    # it.
+    two_slot = add_slot(base, pw, pw2, **fast)
+    opens("second slot opens the same container",
+          lambda: decrypt(two_slot, pw2), b"tamper me")
+    opens("first slot still opens it",
+          lambda: decrypt(two_slot, pw), b"tamper me")
+
+    def retype(container: bytes, index: int, new_type: int) -> bytes:
+        """Rewrite one slot's type byte in place, leaving everything else."""
+        m = bytearray(container)
+        m[SLOT_TABLE_OFFSET + index * slot_len(CIPHER_AES)] = new_type
+        return bytes(m)
+
+    # Slot 0 becomes a type nothing implements. Slot 1 is untouched and valid.
+    alien_first = retype(two_slot, 0, 0x7F)
+    opens("unknown slot type is skipped, later slot still opens",
+          lambda: decrypt(alien_first, pw2), b"tamper me")
+    # And the reverse order, so the result does not depend on the alien slot
+    # happening to come first.
+    alien_second = retype(two_slot, 1, 0x7F)
+    opens("unknown slot type is skipped, earlier slot still opens",
+          lambda: decrypt(alien_second, pw), b"tamper me")
+    # Every slot unusable is the only case that is a failure (finding A5).
+    rejects("container whose every slot type is unknown",
+            lambda: decrypt(retype(alien_first, 1, 0x7F), pw2))
+
+    # Finding A6: a per-slot failure is scoped to the slot, never to the
+    # container.
+    #
+    # The obvious test here — set a reserved byte inside the *alien* slot — is
+    # worthless, and a negative control said so: that slot is skipped for its
+    # type before its reserved bytes are ever looked at, so the check passes
+    # whichever rule the reader follows. The case that separates §3.3's
+    # "reject" from §4.4's "skip" is a reserved byte in a slot whose type the
+    # reader *does* implement, in a container that has another slot to fall
+    # back to.
+    slot1 = SLOT_TABLE_OFFSET + slot_len(CIPHER_AES)
+    reserved_in_known = bytearray(two_slot)
+    reserved_in_known[SLOT_TABLE_OFFSET + 3] = 0xAB
+    opens("a reserved byte in one slot does not condemn the container",
+          lambda: decrypt(bytes(reserved_in_known), pw2), b"tamper me")
+    rejects("that slot's own password once it is unusable",
+            lambda: decrypt(bytes(reserved_in_known), pw))
+
+    flags_in_known = bytearray(two_slot)
+    flags_in_known[slot1 + 2] = 0x02
+    opens("a reserved slot_flags bit in one slot does not condemn the container",
+          lambda: decrypt(bytes(flags_in_known), pw), b"tamper me")
+
+    # --- §4.3 / §5.3: a slot table is editable holding one secret ---
+    #
+    # This is the requirement that forced the constant wrap nonce and
+    # slot_count's absence from the AAD. Both decisions are only justified if
+    # this actually works, so it is executed rather than asserted.
+    check("add_slot leaves the payload byte-identical",
+          two_slot[SLOT_TABLE_OFFSET + 2 * slot_len(CIPHER_AES):]
+          == base[SLOT_TABLE_OFFSET + slot_len(CIPHER_AES):])
+    check("add_slot did not touch the first slot",
+          two_slot[SLOT_TABLE_OFFSET:SLOT_TABLE_OFFSET + slot_len(CIPHER_AES)]
+          == base[SLOT_TABLE_OFFSET:SLOT_TABLE_OFFSET + slot_len(CIPHER_AES)])
+
+    dropped = remove_slot(two_slot, 0)
+    opens("removing a slot needs no secret and leaves the other working",
+          lambda: decrypt(dropped, pw2), b"tamper me")
+    rejects("removed slot's password", lambda: decrypt(dropped, pw))
+
+    repassworded = rewrap_slot(base, 0, pw, pw2, **fast)
+    opens("re-passworded container opens with the new password",
+          lambda: decrypt(repassworded, pw2), b"tamper me")
+    rejects("old password after re-passwording", lambda: decrypt(repassworded, pw))
+    check("re-passwording leaves the payload byte-identical",
+          repassworded[one_slot_aes:] == base[one_slot_aes:])
+
+    # --- §6: slot_count's cap is a bound, not a side effect of the length check
+    #
+    # Every tampered-slot_count case above is on a 130-byte container, where an
+    # inflated count is caught because the file is too short to hold the slots
+    # it claims. That proves nothing about the cap: a negative control removing
+    # the 1..8 range check left the whole suite green. The bound exists to cap
+    # worst-case KDF work (§3.1), so the case that tests it is a container long
+    # enough to actually contain the slots it declares.
+    eight = base
+    for i in range(SLOT_COUNT_MAX - 1):
+        eight = add_slot(eight, pw, f"{pw2}#{i}", **fast)
+    check("eight slots is the maximum slot_count", eight[SLOT_COUNT_OFFSET] == 8)
+    opens("a full slot table still opens on the first slot",
+          lambda: decrypt(eight, pw), b"tamper me")
+    opens("a full slot table still opens on the last slot",
+          lambda: decrypt(eight, f"{pw2}#{SLOT_COUNT_MAX - 2}"), b"tamper me")
+
+    try:
+        add_slot(eight, pw, "one too many", **fast)
+        check("refuse to write a ninth slot", False)
+    except UsageError:
+        check("refuse to write a ninth slot", True)
+
+    # The ninth slot has to be the *only* way in, or the test passes for the
+    # wrong reason. Padding a container and bumping its count was the first
+    # attempt and it was worthless: the reader opened slot 0 exactly as before
+    # and then failed on a payload that had moved, so the check went green with
+    # the cap removed. A control caught that.
+    #
+    # This version builds a genuinely well-formed nine-slot container whose
+    # ninth slot wraps the real master key. Nothing rejects it except the cap.
+    core9, records9, payload9, master9 = recover_master_key(eight, pw)
+    pw9 = "the ninth slot"
+    ninth = build_passphrase_slot(core9, master9, pw9, kdf_id=KDF_PBKDF2, **fast)
+
+    # assemble() refuses to write nine, which is the writer half of the bound,
+    # so the reader half has to be tested against hand-built bytes.
+    over_count = core9.pack() + bytes([9]) + b"".join(records9) + ninth + payload9
+    check("the over-cap container is structurally well-formed",
+          len(over_count) == SLOT_TABLE_OFFSET + 9 * slot_len(CIPHER_AES) + len(payload9))
+    opens("the ninth slot is a valid slot when it is within the cap",
+          lambda: decrypt(assemble(core9, records9[:7] + [ninth], payload9), pw9),
+          b"tamper me")
+    rejects("slot_count above the cap, with the ninth slot the only way in",
+            lambda: decrypt(over_count, pw9))
 
     # --- §6: reserved fields and bounds are rejected ---
     def mutate(index: int, value: int) -> bytes:
@@ -793,43 +1430,91 @@ def _selftest() -> int:
         m[index] = value
         return bytes(m)
 
-    # A crafted container whose header is *internally consistent*: the
-    # reserved field is non-zero and the payload was sealed under that exact
-    # header, so the AAD matches and authentication would succeed.
+    slot0 = SLOT_TABLE_OFFSET
+
+    # A crafted container that is *internally consistent*: the reserved field is
+    # non-zero and everything is sealed under that exact header, so the AADs
+    # match and authentication would succeed.
     #
     # This is the only way to test §3.3's fail-closed rule. Simply flipping a
-    # reserved bit in a finished container proves nothing — the header is AAD,
-    # so it fails on the tag whether or not the reader checks reserved fields
-    # at all. A negative control proved that too: removing both reserved-field
-    # checks left all 46 checks green.
-    def forge_with_reserved(hdr: bytes) -> bytes:
-        """Seal a payload under a header this implementation refuses to write."""
-        fake = Header(kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, flags=hdr[7],
-                      salt=hdr[8:40], iterations=struct.unpack(">I", hdr[40:44])[0])
-        master = derive_master_key(fake, build_kdf_input(pw, None))
-        aes_key, chacha_key = subkeys(fake, master)
-        return hdr + _seal(fake, aes_key, chacha_key, nonce_for(0, True), b"forged", hdr)
+    # reserved bit in a finished container proves nothing — it fails on the tag
+    # whether or not the reader checks reserved fields at all. A negative
+    # control proved that against the first draft: removing both reserved-field
+    # checks left every check green.
+    def forge(core_bytes: bytes, slot_prefix: bytes) -> bytes:
+        """Seal a container under a header this implementation refuses to write.
 
-    hdr_reserved_flag = bytearray(base[:HEADER_LEN]); hdr_reserved_flag[7] = 0x02
-    hdr_reserved_kdf = bytearray(base[:HEADER_LEN]); hdr_reserved_kdf[44] = 0x01
+        Both AADs are the *literal* forged bytes, not a re-packed CoreHeader.
+        Re-packing would silently zero the very reserved field under test, and
+        the container would then fail on a mismatched AAD rather than on the
+        reserved-field check — passing the test for the wrong reason, which is
+        the failure mode this whole helper exists to avoid.
+        """
+        cipher_id = core_bytes[5]
+        master = os.urandom(MASTER_KEY_LEN)
+        draft = Slot(slot_type=slot_prefix[0], kdf_id=slot_prefix[1],
+                     slot_flags=slot_prefix[2],
+                     salt=slot_prefix[SLOT_SALT_OFFSET:SLOT_SALT_OFFSET + SALT_LEN],
+                     wrapped_key=b"",
+                     iterations=struct.unpack(">I", slot_prefix[40:44])[0])
+        slot_key = derive_slot_key(draft, build_kdf_input(pw, None))
+        wk_aes, wk_chacha = wrap_keys(cipher_id, slot_key)
+        wrapped = _seal(cipher_id, wk_aes, wk_chacha, WRAP_NONCE, master,
+                        core_bytes + slot_prefix)
+        pk_aes, pk_chacha = payload_keys(cipher_id, master)
+        payload = _seal(cipher_id, pk_aes, pk_chacha, nonce_for(0, True),
+                        b"forged", core_bytes)
+        return core_bytes + b"\x01" + slot_prefix + wrapped + payload
+
+    good_core = bytearray(base[:CORE_HEADER_LEN])
+    good_prefix = bytearray(base[slot0:slot0 + SLOT_PREFIX_LEN])
+
+    core_flags_set = bytearray(good_core); core_flags_set[6] = 0x01
+    core_pad_set = bytearray(good_core); core_pad_set[7] = 0x01
+    slot_reserved_set = bytearray(good_prefix); slot_reserved_set[3] = 0x01
+    slot_flags_set = bytearray(good_prefix); slot_flags_set[2] = 0x02
+    slot_kdf_reserved = bytearray(good_prefix); slot_kdf_reserved[44] = 0x01
+
+    for label, forged in (
+        ("sealed container with a reserved core flag bit",
+         forge(bytes(core_flags_set), bytes(good_prefix))),
+        ("sealed container with a non-zero core pad byte",
+         forge(bytes(core_pad_set), bytes(good_prefix))),
+        ("sealed container with non-zero slot reserved bytes",
+         forge(bytes(good_core), bytes(slot_reserved_set))),
+        ("sealed container with a reserved slot_flags bit",
+         forge(bytes(good_core), bytes(slot_flags_set))),
+        ("sealed container with non-zero KDF reserved bytes",
+         forge(bytes(good_core), bytes(slot_kdf_reserved))),
+    ):
+        rejects(label, lambda f=forged: decrypt(f, pw))
 
     for label, blob2 in (
-        ("sealed container with a reserved flag bit",
-         forge_with_reserved(bytes(hdr_reserved_flag))),
-        ("sealed container with non-zero KDF reserved bytes",
-         forge_with_reserved(bytes(hdr_reserved_kdf))),
-        ("reserved flag bit", mutate(7, 0x02)),
-        ("PBKDF2 reserved bytes", mutate(44, 0x01)),
-        ("iterations = 0", base[:40] + b"\x00\x00\x00\x00" + base[44:]),
-        ("iterations over cap", base[:40] + struct.pack(">I", 10_000_001) + base[44:]),
-        ("unknown cipher_id", mutate(6, 0x09)),
+        ("reserved core flag bit", mutate(6, 0x02)),
+        ("non-zero core pad byte", mutate(7, 0x01)),
+        ("reserved slot_flags bit", mutate(slot0 + 2, 0x02)),
+        ("non-zero slot reserved byte", mutate(slot0 + 3, 0x01)),
+        ("PBKDF2 reserved bytes", mutate(slot0 + 44, 0x01)),
+        ("iterations = 0",
+         base[:slot0 + 40] + b"\x00\x00\x00\x00" + base[slot0 + 44:]),
+        ("iterations over cap",
+         base[:slot0 + 40] + struct.pack(">I", 10_000_001) + base[slot0 + 44:]),
+        ("unknown cipher_id", mutate(5, 0x09)),
+        ("unknown slot kdf_id", mutate(slot0 + 1, 0x09)),
         ("wrong version", mutate(4, 0x03)),
+        ("truncated to the core header", base[:CORE_HEADER_LEN]),
+        ("empty container", b""),
     ):
-        try:
-            decrypt(blob2, pw)
-            check(f"reject {label}", False)
-        except KeymError:
-            check(f"reject {label}", True)
+        rejects(label, lambda x=blob2: decrypt(x, pw))
+
+    # §6's per-slot bounds: an out-of-bounds slot is unusable, not fatal to a
+    # container that has another slot (finding A5).
+    over_cap = bytearray(two_slot)
+    over_cap[slot0 + 40:slot0 + 44] = struct.pack(">I", 10_000_001)
+    opens("out-of-bounds slot is skipped, not fatal",
+          lambda: decrypt(bytes(over_cap), pw2), b"tamper me")
+    rejects("out-of-bounds slot's own password",
+            lambda: decrypt(bytes(over_cap), pw))
 
     # --- §7: armor round-trip and order-independent detection ---
     check("armor round-trips", dearmor(armor(base)) == base)
@@ -839,22 +1524,45 @@ def _selftest() -> int:
     check("binary detected", detect(base) == "keym-binary-v2")
     check("v1 armor no longer collides with the magic",
           detect(b"KEYM1:AAAA") == "keym1-armor")
-    # The property §7 buys: byte 0 alone separates armor from binary.
     check("armor and magic differ at byte 0", armor(base).encode()[0] != MAGIC[0])
 
     # --- wrong credentials ---
-    for label, kwargs in (
-        ("wrong password", dict(password="nope")),
-        ("missing key file", dict(password=pw, keyfile_bytes=None)),
+    with_kf = encrypt(b"x", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
+                      keyfile_bytes=kf, **fast)
+    for label, password, keyfile in (
+        ("wrong password", "nope", kf),
+        ("missing key file", pw, None),
+        ("wrong key file", pw, b"different"),
     ):
-        blob3 = encrypt(b"x", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
-                        keyfile_bytes=kf, **fast)
         try:
-            decrypt(blob3, kwargs.get("password", pw),
-                    keyfile_bytes=kwargs.get("keyfile_bytes"))
+            decrypt(with_kf, password, keyfile_bytes=keyfile)
             check(f"reject {label}", False)
         except KeymError as e:
             check(f"reject {label}", str(e) == DECRYPT_FAILED)
+
+    # --- §4.5: the conformance entry point is the only way to fix either ---
+    fixed_salt = bytes(range(32))
+    fixed_mk = bytes(range(32, 64))
+    twice = [
+        encrypt(b"determinism", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
+                salt=fixed_salt, master_key=fixed_mk, **fast)
+        for _ in range(2)
+    ]
+    check("fixed salt and master key give byte-identical containers",
+          twice[0] == twice[1])
+    check("default encryption does not repeat itself",
+          encrypt(b"x", pw, kdf_id=KDF_PBKDF2, **fast)
+          != encrypt(b"x", pw, kdf_id=KDF_PBKDF2, **fast))
+    # The property the envelope bought: a reused salt no longer reuses the
+    # payload key, so two containers written with the same salt and password
+    # still differ in every payload byte (§11.1).
+    same_salt = [
+        encrypt(b"same salt", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
+                salt=fixed_salt, **fast)
+        for _ in range(2)
+    ]
+    check("a reused salt does not reuse the payload key",
+          same_salt[0][one_slot_aes:] != same_salt[1][one_slot_aes:])
 
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
@@ -889,14 +1597,17 @@ def main(argv: Optional[list[str]] = None) -> int:
             p.add_argument("--time-cost", type=int, default=3)
             p.add_argument("--memory-kib", type=int, default=65_536)
             p.add_argument("--parallelism", type=int, default=4)
-            # Conformance only. Byte-equality against the TypeScript is the
-            # only check that catches a chunking or nonce disagreement — both
-            # implementations decode each other's output happily even when
-            # they disagree about how to write it — and comparing bytes needs
-            # a shared salt. Reusing one with the same password reuses every
-            # (key, nonce) pair in the container, so this is not something to
-            # use on real data.
-            p.add_argument("--salt", help="32-byte hex salt (conformance testing only)")
+            # Conformance only, both of them. Byte-equality against the
+            # TypeScript is the only check that catches a chunking, nonce or
+            # slot-layout disagreement — the two implementations decode each
+            # other's output happily even when they disagree about how to write
+            # it — and comparing bytes needs both values pinned.
+            #
+            # §4.5 forbids either on real data. Reusing a master key reuses
+            # every (key, nonce) pair in the container.
+            p.add_argument("--salt", help="32-byte hex slot salt (conformance testing only)")
+            p.add_argument("--master-key",
+                           help="32-byte hex master key (conformance testing only)")
 
     insp = sub.add_parser("inspect", help="describe a container without decrypting it")
     insp.add_argument("--in", dest="infile", help="input path (default: stdin)")
@@ -931,22 +1642,22 @@ def main(argv: Optional[list[str]] = None) -> int:
                 memory_kib=args.memory_kib,
                 parallelism=args.parallelism,
                 salt=bytes.fromhex(args.salt) if args.salt else None,
-                enforce_write_policy=args.salt is None,
+                master_key=bytes.fromhex(args.master_key) if args.master_key else None,
             )
-            result = armor(out).encode() if args.armor else out
+            if args.armor:
+                out = armor(out).encode()
         else:
             if args.armor or detect(data) == "keym2-armor":
                 data = dearmor(data.decode())
-            result = decrypt(data, args.password, keyfile_bytes=keyfile)
+            out = decrypt(data, args.password, keyfile_bytes=keyfile)
     except (KeymError, UsageError) as e:
-        print(f"keym2: {e}", file=sys.stderr)
+        print(f"error: {e}", file=sys.stderr)
         return 1
 
     if args.outfile:
-        with open(args.outfile, "wb") as f:
-            f.write(result)
+        open(args.outfile, "wb").write(out)
     else:
-        sys.stdout.buffer.write(result)
+        sys.stdout.buffer.write(out)
     return 0
 
 
