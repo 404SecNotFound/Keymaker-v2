@@ -27,13 +27,13 @@
  * ## What it deliberately is not
  *
  * It is a transport, not a second implementation. It calls exactly the same
- * `encryptData`/`decryptData` the in-thread path uses, so there is no way for
- * the two to disagree about the wire format. Everything the conformance and
+ * `encryptContainer`/`decryptData` the in-thread path uses, so there is no way
+ * for the two to disagree about the wire format. Everything the conformance and
  * fixture suites prove about the core still applies unchanged.
  */
 
 import {
-  encryptData,
+  encryptContainer,
   decryptData,
   isUserFacingError,
   type KeymakerOptions,
@@ -97,7 +97,7 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     }
 
     if (req.op === "encrypt") {
-      const out = await encryptData(req.data, req.password, req.keyFile, req.options);
+      const out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
       const response: CryptoResponse = { id: req.id, ok: true, op: "encrypt", data: out };
       ctx.postMessage(response, [out]);
       return;

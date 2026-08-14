@@ -21,7 +21,7 @@ fixed.
 | KM-02 | Medium | Password gate accepted trivially guessable phrases | **Fixed** |
 | KM-03 | Medium | Dice calculator counted impossible rolls as entropy | **Fixed** |
 | KM-04 | Low | No ciphertext size ceiling on the decrypt path | **Fixed** |
-| KM-05 | Low | Password + key file concatenation is ambiguous | **Deferred to KEYM v2** |
+| KM-05 | Low | Password + key file concatenation is ambiguous | **Closed in KEYM v2** |
 | KM-06 | Low | PBKDF2 is the effective default despite Argon2id being recommended | **Fixed** |
 | KM-07 | Low | `connect-src 'self'` did not enforce the zero-egress claim | **Fixed** |
 | KM-08 | Low | Service worker caching scope broader than necessary | **Fixed** |
@@ -396,14 +396,26 @@ Argon2id round-trips, service-worker registration, and a reload all succeed
 with no CSP violations — the page needs no connections at all. The build now
 fails if `connect-src` is anything other than `'none'`.
 
-## KM-05 — Deferred to KEYM v2
+## KM-05 — Closed in KEYM v2
 
 Key material is `password_bytes || keyfile_bytes` with no length prefix or
 domain separation, so `("ab","c")` and `("a","bc")` produce identical KDF
 input. This is not a practical key-recovery path, but it is not how a format
 should combine two secrets. Fixing it changes derivation and therefore the wire
-format, so it belongs in v2 alongside length-prefixed, domain-separated inputs
-and pre-hashing of key files. **KEYM v1 must remain readable exactly as-is.**
+format, so it went into v2 alongside length-prefixed, domain-separated inputs
+and pre-hashing of key files. **KEYM v1 must remain readable exactly as-is**, so
+v1 containers keep the old derivation permanently — closing this was never going
+to mean changing how an existing file opens. The application writes v2 as of
+Phase 3, so nothing created from now on carries the ambiguity.
+
+One correction worth recording, because the obvious reading of this entry is
+wrong: for the specific `(password, key file)` pair above it is **v2 §4.2's
+hashing of the key file** that closes the collision, not the length prefixes. A
+fixed-width 32-byte digest cannot slide, so those two inputs differ whether or
+not anything is prefixed. A negative control on the reference demonstrated it —
+stubbing `LP()` to the identity left every injectivity test green. What the
+length prefixes actually buy is injectivity of the concatenation as fields are
+added, which is a real property and a different one.
 
 ## KM-06 — Argon2id is now the default
 
@@ -489,28 +501,39 @@ standing behind the word "offline".
 
 ## Remaining work
 
-**KEYM v2.** The one substantial item left. Still no code, deliberately — a
-wire format needs design review before implementation, not after — but the
-design is now written up in
-[docs/FORMAT-V2-DESIGN.md](docs/FORMAT-V2-DESIGN.md) rather than living as a
-bullet list. It carries:
+**KEYM v2 — shipped.** Specified in
+[docs/FORMAT-V2-DESIGN.md](docs/FORMAT-V2-DESIGN.md), implemented twice, and
+written by the application as of Phase 3. It carries:
 
 - length-prefixed, domain-separated key material, closing KM-05
 - key files hashed to a fixed size before derivation, so a 100 MB key file is
   not a 100 MB KDF input
 - chunked AEAD with counter nonces and a final-chunk flag, removing the
   whole-file memory cost that makes the current 100 MB cap necessary
-- the §3.1 bounds as part of the format from the start
+- multi-slot envelope keys: a random master key per container, wrapped
+  independently per unlock secret
+- the bounds as part of the format from the start
 
-Three things the write-up added that the bullet list did not imply: truncation
-of a chunked payload is undetectable without an explicit final-chunk marker; a
-prefix of verified chunks is not a verified prefix of a file, so streaming
-output must not be committed until the last chunk authenticates; and the format
-change alone does not lift the size cap, because a browser assembling a Blob to
-download still holds the whole ciphertext. The document ends with a review
-checklist rather than a conclusion.
+Three things the write-up added that the original bullet list did not imply:
+truncation of a chunked payload is undetectable without an explicit final-chunk
+marker; a prefix of verified chunks is not a verified prefix of a file, so
+streaming output must not be committed until the last chunk authenticates; and
+the format change alone does not lift the size cap, because a browser
+assembling a Blob to download still holds the whole ciphertext. **That last one
+still stands** — the 100 MB user-visible cap has not moved, and the format was
+necessary but not sufficient for it.
 
-KEYM v1 should be frozen as it now stands once v2 exists.
+Writing the specification, then two implementations against it, produced seven
+findings in the *document* rather than in the code (F1–F7, recorded in its
+§11). Two of those — F6 and F7 — arrived with the multi-slot amendment and are
+the same shape as KM-14: rules that were unambiguous with one unlock path and
+stopped being so with several. Not wrong statements; statements whose scope
+stopped being obvious.
+
+KEYM v1 is frozen as it stands. Its decrypt path is untouched, its fixture
+corpus is append-only and now sits alongside a v2 corpus, and `encryptData`
+survives only so the v1 reader's cross-implementation test can still construct
+v1 containers to read.
 
 ---
 

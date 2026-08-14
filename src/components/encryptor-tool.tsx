@@ -87,22 +87,12 @@ function loadBip39(): Promise<Bip39Module> {
   return bip39ModulePromise;
 }
 
-// Chunked base64 encode/decode to avoid stack overflow on large buffers.
-// The spread operator in btoa(String.fromCharCode(...arr)) exceeds the
-// maximum call stack size for buffers larger than ~65KB.
-function uint8ArrayToBase64(bytes: Uint8Array): string {
-  const CHUNK_SIZE = 0x8000; // 32KB — well under any engine's argument limit
-  // Collected and joined once rather than accumulated with `+=`. At the 100 MB
-  // ceiling that is ~3,200 fragments, and an engine that flattens the rope on
-  // every concatenation turns this into O(n²).
-  const parts: string[] = [];
-  for (let i = 0; i < bytes.length; i += CHUNK_SIZE) {
-    const chunk = bytes.subarray(i, i + CHUNK_SIZE);
-    parts.push(String.fromCharCode.apply(null, chunk as unknown as number[]));
-  }
-  return btoa(parts.join(''));
-}
-
+// Chunked base64 decode to avoid stack overflow on large buffers.
+//
+// The encoding half of this pair used to live here and is gone: text output is
+// v2 armor now, which is base64url and comes from `armorKeym2`. B9's fix — the
+// array-and-join instead of `+=` — moved with it, and is called out there
+// rather than dropped.
 function base64ToUint8Array(base64: string): Uint8Array {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -492,10 +482,21 @@ function qrByteLength(text: string): number {
   return new TextEncoder().encode(text).byteLength;
 }
 
-// Self-identifying prefix for encrypted TEXT blobs (files carry the binary
-// "KEYM" magic instead). Decryption strips it if present and still accepts
-// bare base64 IBTZ blobs.
-const KEYM_TEXT_PREFIX = "KEYM1:";
+// Self-identifying prefixes for encrypted TEXT blobs (files carry the binary
+// "KEYM" magic instead). Decryption still accepts bare base64 IBTZ blobs.
+//
+// New text output is v2 armor. v1's prefix is *accepted* forever — it is what
+// every text backup written before Phase 3 starts with — but nothing produces
+// it any more.
+//
+// The two are matched differently on purpose, and FORMAT-V2-DESIGN §7 is the
+// reason. `KEYM1:` shares all four of its first bytes with the binary magic,
+// which is the bug v2's encoding exists to remove: lowercase `k` is 0x6B, the
+// magic's `K` is 0x4B, so byte 0 alone separates them. That only holds if the
+// v2 prefix is matched **case-sensitively** — accepting `KEYM2:` would put the
+// collision straight back while looking like leniency.
+const KEYM_V1_TEXT_PREFIX = "KEYM1:";
+const KEYM_V2_TEXT_PREFIX = "keym2:";
 
 /**
  * How long a copied secret is allowed to sit in the clipboard.
@@ -1344,8 +1345,13 @@ export function EncryptorTool() {
             setFile(null);
         } else {
             if (isStale()) return;
-            const base64String = uint8ArrayToBase64(new Uint8Array(resultBuffer));
-            setOutputText(KEYM_TEXT_PREFIX + base64String);
+            // §7's armor: base64url, unpadded, so the blob survives being
+            // pasted into a URL, a filename or a QR code without escaping —
+            // and so nobody has to strip `=` by hand from a backup they are
+            // trying to recover. Dynamically imported for the same reason the
+            // crypto core imports it that way.
+            const { armorKeym2 } = await import("@/lib/keym-v2");
+            setOutputText(armorKeym2(new Uint8Array(resultBuffer)));
             setTextSecret('');
         }
 
@@ -1356,13 +1362,13 @@ export function EncryptorTool() {
             inputBuffer = await file!.arrayBuffer();
         } else {
             let blobText = textSecret.trim();
-            if (blobText.toUpperCase().startsWith(KEYM_TEXT_PREFIX)) {
-              blobText = blobText.slice(KEYM_TEXT_PREFIX.length);
-            }
-            // Bound the *encoded* length before decoding. atob() plus the
-            // byte-copy in base64ToUint8Array allocates roughly 1.75x the
-            // string before decryptData() has a buffer it can measure, so the
-            // core size check cannot protect this step — only preceding it can.
+
+            // Bound the *encoded* length before decoding, whichever encoding it
+            // turns out to be. atob() plus the byte-copy allocates roughly 1.75x
+            // the string before decryptData() has a buffer it can measure, so
+            // the core size check cannot protect this step — only preceding it
+            // can. This is checked before the prefix is stripped rather than
+            // after, so it cannot be skipped by a paste that has no prefix.
             if (blobText.length > MAX_BASE64_INPUT_CHARS) {
               // Typed, so a size limit is reported as a size limit. As a plain
               // Error this fell through the catch below and told the user their
@@ -1372,7 +1378,20 @@ export function EncryptorTool() {
                 `Encrypted text is too large. Maximum is ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)}MB of original data.`
               );
             }
-            const bytes = base64ToUint8Array(blobText);
+
+            let bytes: Uint8Array;
+            if (blobText.startsWith(KEYM_V2_TEXT_PREFIX)) {
+              // Case-sensitive and byte-exact — see the note on the constants.
+              // Also base64url rather than base64, so this cannot go through
+              // base64ToUint8Array.
+              const { dearmorKeym2 } = await import("@/lib/keym-v2");
+              bytes = dearmorKeym2(blobText);
+            } else {
+              if (blobText.toUpperCase().startsWith(KEYM_V1_TEXT_PREFIX)) {
+                blobText = blobText.slice(KEYM_V1_TEXT_PREFIX.length);
+              }
+              bytes = base64ToUint8Array(blobText);
+            }
             inputBuffer = bytes.buffer as ArrayBuffer;
         }
 
@@ -1396,6 +1415,15 @@ export function EncryptorTool() {
         if (decryptResult.format === "keym-v1") {
           const inspected = inspectKeym(headerPeek);
           if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
+        } else if (decryptResult.format === "keym-v2") {
+          const { inspectKeym2 } = await import("@/lib/keym-v2");
+          const inspected = inspectKeym2(headerPeek);
+          if (inspected) {
+            info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
+            // Only worth saying when it is not the one-slot case every
+            // container this version writes has.
+            if (inspected.slots > 1) info += ` · ${inspected.slots} slots`;
+          }
         }
         if (decryptResult.keyFileUsed) info += " · key file";
         if (isStale()) return;
@@ -1426,7 +1454,12 @@ export function EncryptorTool() {
         // unconditional "Success!" below replaced this one the instant it
         // appeared and nobody ever read the re-encryption nudge. One toast,
         // both facts.
-        legacyNotice = decryptResult.format !== "keym-v1";
+        // Names the IttyBitz formats rather than "anything that is not v1",
+        // because the toast this drives says "This was a legacy IttyBitz file".
+        // The old condition was correct only while v1 was the sole KEYM version
+        // in existence; the moment v2 containers appear it starts telling
+        // people their brand-new file came from IttyBitz.
+        legacyNotice = decryptResult.format === "ibtz-v1" || decryptResult.format === "ibtz-v0";
 
         if (inputType === 'file') {
              const stripped = file!.name.replace(/\.(keym|ibitz)$/i, '');

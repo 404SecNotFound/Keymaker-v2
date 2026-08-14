@@ -136,16 +136,29 @@ def main() -> int:
         tmp = Path(td)
 
         # ---- 1. Frozen JS fixtures, read by the independent implementation ----
-        print("Frozen JS fixtures decrypted by the Python reference:")
+        #
+        # v1 only. The corpus holds both versions now, and this file is the v1
+        # reference — handing it a v2 container gets "unsupported version 2",
+        # which is the right answer to the wrong question. crosstest2.py owns
+        # the v2 half.
+        #
+        # Filtered, with the count asserted, rather than sliced by position: a
+        # v1 fixture that stopped being recognised as one would otherwise stop
+        # being tested silently, which is the failure mode a frozen corpus
+        # exists to make impossible.
+        print("Frozen JS fixtures decrypted by the Python reference (v1):")
         meta = json.loads((ROOT / "scripts/fixtures/keymaker/fixtures.json").read_text())
         fx_pw, fx_kf = meta["password"], bytes.fromhex(meta["keyFileHex"])
-        for f in meta["fixtures"]:
+        v1_fixtures = [f for f in meta["fixtures"] if f.get("version", 1) == 1]
+        for f in v1_fixtures:
             blob = (ROOT / "scripts/fixtures/keymaker" / f["file"]).read_bytes()
             try:
                 got = decrypt(blob, fx_pw, fx_kf if f["keyFile"] else None).decode()
                 check(got == f["plaintext"], f["name"])
             except KeymError as e:
                 check(False, f["name"], str(e))
+        check(len(v1_fixtures) == 6, "v1 corpus still has all six vectors",
+              f"found {len(v1_fixtures)}")
 
         # ---- 2. JS encrypts -> Python decrypts ----
         print("\nJS encrypt -> Python decrypt (6 combos x key file):")

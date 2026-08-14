@@ -620,6 +620,75 @@ export async function encryptData(
   }
 }
 
+/**
+ * Encrypt into the current container format, which since Phase 3 is **KEYM v2**.
+ *
+ * This is the application's writer. `encryptData` above still produces v1 and
+ * is deliberately kept, for one reason: `reference/crosstest.py` has to be able
+ * to *construct* v1 containers in order to prove the v1 reader still opens
+ * them, and the frozen fixture corpus was generated the same way. Retiring the
+ * v1 writer outright would mean the v1 reader's strongest test could no longer
+ * be written.
+ *
+ * FORMAT-V2-DESIGN §9.2 is about the product, and the product does not reach
+ * it: nothing under `src/components`, `crypto-worker.ts` or `crypto-client.ts`
+ * calls `encryptData` any more. "Two writable formats means two formats to keep
+ * correct, and there is no reason to author new v1 files."
+ *
+ * The v2 module arrives through a dynamic import for the same reason
+ * `decryptData`'s v2 branch uses one: the dependency runs one way, so v2 work
+ * is structurally unable to change how a v1 container is written or parsed, and
+ * v2 stays out of the initial bundle until something actually needs it.
+ */
+export async function encryptContainer(
+  dataBuffer: ArrayBuffer,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null,
+  options: KeymakerOptions
+): Promise<ArrayBuffer> {
+  validateCommon(dataBuffer, password, true);
+  if (!password) {
+    throw new KeymakerError("credential-required", "A password is required for encryption.");
+  }
+  if (!crypto.subtle) {
+    throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
+  }
+  // Same contract as encryptData: the caller states the algorithms, or this
+  // throws. See the note on KeymakerOptions for why an implicit default was a
+  // footgun.
+  if (!options || !options.kdf || options.cipher === undefined) {
+    throw new Error(
+      "encryptContainer requires explicit kdf and cipher options — algorithm selection is the caller's decision."
+    );
+  }
+  validateKdfParams(options.kdf, "encrypt");
+  const cipher = options.cipher;
+  if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+    throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
+  }
+
+  try {
+    const { encryptKeym2 } = await import("./keym-v2");
+    const out = await encryptKeym2(
+      new Uint8Array(dataBuffer),
+      password,
+      keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+      { kdf: options.kdf, cipher }
+    );
+    return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
+  } catch (error) {
+    if (isUserFacingError(error)) throw error;
+    if (error instanceof Error && /required|too (large|long)|invalid characters|not available/i.test(error.message)) {
+      throw error;
+    }
+    throw new Error("Encryption failed. Please try again.");
+  } finally {
+    // Same contract as every other path here: the caller's key file buffer is
+    // zeroed in place once used.
+    if (keyFileBuffer) secureErase(keyFileBuffer);
+  }
+}
+
 interface ParsedKeym {
   kdf: KdfParams;
   cipher: CipherId;

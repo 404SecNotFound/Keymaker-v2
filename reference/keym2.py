@@ -1033,7 +1033,17 @@ def dearmor(text: str) -> bytes:
     raw = text.strip().encode("utf-8", errors="strict")
     if not raw.startswith(ARMOR_PREFIX):
         raise _reject()
-    body = raw[len(ARMOR_PREFIX):]
+
+    # Whitespace inside the body is removed before anything else, because the
+    # padding below is computed from the body's length. A backup that arrived
+    # line-wrapped — which is how most of them arrive, having been stored in a
+    # notes app or printed — would otherwise have its newlines counted as
+    # base64 characters, and the padding would come out wrong.
+    #
+    # docs/RECOVERY.md tells people line breaks are fine. This is the line that
+    # makes that true, and the TypeScript's dearmorKeym2 has always done it;
+    # the two had quietly diverged here.
+    body = b"".join(raw[len(ARMOR_PREFIX):].split())
     try:
         return base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4))
     except Exception:
@@ -1078,10 +1088,14 @@ def _describe_slot(index: int, record: bytes) -> list[str]:
         else f"Argon2id, t={slot.time_cost} m={slot.memory_kib}KiB p={slot.parallelism}"
     )
     return [
-        f"  slot {index}     type 0x{slot.slot_type:02x} (passphrase)",
-        f"    kdf       {kdf}",
-        f"    key file  {'yes' if slot.keyfile_used else 'no'}",
-        f"    salt      {slot.salt.hex()}",
+        f"  slot {index}       type 0x{slot.slot_type:02x} (passphrase)",
+        f"    kdf         {kdf}",
+        # "required" / "not used", matching keym.py word for word.
+        # docs/RECOVERY.md's troubleshooting tells a stuck user to look for
+        # `required`, and that instruction has to hold for whichever of the two
+        # scripts they ended up running.
+        f"    key file    {'required' if slot.keyfile_used else 'not used'}",
+        f"    salt        {slot.salt.hex()}",
     ]
 
 
@@ -1575,6 +1589,33 @@ def _selftest() -> int:
     return 0
 
 
+def resolve_password(supplied: Optional[str], confirm: bool = False) -> str:
+    """
+    Prefer an interactive prompt over --password.
+
+    Identical in behaviour to keym.py's, and identical for the same reason: a
+    password passed as an argument lands in shell history and is visible in the
+    process list to every other user on the machine, for as long as the KDF runs
+    — which for Argon2id is seconds, by design. That is the wrong default for a
+    tool whose entire job is handling someone's real secret.
+    """
+    if supplied is not None:
+        print(
+            "warning: --password was read from the command line, so it is now in "
+            "your shell history and was visible in the process list. Prefer the "
+            "interactive prompt for real secrets.",
+            file=sys.stderr,
+        )
+        return supplied
+
+    import getpass
+
+    pw = getpass.getpass("Password: ")
+    if confirm and pw != getpass.getpass("Confirm password: "):
+        raise UsageError("passwords did not match")
+    return pw
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="keym2.py",
@@ -1584,7 +1625,11 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     for name in ("encrypt", "decrypt"):
         p = sub.add_parser(name, help=f"{name} a KEYM v2 container")
-        p.add_argument("--password", required=True)
+        # Optional, and deliberately so — see resolve_password. This mirrors
+        # keym.py, and docs/RECOVERY.md tells people to use the prompt; a
+        # required flag here would have made that instruction false for exactly
+        # the containers the app now writes.
+        p.add_argument("--password")
         p.add_argument("--key-file", help="path to the key file, if one was used")
         p.add_argument("--in", dest="infile", help="input path (default: stdin)")
         p.add_argument("--out", dest="outfile", help="output path (default: stdout)")
@@ -1630,9 +1675,15 @@ def main(argv: Optional[list[str]] = None) -> int:
     keyfile = open(args.key_file, "rb").read() if args.key_file else None
 
     try:
+        password = resolve_password(args.password, confirm=(args.cmd == "encrypt"))
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
+
+    try:
         if args.cmd == "encrypt":
             out = encrypt(
-                data, args.password,
+                data, password,
                 kdf_id=KDF_PBKDF2 if args.kdf == "pbkdf2" else KDF_ARGON2ID,
                 cipher_id={"aes": CIPHER_AES, "chacha": CIPHER_CHACHA,
                            "chained": CIPHER_CHAINED}[args.cipher],
@@ -1649,7 +1700,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             if args.armor or detect(data) == "keym2-armor":
                 data = dearmor(data.decode())
-            out = decrypt(data, args.password, keyfile_bytes=keyfile)
+            out = decrypt(data, password, keyfile_bytes=keyfile)
     except (KeymError, UsageError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

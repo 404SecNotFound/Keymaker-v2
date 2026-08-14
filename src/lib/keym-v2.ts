@@ -875,12 +875,25 @@ export async function decryptKeym2(
 // Armor and detection (§7)
 // ---------------------------------------------------------------------------
 
+/**
+ * Chunked, because the spread in `btoa(String.fromCharCode(...arr))` exceeds
+ * the maximum call stack for buffers over roughly 65 KB. 32 KB is well under
+ * any engine's argument limit.
+ *
+ * Collected into an array and joined once rather than accumulated with `+=`.
+ * That is finding **B9**, which was fixed in the v1 text path and would have
+ * come straight back here: at the 100 MB ceiling this is ~3,200 fragments, and
+ * an engine that flattens the rope on every concatenation turns it into O(n²).
+ * Since the product writes v2, this is the only base64 path the text output has
+ * left, so it is the one that has to hold the line.
+ */
 function toBase64Url(bytes: Uint8Array): string {
-  let binary = "";
-  for (let i = 0; i < bytes.length; i += 0x8000) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  const CHUNK = 0x8000;
+  const parts: string[] = [];
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    parts.push(String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK) as unknown as number[]));
   }
-  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+  return btoa(parts.join("")).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
 }
 
 function fromBase64Url(text: string): Uint8Array {
@@ -910,6 +923,48 @@ export function dearmorKeym2(text: string): Uint8Array {
     return fromBase64Url(trimmed.slice(KEYM2_ARMOR_PREFIX.length).replace(/\s+/g, ""));
   } catch {
     reject();
+  }
+}
+
+/**
+ * Describe a v2 container from its opening bytes, without opening it.
+ *
+ * The mirror of `inspectKeym` for v1, and it exists so that switching the
+ * product to v2 does not silently drop the "· Argon2id · AES-256-GCM" half of
+ * the line the decrypt panel has always shown. Returns null rather than
+ * throwing for anything it cannot read — this drives a label, not a decision.
+ *
+ * The KDF reported is **slot 0's**, because the KDF is a property of a slot
+ * now, not of the container. That is exact for everything this version writes
+ * and stays honest for the rest: the slot count is reported alongside it, so a
+ * multi-slot container from Phase 4 says so rather than implying its one
+ * visible KDF is the whole story.
+ */
+export function inspectKeym2(data: Uint8Array): { kdfLabel: string; cipherLabel: string; slots: number } | null {
+  try {
+    const core = parseKeym2CoreHeader(data);
+    const slotCount = data[SLOT_COUNT_OFFSET] as number;
+    if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) return null;
+
+    const width = keym2SlotLen(core.cipher);
+    if (data.length < SLOT_TABLE_OFFSET + width) return null;
+    const slot = parseKeym2Slot(data.subarray(SLOT_TABLE_OFFSET, SLOT_TABLE_OFFSET + width));
+
+    const kdfLabel =
+      slot === null
+        ? "unrecognised slot"
+        : slot.kdf.kdf === KdfId.PBKDF2
+          ? `PBKDF2 (${slot.kdf.params.iterations.toLocaleString("en-US")} iters)`
+          : `Argon2id (${Math.round(slot.kdf.params.memoryKiB / 1024)} MiB, t=${slot.kdf.params.timeCost}, p=${slot.kdf.params.parallelism})`;
+    const cipherLabel =
+      core.cipher === CipherId.AES_256_GCM
+        ? "AES-256-GCM"
+        : core.cipher === CipherId.CHACHA20_POLY1305
+          ? "ChaCha20-Poly1305"
+          : "AES-256-GCM + ChaCha20-Poly1305";
+    return { kdfLabel, cipherLabel, slots: slotCount };
+  } catch {
+    return null;
   }
 }
 
