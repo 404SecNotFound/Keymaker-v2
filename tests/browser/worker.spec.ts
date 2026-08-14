@@ -25,6 +25,35 @@ async function maxOutArgon2id(page: Page) {
   await visible(page.getByLabel("Argon2id time cost")).fill("10");
 }
 
+/**
+ * Start the operation without awaiting it, with a bounded click.
+ *
+ * Two hazards, both hit in CI:
+ *
+ *  - Awaiting the click serialises the test behind actionability checks and
+ *    closes the very window we want to act inside.
+ *  - Not bounding it is worse. Once the operation is interrupted the button's
+ *    label changes ("Encrypt Text" becomes "Encrypt File"), so a click still
+ *    retrying actionability is now waiting on a locator that will never match
+ *    again. On WebKit that hung until the 120 s test timeout.
+ *
+ * So: fire it, bound it, and swallow the failure — a click that loses its
+ * target because the test deliberately moved the target is not a defect.
+ */
+function startOperation(page: Page, label: RegExp): Promise<void> {
+  return visible(page.getByRole("button", { name: label }))
+    .click({ timeout: 15_000 })
+    .catch(() => {});
+}
+
+/** Fail loudly if the derivation is not actually running yet. */
+async function confirmInFlight(page: Page) {
+  await expect(
+    page.locator(".animate-spin").first(),
+    "the derivation never started — this test proves nothing unless it is in flight"
+  ).toBeVisible({ timeout: 20_000 });
+}
+
 test("the crypto worker is what actually runs the derivation", async ({ page }) => {
   const workers: string[] = [];
   page.on("worker", (w) => workers.push(w.url()));
@@ -49,9 +78,7 @@ test("the tab stays responsive through a maximum-cost Argon2id derivation", asyn
   await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
 
   // Start it without awaiting — we are measuring what happens *during*.
-  const running = visible(page.getByRole("button", { name: /^Encrypt Text$/i }))
-    .click()
-    .catch(() => {});
+  const running = startOperation(page, /^Encrypt Text$/i);
 
   // Poll the page for a timestamp and record the largest gap between
   // consecutive successful replies.
@@ -93,10 +120,11 @@ test("a derivation can be cancelled, and the tab recovers", async ({ page }) => 
 
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill("secret");
   await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
-  const running = visible(page.getByRole("button", { name: /^Encrypt Text$/i }))
-    .click()
-    .catch(() => {});
-  await page.waitForTimeout(500);
+  const running = startOperation(page, /^Encrypt Text$/i);
+  // Confirm it is genuinely running first. A fixed sleep was not enough on a
+  // slow runner: the click could still be pending, so the test would "cancel"
+  // an operation that had never started and assert nothing of value.
+  await confirmInFlight(page);
 
   // Switching input type disowns the operation, which now terminates the
   // worker rather than merely ignoring its result. Before the worker there was
