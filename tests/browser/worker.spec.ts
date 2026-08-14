@@ -161,5 +161,5 @@ test("encryption still works when the worker script cannot load", async ({ page 
   await page.waitForTimeout(2_000); // let the probe fail
 
   const container = await encryptText(page, "fallback path still encrypts", STRONG_PASSWORD);
-  expect(container.startsWith("KEYM1:")).toBe(true);
+  expect(container.startsWith("keym2:")).toBe(true);
 });

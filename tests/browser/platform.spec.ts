@@ -156,7 +156,7 @@ for (const [kdf, cipher] of OFFLINE_MATRIX) {
       await useTextMode(page);
       await selectCrypto(page, kdf, cipher);
       const container = await encryptText(page, `offline ${kdf} ${cipher}`, STRONG_PASSWORD);
-      expect(container.startsWith("KEYM1:")).toBe(true);
+      expect(container.startsWith("keym2:")).toBe(true);
 
       expect(
         failedRequests,

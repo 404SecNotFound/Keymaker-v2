@@ -38,7 +38,16 @@ test.describe("KEYM round-trips in a real browser", () => {
         await selectCrypto(page, kdf, cipher);
 
         const container = await encryptText(page, SECRET, STRONG_PASSWORD);
-        expect(container.startsWith("KEYM1:")).toBe(true);
+        // The app writes v2, and §7's property is that one byte at offset 0
+        // separates armor from the binary magic. Both halves are asserted:
+        // the prefix is right, *and* it is not the `KEYM` that would collide.
+        //
+        // `encryptText` accepts either prefix on purpose — its job is "output
+        // appeared". This is where the format itself is pinned, and it exists
+        // because when the app switched to v2 the only signal was 60 tests
+        // timing out across three engines with nothing naming a prefix.
+        expect(container.startsWith("keym2:")).toBe(true);
+        expect(container.startsWith("KEYM")).toBe(false);
 
         const recovered = await decryptText(page, container, STRONG_PASSWORD);
         expect(recovered).toBe(SECRET);
@@ -60,7 +69,7 @@ test("the self-describing header is read back on decrypt", async ({ page }) => {
   // The container states its own parameters, and the UI surfaces them.
   const body = await page.evaluate(() => document.body.innerText);
   expect(body).toContain("Argon2id");
-  expect(body).toMatch(/Format:\s*Keymaker v1/);
+  expect(body).toMatch(/Format:\s*Keymaker v2/);
 });
 
 test("a wrong password is refused", async ({ page }) => {
@@ -91,8 +100,11 @@ test("a tampered container is refused", async ({ page }) => {
 
   const container = await encryptText(page, SECRET, STRONG_PASSWORD);
 
-  // Corrupt one base64 character in the body, leaving the KEYM1: prefix.
-  const prefix = "KEYM1:";
+  // Corrupt one character in the body, leaving the prefix intact so the
+  // container is still routed to the v2 reader and fails on the tag rather
+  // than on format detection. `A` and `B` are in both the base64 and
+  // base64url alphabets, so the swap stays decodable either way.
+  const prefix = "keym2:";
   const payload = container.slice(prefix.length);
   const idx = Math.floor(payload.length / 2);
   const swapped = payload[idx] === "A" ? "B" : "A";
