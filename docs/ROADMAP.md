@@ -132,7 +132,7 @@ counting down with **Keep open**, because someone transcribing a 24-word phrase
 onto paper is doing exactly the thing a silent wipe would ruin. A wipe is
 deliberately not a reset: cipher, KDF and input-type choices survive it.
 
-### 2.7 Accessibility
+### 2.7 Accessibility — **shipped**
 
 Non-colour cue for BIP-39 validity (it is colour-only today, invisible to
 colour-blind users), aria states, `axe-core` in CI.
@@ -142,8 +142,37 @@ and demonstrated against a real release. **Both met** — the signing job ran
 against a real OIDC token on the first deploy after 2.2 merged, and verifies its
 own signature before publishing it.
 
-**Remaining in this phase:** 2.5 (KDF auto-calibration) and 2.7 (accessibility).
-Neither blocks Phase 3.
+**Remaining in this phase:** 2.5 (KDF auto-calibration) alone. It is the
+largest of the phase and the least load-bearing — the fixed 64 MiB Argon2id
+defaults are already sound — so it does not block Phase 3.
+
+### What 2.7 actually found
+
+Two defects, and the more serious one is the one no tool reports.
+
+**axe found three unnamed buttons.** The ⓘ controls explaining the key file,
+the password policy and filename privacy were icon-only `<button>`s with no
+accessible name, so a screen reader announced three anonymous "button"s among
+the security settings. They also carried `focus:outline-hidden` with nothing
+put back, so a keyboard user lost their place entirely (WCAG 2.4.7) — a defect
+invisible to anyone driving the page with a mouse, which is why it survived.
+All three are now one `InfoTip` component with a name and a 2px accent ring.
+
+**axe did not find the colour-only recovery-phrase check, and could not.** The
+encrypt-side BIP-39 validator spoke in border tint alone: green for a valid
+phrase, red for one with a word the list does not contain. That red border is
+the last warning before a mistyped phrase is sealed into a backup nobody may
+open for a decade, and roughly one man in twelve cannot tell it from the green
+one. Every screen reader got nothing. **axe reports zero violations for a red
+border** — measured, by reverting the fix and watching all six scans stay
+green.
+
+It was colour-only deliberately: the original note reasoned that a text badge
+would tell a shoulder-surfer the blurred field holds a seed phrase. That
+concern is real but does not bite, because the indicator only appears for
+phrase-shaped input — an icon leaks precisely what the coloured border already
+leaked. The wording is kept generic for the same reason: "a word isn't
+recognised" is a spellcheck result, not an announcement about a wallet.
 
 ---
 
