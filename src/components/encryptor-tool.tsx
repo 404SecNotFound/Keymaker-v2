@@ -24,6 +24,10 @@ import {
   Dices,
   ChevronDown,
   AlertTriangle,
+  ShieldCheck,
+  LifeBuoy,
+  Trash2,
+  Timer,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -493,6 +497,55 @@ function qrByteLength(text: string): number {
 // bare base64 IBTZ blobs.
 const KEYM_TEXT_PREFIX = "KEYM1:";
 
+/**
+ * How long a copied secret is allowed to sit in the clipboard.
+ *
+ * The previous implementation read the clipboard back after 60 s and only
+ * overwrote it if the contents still matched. That read is the problem:
+ * `navigator.clipboard.readText()` needs both permission and document focus,
+ * Firefox does not offer it to page script at all, and the whole thing sat
+ * inside a `catch {}`. In practice the comparison threw and the seed phrase
+ * stayed in the clipboard indefinitely — while the toast said it would be
+ * cleared. A promise a security tool cannot keep is worse than no promise.
+ *
+ * So the overwrite is now unconditional. The cost is real and worth naming: if
+ * the user copies something else in the meantime, that is what gets cleared.
+ * The countdown is on screen for exactly that reason, with a control to clear
+ * it early or dismiss it — a surprise is only a surprise if it was invisible.
+ */
+const CLIPBOARD_CLEAR_SECONDS = 60;
+
+/**
+ * Idle time before the tool wipes secrets from memory and the screen.
+ *
+ * The threat is mundane and the reason the feature exists: an unlocked laptop
+ * with a decrypted seed phrase on it, in an office, a café, or a hotel room.
+ *
+ * Five minutes is a compromise. Someone transcribing a 24-word phrase onto
+ * paper is doing the exact thing this could interrupt, so the last
+ * LOCK_WARN_SECONDS are spent visibly counting down with a control to stay
+ * open, rather than the screen simply going blank on them.
+ */
+const AUTO_LOCK_MS = 5 * 60_000;
+const LOCK_WARN_SECONDS = 30;
+
+/**
+ * Subdirectory this build is served from, or "" at a domain root.
+ *
+ * Next rewrites its own asset URLs but not ones written by hand, so any link
+ * authored here has to prefix itself — same reason crypto-client.ts does it for
+ * the worker URL. Without it the recovery-kit links 404 on the Pages
+ * deployment, which is the one place they matter most.
+ */
+const BASE_PATH = (process.env.KEYMAKER_BASE_PATH || '').replace(/\/$/, '');
+
+/** Byte count for humans. Used by the verify-only result. */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} byte${n === 1 ? '' : 's'}`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
 // Filename privacy: when enabled, encrypted downloads are named
 // keymaker-<random8 hex>.keym instead of <original name>.keym.
 function randomFilenameSuffix(): string {
@@ -574,7 +627,48 @@ export function EncryptorTool() {
   const [isLoading, setIsLoading] = useState(false);
   const [isCryptoAvailable, setIsCryptoAvailable] = useState(true);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
+
+  /**
+   * Verify-only decryption.
+   *
+   * "Does this backup still open with this password?" is the question people
+   * actually have about a container they wrote two years ago, and answering it
+   * today means decrypting it and looking at the seed phrase on screen — which
+   * is the one thing a careful person does not want to do just to run a check.
+   *
+   * The AEAD tag *is* the answer: if it verifies, the container is intact and
+   * the password is right. So run the identical decryption, then throw the
+   * plaintext away without rendering it, writing it to disk, or letting the
+   * BIP-39 detector near it.
+   *
+   * Being precise about what this does not do: authenticating an AEAD ciphertext
+   * requires producing the plaintext — neither AES-GCM nor ChaCha20-Poly1305
+   * exposes a verify-the-tag-only operation, and WebCrypto has no such API. The
+   * plaintext exists in the worker's heap for the length of one call. What is
+   * avoided is the part under the user's control: it never reaches the DOM, the
+   * clipboard, a Blob, or a file.
+   */
+  const [verifyOnly, setVerifyOnly] = useState(false);
+  type VerifyResult = { detail: string; bytes: number };
+  const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
+
+  // Recovery kit modal — see the footer.
+  const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
+
   const clipboardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /**
+   * Wall-clock instant the clipboard is due to be overwritten, or null.
+   *
+   * A deadline rather than a countdown integer, so the ticking effect owns the
+   * display and nothing has to fire a side effect from inside a state updater.
+   */
+  const [clipboardDeadline, setClipboardDeadline] = useState<number | null>(null);
+  const [clipboardSecondsLeft, setClipboardSecondsLeft] = useState<number | null>(null);
+
+  // Auto-lock. lastActivityRef is a ref because it is written on every pointer
+  // and key event: as state it would re-render the whole tool on mouse-down.
+  const lastActivityRef = useRef<number>(0);
+  const [lockSecondsLeft, setLockSecondsLeft] = useState<number | null>(null);
 
   /**
    * Monotonic id of the crypto operation that currently owns the UI.
@@ -658,6 +752,42 @@ export function EncryptorTool() {
     };
   }, []);
 
+  /**
+   * Drive the clipboard countdown, and overwrite when it reaches zero.
+   *
+   * Deliberately derived from a deadline and `Date.now()` rather than counting
+   * ticks down: a background tab has its timers throttled to roughly once a
+   * minute, so a tick-counter would still be showing "43 seconds" long after
+   * the minute was up. The clipboard is exactly the thing that must not
+   * silently outlive its stated lifetime.
+   */
+  useEffect(() => {
+    if (clipboardDeadline === null) {
+      setClipboardSecondsLeft(null);
+      return;
+    }
+    let cancelled = false;
+    const tick = () => {
+      if (cancelled) return;
+      const left = Math.ceil((clipboardDeadline - Date.now()) / 1000);
+      if (left <= 0) {
+        setClipboardDeadline(null);
+        setClipboardSecondsLeft(null);
+        // Unconditional. See CLIPBOARD_CLEAR_SECONDS for why the old
+        // read-and-compare could not do this job.
+        navigator.clipboard.writeText('').catch(() => {});
+        return;
+      }
+      setClipboardSecondsLeft(left);
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [clipboardDeadline]);
+
   useEffect(() => {
     if (!window.crypto || !window.crypto.subtle || !window.crypto.getRandomValues) {
       setIsCryptoAvailable(false);
@@ -740,10 +870,108 @@ export function EncryptorTool() {
     setShowDecryptedText(false);
     setDecryptInfo(null);
     setInputType('file');
+    setVerifyResult(null);
     setIsDecryptedQrModalOpen(false);
     setIsDecryptedQrRevealed(false);
     setDecryptedQrStatus({ kind: "idle" });
   }, []);
+
+  /**
+   * Drop everything secret, keeping the user's settings.
+   *
+   * Distinct from `resetState`, which also returns the form to its defaults.
+   * A wipe is not a reset: someone who has just had the tool lock itself, or
+   * pressed the button because a colleague walked over, wants their chosen
+   * cipher and KDF still selected when they come back. What they do not want
+   * is the password, the plaintext, or the file still sitting there.
+   */
+  const wipeSensitiveState = useCallback(() => {
+    // Same disown-and-cancel as resetState: an in-flight derivation must not
+    // land its plaintext in a UI that has just been deliberately emptied.
+    opSeqRef.current++;
+    cancelAllCryptoWork();
+    setIsLoading(false);
+    setPassword('');
+    setGenerated(null);
+    setShowPassword(false);
+    setFile(null);
+    setKeyFile(null);
+    setUseKeyFile(false);
+    setTextSecret('');
+    setShowTextSecret(false);
+    setTextSecretSeedStatus("none");
+    setOutputText('');
+    setShowDecryptedText(false);
+    setDecryptInfo(null);
+    setVerifyResult(null);
+    setIsQrModalOpen(false);
+    setIsDecryptedQrModalOpen(false);
+    setIsDecryptedQrRevealed(false);
+    setDecryptedQrStatus({ kind: "idle" });
+  }, []);
+
+  /**
+   * Is there anything on screen worth locking?
+   *
+   * Arming the timer unconditionally would mean a blank page quietly running a
+   * five-minute countdown and firing a "wiped" toast at someone who has typed
+   * nothing. The timer exists for the state that matters — a password, a
+   * plaintext secret, a decrypted result — so it only runs when that exists.
+   */
+  const hasSecretsOnScreen =
+    password.length > 0 || textSecret.length > 0 || outputText.length > 0;
+
+  const keepOpen = useCallback(() => {
+    lastActivityRef.current = Date.now();
+    setLockSecondsLeft(null);
+  }, []);
+
+  /**
+   * Auto-lock on inactivity.
+   *
+   * Activity is tracked in a ref and sampled once a second, rather than each
+   * event resetting a timer in state: pointer and key events fire constantly,
+   * and re-rendering the whole tool on every one of them to service a
+   * five-minute clock would be a poor trade.
+   *
+   * Only the final LOCK_WARN_SECONDS are rendered. Before that the countdown
+   * exists but says nothing, so the common case — someone actively using the
+   * tool — sees no chrome at all.
+   */
+  useEffect(() => {
+    if (!hasSecretsOnScreen) {
+      setLockSecondsLeft(null);
+      return;
+    }
+
+    lastActivityRef.current = Date.now();
+    const bump = () => {
+      lastActivityRef.current = Date.now();
+    };
+    const events = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    for (const event of events) {
+      window.addEventListener(event, bump, { passive: true });
+    }
+
+    const id = setInterval(() => {
+      const left = Math.ceil((AUTO_LOCK_MS - (Date.now() - lastActivityRef.current)) / 1000);
+      if (left <= 0) {
+        setLockSecondsLeft(null);
+        wipeSensitiveState();
+        toast({
+          title: "Locked — secrets cleared",
+          description: `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were wiped from memory. Your settings are unchanged.`,
+        });
+        return;
+      }
+      setLockSecondsLeft(left <= LOCK_WARN_SECONDS ? left : null);
+    }, 1000);
+
+    return () => {
+      for (const event of events) window.removeEventListener(event, bump);
+      clearInterval(id);
+    };
+  }, [hasSecretsOnScreen, wipeSensitiveState, toast]);
 
   const handleModeChange = useCallback((newMode: string) => {
     setMode(newMode as Mode);
@@ -889,28 +1117,25 @@ export function EncryptorTool() {
   }, [toast, handlePasswordChange]);
 
 
+  /** Overwrite the clipboard now and stop the countdown. */
+  const clearClipboardNow = useCallback(async () => {
+    setClipboardDeadline(null);
+    try {
+      await navigator.clipboard.writeText('');
+    } catch {
+      // Writing needs document focus. Nothing useful to say here — the
+      // countdown is already gone and the user asked for this explicitly.
+    }
+  }, []);
+
   const handleCopy = useCallback((textToCopy: string) => {
     if (!textToCopy) return;
     navigator.clipboard.writeText(textToCopy).then(() => {
-      toast({ title: "Copied to clipboard", description: "Auto-clear will be attempted in 60 seconds (may not work if tab loses focus)." });
-
-      // Reset any existing auto-clear timer
-      if (clipboardTimeoutRef.current) {
-        clearTimeout(clipboardTimeoutRef.current);
-      }
-
-      // Auto-clear clipboard after 60 seconds (best-effort)
-      clipboardTimeoutRef.current = setTimeout(async () => {
-        try {
-          const current = await navigator.clipboard.readText();
-          if (current === textToCopy) {
-            await navigator.clipboard.writeText('');
-          }
-        } catch {
-          // Clipboard read may fail if tab is not focused — silently ignore
-        }
-        clipboardTimeoutRef.current = null;
-      }, 60_000);
+      toast({
+        title: "Copied to clipboard",
+        description: `It will be overwritten in ${CLIPBOARD_CLEAR_SECONDS} seconds — including anything you copy in the meantime.`,
+      });
+      setClipboardDeadline(Date.now() + CLIPBOARD_CLEAR_SECONDS * 1000);
     }).catch(() => {
        toast({ title: "Failed to copy", variant: "destructive" });
     });
@@ -1044,7 +1269,12 @@ export function EncryptorTool() {
     setOutputText('');
     setShowDecryptedText(false);
     setDecryptInfo(null);
+    setVerifyResult(null);
     setDecryptedQrStatus({ kind: "idle" });
+
+    // Verify-only is a decrypt-side control; it must not silently apply to an
+    // encrypt run if the user toggles it and then switches mode.
+    const verifying = mode === 'decrypt' && verifyOnly;
 
     try {
       const keyFileBuffer = keyFile ? await keyFile.arrayBuffer() : null;
@@ -1133,6 +1363,28 @@ export function EncryptorTool() {
         if (decryptResult.keyFileUsed) info += " · key file";
         if (isStale()) return;
         setDecryptInfo(info);
+
+        if (verifying) {
+          // Reaching this line *is* the result: decryptViaWorker throws unless
+          // the AEAD tag verifies, so the container is intact and the password
+          // and key file are right.
+          //
+          // Everything the non-verifying path does with the plaintext —
+          // rendering it, encoding it to base64, building a Blob, downloading
+          // it, running the BIP-39 detector over it — is skipped. The byte
+          // count is reported because "it opens, and it is the size you
+          // expect" catches a class of mistake that a bare tick does not: the
+          // right password on the wrong backup.
+          new Uint8Array(resultBuffer).fill(0);
+          setVerifyResult({ detail: info, bytes: resultBuffer.byteLength });
+          if (!isStale()) {
+            toast({
+              title: "Verified — the backup opens",
+              description: "The contents were checked and discarded without being shown.",
+            });
+          }
+          return;
+        }
         // Deliberately not a toast of its own. TOAST_LIMIT is 1, so the
         // unconditional "Success!" below replaced this one the instant it
         // appeared and nobody ever read the re-encryption nudge. One toast,
@@ -1223,7 +1475,7 @@ export function EncryptorTool() {
         setIsLoading(false);
       }
     }
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -1546,6 +1798,30 @@ export function EncryptorTool() {
 
           {currentMode === 'decrypt' && keyFileControls}
 
+          {/*
+            Verify-only. See the state declaration for why this exists and what
+            it does not claim.
+          */}
+          {currentMode === 'decrypt' && (
+            <div className="flex items-start gap-3 rounded-xl border border-white/8 bg-white/2 px-4 py-3">
+              <Switch
+                id="verify-only"
+                checked={verifyOnly}
+                onCheckedChange={setVerifyOnly}
+                aria-describedby="verify-only-help"
+              />
+              <div className="min-w-0 space-y-0.5">
+                <Label htmlFor="verify-only" className="cursor-pointer text-[13px] font-medium">
+                  Verify only — don&apos;t reveal the contents
+                </Label>
+                <p id="verify-only-help" className="text-[11px] leading-snug text-muted-foreground">
+                  Checks that the backup still opens with this password, then discards
+                  what it found. Nothing is displayed, downloaded, or copied.
+                </p>
+              </div>
+            </div>
+          )}
+
           {currentMode === 'encrypt' && (
             <div className="overflow-hidden rounded-xl border border-white/8 bg-white/2">
               <button
@@ -1738,12 +2014,34 @@ export function EncryptorTool() {
         </TooltipProvider>
       </div>
 
-      {decryptInfo && currentMode === 'decrypt' && (
+      {/*
+        A verified result subsumes the plain format line — verifyResult.detail
+        is the same string — so only one of the two is ever rendered.
+      */}
+      {verifyResult && currentMode === 'decrypt' ? (
+        <div
+          role="status"
+          className="animate-in fade-in-50 rounded-xl border border-success/40 bg-success/10 px-4 py-3"
+        >
+          <p className="flex items-center gap-2 text-[13px] font-semibold text-success">
+            <ShieldCheck className="h-4 w-4 shrink-0" />
+            The backup opens with this password
+          </p>
+          <p className="mt-1 text-[12px] leading-snug text-success/90">
+            {verifyResult.detail} · {formatBytes(verifyResult.bytes)} of contents,
+            authenticated and discarded without being shown.
+          </p>
+          <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+            The size is worth a glance: the right password on the wrong backup still
+            verifies.
+          </p>
+        </div>
+      ) : decryptInfo && currentMode === 'decrypt' ? (
         <p className="animate-in fade-in-50 rounded-lg bg-white/4 px-3 py-2 text-[12px] text-muted-foreground">
           <Info className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
           {decryptInfo}
         </p>
-      )}
+      ) : null}
 
       {outputText && (
         <div className="animate-in fade-in-50 space-y-2">
@@ -1887,6 +2185,56 @@ export function EncryptorTool() {
         </div>
       )}
 
+      {/*
+        Clipboard countdown and the imminent-lock warning.
+
+        Both are here rather than as toasts because both are *states*, not
+        events: a toast that has already faded cannot tell you the clipboard
+        still holds your seed phrase, and a lock warning you missed is not a
+        warning. Each carries the control that answers it.
+      */}
+      {clipboardSecondsLeft !== null && (
+        <div
+          role="status"
+          className="flex items-center justify-between gap-3 rounded-xl border border-white/10 bg-white/4 px-3 py-2 text-[12px]"
+        >
+          <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+            <Timer className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">
+              Clipboard clears in <span className="tabular-nums font-medium text-foreground">{clipboardSecondsLeft}s</span>
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={clearClipboardNow}
+            className="shrink-0 cursor-pointer rounded-lg border border-white/10 px-2.5 py-1 font-medium text-muted-foreground transition-colors hover:border-white/20 hover:text-foreground"
+          >
+            Clear now
+          </button>
+        </div>
+      )}
+
+      {lockSecondsLeft !== null && (
+        <div
+          role="alert"
+          className="flex items-center justify-between gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[12px]"
+        >
+          <span className="flex min-w-0 items-center gap-1.5 text-yellow-400">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            <span className="truncate">
+              Locking in <span className="tabular-nums font-medium">{lockSecondsLeft}s</span> — secrets will be cleared
+            </span>
+          </span>
+          <button
+            type="button"
+            onClick={keepOpen}
+            className="shrink-0 cursor-pointer rounded-lg border border-yellow-500/40 px-2.5 py-1 font-medium text-yellow-400 transition-colors hover:bg-yellow-500/15"
+          >
+            Keep open
+          </button>
+        </div>
+      )}
+
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}
@@ -1894,11 +2242,41 @@ export function EncryptorTool() {
       >
         {isLoading ? (
           <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+        ) : currentMode === 'encrypt' ? (
+          <Lock className="mr-2 h-5 w-5" />
+        ) : verifyOnly ? (
+          <ShieldCheck className="mr-2 h-5 w-5" />
         ) : (
-          currentMode === 'encrypt' ? <Lock className="mr-2 h-5 w-5" /> : <Unlock className="mr-2 h-5 w-5" />
+          <Unlock className="mr-2 h-5 w-5" />
         )}
-        {currentMode === 'encrypt' ? `Encrypt ${inputType === 'file' ? 'File' : 'Text'}` : `Decrypt ${inputType === 'file' ? 'File' : 'Text'}`}
+        {currentMode === 'encrypt'
+          ? `Encrypt ${inputType === 'file' ? 'File' : 'Text'}`
+          : verifyOnly
+            ? `Verify ${inputType === 'file' ? 'File' : 'Text'}`
+            : `Decrypt ${inputType === 'file' ? 'File' : 'Text'}`}
       </Button>
+
+      {/*
+        Always available while there is something to wipe — the panic button
+        for "someone just walked over", which is the case the five-minute timer
+        is too slow for.
+      */}
+      {hasSecretsOnScreen && (
+        <button
+          type="button"
+          onClick={() => {
+            wipeSensitiveState();
+            toast({
+              title: "Wiped",
+              description: "Password, inputs and any decrypted output were cleared. Your settings are unchanged.",
+            });
+          }}
+          className="mx-auto flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-destructive"
+        >
+          <Trash2 className="h-3.5 w-3.5" />
+          Wipe now
+        </button>
+      )}
     </div>
   );
 
@@ -2021,11 +2399,87 @@ export function EncryptorTool() {
             </span>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setIsRecoveryOpen(true)}
+              className="flex cursor-pointer items-center gap-1.5 text-accent hover:underline"
+            >
+              <LifeBuoy className="h-3.5 w-3.5" />
+              Recovery kit
+            </button>
             <a href="https://github.com/seQRets/ittybitz" target="_blank" rel="noopener noreferrer" className="hover:underline">GitHub</a>
             <span>Keymaker v1.0.0</span>
           </div>
         </div>
       </footer>
+
+      {/*
+        The recovery kit.
+
+        Everything else in this app is about the container being safe. This is
+        about it being *openable* — years from now, by someone who did not
+        choose this tool, when the website is gone. Both files are served from
+        this origin and precached by the service worker, so this dialog works
+        offline and travels with the app rather than pointing at a repository
+        the user may never find.
+      */}
+      <Dialog open={isRecoveryOpen} onOpenChange={setIsRecoveryOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <LifeBuoy className="h-4 w-4 text-accent" />
+              Recovery kit
+            </DialogTitle>
+            <DialogDescription>
+              A <code className="rounded bg-white/8 px-1 py-0.5 text-[11px]">.keym</code> file
+              does not need this website. Save these next to your backups.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2.5">
+            {[
+              {
+                href: `${BASE_PATH}/recovery/keym.py`,
+                name: 'keym.py',
+                what: 'A standalone Python decryptor. Standard library plus one dependency for Argon2id; no browser, no npm, no network.',
+              },
+              {
+                href: `${BASE_PATH}/recovery/RECOVERY.md`,
+                name: 'RECOVERY.md',
+                what: 'The procedure in writing, including how to decrypt by hand if even the script is gone. Worth printing and storing with the backup.',
+              },
+            ].map((item) => (
+              <div
+                key={item.name}
+                className="rounded-xl border border-white/10 bg-white/2 p-3"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <span className="font-mono text-[13px] font-medium">{item.name}</span>
+                  <a
+                    href={item.href}
+                    download
+                    className="shrink-0 rounded-lg border border-white/10 px-2.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:border-white/20 hover:text-foreground"
+                  >
+                    <Download className="mr-1 inline h-3 w-3 align-[-1px]" />
+                    Save
+                  </a>
+                </div>
+                <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">{item.what}</p>
+              </div>
+            ))}
+          </div>
+
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            These are the same files as in the repository, copied into this build — so
+            the copy you save is the one that matches the version that encrypted your
+            data. The format itself is documented in{' '}
+            <code className="rounded bg-white/8 px-1 py-0.5">FORMAT.md</code>, and{' '}
+            <code className="rounded bg-white/8 px-1 py-0.5">keym.py</code> was written
+            from that document independently of the code running here — which is how a
+            specification bug got caught before it shipped.
+          </p>
+        </DialogContent>
+      </Dialog>
     </Tabs>
   );
 }

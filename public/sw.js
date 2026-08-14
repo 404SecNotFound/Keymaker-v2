@@ -28,6 +28,13 @@ const APP_SHELL = [
   // precache manifest below does not cover it and it has to be named here.
   // Missing it would mean the app loads offline and then cannot encrypt.
   `${BASE}/crypto-worker.js`,
+  // The recovery kit — the printed procedure and the standalone Python
+  // decryptor, copied in by scripts/build-recovery-kit.mjs. Precached
+  // deliberately: the moment someone needs these is the moment the website is
+  // unreachable, so a recovery document that requires the site to be up is not
+  // a recovery document.
+  `${BASE}/recovery/RECOVERY.md`,
+  `${BASE}/recovery/keym.py`,
   `${BASE}/logo.svg`,
   `${BASE}/favicon.ico`,
   `${BASE}/manifest.json`,

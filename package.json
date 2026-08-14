@@ -4,7 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "node scripts/build-crypto-worker.mjs && next dev -p 9002",
-    "build": "node scripts/build-crypto-worker.mjs && next build && node scripts/apply-csp-hashes.mjs && node scripts/apply-build-id.mjs && node scripts/build-manifest.mjs",
+    "build": "node scripts/build-crypto-worker.mjs && node scripts/build-recovery-kit.mjs && next build && node scripts/apply-csp-hashes.mjs && node scripts/apply-build-id.mjs && node scripts/build-manifest.mjs",
     "typecheck": "tsc --noEmit",
     "test:crypto": "node scripts/crypto-regression.mts",
     "test:keymaker": "node scripts/keymaker-test.mjs",
