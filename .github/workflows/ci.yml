@@ -51,6 +51,9 @@ jobs:
       - name: KEYM v1 regression suite
         run: npm run test:keymaker
 
+      - name: KEYM version dispatch
+        run: npm run test:keym2-dispatch
+
       # parseKeym() consumes fully attacker-controlled binary before any of it
       # has been authenticated. Seeded and deterministic, so a CI failure
       # reproduces exactly.

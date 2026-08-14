@@ -10,6 +10,7 @@
  *   node scripts/keymaker-test.mjs            → run the regression suite
  *   node scripts/keymaker-test.mjs fuzz       → run the parser fuzzer
  *   node scripts/keymaker-test.mjs generate   → regenerate fixtures
+ *   node scripts/keymaker-test.mjs keym2-dispatch → KEYM version routing
  */
 import { build } from "esbuild";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -20,6 +21,7 @@ const ENTRY_BY_MODE = {
   generate: "keymaker-generate-fixtures.mts",
   fuzz: "keymaker-fuzz.mts",
   regression: "keymaker-regression.mts",
+  "keym2-dispatch": "keym2-dispatch.mts",
 };
 const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
 const entry = join(HERE, ENTRY_BY_MODE[mode]);

@@ -889,6 +889,14 @@ def main(argv: Optional[list[str]] = None) -> int:
             p.add_argument("--time-cost", type=int, default=3)
             p.add_argument("--memory-kib", type=int, default=65_536)
             p.add_argument("--parallelism", type=int, default=4)
+            # Conformance only. Byte-equality against the TypeScript is the
+            # only check that catches a chunking or nonce disagreement — both
+            # implementations decode each other's output happily even when
+            # they disagree about how to write it — and comparing bytes needs
+            # a shared salt. Reusing one with the same password reuses every
+            # (key, nonce) pair in the container, so this is not something to
+            # use on real data.
+            p.add_argument("--salt", help="32-byte hex salt (conformance testing only)")
 
     insp = sub.add_parser("inspect", help="describe a container without decrypting it")
     insp.add_argument("--in", dest="infile", help="input path (default: stdin)")
@@ -922,6 +930,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 time_cost=args.time_cost,
                 memory_kib=args.memory_kib,
                 parallelism=args.parallelism,
+                salt=bytes.fromhex(args.salt) if args.salt else None,
+                enforce_write_policy=args.salt is None,
             )
             result = armor(out).encode() if args.armor else out
         else:

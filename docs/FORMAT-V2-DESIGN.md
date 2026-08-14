@@ -268,6 +268,24 @@ Deterministic counter nonces are safe here because the key is per-file: a fresh
 random salt gives a fresh master key for every container, so no (key, nonce)
 pair is ever reused.
 
+That makes §2's "fresh CSPRNG salt per container" **normative and
+load-bearing**, in a way it was not in v1:
+
+> A writer **MUST** generate the salt with a CSPRNG for every container, and
+> **MUST NOT** expose a caller-supplied salt in any interface intended for
+> encrypting real data.
+
+In v1 the nonces were random, so reusing a salt meant reusing the key — bad,
+but the nonces still differed. In v2 reusing a salt with the same password
+reuses the key *and every nonce in the container*, which for an AEAD means
+recoverable plaintext and forgeable tags. The severity changed; the sentence
+requiring freshness did not, and a reader could reasonably have taken it for
+ordinary good practice.
+
+The one place a fixed salt is needed is cross-implementation byte comparison,
+which both implementations expose under a separately named entry point whose
+documentation states the hazard (`encryptKeym2WithExplicitSalt`, `--salt`).
+
 The flag byte is what makes truncation detectable. Without it, an attacker
 could drop trailing chunks and every surviving chunk would still authenticate
 perfectly — the file would decrypt to a valid prefix of the original with no
@@ -471,6 +489,13 @@ no record of what it fixed invites the same gap back on the next edit.
 | F2 | §7 | Armor prefix case sensitivity unstated | Minor |
 | F3 | §3.3 | "Bit 0" not defined as LSB or MSB | Minor |
 | F4 | §4.1 | Character encoding of the context literals unstated | Cosmetic |
+| F5 | §5.2 | Salt freshness stated as description, not requirement, though deterministic nonces make reuse catastrophic | **Normative gap** |
+
+**F5 came from writing the second implementation**, not the first: building a
+byte-equality harness forces you to ask for a fixed salt, and asking exposes
+that nothing in the document forbids it. v1 tolerated the same mistake far
+better, so the instinct carried over from v1 is wrong here. Now stated as a
+MUST in §5.2.
 
 **F1 is the one that matters,** and it is worth understanding why it survived
 review. Both readings decode correctly, and both round-trip perfectly *within*

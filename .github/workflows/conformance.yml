@@ -59,6 +59,15 @@ jobs:
       - name: Reference self-test (KEYM v2, spec-first)
         run: npm run test:keym2
 
+      # Byte equality, not just round-trips. For v1 a bidirectional round-trip
+      # is sufficient; for v2 it is not, and the reference proved why before
+      # either implementation existed. §5.1 originally admitted two chunkings
+      # for a plaintext that is an exact multiple of the chunk size, and both
+      # decode correctly — so two writers could disagree, round-trip perfectly
+      # in both directions, and still produce incompatible files.
+      - name: Bidirectional conformance (KEYM v2, byte-for-byte)
+        run: npm run test:conformance2
+
       - name: Bidirectional conformance
         run: npm run test:conformance
 

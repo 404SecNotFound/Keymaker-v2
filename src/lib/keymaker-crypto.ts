@@ -85,7 +85,7 @@ export const DEFAULT_ARGON2ID: Argon2idParams = {
   parallelism: 4,
 };
 
-export type DetectedFormat = "keym-v1" | "ibtz-v1" | "ibtz-v0";
+export type DetectedFormat = "keym-v1" | "keym-v2" | "ibtz-v1" | "ibtz-v0";
 
 const SALT_LEN_PBKDF2 = 16;
 const SALT_LEN_ARGON2ID = 32;
@@ -264,9 +264,15 @@ export function secureErase(buffer: ArrayBuffer | Uint8Array | null | undefined)
   view.fill(0);
 }
 
-/** Lazy-load hash-wasm (inlines its WASM as base64 — works fully offline). */
+/**
+ * Lazy-load hash-wasm (inlines its WASM as base64 — works fully offline).
+ *
+ * Exported so keym-v2.ts shares the same promise rather than opening a second
+ * one: `import()` is cached per specifier, so both paths resolve the same
+ * module instance and warmCryptoDependencies() warms them together.
+ */
 let hashWasmPromise: Promise<typeof import("hash-wasm")> | null = null;
-function loadHashWasm(): Promise<typeof import("hash-wasm")> {
+export function loadHashWasm(): Promise<typeof import("hash-wasm")> {
   if (!hashWasmPromise) {
     hashWasmPromise = import("hash-wasm");
   }
@@ -332,9 +338,9 @@ export function isArgon2idAvailable(): Promise<boolean> {
   return argon2AvailabilityPromise;
 }
 
-type NobleCiphers = typeof import("@noble/ciphers/chacha.js");
+export type NobleCiphers = typeof import("@noble/ciphers/chacha.js");
 let noblePromise: Promise<NobleCiphers> | null = null;
-function loadNoble(): Promise<NobleCiphers> {
+export function loadNoble(): Promise<NobleCiphers> {
   if (!noblePromise) {
     noblePromise = import("@noble/ciphers/chacha.js");
   }
@@ -715,7 +721,13 @@ const IBTZ_MAGIC = [0x49, 0x42, 0x54, 0x5a]; // "IBTZ"
  */
 export function detectFormat(data: Uint8Array): DetectedFormat {
   if (data.length >= 5 && magicPrefixLen(data, KEYM_MAGIC) === KEYM_MAGIC.length) {
-    return "keym-v1";
+    // The version byte is the discriminator, exactly as FORMAT-V2-DESIGN §3
+    // says: "a reader dispatches on bytes 0-4 exactly as v1's decryptData()
+    // already does, so v1 containers are unaffected". An unknown version stays
+    // "keym-v1" so that parseKeym reports it as an unsupported version rather
+    // than the blob falling through to the headerless legacy path and burning
+    // a million PBKDF2 iterations before saying so.
+    return data[4] === 2 ? "keym-v2" : "keym-v1";
   }
   if (data.length >= 5 && magicPrefixLen(data, IBTZ_MAGIC) === IBTZ_MAGIC.length) {
     return "ibtz-v1";
@@ -875,6 +887,34 @@ export async function decryptData(
 
   const fullData = new Uint8Array(encryptedBuffer);
   const format = detectFormat(fullData);
+
+  if (format === "keym-v2") {
+    // Dynamically imported so keymaker-crypto.ts does not depend on keym-v2.ts
+    // at module-evaluation time — the dependency runs one way, which is what
+    // keeps the v1 path structurally unable to be changed by v2 work. It also
+    // keeps v2 out of the initial bundle until a v2 container is actually
+    // opened.
+    const { decryptKeym2 } = await import("./keym-v2");
+    try {
+      const result = await decryptKeym2(
+        fullData,
+        password,
+        keyFileBuffer ? new Uint8Array(keyFileBuffer) : null
+      );
+      return {
+        data: result.data.buffer.slice(
+          result.data.byteOffset,
+          result.data.byteOffset + result.data.byteLength
+        ) as ArrayBuffer,
+        format,
+        keyFileUsed: result.keyFileUsed,
+      };
+    } finally {
+      // Same contract as every other path here: the caller's key file buffer
+      // is zeroed in place once used.
+      if (keyFileBuffer) secureErase(keyFileBuffer);
+    }
+  }
 
   if (format !== "keym-v1") {
     const data = await legacyDecryptWithNormalizationFallback(
