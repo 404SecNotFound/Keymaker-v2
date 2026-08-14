@@ -245,6 +245,104 @@ append-only rule. No exceptions — that rule is the moat.
 
 ---
 
+## Phase 5 — UAT remediation
+
+Source: [reports/UAT-2026-08-14.md](reports/UAT-2026-08-14.md) — five agents
+driving the production build in headless Chromium, ~150 automated checks plus
+manual inspection, 28 findings.
+
+**The headline is the part worth keeping.** With every network request aborted
+at the browser level, a full Argon2id text round-trip completed with **zero
+requests attempted**. The service worker controls the page on first load,
+offline reload works, the served CSP has hashed scripts and `connect-src
+'none'`, a DOM-injected inline script was blocked, and the heap stayed flat
+across ten encrypt/decrypt cycles. The central claim of the product was tested
+adversarially and held.
+
+### Corrections to the report
+
+Verified against the working tree, not assumed — the same rule as the
+corrections at the top of this document. **Ten of the 28 findings, including
+five of the ten Priority 1 items, are already fixed.** The report was run
+against a build predating Phases 1 and 2.
+
+| Finding | Reality |
+|---|---|
+| U1 — UI freezes during KDF, "found independently by 3 agents" | **Shipped** as 2.1. Crypto runs in a Worker, with a cancel that actually stops the derivation. |
+| U3 / B1 — stale-op toast and silent data loss | **Shipped** in Phase 1. Op-sequence guard; the `finally` that wiped the password now sits behind `isStale()`. |
+| U11 / B2 — dead IttyBitz toast | **Shipped** in Phase 1. |
+| U12 / B4 — arbitrary error whitelist | **Shipped** in Phase 1 as typed error codes. |
+| U19 — derivation estimate 4–7× off ("≈3s" measured 0.43s) | **Shipped** as 2.5, and the fix is exactly what the report proposed: calibrate from a one-time Argon2 benchmark. Every slider position is now priced against the measured device. |
+| U6, U10 — icon-only buttons with no name, tooltip focus ring removed | **Shipped** as 2.7, as one `InfoTip` component with a name and a 2px accent ring. |
+| U7 — colour-only BIP-39 signalling | **Shipped** as 2.7. This is the finding 2.7 records as the one **axe could not see**: a red border produces zero violations. |
+| U2, first half — tab round-trip wipes in-progress work | **Already fixed.** `handleModeChange` skips `resetState()` for the Tools tab, with a comment saying why. |
+| B7 — dice invalid-sides entropy | **Shipped.** |
+| U9 — 320px header overflow, "Tools" clipped off-screen | **Shipped**, and now measured rather than assumed: `platform.spec.ts` asserts no horizontal overflow at 320, 360, 375, 393 and 430px, and all five pass. |
+| "Add axe-core to the Playwright suite" | **Shipped** as 2.7, across six scans in CI. |
+
+One is still open but is not the finding it is filed under:
+
+- **U2, second half** — the dice roll log dying on a tab switch. Confirmed
+  still true (`TabsContent` carries no `forceMount`, so Radix unmounts it), but
+  a different defect from the one U2 leads with. Queued as U2b in 5.2.
+
+### 5.1 The crash, first
+
+**U4 — a large paste hard-crashes the renderer (OOM) before any validation
+runs.** The size check fires only on submit; the textarea's `onChange` has no
+gate at all.
+
+This does not queue behind Phase 4. It is a Phase-1-class defect that arrived
+late, and this document's own selection rule puts a defect in the shipped
+product above any feature. A tab that dies taking the user's typed secret with
+it is worse than anything Phase 4 adds.
+
+Gate the input layer independently of the submit path, and put the size message
+in the error whitelist so it is reported as a size limit rather than as a
+possible wrong password.
+
+### 5.2 Correctness and honesty
+
+| # | Issue | Note |
+|---|---|---|
+| U13 | The password is cleared after **every** attempt, failures included — a typo means retyping all of it | The clear lives in `finally`. Moving it to the success path is small, but read why it is there first: it was part of the B1 fix. |
+| U2b | Dice roll log destroyed on tab switch | `forceMount`, or lift the state out. |
+| U15 | The password policy silently disables Encrypt with no explanation at the button — **and the code comment calls the policy "advisory and UI-only" while the code hard-blocks** | The comment that lies is the worse half. |
+| U16 | Footer "GitHub" points at `seQRets/ittybitz`, in three places | Someone looking for the source of *this* product lands on a different one. |
+| U14 | Obscured-filename decrypt loses the extension, silently | The report suggests storing the name in the v2 header. **v2 has no field for it and should not grow one** — §8 deferred metadata deliberately, and container length already leaks plaintext size. If it happens at all it belongs inside the plaintext. A design note, not a bug fix. |
+| U20 | `'wasm-unsafe-eval'` also permits `eval()` in Chromium | Not exploitable — no inline injection is possible — but it belongs in SECURITY.md rather than being rediscovered. |
+
+### 5.3 Accessibility, second pass
+
+2.7 was a real pass and it closed what axe can see. These are what it cannot,
+which is the lesson 2.7 already recorded about itself.
+
+| # | Issue |
+|---|---|
+| U5 | **The collapsed Advanced panel keeps 12 controls in the tab order.** Confirmed: it collapses via `grid-template-rows: 0fr` with `overflow-hidden`, so the content is clipped but still focusable. A keyboard user tabs through twelve controls they cannot see. Needs `inert`, or unmounting. |
+| U8 | Touch targets under the minimum at every viewport — sliders 16px tall, info buttons 14×14, footer links 16–17px |
+| U18 | Dropzone `role="button"` handles Enter but not Space; a dead tab stop on the Radix tab panel; heading hierarchy skips h1→h3 |
+| U17 | `prefers-reduced-motion` ignored entirely — 25 animated elements, no media query anywhere in the stylesheet |
+
+### 5.4 Polish
+
+U21–U28: dice pluralisation ("1 more rolls"), non-file drops ignored without
+feedback, Enter doing nothing in the password field, the undisclosed
+1024-character password limit, Show/Hide reading "Hide" on an emptied field and
+exposing no `aria-pressed`, the 11px typography floor, and the SeedQR modal
+offering no "copy digits" path.
+
+**U27 is deliberately not actionable yet.** Non-ASCII download filenames
+collapsing to "download" is suspected to be a harness artifact, and the report
+says to confirm it in a real browser first. Worth honouring — a fix aimed at a
+test-harness bug is worse than no fix.
+
+**Gate:** every item in 5.1 and 5.2 ships with a Playwright regression test that
+has been *seen to fail* without the fix. The UAT produced reproducible scripts
+per finding; ask for those rather than reconstructing the repro from prose.
+
+---
+
 ## Cut
 
 Not "later". Cut, with reasons.
@@ -285,14 +383,23 @@ hold". The print kit must say so on the paper.
 ## Sequencing at a glance
 
 ```
-Phase 1  Fix what is broken            ──────  blocks everything
-Phase 2  Unfreeze and prove            ──────  format-independent, parallel with P3 design
+Phase 1  Fix what is broken            ─ done ─  blocked everything
+Phase 2  Unfreeze and prove            ─ done ─  format-independent
          └ Worker · provenance · verify-only · recovery kit · calibration · auto-lock · a11y
-Phase 3  KEYM v2                       ──────  Python reference first, then TS
-         └ chunked STREAM + envelope slots
-Phase 4  What v2 unlocks               ──────  Shamir · print kit · self-extracting HTML · passkey · inheritance
+Phase 3  KEYM v2                       ─ done ─  Python reference first, then TS
+         └ chunked STREAM + envelope slots · the app writes v2
+Phase 5.1 The OOM crash (U4)           ──────    jumps the queue, see below
+Phase 4  What v2 unlocks               ──────    Shamir · print kit · self-extracting HTML · passkey · inheritance
+Phase 5  UAT remediation (rest)        ──────    correctness · a11y second pass · polish
 ```
 
-The order is not negotiable in one respect: **Phase 1 before anything.** A tool
-that tells you your password is wrong when the file is actually truncated has
-no business gaining features.
+The order is not negotiable in two respects now.
+
+**Phase 1 came before anything**, because a tool that tells you your password is
+wrong when the file is actually truncated has no business gaining features.
+
+**5.1 comes before Phase 4** for the same reason, arriving late. It is numbered
+5.1 because that is where the report put it, not because it waits for Phase 4 —
+a paste that kills the tab and takes the user's typed secret with it is the same
+class of defect Phase 1 existed to clear, and it outranks every feature below
+it. The rest of Phase 5 does sit after Phase 4.
