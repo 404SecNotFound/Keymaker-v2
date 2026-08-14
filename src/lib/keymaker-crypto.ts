@@ -121,6 +121,53 @@ const MAX_CIPHERTEXT_SIZE = MAX_CONTAINER_SIZE;
 export const MAX_BASE64_INPUT_CHARS = Math.ceil(MAX_CONTAINER_SIZE / 3) * 4 + 4;
 
 /**
+ * What the *text* fields will accept, as opposed to what the crypto core can
+ * process. Two different questions, and conflating them is what made a paste
+ * able to kill the tab (U4).
+ *
+ * ## Measured, not chosen
+ *
+ * The limits above bound the crypto. Nothing bounded the textarea, so a paste
+ * reached React state and the DOM before any check ran. The reported symptom
+ * was a renderer OOM at ~140 MB; measuring it found something both smaller and
+ * more ordinary. Worst main-thread block, production build, headless Chromium:
+ *
+ * |   pasted | as one line | wrapped at 76 cols |
+ * |----------|-------------|--------------------|
+ * |   64 KiB |      833 ms |                  — |
+ * |  256 KiB |    3 245 ms |                  — |
+ * |    1 MiB |   12 434 ms |             407 ms |
+ *
+ * Three findings, each of which changes the fix:
+ *
+ * 1. **The cost is not in our handler.** `onChange` returns in 3–7 ms at every
+ *    size. The block happens afterwards, in Chromium laying out the field.
+ * 2. **It is not the BIP-39 check.** Encrypt and decrypt block identically, and
+ *    that check only runs on encrypt.
+ * 3. **It is line length, not total length** — 30x between the same megabyte as
+ *    one line and as wrapped lines. A `<textarea>` holding one enormous line is
+ *    a pathological layout case.
+ *
+ * Point 3 is why this is not only an adversarial-paste problem: **Keymaker's own
+ * armored output is a single unbroken line**, so a user copying their backup out
+ * and pasting it back into Decrypt walks straight into it on the normal
+ * recovery path. 100 MB was never a real limit for this field; it was a number
+ * that had not been tested.
+ *
+ * ## The two caps
+ *
+ * They are asymmetric on purpose. Armor expands by 4/3, so a symmetric pair
+ * would let the app produce text it then refuses to take back — a trap that is
+ * worse than either limit. The decrypt cap is sized to comfortably clear
+ * `MAX_TEXT_PLAINTEXT_BYTES` of armor plus its prefix.
+ *
+ * Anything larger belongs in file mode, which never goes through a textarea and
+ * is unaffected by any of this.
+ */
+export const MAX_TEXT_PLAINTEXT_BYTES = 32 * 1024;
+export const MAX_TEXT_ARMOR_CHARS = 64 * 1024;
+
+/**
  * Bounds on KDF cost parameters.
  *
  * These matter because a KEYM header is unauthenticated until the AEAD tag is

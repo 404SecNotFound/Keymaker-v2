@@ -45,6 +45,8 @@ import {
   MAX_PLAINTEXT_SIZE,
   MAX_CONTAINER_SIZE,
   MAX_BASE64_INPUT_CHARS,
+  MAX_TEXT_PLAINTEXT_BYTES,
+  MAX_TEXT_ARMOR_CHARS,
   KdfId,
   CipherId,
   DEFAULT_ARGON2ID,
@@ -794,6 +796,16 @@ export function EncryptorTool() {
   // Encrypt-side seed check for the subtle border tint on the secret text
   // field: 'valid' → green, 'invalid' → red (seed-shaped but failing
   // validation, i.e. a likely typo), 'none' → neutral (ordinary text).
+  /**
+   * Set when the text field refused an oversized input (U4).
+   *
+   * A separate piece of state rather than a toast: a toast is gone in a second
+   * and the user is left looking at a field that silently did not take their
+   * paste. This is a *state* of the field, so it renders next to the field and
+   * stays until they act on it.
+   */
+  const [textInputRejected, setTextInputRejected] = useState<string | null>(null);
+
   const [textSecretSeedStatus, setTextSecretSeedStatus] = useState<
     "none" | "valid" | "invalid"
   >("none");
@@ -928,6 +940,49 @@ export function EncryptorTool() {
     };
   }, [textSecret, mode, inputType]);
 
+  /**
+   * Gate the text field before its contents reach React state or the DOM.
+   *
+   * This runs on every input event, independently of the submit path — which is
+   * the whole point of U4. The old size check lived only in `processData`, so a
+   * paste was already in state, already laid out by the browser, and had
+   * already blocked the main thread for seconds before anything looked at its
+   * length. A check that runs after the damage is not a check.
+   *
+   * Refuses rather than truncates. Silently keeping the first 32 KiB of
+   * someone's secret and encrypting *that* is the worst available outcome: it
+   * succeeds, produces a container, and loses data without saying so.
+   *
+   * Byte length, not string length, on the encrypt side — the crypto core's cap
+   * is on UTF-8 bytes, and a field measured in UTF-16 code units would disagree
+   * with it for any non-ASCII secret.
+   */
+  const handleTextSecretChange = useCallback((next: string) => {
+    const decrypting = mode === 'decrypt';
+    if (decrypting) {
+      if (next.length > MAX_TEXT_ARMOR_CHARS) {
+        setTextInputRejected(
+          `That is ${Math.round(next.length / 1024).toLocaleString()} KB of text. ` +
+          `Encrypted text is accepted up to ${MAX_TEXT_ARMOR_CHARS / 1024} KB — ` +
+          `for anything larger, decrypt the .keym file itself in File mode.`
+        );
+        return;
+      }
+    } else {
+      const bytes = new Blob([next]).size;
+      if (bytes > MAX_TEXT_PLAINTEXT_BYTES) {
+        setTextInputRejected(
+          `That is ${Math.round(bytes / 1024).toLocaleString()} KB. ` +
+          `Text mode is for secrets up to ${MAX_TEXT_PLAINTEXT_BYTES / 1024} KB — ` +
+          `switch to File mode to encrypt something this size.`
+        );
+        return;
+      }
+    }
+    setTextInputRejected(null);
+    setTextSecret(next);
+  }, [mode]);
+
   const handlePasswordChange = useCallback((pwd: string) => {
     setPassword(pwd);
     // Any edit invalidates the entropy claim — it only holds for the exact
@@ -956,6 +1011,7 @@ export function EncryptorTool() {
     setUseKeyFile(false);
     setKeyFile(null);
     setTextSecret('');
+    setTextInputRejected(null);
     setShowTextSecret(false);
     setOutputText('');
     setShowDecryptedText(false);
@@ -989,6 +1045,7 @@ export function EncryptorTool() {
     setKeyFile(null);
     setUseKeyFile(false);
     setTextSecret('');
+    setTextInputRejected(null);
     setShowTextSecret(false);
     setTextSecretSeedStatus("none");
     setOutputText('');
@@ -1771,7 +1828,7 @@ export function EncryptorTool() {
               <Textarea
                 id="text-secret"
                 value={textSecret}
-                onChange={(e) => setTextSecret(e.target.value)}
+                onChange={(e) => handleTextSecretChange(e.target.value)}
                 placeholder={`Enter text to ${currentMode}...`}
                 rows={5}
                 // This field routinely holds BIP-39 seed phrases. Spellcheck can
@@ -1790,9 +1847,14 @@ export function EncryptorTool() {
                 // the field's description rather than a floating scrap of text
                 // a screen reader user has to go looking for.
                 aria-describedby={
-                  currentMode === 'encrypt' && textSecretSeedStatus !== 'none'
-                    ? "text-secret-seed-status"
-                    : undefined
+                  [
+                    currentMode === 'encrypt' && textSecretSeedStatus !== 'none'
+                      ? "text-secret-seed-status"
+                      : null,
+                    textInputRejected ? "text-secret-size-error" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
                 }
                 aria-invalid={currentMode === 'encrypt' && textSecretSeedStatus === 'invalid'}
                 className={cn(
@@ -1817,6 +1879,16 @@ export function EncryptorTool() {
                 </button>
               )}
             </div>
+            {textInputRejected && (
+              <p
+                id="text-secret-size-error"
+                role="alert"
+                className="animate-in fade-in-50 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px] leading-snug text-destructive"
+              >
+                {textInputRejected} Nothing was pasted, so what you already had is
+                still here.
+              </p>
+            )}
           </div>
         )}
 

@@ -49,3 +49,8 @@ public/crypto-worker.js
 # Copied from docs/ and reference/ by scripts/build-recovery-kit.mjs on every
 # build. The originals are canonical; a checked-in copy would drift.
 public/recovery/
+
+# Session handoff notes and one-off measurement probes — working
+# artifacts, not project content.
+re-fresh-*.md
+probe-*.mjs
