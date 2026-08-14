@@ -1,9 +1,12 @@
 # KEYM v2 — Design Proposal
 
-**Status: proposal. Not implemented, not normative, no code written against it.**
-Nothing in `src/` reads or writes this format. It exists to be argued with on
-paper first, because a wire format is the one part of this project that cannot
-be revised after users have files in it.
+**Status: proposal, with an executable reference.** Nothing in `src/` reads or
+writes this format. `reference/keym2.py` implements it — written from this
+document alone, before any TypeScript exists, which is the order that makes the
+*specification* the thing under test. It found four gaps; see §11.
+
+It exists to be argued with on paper first, because a wire format is the one
+part of this project that cannot be revised after users have files in it.
 
 [FORMAT.md](FORMAT.md) is the normative specification of KEYM v1 and stays
 that way. **KEYM v1 must remain readable exactly as it is today**, and the
@@ -128,6 +131,11 @@ bounding at all".
 | 0 | A key file was used at encryption time (UX hint only, as in v1) |
 | 1–7 | Reserved, MUST be zero |
 
+Bit 0 is the **least significant** bit, i.e. mask `0x01`; the reserved mask is
+`0xFE`. FORMAT.md §4 numbers the same field without saying which end, and a
+section whose rule is "reject non-zero reserved bits" should not leave which
+bits those are to convention.
+
 **Reserved bits and bytes MUST be rejected when non-zero**, which is stricter
 than v1 (§4 says ignore). The reasoning: the header is covered by AAD, so a
 non-zero reserved field cannot be attacker-introduced without failing
@@ -155,9 +163,26 @@ kdf_input  = LP("keymaker.v2.kdf-input")
            || LP(keyfile_digest)          -- LP("") when no key file is used
 ```
 
-Length prefixes make the encoding injective: distinct `(password, key file)`
-pairs produce distinct `kdf_input`. The leading context string separates this
-input from any other use of the same KDF, now or later.
+Literal strings above are ASCII (byte-identical to UTF-8 for these). Stated
+because the password beside them carries an explicit encoding, which invites
+the reader to wonder whether the omission is meaningful.
+
+Length prefixes make the concatenation injective: no two distinct field
+sequences produce the same `kdf_input`, which is what keeps the encoding sound
+as fields are added.
+
+Note `keyfile_digest` concatenates *without* a length prefix, in a section
+whose subject is that unprefixed concatenation is ambiguous. That is correct —
+the prefix is a fixed constant, so `k ↦ "keymaker.v2.keyfile" ‖ k` is injective
+— but it is worth saying so, because every careful reader stops on it.
+
+Worth being precise about what closes KM-05, because the reference showed the
+obvious answer is wrong: for the specific `(password, key file)` pair, the
+collision is closed by **§4.2's hashing**, not by the length prefixes. A
+fixed-width 32-byte field cannot slide, so `("ab", "c")` and `("a", "bc")`
+differ whether or not anything is length-prefixed. Removing `LP` entirely still
+passes a naive injectivity test — which is exactly what a negative control on
+`reference/keym2.py` demonstrated.
 
 When no key file is used the third field is present with length zero. Omitting
 it entirely would work too, but a fixed shape means one code path rather than
@@ -212,9 +237,23 @@ essentially nothing at this overhead, and if a future need appears it is a
 version bump. This is §3.1's principle applied to the one field most likely to
 have been made configurable out of habit.
 
-A zero-length plaintext is encoded as exactly one chunk containing zero
+The chunk count is **`max(1, ceil(len(plaintext) / 1048576))`** — the fewest
+chunks that can hold the plaintext.
+
+A zero-length plaintext is therefore exactly one chunk containing zero
 plaintext bytes, so a container always has at least one chunk and the final
-chunk always exists.
+chunk always exists. A plaintext whose length is a positive multiple of the
+chunk size ends with a **full** final chunk; no empty trailing chunk is
+emitted.
+
+That second sentence is the one the reference had to add. Without it, a
+plaintext of exactly 1,048,576 bytes has two readings that both satisfy "chunks
+of exactly 1 MiB ... except the last, which holds 0 to 1,048,576 bytes": one
+full final chunk, or a full chunk followed by an empty one. They differ by 16
+bytes (32 chained) and in every nonce after the first, so two conforming
+writers would produce different containers for the same input — and the decoder
+accepts both, unambiguously, which is what makes it invisible to a round-trip
+test inside a single implementation.
 
 ### 5.2 Nonces and the final-chunk flag
 
@@ -339,6 +378,10 @@ Lowercase `k` is 0x6B; the magic's `K` is 0x4B. One byte at offset 0
 distinguishes the two encodings, so detection is a switch on the first byte
 with no ordering dependency and no way for a reader to get it subtly wrong.
 
+The prefix is **case-sensitive** and matched byte-for-byte. A reader that
+accepted `KEYM2:` would reintroduce the exact collision this section removes,
+while believing it was being lenient.
+
 Base64url without padding, so the armored form survives being pasted into a
 URL, a filename, or a QR code without escaping — and so `=` never has to be
 stripped by hand from a backup someone is trying to recover.
@@ -381,22 +424,79 @@ stripped by hand from a backup someone is trying to recover.
 
 ## 10. Review checklist
 
-Before any of this becomes code:
+Items marked ✅ are answered by `reference/keym2.py selftest`, which executes
+them rather than reasoning about them. The unticked ones need a human.
 
-- [ ] Is the `kdf_input` encoding injective for every `(password, key file)` pair,
-      including empty password and empty key file?
-- [ ] Is `uint88_be(i) || flag` correct for the maximum container size the
-      implementation will accept, with no counter overflow reachable?
-- [ ] Does the final-chunk rule reject every truncation, including truncation
-      exactly on a chunk boundary?
-- [ ] Can a chunk from container A verify inside container B under any
-      circumstances?
-- [ ] Does every rejection path run before the KDF?
+- [x] Is the `kdf_input` encoding injective for every `(password, key file)` pair,
+      including empty password and empty key file? — ✅ *and see §4.1: the
+      reference showed the digest, not the length prefixes, is what closes the
+      KM-05 pair.*
+- [x] Is `uint88_be(i) || flag` correct for the maximum container size the
+      implementation will accept, with no counter overflow reachable? — ✅
+      2^88 chunks of 1 MiB is 2^108 bytes; unreachable by construction, not by
+      argument.
+- [x] Does the final-chunk rule reject every truncation, including truncation
+      exactly on a chunk boundary? — ✅ four truncations and one append, all
+      rejected. Removing the flag byte from the nonce fails exactly the two
+      boundary cases, which is the negative control for this row.
+- [x] Can a chunk from container A verify inside container B under any
+      circumstances? — ✅ splice test; the salt differs, so both the key and
+      the AAD differ.
+- [x] Does every rejection path run before the KDF? — ✅ structurally: header
+      parsing *is* validation, so no unbounded `Header` can exist.
 - [ ] Is 1 MiB defensible against both the tiny-file case (a 200-byte note) and
       the large-file case, or does either want a different constant badly enough
-      to justify a header field after all?
+      to justify a header field after all? — **still open.** A 200-byte note
+      pays 16 bytes of tag, i.e. 8%. Tolerable, but it is a judgement call, not
+      something a test settles.
 - [ ] Does the Python reference, written only from this document, arrive at the
-      same bytes as the TypeScript?
-- [ ] Does format detection distinguish `keym2:`, the binary magic, and every
+      same bytes as the TypeScript? — **not yet answerable.** No TypeScript
+      exists. This is the row that motivated finding F1: until the chunk count
+      was pinned, the two implementations could have differed *while both
+      conformed*.
+- [x] Does format detection distinguish `keym2:`, the binary magic, and every
       legacy prefix by inspecting bytes alone, with no dependence on the order
-      the checks are written in?
+      the checks are written in? — ✅ the three cases are disjoint on byte 0.
+
+## 11. Findings from the reference implementation
+
+`reference/keym2.py` was written from this document and nothing else. Four
+places did not determine the bytes. All four are now fixed above; they are
+recorded here because the point of the exercise is the document, and a fix with
+no record of what it fixed invites the same gap back on the next edit.
+
+| # | Section | Gap | Severity |
+|---|---|---|---|
+| F1 | §5.1 | Chunk count for a plaintext that is an exact multiple of the chunk size | **Interop-breaking** |
+| F2 | §7 | Armor prefix case sensitivity unstated | Minor |
+| F3 | §3.3 | "Bit 0" not defined as LSB or MSB | Minor |
+| F4 | §4.1 | Character encoding of the context literals unstated | Cosmetic |
+
+**F1 is the one that matters,** and it is worth understanding why it survived
+review. Both readings decode correctly, and both round-trip perfectly *within*
+one implementation — the ambiguity is on the writer side only. A test suite
+built around round-trips cannot see it. It would have surfaced as a
+cross-implementation byte mismatch months later, with two implementations each
+correctly citing §5.1 in their defence.
+
+That is the same shape as KM-14: not a wrong statement, an absent one, in a
+place where every implementation quietly makes the same guess until one does
+not.
+
+### On the value of negative controls, again
+
+Two of the four controls run against this reference did **not** fail when the
+corresponding protection was removed, which means those two tests were proving
+nothing:
+
+- Stubbing `LP()` to the identity left all checks green — because §4.2's
+  fixed-width digest already closes the collision the test was aimed at. The
+  test was at the wrong layer.
+- Removing both reserved-field checks left all checks green — because flipping
+  a reserved bit in a finished container breaks the AAD, so it fails on the tag
+  regardless. Testing §3.3 requires forging a container whose header is
+  *internally consistent*: reserved bit set, payload sealed under that header.
+
+Both tests were rewritten and both controls now bite. Neither gap was
+detectable by reading the tests; only by deleting the code they were supposed
+to be testing.
