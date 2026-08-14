@@ -237,3 +237,53 @@ test("the service worker caches every shipped chunk on a first visit", async ({
     await context.close();
   }
 });
+
+/**
+ * The page must not scroll sideways on a phone.
+ *
+ * This shipped, and it is the reason a bug report about the dice tool arrived
+ * as "look at the padding": the header put a wordmark and three tabs on one
+ * row needing 412px, and the Encrypt panel's four action buttons needed 470px
+ * in a row they could not shrink out of. Below those widths the whole document
+ * shifted left, so every panel underneath — including the dice results grid —
+ * looked like its columns were overlapping. Nothing was wrong with the grid.
+ *
+ * 320px is the narrowest phone still in use, 375px an iPhone SE or mini, 393px
+ * a Pixel, 430px the largest iPhone. 375 and 393 straddle the width at which
+ * the header wordmark reappears, which is the tightest margin in the layout —
+ * and text metrics are not identical across engines, so this running in all
+ * three is the point. All three tabs are checked because each mounts a
+ * different panel and any of them can be the thing that overflows.
+ */
+for (const width of [320, 360, 375, 393, 430]) {
+  test(`no horizontal overflow at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.goto("/");
+
+    for (const tab of ["Encrypt", "Decrypt", "Tools"] as const) {
+      await page.getByRole("tab", { name: tab }).locator("visible=true").first().click();
+
+      const overflow = await page.evaluate(() => {
+        const doc = document.documentElement;
+        // Report the widest offender too — "it overflows" is not actionable on
+        // its own, and the culprit is rarely the element you are looking at.
+        let worst = { sel: "", right: doc.clientWidth };
+        for (const el of Array.from(doc.querySelectorAll("*"))) {
+          const box = el.getBoundingClientRect();
+          if (box.width === 0 || box.right <= worst.right) continue;
+          // className on an SVG element is an SVGAnimatedString, which
+          // stringifies to "[object SVGAnimatedString]" and names nothing.
+          const raw = (el as HTMLElement | SVGElement).className;
+          const cls = (typeof raw === "string" ? raw : (raw?.baseVal ?? "")).slice(0, 60);
+          worst = { sel: `${el.tagName.toLowerCase()}.${cls}`, right: box.right };
+        }
+        return { px: doc.scrollWidth - doc.clientWidth, worst };
+      });
+
+      expect(
+        overflow.px,
+        `${tab} tab scrolls sideways by ${overflow.px}px at ${width}px — widest element: ${overflow.worst.sel}`
+      ).toBeLessThanOrEqual(1);
+    }
+  });
+}
