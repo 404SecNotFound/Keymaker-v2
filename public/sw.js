@@ -23,6 +23,11 @@ const BASE = new URL('./', self.location).pathname.replace(/\/$/, '');
 // the manifest. The build output is handled separately, below.
 const APP_SHELL = [
   `${BASE}/`,
+  // The crypto worker. It lives at the origin root rather than under
+  // _next/static (see scripts/build-crypto-worker.mjs), so the generated
+  // precache manifest below does not cover it and it has to be named here.
+  // Missing it would mean the app loads offline and then cannot encrypt.
+  `${BASE}/crypto-worker.js`,
   `${BASE}/logo.svg`,
   `${BASE}/favicon.ico`,
   `${BASE}/manifest.json`,

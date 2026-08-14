@@ -47,6 +47,12 @@ import {
   type KdfParams,
   type DetectedFormat,
 } from "@/lib/keymaker-crypto";
+import {
+  encryptViaWorker,
+  decryptViaWorker,
+  cancelAllCryptoWork,
+  warmCryptoWorker,
+} from "@/lib/crypto-client";
 import { EFF_LARGE_WORDLIST, EFF_LARGE_WORDLIST_SIZE } from "@/lib/eff-wordlist";
 import { DiceEntropyTool } from "@/components/dice-entropy-tool";
 import { Switch } from "@/components/ui/switch";
@@ -631,8 +637,15 @@ export function EncryptorTool() {
     // README's "works air-gapped after first load" false in exactly the case
     // it matters.
     warmCryptoDependencies();
+    // Spawn the crypto worker now too, for the same reason: its chunk should be
+    // fetched and cached while the network is available, not at the moment
+    // someone presses Encrypt.
+    warmCryptoWorker();
     return () => {
       cancelled = true;
+      // Leaving a worker running past unmount would keep burning CPU on a
+      // derivation whose result nobody can receive.
+      cancelAllCryptoWork();
     };
   }, []);
 
@@ -709,6 +722,11 @@ export function EncryptorTool() {
     // instead of writing its result, its toast, and a password wipe into a UI
     // that has moved on.
     opSeqRef.current++;
+    // Now a real cancel, not just a disowning. Terminating the worker stops the
+    // derivation; before it moved off the main thread there was no way to halt
+    // a synchronous WASM call, so an abandoned operation ran to completion
+    // regardless, burning CPU and battery for a result nobody would receive.
+    cancelAllCryptoWork();
     setIsLoading(false);
     setFile(null);
     setPassword('');
@@ -742,6 +760,7 @@ export function EncryptorTool() {
       // half of the bug — switch input type mid-derivation and the finished
       // operation announced "Success!" on a panel that had never run it.
       opSeqRef.current++;
+      cancelAllCryptoWork();
       setIsLoading(false);
       setInputType(newType as InputType);
       // Clear any previous result when the input type changes. The blur and
@@ -1047,7 +1066,7 @@ export function EncryptorTool() {
 
         const encoder = new TextEncoder();
         const inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
-        resultBuffer = await encryptData(inputBuffer, mutablePassword, keyFileBuffer, { kdf, cipher: cipherChoice });
+        resultBuffer = await encryptViaWorker(inputBuffer, mutablePassword, keyFileBuffer, { kdf, cipher: cipherChoice });
 
         if (inputType === 'file') {
             const blob = new Blob([resultBuffer]);
@@ -1091,7 +1110,13 @@ export function EncryptorTool() {
             inputBuffer = bytes.buffer as ArrayBuffer;
         }
 
-        const decryptResult = await decryptData(inputBuffer, mutablePassword, keyFileBuffer);
+        // Copy the header before the call. The buffer is transferred to the
+        // worker, which detaches it here — reading it afterwards would yield
+        // zero bytes and the format readback below would silently go blank.
+        // 128 bytes covers the largest KEYM v1 header (71) with room to spare.
+        const headerPeek = new Uint8Array(inputBuffer.slice(0, Math.min(128, inputBuffer.byteLength)));
+
+        const decryptResult = await decryptViaWorker(inputBuffer, mutablePassword, keyFileBuffer);
         resultBuffer = decryptResult.data;
 
         // Info line + legacy-format nudge.
@@ -1102,7 +1127,7 @@ export function EncryptorTool() {
         };
         let info = `Format: ${formatLabels[decryptResult.format]}`;
         if (decryptResult.format === "keym-v1") {
-          const inspected = inspectKeym(new Uint8Array(inputBuffer));
+          const inspected = inspectKeym(headerPeek);
           if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
         }
         if (decryptResult.keyFileUsed) info += " · key file";

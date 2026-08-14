@@ -40,3 +40,6 @@ reference/.bridge.build.mjs
 # python
 __pycache__/
 *.pyc
+
+# Bundled by scripts/build-crypto-worker.mjs on every build.
+public/crypto-worker.js

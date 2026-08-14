@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 9002",
-    "build": "next build && node scripts/apply-csp-hashes.mjs && node scripts/apply-build-id.mjs",
+    "dev": "node scripts/build-crypto-worker.mjs && next dev -p 9002",
+    "build": "node scripts/build-crypto-worker.mjs && next build && node scripts/apply-csp-hashes.mjs && node scripts/apply-build-id.mjs",
     "typecheck": "tsc --noEmit",
     "test:crypto": "node scripts/crypto-regression.mts",
     "test:keymaker": "node scripts/keymaker-test.mjs",
@@ -13,7 +13,8 @@
     "test:conformance": "python3 reference/crosstest.py",
     "test:recovery": "python3 reference/recovery_test.py",
     "test:wordlist": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-wordlist.mjs",
-    "analyze": "ANALYZE=true next build --webpack"
+    "analyze": "ANALYZE=true next build --webpack",
+    "build:worker": "node scripts/build-crypto-worker.mjs"
   },
   "dependencies": {
     "@noble/ciphers": "^2.3.0",

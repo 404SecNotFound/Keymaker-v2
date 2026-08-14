@@ -49,6 +49,7 @@ fixed.
 |---|---|---|---|
 | KM-25 | Low | Service-worker update could swap versions mid-encryption | **Fixed** |
 | KM-26 | Medium | Offline support rested on the browser's HTTP cache, not the service worker (3 of 17 chunks cached) | **Fixed** |
+| KM-27 | Medium | Argon2id on the main thread froze the tab for the whole derivation (22.3 s measured), making Cancel unreachable | **Fixed** |
 
 ### Third-party audit, 2026-08-13 (four-agent swarm)
 
@@ -90,6 +91,56 @@ out-of-range parameters, oversized input — which describe the *file* or the
 genuine authentication failure stays a plain `Error` with the single generic
 message, so wrong-password and corrupt-ciphertext remain indistinguishable.
 That distinction is asserted in both directions in `test:keymaker`.
+
+## KM-27 — the default KDF froze the tab (Phase 2)
+
+Not in any external review. It surfaced while building a regression test for
+B1, and it is the more serious of the two.
+
+Argon2id runs through hash-wasm, which is synchronous and CPU-bound. On the
+main thread that means the tab is dead for the whole derivation. Measured at
+256 MiB / t=10: an interaction issued 200 ms into the run did not complete for
+**22.3 seconds** — nothing painted, nothing responded, and the Cancel the UI
+appeared to offer could not be reached, because reaching it required the very
+thread that was blocked. At the shipped defaults it is shorter, and on a
+mid-range phone it is not.
+
+Crypto now runs in a dedicated Web Worker. Measured on the same configuration
+after the change: a frame in **13 ms**, an interaction in **59 ms**.
+
+Three consequences beyond responsiveness:
+
+- **Cancellation is real.** Terminating the worker actually stops a synchronous
+  WASM derivation. Previously an abandoned operation ran to completion
+  regardless, burning CPU and battery for a result nobody would receive.
+- **Key material has its own heap.** Passwords, derived keys and plaintext live
+  in a separate realm from React state and the DOM. Not a hard boundary — a
+  compromised page can still postMessage — but the accidental exposure surface
+  is much smaller.
+- **The B1 race widened.** It was previously unreachable on the Argon2id path
+  *because* the tab was frozen. Now that the tab responds, a user really can
+  switch tabs mid-derivation on every path, so the Phase 1 sequence guard went
+  from belt-and-braces to load-bearing.
+
+The worker is a transport, not a second implementation: it calls the same
+`encryptData`/`decryptData` as the in-thread path, so the two cannot disagree
+about the wire format and every existing conformance and fixture guarantee
+still applies. If the worker cannot be constructed or its script fails to load,
+everything falls back in-thread — degraded responsiveness, never lost
+capability, and there is a test that blocks the script to prove it.
+
+One design detail worth recording. Buffers are *transferred* to the worker,
+which detaches them on this side, so a worker that turned out to be broken
+after being handed the only copy of a user's plaintext would lose it. The
+client therefore requires the worker to answer a probe before trusting it with
+real data.
+
+Bundling note: `new Worker(new URL(...))` does not survive this static export.
+As a module worker Turbopack's bootstrap fails at runtime with "Missing worker
+bootstrap config"; as a classic worker it copies raw TypeScript into
+`out/_next/static/media/` and the build fails typechecking its own output. The
+worker is therefore bundled explicitly by `scripts/build-crypto-worker.mjs` and
+served from the origin root, like `sw.js`.
 
 ## What testing B1 actually revealed
 
