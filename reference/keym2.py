@@ -234,6 +234,10 @@ WRAP_NONCE = (0).to_bytes(11, "big") + b"\xff"
 
 ARMOR_PREFIX = b"keym2:"  # §7 — case-sensitive, see finding A2
 
+# §7. Presentation only; whitespace is not part of the encoding. 64 matches the
+# TypeScript, and PGP, and survives quoted-printable mail without re-wrapping.
+ARMOR_COLUMNS = 64
+
 # §4.1 / §4.3 domain separation. ASCII, see finding A4.
 CTX_KDF_INPUT = b"keymaker.v2.kdf-input"
 CTX_KEYFILE = b"keymaker.v2.keyfile"
@@ -1018,9 +1022,22 @@ def rewrap_slot(
 # §G  ARMOR AND FORMAT DETECTION
 # =============================================================================
 
-def armor(container: bytes) -> str:
-    """§7 ``keym2:<base64url-unpadded>``."""
-    return ARMOR_PREFIX.decode() + base64.urlsafe_b64encode(container).decode().rstrip("=")
+def armor(container: bytes, columns: int = ARMOR_COLUMNS) -> str:
+    """
+    §7 ``keym2:<base64url-unpadded>``, wrapped at ``columns``.
+
+    Line breaks are not part of the encoding — ``dearmor`` strips whitespace,
+    and so does every other reader — so this is presentation only. Matching the
+    TypeScript matters anyway: two implementations of one format that emit
+    different text for the same container is the drift this project spends its
+    conformance suite preventing.
+
+    ``columns=0`` emits one line, for channels where every byte costs.
+    """
+    body = base64.urlsafe_b64encode(container).decode().rstrip("=")
+    if columns > 0:
+        body = "\n".join(body[i:i + columns] for i in range(0, len(body), columns))
+    return ARMOR_PREFIX.decode() + body
 
 
 def dearmor(text: str) -> bytes:
