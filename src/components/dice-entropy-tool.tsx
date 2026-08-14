@@ -27,6 +27,21 @@ const TARGET_BITS = 256;
 const MIN_SIDES = 2;
 const MAX_SIDES = 1000;
 
+/**
+ * Most rolls we will accept as a hand-tallied count.
+ *
+ * A 256-bit target needs 100 rolls on a d6 and 63 on a d20. Ten thousand is
+ * absurdly generous for something a human physically did, and still far below
+ * the range where the arithmetic stops being meaningful.
+ *
+ * The bound exists because the field was unbounded and `Number.isInteger` is
+ * true for 1.25e+27. Pasting a string of roll *values* into the count box —
+ * which is an easy mistake, the two fields sit next to each other — produced
+ * "3.2e+27 bits" and a cheerful "256-bit target reached". Inflating the number
+ * a user is trusting is the one failure this tool must never have.
+ */
+const MAX_ROLLS = 10_000;
+
 type Verdict = "below" | "floor" | "target";
 
 export function DiceEntropyTool() {
@@ -90,9 +105,28 @@ export function DiceEntropyTool() {
     }
 
     // The manual count is a fallback for people who tallied on paper. It only
-    // applies when no rolls were logged, and must itself be a positive integer.
-    const manual = Number(manualRolls.trim());
-    if (rolls === 0 && invalidEntries.length === 0 && Number.isInteger(manual) && manual > 0) {
+    // applies when no rolls were logged.
+    const manualRaw = manualRolls.trim();
+    const manual = Number(manualRaw);
+    // Number.isSafeInteger, not Number.isInteger: the latter is true for
+    // 1.25e+27, which is how a pasted sequence of faces got treated as a count.
+    const manualUsable =
+      Number.isSafeInteger(manual) && manual >= 1 && manual <= MAX_ROLLS;
+
+    // Distinguish "typed a silly number" from "pasted the roll values into the
+    // wrong box", because the fix differs and only one of them is a mistake
+    // about arithmetic. A long run of digits that are all valid faces for this
+    // die is the signature of the latter.
+    const looksLikeRollValues =
+      sidesValid &&
+      validSides <= 9 &&
+      /^\d+$/.test(manualRaw) &&
+      manualRaw.length > 6 &&
+      manualRaw.split("").every((d) => Number(d) >= 1 && Number(d) <= validSides);
+
+    const manualRejected = manualRaw.length > 0 && !manualUsable;
+
+    if (rolls === 0 && invalidEntries.length === 0 && manualUsable) {
       rolls = manual;
     }
 
@@ -107,6 +141,8 @@ export function DiceEntropyTool() {
 
     return {
       sidesValid,
+      manualRejected,
+      looksLikeRollValues,
       validSides,
       bitsPerRoll,
       rolls,
@@ -235,12 +271,34 @@ export function DiceEntropyTool() {
           onChange={(e) => setManualRolls(e.target.value)}
           placeholder="0"
           disabled={rollLog.trim().length > 0}
-          className="h-11 rounded-xl border-white/10 bg-white/4 text-[15px] focus-visible:border-accent/50 focus-visible:ring-0 disabled:opacity-40"
+          aria-invalid={calc.manualRejected}
+          aria-describedby={calc.manualRejected ? "manual-rolls-error" : undefined}
+          className={cn(
+            "h-11 rounded-xl bg-white/4 text-[15px] focus-visible:ring-0 disabled:opacity-40",
+            calc.manualRejected
+              ? "border-destructive/60 focus-visible:border-destructive"
+              : "border-white/10 focus-visible:border-accent/50"
+          )}
         />
-        <p className="text-[11px] text-muted-foreground">
-          Just the count. Keymaker does not need — and deliberately does not ask for —
-          the values you rolled.
-        </p>
+        {calc.manualRejected ? (
+          <p id="manual-rolls-error" role="alert" className="text-[11px] leading-snug text-destructive">
+            {calc.looksLikeRollValues ? (
+              <>
+                That looks like the faces you rolled, not how many times you rolled.
+                Nothing is counted from it. Put the sequence in{" "}
+                <strong>Check a roll log</strong> below if you want it validated, or
+                enter just the number of rolls here.
+              </>
+            ) : (
+              <>Enter a whole number of rolls between 1 and {MAX_ROLLS.toLocaleString()}.</>
+            )}
+          </p>
+        ) : (
+          <p className="text-[11px] text-muted-foreground">
+            Just the count. Keymaker does not need — and deliberately does not ask for —
+            the values you rolled.
+          </p>
+        )}
       </div>
 
       <div className="space-y-1.5">
@@ -293,22 +351,33 @@ export function DiceEntropyTool() {
 
       {/* Results */}
       <div className="space-y-3 rounded-xl border border-white/8 bg-white/2 p-4">
+        {/*
+          min-w-0 on each cell, because a grid track's default min-width is
+          auto — it refuses to shrink below its content, so one long number
+          pushes its neighbour out of its column instead of wrapping. That is
+          what happened when the count field accepted 1.25e+27: "Total entropy"
+          ran straight into "Rolls needed". The values are bounded now, but a
+          layout that breaks on unexpected content will break again on the next
+          unexpected content.
+        */}
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-4">
-          <div>
+          <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Bits / roll</p>
-            <p className="font-semibold tabular-nums">{calc.bitsPerRoll.toFixed(2)}</p>
+            <p className="truncate font-semibold tabular-nums">{calc.bitsPerRoll.toFixed(2)}</p>
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Rolls counted</p>
-            <p className="font-semibold tabular-nums">{calc.rolls}</p>
+            <p className="truncate font-semibold tabular-nums">{calc.rolls.toLocaleString()}</p>
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total entropy</p>
-            <p className="font-semibold tabular-nums">{calc.totalBits.toFixed(1)} bits</p>
+            <p className="truncate font-semibold tabular-nums">
+              {calc.totalBits.toFixed(1)} bits
+            </p>
           </div>
-          <div>
+          <div className="min-w-0">
             <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Rolls needed</p>
-            <p className="font-semibold tabular-nums">
+            <p className="truncate font-semibold tabular-nums">
               {calc.rollsFor128} <span className="text-muted-foreground">/128</span>
               {" · "}
               {calc.rollsFor256} <span className="text-muted-foreground">/256</span>

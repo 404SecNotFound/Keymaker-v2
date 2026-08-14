@@ -177,36 +177,5 @@ test.describe("an operation that loses the UI falls silent", () => {
   });
 });
 
-/**
- * The dice tool must not invent a die.
- *
- * Clearing the field yields Number("") === 0, which used to be silently
- * replaced with 6 — so the tool displayed an entropy figure for a six-sided die
- * the user had never specified. An inflated entropy number is the one output
- * this tool must never produce.
- */
-test("the dice tool refuses to compute entropy for a die that was not specified", async ({
-  page,
-}) => {
-  await page.goto("/");
-  await visible(page.getByRole("tab", { name: "Tools" })).click();
-
-  const sides = visible(page.getByLabel("Dice sides"));
-  await expect(sides).toBeVisible();
-
-  await sides.fill("");
-  await expect(
-    page.getByText(/Enter the number of sides on your die/i),
-    "clearing the die size must say so instead of assuming a d6"
-  ).toBeVisible();
-  await expect(sides).toHaveAttribute("aria-invalid", "true");
-
-  // Bits per roll must not be log2(6) = 2.58 for a die that does not exist.
-  const body = (await page.locator("body").textContent()) ?? "";
-  expect(body, "entropy was computed for an unspecified die").not.toContain("2.58");
-
-  // A real die brings the numbers back.
-  await sides.fill("6");
-  await expect(sides).toHaveAttribute("aria-invalid", "false");
-  await expect(page.getByText(/Enter the number of sides on your die/i)).toHaveCount(0);
-});
+// The dice-tool tests that used to live here have moved to dice.spec.ts, which
+// is where the rest of the entropy-inflation cases now are.

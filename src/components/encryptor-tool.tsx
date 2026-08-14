@@ -1449,13 +1449,22 @@ export function EncryptorTool() {
                 {showPassword ? 'Hide' : 'Show'}
               </button>
             </div>
-            <div className="mt-2.5 flex gap-2">
+            {/*
+              Two columns on a phone, one row once there is room.
+
+              These are four buttons — Copy, Clear, Random, Passphrase — and
+              Button carries whitespace-nowrap, so flex-1 could not shrink them
+              below their content: the row demanded ~470px and pushed the whole
+              document sideways on every phone. min-w-0 lets a label ellipsise
+              at the very narrowest widths rather than taking the page with it.
+            */}
+            <div className="mt-2.5 grid grid-cols-2 gap-2 sm:flex">
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => handleCopy(password)}
                 disabled={!password}
-                className="flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
+                className="min-w-0 flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
               >
                 <Copy className="mr-1.5 h-3.5 w-3.5" />Copy
               </Button>
@@ -1464,7 +1473,7 @@ export function EncryptorTool() {
                 size="sm"
                 onClick={() => handlePasswordChange("")}
                 disabled={!password}
-                className="flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
+                className="min-w-0 flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
               >
                 <X className="mr-1.5 h-3.5 w-3.5" />Clear
               </Button>
@@ -1475,7 +1484,7 @@ export function EncryptorTool() {
                     size="sm"
                     onClick={generatePassword}
                     title={`${PASSWORD_LENGTH} random characters — ${PASSWORD_ENTROPY_BITS} bits`}
-                    className="flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
+                    className="min-w-0 flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
                   >
                     <RefreshCw className="mr-1.5 h-3.5 w-3.5" />Random
                   </Button>
@@ -1484,7 +1493,7 @@ export function EncryptorTool() {
                     size="sm"
                     onClick={generatePassphrase}
                     title={`${PASSPHRASE_WORDS} words from the EFF long list — ${PASSPHRASE_ENTROPY_BITS} bits`}
-                    className="flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
+                    className="min-w-0 flex-1 rounded-lg border-white/10 bg-white/4 text-[13px] font-medium text-muted-foreground hover:bg-white/8 hover:text-foreground"
                   >
                     <Dices className="mr-1.5 h-3.5 w-3.5" />Passphrase
                   </Button>
@@ -1893,14 +1902,18 @@ export function EncryptorTool() {
     </div>
   );
 
-  const tabTriggerClasses = "rounded-lg px-4 py-1.5 text-[13px] font-medium text-muted-foreground data-[state=active]:bg-white/10 data-[state=active]:text-foreground data-[state=active]:shadow-xs";
+  // px-2.5 until there is room for px-4. The header is a wordmark and three
+  // tabs on one row; at the tabs' full padding that row needs 412px, so every
+  // phone narrower than an iPhone 14 Pro Max scrolled the whole page sideways —
+  // which is what made the results grid look like it was overlapping.
+  const tabTriggerClasses = "rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground sm:px-4 data-[state=active]:bg-white/10 data-[state=active]:text-foreground data-[state=active]:shadow-xs";
 
   return (
     <Tabs value={mode} onValueChange={handleModeChange} className="flex min-h-screen flex-col">
       {/* ---- HEADER ---- */}
       <header className="sticky top-0 z-50 w-full border-b border-white/8 bg-black/70 backdrop-blur-xl backdrop-saturate-150">
-        <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3 sm:px-6">
-          <div className="flex items-center gap-2.5">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-4 py-3 sm:px-6">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
             <svg viewBox="0 0 512 512" width={28} height={28} aria-label="Keymaker Logo" role="img" xmlns="http://www.w3.org/2000/svg">
               <defs>
                 <linearGradient id="kmHdrGrad" x1="0" y1="0" x2="1" y2="1">
@@ -1916,7 +1929,20 @@ export function EncryptorTool() {
               </defs>
               <rect width="512" height="512" rx="48" fill="url(#kmHdrGrad)" mask="url(#kmHdrKey)" />
             </svg>
-            <span className="text-[17px] font-semibold tracking-tight">Keymaker</span>
+            {/* The wordmark is what pushes the header row over on a small
+                phone, so below the breakpoint only the logo remains — the
+                brand is still present, and the tabs are the part a user cannot
+                do without.
+
+                The breakpoint is measured, not guessed, and deliberately has
+                room to spare: text metrics differ between Chromium, Firefox
+                and WebKit by a few pixels, and only Chromium can be checked
+                locally. The overflow sweep in platform.spec.ts runs 375px and
+                393px — either side of this line — in all three engines, so CI
+                is what actually proves it. */}
+            <span className="hidden text-[16px] font-semibold tracking-tight min-[390px]:inline sm:text-[17px]">
+              Keymaker
+            </span>
           </div>
           <TabsList className="h-auto bg-white/6 p-0.5">
             <TabsTrigger value="encrypt" className={tabTriggerClasses}>
@@ -1950,8 +1976,9 @@ export function EncryptorTool() {
             </p>
           </div>
 
-          {/* Card */}
-          <section className="glass-card rounded-[20px] p-6 sm:p-8">
+          {/* Card. 24px of padding either side of a 320px screen leaves 240px
+              of usable width; p-5 buys back 16px where it is scarcest. */}
+          <section className="glass-card rounded-[20px] p-5 sm:p-8">
             <TabsContent value="encrypt" className="mt-0">
               {renderContent("encrypt")}
             </TabsContent>
