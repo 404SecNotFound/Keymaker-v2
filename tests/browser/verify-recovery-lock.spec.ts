@@ -131,7 +131,14 @@ test.describe("recovery kit", () => {
     }
   });
 
-  test("the service worker precaches the kit for offline use", async ({ page }) => {
+  test("the service worker precaches the kit for offline use", async ({
+    page,
+    browserName,
+  }) => {
+    // Same exclusion as every other service-worker test in this suite — see
+    // platform.spec.ts. The kit is still asserted to be *served* on WebKit by
+    // the test above; only the Cache Storage half is unobservable there.
+    test.skip(browserName === "webkit", "service workers are not testable in WebKit here");
     await page.goto("/");
     await page.evaluate(() => navigator.serviceWorker.ready);
 
