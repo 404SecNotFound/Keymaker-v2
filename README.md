@@ -344,6 +344,7 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
 | [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Proposed KEYM v2 — design only, nothing implemented |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased plan: what ships next, and what was cut |
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |

@@ -1,0 +1,211 @@
+# Keymaker roadmap
+
+Derived from two inputs — a four-agent security audit and a competitive feature
+blueprint — reconciled against the code at `d48019f` and cut down hard.
+
+The blueprint proposes 25 features. **Nine survive.** The rest are cut or
+deferred below, with reasons, because a tool whose entire moat is trust
+engineering cannot afford to ship sixteen half-features.
+
+**Selection rule.** A candidate survives only if it does one of three things:
+
+1. fixes something that is wrong in the shipped product,
+2. strengthens the trust moat (verifiability, recoverability, honesty), or
+3. is a differentiator nobody else has **and** works with zero servers.
+
+"Would be cool" is not one of them.
+
+---
+
+## Corrections to the input documents
+
+Verified against `d48019f`, not assumed.
+
+| Claim | Reality |
+|---|---|
+| Audit: `scripts/fixtures/keymaker/` "absent from the audited checkout — confirm whether git-ignored or a broken regression gate" | **Present and tracked**, 7 files, not gitignored. The audit's sandbox `npm ci` failed; the gate is intact. |
+| Audit Wave 2 #7: "Precache manifest for true offline completeness" | **Already shipped** as KM-26. Coverage went 3/17 → 17/17 chunks, with a browser test that counts what the worker holds. |
+| Audit C-I3: "CSP `script-src` keeps `'unsafe-inline'`" | True in source; the build replaces it with per-file sha256 hashes and fails closed. The residual item is moving the inline script to a static file — cosmetic, not a hole. |
+| Audit C-I1: unseparated `password‖keyfile` | Already designed out in `FORMAT-V2-DESIGN.md` §4.1. |
+| Blueprint #1: passkey PRF as a security upgrade | **Reframed.** See "Honest framing" below — with a mandatory passphrase fallback it is a convenience and phishing-resistance win, not added strength. |
+
+---
+
+## Phase 1 — Fix what is broken
+
+**Nothing else starts until this lands.** These are defects in the product
+people are using today, and three of them make a backup tool lie to its user
+about *why* their file did not open. In a category where the failure mode is
+"I cannot get my money back", a misleading error message is not a papercut.
+
+| Item | Sev | What |
+|---|---|---|
+| B1 | **High** | No async-operation guard. Switching tab or input type mid-KDF lets the stale operation fire "Success!" on the wrong tab and — via the unconditional `setPassword('')` in its `finally` — **wipe a password the user has since typed**. Fix: op-sequence ref, bail out of every post-`await` `setState`/toast when stale. |
+| B8 | Low | `processData` has no `isLoading` early-return; reentrancy is guarded only in render. Same root cause as B1, fix together. |
+| B3, B4 | Med | `knownSafeMessages` is an **exact-match** list, so "Encrypted data is too large…" and "KDF parameter out of range: …" (interpolated, can never match) both surface as *"the password may be incorrect"*. Tampered and oversized files are misreported as wrong-password. Fix: typed error codes, not string matching. |
+| B5 | Med | Legacy IBTZ path skips NFC normalization — only `keymaker-crypto.ts` normalizes. A legacy file encrypted with an NFC password rejects the canonically-equivalent NFD string. Fix: retry NFC/NFD variants on legacy auth failure. |
+| B6 | Low | `parseKeym` reads Argon2 params via `DataView` at offset 7+ after only a `length < 8` check; `minLen` is validated at line 607, too late. 8–13-byte inputs throw `RangeError`, re-wrapped as wrong-password. |
+| B2 | Med | "Imported from IttyBitz" re-encryption nudge is dead code — `TOAST_LIMIT = 1` means the unconditional "Success!" replaces it instantly. |
+| B7 | Low-Med | Dice tool silently coerces invalid `sides` to 6, so a cleared field showing "256 bits" describes a d6 nobody rolled. Inflated entropy is the exact failure class the tool's own comments warn about. |
+| B9 | Low | `uint8ArrayToBase64` string-concatenates ~3,200 chunks at 100 MB. `chunks.join("")`. |
+| W-L1 | Low | `base-uri 'self'` → `'none'`. The app has no `<base>`. |
+| C-L3 | Low | KEYM inputs under 5 bytes fall through to the legacy v0 path and burn 1M PBKDF2 iterations before failing. Special-case prefixes of `KEYM`. |
+
+**Tests, same phase** — these bugs shipped because the gaps existed:
+`bip39.ts` has zero tests, NFC round-trip is untested (would have caught B5),
+dice math untested (B7), UI logic untested (B1–B3).
+
+**Gate:** every item above has a test that fails without the fix.
+
+---
+
+## Phase 2 — Unfreeze and prove
+
+Everything here is **independent of the wire format**, so it can proceed in
+parallel with Phase 3's design work and ship without a migration.
+
+### 2.1 Crypto in a Web Worker *(the single highest-leverage change)*
+
+Argon2id freezes the tab for 1–3 s today. A Worker buys four things at once:
+a responsive UI, real cancel/progress, transferable `ArrayBuffer`s that kill
+the double copies, and — the part that matters most — **a separate heap** for
+key material, away from React state and DOM strings. `worker-src 'self'` is
+already in the CSP. This also unblocks 2.2 and 2.5.
+
+### 2.2 Signed build provenance
+
+The README concedes that "whoever serves the bundle is the trust anchor". Emit
+`SHA256SUMS` of `out/`, sign with **Sigstore keyless** (the deploy job already
+has OIDC), publish as a release asset, document `cosign verify-blob`. This
+converts the project's central honesty admission into something a user can
+check. For a zero-server tool this is the highest-value trust item that exists.
+
+### 2.3 Verify-only mode
+
+"Prove this backup still opens with this password" — decrypt, authenticate,
+discard the plaintext, never render it. Tiny to build, and it makes backup
+hygiene a first-class flow. Nobody ships this.
+
+### 2.4 In-app recovery kit
+
+Footer link → the bundled `RECOVERY.md` and `keym.py`. Near-zero cost, and it
+means the recovery path travels with the container instead of living in a repo
+the user may never find.
+
+### 2.5 KDF auto-calibration
+
+Benchmark ~300 ms in the Worker, pick the strongest Argon2id parameters that
+fit a chosen unlock-time budget. KeePass does this; no browser tool does.
+
+### 2.6 Session auto-lock and clipboard hardening
+
+Inactivity timer clearing password/plaintext state, a "Wipe now" button, and an
+unconditional clipboard overwrite with a visible countdown (drop the failing
+`readText` comparison). Small, and they close the gap between what the threat
+model claims and what the UI actually does.
+
+### 2.7 Accessibility
+
+Non-colour cue for BIP-39 validity (it is colour-only today, invisible to
+colour-blind users), aria states, `axe-core` in CI.
+
+**Gate:** Worker landed with cancel working; `cosign verify-blob` documented
+and demonstrated against a real release.
+
+---
+
+## Phase 3 — KEYM v2
+
+The design already exists in [FORMAT-V2-DESIGN.md](FORMAT-V2-DESIGN.md). Two
+changes to it, both from the blueprint:
+
+- **Add a multi-slot envelope key.** One random master key per container,
+  wrapped independently by passphrase / keyfile / passkey-PRF / Shamir-share
+  slots. This is the architectural unlock for three separate Phase 4 features,
+  and adding it later would mean a *second* format migration. It also gives
+  cheap re-passwording without re-encrypting the payload.
+- Keep everything else as specified: chunked STREAM AEAD, domain-separated
+  length-prefixed key material, bounds normative from the start, `keym2:` armor.
+
+**Process is non-negotiable and is the reason v1 is trustworthy:**
+
+1. Write `reference/keym2.py` **from the document alone**, before any
+   TypeScript. That is what produced KM-14 — the only finding in this project's
+   history that came from testing the specification rather than the code.
+2. FORMAT.md, the reference, and the fixture corpus update in the same PR.
+3. v1 decrypt stays frozen forever; the v1 fixture corpus stays append-only.
+
+**Gate:** Python and TypeScript agree bit-for-bit on every KDF × cipher combo;
+the whole v1 corpus still decrypts; truncation, reordering, duplication and
+cross-container splicing all fail authentication.
+
+---
+
+## Phase 4 — What v2 unlocks
+
+Only after Phase 3 ships. Ordered by value.
+
+| # | Feature | Why it survives |
+|---|---|---|
+| 1 | **Shamir k-of-n key splitting** | Slots make this clean: a share set is a slot, not a bolted-on layer. ~150 lines of GF(256). Inheritance is the single most common real use of personal encryption. |
+| 2 | **Paper vault print kit** | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Small, and it composes with everything else. |
+| 3 | **Self-extracting HTML decryptor** | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym.py` as the second line. Must be PBKDF2/AES-GCM only — no WASM — or it does not survive the decade. |
+| 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
+| 5 | **Inheritance wizard** | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
+
+**Gate for each:** fixture-corpus entries and Python-reference parity, per the
+append-only rule. No exceptions — that rule is the moat.
+
+---
+
+## Cut
+
+Not "later". Cut, with reasons.
+
+| Feature | Why |
+|---|---|
+| **Plausible-deniability container** and **duress/decoy password** | The blueprint concedes it: "deniability fails if the UI announces it." This is open-source software with a public spec — an adversary who knows Keymaker exists knows the decoy mode exists, and the presence of the feature is itself evidence. Shipping it invites users to bet their physical safety on a property the design cannot deliver. Worse than absent. |
+| **PAKE / croc-style transfer** | Needs a rendezvous server. The zero-server property is the product. |
+| **Steganography (KEYM-in-PNG)** | The blueprint frames it honestly as "obscurity, not security" — which is the argument for not shipping it. |
+| **TOTP vault** | Scope creep into password-manager territory, against incumbents with sync. Dilutes focus for no differentiation. |
+| **OPFS vault / File System Access workspace** | Chromium-only, large surface, and it puts plaintext-adjacent state into durable storage — directly against "nothing is stored", which is the claim people choose this tool for. |
+| **Importers (Hat.sh, age, OpenPGP)** | Low value, ongoing maintenance, and OpenPGP is a key-model mismatch with a huge dependency tree. |
+| **Reed-Solomon error correction** | Genuinely interesting, but AEAD already rejects any corrupted container, so parity has to wrap the whole thing as an outer layer with its own spec and reference parity. Real cost is well above the blueprint's "M". Revisit only if bit-rot is an observed complaint. |
+| **Post-quantum hybrid / encrypt-to-recipient** | Changes the model from password-based to keypair-based — effectively a different product. Revisit when WebCrypto ships ML-KEM natively and `SubtleCrypto.supports()` can gate it. |
+| **Wipe-on-N-attempts, self-destruct, time-lock, breach checks** | Impossible without a server. The blueprint already lists these as impossibilities; keeping them documented as impossible **is** the feature. |
+
+---
+
+## Honest framing to preserve
+
+Two places where the blueprint's pitch outruns what the crypto delivers. Both
+must be stated plainly in the UI, not just here.
+
+**Passkey PRF is convenience, not strength.** With a mandatory passphrase
+fallback — and there must be one, or a lost key is lost data — the container's
+security is still bounded by the passphrase. The passkey removes phishing and
+typing, not brute-force exposure. Advertising it as "hardware-grade security"
+while a 12-character password unlocks the same file would be exactly the class
+of overstatement KM-02 was about.
+
+**Shamir shares are password-equivalent.** Any *k* shares decrypt without the
+password. That makes each share as sensitive as the password itself, and it
+changes the threat model from "one secret I know" to "k secrets other people
+hold". The print kit must say so on the paper.
+
+---
+
+## Sequencing at a glance
+
+```
+Phase 1  Fix what is broken            ──────  blocks everything
+Phase 2  Unfreeze and prove            ──────  format-independent, parallel with P3 design
+         └ Worker · provenance · verify-only · recovery kit · calibration · auto-lock · a11y
+Phase 3  KEYM v2                       ──────  Python reference first, then TS
+         └ chunked STREAM + envelope slots
+Phase 4  What v2 unlocks               ──────  Shamir · print kit · self-extracting HTML · passkey · inheritance
+```
+
+The order is not negotiable in one respect: **Phase 1 before anything.** A tool
+that tells you your password is wrong when the file is actually truncated has
+no business gaining features.
