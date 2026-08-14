@@ -332,6 +332,19 @@ Because Keymaker does all its work in the browser, **whoever serves the bundle i
 the trust anchor.** For high-value secrets, prefer a copy you built and verified
 yourself, kept offline.
 
+You no longer have to take that on trust, though. Every deployment publishes a
+`SHA256SUMS` manifest of the exact bytes it served, signed with Sigstore by the
+deploy workflow's own identity — no long-lived key to leak, and verification
+asks "did *this repository's workflow* sign this", not "do you trust this key".
+And the build is reproducible: two clean builds of a commit produce identical
+output, and CI enforces it, so you can rebuild the commit yourself and compare
+manifests.
+
+Those are two different claims and both matter. The signature says the site is
+the artifact CI produced; the rebuild says that artifact matches the source you
+can read. See [`docs/VERIFYING.md`](docs/VERIFYING.md) — the first check needs
+nothing but `sha256sum`.
+
 The Argon2id suite is deliberately slow. It runs real memory-hard derivations across
 every KDF and cipher combination, and takes a few minutes.
 
@@ -345,6 +358,7 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
 | [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Proposed KEYM v2 — design only, nothing implemented |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased plan: what ships next, and what was cut |
+| [`docs/VERIFYING.md`](docs/VERIFYING.md) | Checking that the site you loaded is the code you read |
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |

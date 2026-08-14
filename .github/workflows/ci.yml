@@ -59,3 +59,34 @@ jobs:
 
       - name: Production build (static export + CSP hashes)
         run: npm run build
+
+  # Two clean builds of the same commit must produce identical bytes.
+  #
+  # This is what makes the signed manifest mean something a user can act on.
+  # A signature alone proves "CI built this"; reproducibility is what lets
+  # someone check that what CI built matches the source they read. It is also
+  # unusually easy to lose by accident — one timestamp or random id baked into
+  # a bundle and it is gone, with nothing else failing.
+  #
+  # Its own job because it runs the full build twice, and there is no reason
+  # for that to serialise behind the test suite.
+  reproducible:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Build twice and compare every byte
+        run: npm run verify:reproducible
+        env:
+          KEYMAKER_BASE_PATH: /Keymaker-v2

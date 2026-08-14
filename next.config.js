@@ -8,8 +8,42 @@
 // request goes to the domain root and the page loads as a blank shell.
 const basePath = (process.env.KEYMAKER_BASE_PATH || '').replace(/\/$/, '');
 
+/**
+ * Deterministic build id.
+ *
+ * Next generates a random one per build, and it appears both in the emitted
+ * path `_next/static/<buildId>/` and inside the HTML. That single value was the
+ * *only* thing making two builds of the same commit differ — every JS and CSS
+ * chunk already hashed identically. Left alone it makes the output
+ * unreproducible, which would reduce a signed manifest to "CI built this"
+ * rather than "rebuild it and check for yourself".
+ *
+ * The commit SHA is the right value: whoever verifies a deployment knows which
+ * commit it claims to be (the manifest records it), and can rebuild exactly
+ * that. KEYMAKER_BUILD_ID overrides it for environments without git — a source
+ * tarball, say — so verification is still possible there by passing the commit
+ * explicitly.
+ *
+ * The fallback is a constant rather than a timestamp or a random string,
+ * because an unreproducible build should be a deliberate choice, not something
+ * that happens quietly when git is missing.
+ */
+function resolveBuildId() {
+  if (process.env.KEYMAKER_BUILD_ID) return process.env.KEYMAKER_BUILD_ID;
+  if (process.env.GITHUB_SHA) return process.env.GITHUB_SHA;
+  try {
+    return require('node:child_process')
+      .execFileSync('git', ['rev-parse', 'HEAD'], { stdio: ['ignore', 'pipe', 'ignore'] })
+      .toString()
+      .trim();
+  } catch {
+    return 'keymaker-local-build';
+  }
+}
+
 const nextConfig = {
   output: 'export',
+  generateBuildId: async () => resolveBuildId(),
   ...(basePath ? { basePath, assetPrefix: basePath } : {}),
   // Exposed to client code so the hand-written <link> tags and the service
   // worker registration in layout.tsx can prefix themselves. Next rewrites
