@@ -286,7 +286,46 @@ One is still open but is not the finding it is filed under:
   still true (`TabsContent` carries no `forceMount`, so Radix unmounts it), but
   a different defect from the one U2 leads with. Queued as U2b in 5.2.
 
-### 5.1 The crash, first
+### 5.1 The crash, first — **shipped**
+
+**What it actually was.** The report filed this as a renderer OOM at ~140 MB.
+Measuring it found something smaller, more ordinary, and reachable on the
+*normal* path. Worst main-thread block, production build, headless Chromium:
+
+| pasted | as one line | wrapped at 76 cols |
+|---|---|---|
+| 64 KiB | 833 ms | — |
+| 256 KiB | 3 245 ms | — |
+| 1 MiB | **12 434 ms** | 407 ms |
+
+Three findings, each of which changed the fix:
+
+1. **The cost is not in the handler.** `onChange` returns in 3–7 ms at every
+   size; the block is afterwards, in the browser laying out the field. A check
+   inside `processData` could never have helped.
+2. **It is not the BIP-39 check** — encrypt and decrypt block identically, and
+   that check only runs on encrypt.
+3. **It is line length, not total size.** 30× between the same megabyte as one
+   line and as wrapped lines.
+
+(3) is the part worth keeping: **Keymaker's own armored output is a single
+unbroken line**, so a user copying a backup out and pasting it back into Decrypt
+walks into this on the ordinary recovery path. 100 MB was never a real limit for
+this field — it was a number nobody had tested.
+
+Fixed by gating the input layer, refusing rather than truncating (silently
+keeping a prefix of someone's secret and encrypting *that* is the worse
+outcome), with asymmetric caps — 32 KiB of plaintext, 64 KiB of armored text —
+because armor expands by 4/3 and a symmetric pair would let the app produce text
+it then refuses to take back. `tests/browser/paste-size.spec.ts`; the negative
+control reproduces 12 569 ms.
+
+**Still open, and a decision rather than a bug:** the app emits armor as one
+line. Wrapping it would remove the self-inflicted case entirely, and both the
+parser and `RECOVERY.md` already accept wrapped text — but it changes what the
+app writes, so it is not folded into a crash fix.
+
+### The original triage entry
 
 **U4 — a large paste hard-crashes the renderer (OOM) before any validation
 runs.** The size check fires only on submit; the textarea's `onChange` has no
