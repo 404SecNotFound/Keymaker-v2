@@ -235,7 +235,7 @@ Only after Phase 3 ships. Ordered by value.
 | # | Feature | Why it survives |
 |---|---|---|
 | 1 | **Shamir k-of-n key splitting** — **shipped**, §4.1 below | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
-| 2 | **Paper vault print kit** | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Small, and it composes with everything else. |
+| 2 | **Paper vault print kit** — *next up in this phase* | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Composes directly with 4.1, and there is now a concrete debt to pay: the share modal's Print button is `window.print()` against a screen layout, which is the weakest part of what 4.1 shipped. A share set printed from a dark-themed dialog is not a paper backup. |
 | 3 | **Self-extracting HTML decryptor** | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym.py` as the second line. Must be PBKDF2/AES-GCM only — no WASM — or it does not survive the decade. |
 | 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
 | 5 | **Inheritance wizard** | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
@@ -287,11 +287,27 @@ the password itself. That belongs on the screen and on the paper, not only here.
 
 ---
 
-## Phase 5 — UAT remediation
+## Phase 5 — UAT remediation — **26 of 28 closed**
 
 Source: [reports/UAT-2026-08-14.md](reports/UAT-2026-08-14.md) — five agents
 driving the production build in headless Chromium, ~150 automated checks plus
 manual inspection, 28 findings.
+
+**Two remain, both by decision rather than backlog.** U14 is refused — v2 has no
+filename field and should not grow one. U27 is parked until the non-ASCII
+download filename is confirmed in a real browser; the unpark condition is in
+§5.4 and has not been met.
+
+**A counting correction, recorded because the process failed, not just the
+count.** This was reported as 26 of 28 twice while it was actually 24. U2b and
+U24 were both enumerated correctly in the triage and then not carried into
+either PR — worse than overlooking them, because the list was right and stopped
+being consulted. An external review caught U2b by name; re-counting against the
+report found U24.
+
+The lesson is mechanical: **a triage list is worth only what the final count is
+checked against.** Stating a total from memory instead of recomputing it from
+the source document is how two open findings became closed ones on paper.
 
 **The headline is the part worth keeping.** With every network request aborted
 at the browser level, a full Argon2id text round-trip completed with **zero
@@ -424,6 +440,179 @@ per finding; ask for those rather than reconstructing the repro from prose.
 
 ---
 
+## Phase 6 — Make the trust claims checkable by a stranger
+
+Source: an external review of the public repo, 2026-08-15. Its central point is
+correct and uncomfortable: **the engineering is ahead of the packaging.** Every
+expensive trust property this project has already built — reproducible builds,
+Sigstore signatures, an independent reference implementation — is currently
+invisible to someone who arrives at the repo and has to decide whether to trust
+it in the next ninety seconds.
+
+This phase adds no cryptography. It is the phase that makes the existing
+cryptography *legible*, and by the selection rule at the top of this document it
+survives under criterion 2: it strengthens the trust moat, because a
+verifiability property nobody can find is not a verifiability property.
+
+**Sequenced first among what remains**, ahead of Phase 4's features, and that is
+a deliberate reversal of the usual order. Phase 4 makes the tool do more for
+people already using it; Phase 6 is what lets anyone establish that it is worth
+using at all. With zero stars, zero forks and no release, the second is the
+binding constraint.
+
+### 6.1 Version coherence — do this before anything with a version number in it
+
+`package.json` says `1.0.0`, the footer says `Keymaker v1`, the container format
+is KEYM v2, and there are **zero git tags**. Three different numbers and no
+release to pin any of them to.
+
+The fix is a decision, not a rename: **the application version and the container
+format version are separate things and must stay separate.** Conflating them is
+its own confusion — a user reading "v2" needs to know whether that describes the
+app they are running or the file they are holding, and those diverge the moment
+the app gains a feature that does not change the format.
+
+- Application version in `package.json` and the footer, moving on app releases.
+- Format version stated as "KEYM v2" wherever a container is described, moving
+  only on a format change — which §9 of `FORMAT-V2-DESIGN.md` says is now frozen.
+- The footer says both, because the footer is where someone looks when a file
+  will not open.
+
+**Gate:** a test asserting the footer's app version matches `package.json`. A
+version string maintained in two places drifts, and the one place it must not
+drift is the line a user quotes in a bug report.
+
+### 6.2 A tagged release, with the verification path attached
+
+No release exists, which makes `SHA256SUMS` and the Sigstore signature
+unreachable in practice: there is nothing to download and verify *against*.
+
+Release notes should say what the container format is, what changed, and how to
+check the artefact — in that order, because the third is the differentiator and
+it currently reads as an implementation detail buried in `docs/VERIFYING.md`.
+
+**Gate:** the release workflow attaches `SHA256SUMS` and its signature, and the
+`cosign verify-blob` line in the notes is copied from `docs/VERIFYING.md` rather
+than retyped. A verification command that does not work is worse than none.
+
+### 6.3 "Verify this build" — in the app, not only in a doc
+
+The review's strongest suggestion. The infrastructure is complete and nothing
+walks a user through using it.
+
+An in-app page that states the running build's commit and manifest hash, and
+gives the exact `cosign verify-blob` and `sha256sum` invocations for it. Not a
+button that claims "verified" — the page cannot verify itself, and one that
+pretended to would be the precise class of overstatement KM-02 was about. It
+hands the user the commands and gets out of the way.
+
+**Gate:** a browser test that reads the hash off the page and checks it against
+the built `SHA256SUMS`. Otherwise the page becomes wrong on the first build that
+changes it, silently, and a stale hash is worse than no hash.
+
+### 6.4 README top matter
+
+Live-demo link, CI / licence / reproducible-build badges, and a short **"Why
+Keymaker?"** against `age`, GPG, Cryptomator and the browser-only tools. Nine
+screenshot references already exist; badges and the comparison are the gap.
+
+The comparison must be honest about where the alternatives win — `age` and GPG
+are not browser tools and do not carry this project's threat model, and saying
+so is what makes the rest of the table credible.
+
+### 6.5 Mobile and PWA polish
+
+Install prompt, offline behaviour after install, and touch targets on a real
+handset. U8 fixed the measurable part at 390px in a headless browser; **nothing
+in this project has ever been opened on a phone.** That is an owner-only task
+and it is in the register below.
+
+---
+
+## Phase 7 — Documentation that survives the author
+
+The recovery-first philosophy is already the best thing in the docs. These
+extend it in the two directions it does not currently reach.
+
+### 7.1 An illustrated end-to-end walkthrough
+
+First encryption through to recovery with `keym.py` and no website. Written and
+illustrated, in the repo, tested by `recovery_test.py` the way `RECOVERY.md`
+already is.
+
+**A video is cut.** It cannot be version-controlled, cannot be tested against
+the code, and goes stale silently the first time the UI moves — which, on this
+project's recent rate of change, is days. The written walkthrough is executable
+by a test; a video is a screenshot with a play button.
+
+### 7.2 The hosted instance is a different trust model, and should say so
+
+Using `404secnotfound.github.io` means trusting whoever serves the bundle, on
+every visit. Downloading a signed release and opening it locally does not. The
+README concedes the first point in passing; it deserves its own section with
+the three postures spelled out — hosted, downloaded-and-verified, and
+built-from-source — and what each one actually costs.
+
+### 7.3 Expand "what this does not protect against"
+
+Currently honest but thin. Should name, plainly: a compromised device or
+browser, a malicious extension, the clipboard, shoulder-surfing, and the fact
+that **container length reveals plaintext length to within a chunk** (§8 of the
+format design). The last one is documented in the spec and nowhere a user will
+look.
+
+---
+
+## Phase 8 — Outreach, and only after 6
+
+Gated deliberately. The first thing a security-minded visitor does is look for a
+release to check against `SHA256SUMS` — so posting to r/privacy, r/crypto or
+Show HN before Phase 6 spends the one arrival that matters on a repo that cannot
+yet substantiate its own claims.
+
+Order: Phase 6 lands → tagged release → then posts, leading with the offline
+guarantee and the recovery path rather than the cipher list. The demonstration
+that lands is "every network request blocked, full round trip still works",
+which the UAT already measured.
+
+**One recommendation is reframed rather than adopted.** The review suggests
+seeking independent audits *for publicity*. Commission an audit for findings;
+publicity is the wrong reason and selects for the wrong auditor — one who
+produces quotable conclusions rather than uncomfortable ones. The publicity
+asset this project should lead with already exists and is stronger: reproducible
+builds, signed manifests, and a Python reference that lets a stranger verify the
+format without trusting the app or its author.
+
+---
+
+## Ongoing — not a phase, a standing obligation
+
+- **Dependency surface.** `@noble/ciphers` and `hash-wasm` are good choices and
+  the risk is Next.js and React, which move fastest and are the largest surface.
+- **The Python reference stays first-class.** Bit-for-bit conformance on every
+  format change, no exceptions. It is the moat.
+- **`wasm-unsafe-eval` is answered, not open.** The review asks whether it can be
+  hardened further; that evaluation is done and written up in `SECURITY.md` as
+  U20. Removing the token means either a JavaScript Argon2id or PBKDF2-only, and
+  both trade real key-derivation strength for a hypothetical injection gain. It
+  is revisited only if the CSP spec or Chromium's behaviour changes.
+
+---
+
+## Owner-only register
+
+Not blocked on work, blocked on access. Listed because they have been
+outstanding across every session and each one costs minutes.
+
+| # | What | Why it matters |
+|---|---|---|
+| O1 | **About panel and topics are empty** on a public repo | The one-line description is the entire first impression, and topics are how anyone finds this at all |
+| O2 | **Two stale `claude/*` branches** on the old repo | Force-push was permission-denied |
+| O3 | **The live site has never been opened on a phone** | Several rounds of UI change have shipped; this container is egress-blocked from the deployed site, so it cannot be checked here. It is also 6.5's gate |
+| O4 | **U27 unpark** — confirm the non-ASCII download filename in a real browser | Suspected harness artifact; a fix aimed at one would be worse than none |
+
+---
+
 ## Cut
 
 Not "later". Cut, with reasons.
@@ -437,6 +626,9 @@ Not "later". Cut, with reasons.
 | **OPFS vault / File System Access workspace** | Chromium-only, large surface, and it puts plaintext-adjacent state into durable storage — directly against "nothing is stored", which is the claim people choose this tool for. |
 | **Importers (Hat.sh, age, OpenPGP)** | Low value, ongoing maintenance, and OpenPGP is a key-model mismatch with a huge dependency tree. |
 | **Reed-Solomon error correction** | Genuinely interesting, but AEAD already rejects any corrupted container, so parity has to wrap the whole thing as an outer layer with its own spec and reference parity. Real cost is well above the blueprint's "M". Revisit only if bit-rot is an observed complaint. |
+| **Video walkthrough** (Phase 7 alternative) | Cannot be version-controlled, cannot be tested against the code, and goes stale silently the first time the UI moves. The written walkthrough in 7.1 is executed by `recovery_test.py`; a video is a screenshot with a play button. |
+| **Auto-copying a generated password to the clipboard** (UAT U24) | The clipboard is readable by other applications and syncs across devices on some platforms. Putting a secret there without being asked is the wrong default for a tool whose thesis is minimising exposure. Generate already fills the field; Copy sits beside it and carries 2.6's countdown and unconditional clear. |
+| **Auditing for publicity** (external review, 2026-08-15) | Commission an audit for findings. Publicity is the wrong reason and selects for the wrong auditor. The asset to lead with already exists: reproducible builds, signed manifests, and a reference implementation that removes the need to trust the author. |
 | **Post-quantum hybrid / encrypt-to-recipient** | Changes the model from password-based to keypair-based — effectively a different product. Revisit when WebCrypto ships ML-KEM natively and `SubtleCrypto.supports()` can gate it. |
 | **Wipe-on-N-attempts, self-destruct, time-lock, breach checks** | Impossible without a server. The blueprint already lists these as impossibilities; keeping them documented as impossible **is** the feature. |
 
@@ -469,10 +661,26 @@ Phase 2  Unfreeze and prove            ─ done ─  format-independent
          └ Worker · provenance · verify-only · recovery kit · calibration · auto-lock · a11y
 Phase 3  KEYM v2                       ─ done ─  Python reference first, then TS
          └ chunked STREAM + envelope slots · the app writes v2
-Phase 5.1 The OOM crash (U4)           ──────    jumps the queue, see below
-Phase 4  What v2 unlocks               ──────    Shamir · print kit · self-extracting HTML · passkey · inheritance
-Phase 5  UAT remediation (rest)        ──────    correctness · a11y second pass · polish
+Phase 5.1 The OOM crash (U4)           ─ done ─  jumped the queue, see below
+Phase 5  UAT remediation               ─ done ─  26 of 28; U14 refused, U27 parked
+         └ correctness · a11y second pass · polish
+Phase 4.1 Shamir k-of-n                ─ done ─  format · reference · parity · UI
+Phase 6  Make the claims checkable     ──────    version · release · verify page · README · mobile
+Phase 7  Documentation                 ──────    walkthrough · trust postures · limitations
+Phase 4  The rest of what v2 unlocks   ──────    print kit · self-extracting HTML · passkey · wizard
+Phase 8  Outreach                      ──────    gated on 6
 ```
+
+**Phase 6 goes before the rest of Phase 4, and that reverses the usual order.**
+Phase 4 makes the tool do more for people already using it. Phase 6 is what lets
+anyone decide it is worth using. At zero stars, zero forks and no tagged
+release, the second is the binding constraint — and every trust property that
+would answer a sceptical visitor is already built and simply cannot be found.
+
+The one exception inside Phase 4 is the **paper vault print kit**, which is the
+natural next feature regardless: it composes directly with the share sets that
+just shipped, and the share modal's Print button is currently `window.print()`
+against a screen layout, which is the weakest thing in that feature.
 
 The order is not negotiable in two respects now.
 

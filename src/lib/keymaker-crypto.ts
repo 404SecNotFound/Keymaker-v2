@@ -96,7 +96,15 @@ const NONCE_LEN = 12;
  */
 export const MAX_PLAINTEXT_SIZE = 100 * 1024 * 1024; // 100 MB
 const MAX_FILE_SIZE = MAX_PLAINTEXT_SIZE;
-const MAX_PASSWORD_LENGTH = 1024;
+/**
+ * Longest password we will accept.
+ *
+ * Exported (U24) because the UI now discloses it. A second copy of the number
+ * in the component would be free to drift from the one actually enforced here,
+ * and a stated limit that disagrees with the real one is worse than no stated
+ * limit at all.
+ */
+export const MAX_PASSWORD_LENGTH = 1024;
 
 /**
  * Largest container we will even attempt to decrypt: the 100 MB plaintext cap
