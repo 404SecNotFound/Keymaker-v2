@@ -1199,9 +1199,18 @@ Added by the Shamir slot (§4.6):
 - [x] Does `k−1` shares yield nothing? — ✅ all ten 2-subsets of a 3-of-5 split
       reconstructed; none is the secret and all ten differ from each other. By
       enumeration, not by citing the theorem.
-- [ ] Do the Python and TypeScript implementations produce identical share bytes
+- [x] Do the Python and TypeScript implementations produce identical share bytes
       from identical coefficients, and identical containers from identical share
-      secrets? — **open until the TypeScript exists.**
+      secrets? — ✅ `crosstest2.py` compares the enrolled container and all five
+      share strings. Both controls confirm it bites: transposing the coefficient
+      block and regrouping the base32 each fail the share comparison.
+
+      **The first control is the reason this row is worded about shares and not
+      just containers.** Transposing the coefficients leaves the container
+      *byte-identical* — the wrapped key does not depend on them — and changes
+      only the printed strings. A conformance test that compared containers
+      alone would have passed while the two implementations issued
+      mutually-unusable share sets.
 - [x] Does a reader skip a Shamir slot it does not implement and still open the
       container from a passphrase slot beside it? — ✅ §4.4's skip rule with a
       real slot type behind it for the first time, tested by narrowing the

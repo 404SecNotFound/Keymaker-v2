@@ -89,6 +89,32 @@ export const KEYM2_ARMOR_PREFIX = "keym2:";
  *  reserved for Phase 4 and their layouts are deliberately unspecified until
  *  something implements them. Unknown types are skipped, never rejected. */
 const SLOT_TYPE_PASSPHRASE = 0x00;
+/** §4.6. Same 48-byte prefix; only the slot secret's origin differs. */
+export const KEYM2_SLOT_TYPE_SHAMIR = 0x02;
+
+/**
+ * §3.2, HKDF-SHA-256 — added by §4.6, with no cost parameters on purpose.
+ *
+ * Deliberately *not* a new member of `KdfId`. That enum is v1's, v1 is frozen,
+ * and widening it would mean a v1 header declaring 0x02 became parseable. The
+ * v2 slot parser is the only thing that should ever see this value, so it is
+ * defined here and the slot's KDF type is widened locally.
+ */
+export const KEYM2_KDF_HKDF = 0x02;
+export type Keym2KdfParams = KdfParams | { kdf: typeof KEYM2_KDF_HKDF };
+
+/**
+ * §6, and normative in both directions. A passphrase under HKDF is a password
+ * with no stretching at all and nothing in any output would reveal it; a
+ * 32-byte CSPRNG secret under Argon2id is a memory-hard cost paid to defend an
+ * unguessable value. Only the first is a vulnerability, but a rule that admits
+ * the second invites a writer to read the pairing as advice.
+ */
+function kdfIsLegalForSlotType(slotType: number, kdfId: number): boolean {
+  if (slotType === SLOT_TYPE_PASSPHRASE) return kdfId === KdfId.PBKDF2 || kdfId === KdfId.ARGON2ID;
+  if (slotType === KEYM2_SLOT_TYPE_SHAMIR) return kdfId === KEYM2_KDF_HKDF;
+  return false;
+}
 
 /** §3.3. The container flags byte is entirely reserved; the key-file hint moved
  *  into the slot, because it describes a slot and not a container. */
@@ -105,6 +131,11 @@ const INFO_AES = textEncoder.encode("keymaker-v2-aes");
 const INFO_CHACHA = textEncoder.encode("keymaker-v2-chacha");
 const INFO_SLOT_AES = textEncoder.encode("keymaker-v2-slot-aes");
 const INFO_SLOT_CHACHA = textEncoder.encode("keymaker-v2-slot-chacha");
+
+// §4.6. The input string differs from CTX_KDF_INPUT so a 32-byte passphrase and
+// a 32-byte share secret can never derive the same slot key.
+const CTX_SHAMIR_INPUT = textEncoder.encode("keymaker.v2.shamir-input");
+const INFO_SLOT_KEY = textEncoder.encode("keymaker.v2.slot-key");
 
 const MAGIC = new Uint8Array([0x4b, 0x45, 0x59, 0x4d]); // "KEYM"
 
@@ -172,7 +203,7 @@ export interface Keym2CoreHeader {
 
 export interface Keym2Slot {
   slotType: number;
-  kdf: KdfParams;
+  kdf: Keym2KdfParams;
   slotFlags: number;
   salt: Uint8Array;
   wrappedKey: Uint8Array;
@@ -189,13 +220,22 @@ function packCoreHeader(cipher: CipherId, flags: number): Uint8Array {
   return header;
 }
 
-function packSlotPrefix(kdf: KdfParams, slotFlags: number, salt: Uint8Array): Uint8Array {
+function packSlotPrefix(
+  kdf: Keym2KdfParams,
+  slotFlags: number,
+  salt: Uint8Array,
+  slotType: number = SLOT_TYPE_PASSPHRASE
+): Uint8Array {
   const prefix = new Uint8Array(SLOT_PREFIX_LEN);
-  prefix[0] = SLOT_TYPE_PASSPHRASE;
+  prefix[0] = slotType;
   prefix[1] = kdf.kdf;
   prefix[2] = slotFlags;
-  // bytes 3..7 stay zero — §4.4 reserved
+  // bytes 3..7 stay zero — §4.4 reserved, for every slot type. §4.6 considered
+  // spending them on a digest of the reconstructed secret and did not.
   prefix.set(salt, SLOT_SALT_OFFSET);
+
+  // §3.2. HKDF's whole parameter block is reserved, so the prefix is finished.
+  if (kdf.kdf === KEYM2_KDF_HKDF) return prefix;
 
   const view = new DataView(prefix.buffer, prefix.byteOffset, prefix.byteLength);
   if (kdf.kdf === KdfId.PBKDF2) {
@@ -302,13 +342,32 @@ export function parseKeym2Slot(record: Uint8Array): Keym2Slot | null {
   const kdfId = record[1] as number;
   const slotFlags = record[2] as number;
 
-  if (slotType !== SLOT_TYPE_PASSPHRASE) return null;
+  if (slotType !== SLOT_TYPE_PASSPHRASE && slotType !== KEYM2_SLOT_TYPE_SHAMIR) return null;
   for (let i = 3; i < 8; i++) if (record[i] !== 0) return null; // §4.4 reserved
   if (slotFlags & SLOT_FLAGS_RESERVED_MASK) return null; // §4.4 reserved bits
+  // §6, the slot_type/slot_kdf_id pairing, checked before any KDF runs. This is
+  // what makes "a passphrase slot declaring HKDF" unreachable rather than
+  // merely discouraged.
+  if (!kdfIsLegalForSlotType(slotType, kdfId)) return null;
 
   const view = new DataView(record.buffer, record.byteOffset, record.byteLength);
 
-  let kdf: KdfParams;
+  let kdf: Keym2KdfParams;
+  if (kdfId === KEYM2_KDF_HKDF) {
+    // §3.2. All eight parameter bytes reserved, so there is nothing to bound
+    // and validateKdfParams has nothing to say about this slot.
+    for (let i = SLOT_PARAMS_OFFSET; i < SLOT_PARAMS_OFFSET + 8; i++) {
+      if (record[i] !== 0) return null;
+    }
+    return {
+      slotType,
+      kdf: { kdf: KEYM2_KDF_HKDF },
+      slotFlags,
+      salt: record.slice(SLOT_SALT_OFFSET, SLOT_SALT_OFFSET + SALT_LEN),
+      wrappedKey: record.slice(SLOT_PREFIX_LEN),
+      keyFileUsed: false,
+    };
+  }
   if (kdfId === KdfId.PBKDF2) {
     for (let i = 44; i < 48; i++) if (record[i] !== 0) return null; // §3.2 reserved
     kdf = { kdf: KdfId.PBKDF2, params: { iterations: view.getUint32(SLOT_PARAMS_OFFSET, false) } };
@@ -401,8 +460,33 @@ async function buildKdfInput(password: string, keyFile: Uint8Array | null): Prom
   return concat([lp(CTX_KDF_INPUT), lp(normalized), lp(digest)]);
 }
 
+/**
+ * §4.6, the slot secret for `slot_type = 0x02`.
+ *
+ * Same shape as `buildKdfInput` with a different domain string, which is the
+ * entire reason a 32-byte passphrase and a 32-byte share secret cannot collide
+ * into the same slot key.
+ */
+function buildShamirInput(shareSecret: Uint8Array): Uint8Array {
+  if (shareSecret.length !== MASTER_KEY_LEN) reject();
+  return concat([lp(CTX_SHAMIR_INPUT), lp(shareSecret)]);
+}
+
 /** §4.3. The slot key, from that slot's own KDF, salt and parameters. */
-async function deriveSlotKey(kdfInput: Uint8Array, salt: Uint8Array, kdf: KdfParams): Promise<Uint8Array> {
+async function deriveSlotKey(kdfInput: Uint8Array, salt: Uint8Array, kdf: Keym2KdfParams): Promise<Uint8Array> {
+  if (kdf.kdf === KEYM2_KDF_HKDF) {
+    // §3.2. No cost parameters, because the secret this stretches is already 32
+    // CSPRNG bytes and 2^256 does not get larger when multiplied by a work
+    // factor. `parseKeym2Slot`'s pairing check is what guarantees this branch is
+    // only reachable for a slot type whose secret has that property.
+    const baseKey = await crypto.subtle.importKey("raw", kdfInput as BufferSource, "HKDF", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits(
+      { name: "HKDF", hash: "SHA-256", salt: salt as BufferSource, info: INFO_SLOT_KEY as BufferSource },
+      baseKey,
+      MASTER_KEY_LEN * 8
+    );
+    return new Uint8Array(bits);
+  }
   if (kdf.kdf === KdfId.PBKDF2) {
     const baseKey = await crypto.subtle.importKey("raw", kdfInput as BufferSource, "PBKDF2", false, ["deriveBits"]);
     const bits = await crypto.subtle.deriveBits(
@@ -656,6 +740,51 @@ async function wrapMasterKey(
 }
 
 /**
+ * What the caller can offer a slot: a passphrase, a set of shares, or both.
+ *
+ * Both is the ordinary inheritance shape — slot 0 the owner's password, slot 1
+ * the heirs' share set — and either alone must be enough.
+ */
+export interface Keym2Secrets {
+  password?: string | undefined;
+  keyFile?: Uint8Array | null | undefined;
+  shares?: string[] | undefined;
+}
+
+/**
+ * §4.1 / §4.6. The slot secret this caller can offer *this* slot, or null if it
+ * holds nothing of the kind the slot wants.
+ *
+ * This is the whole of what §4.6 changed about the read path. The walk below is
+ * unchanged; only the question "what secret does this slot take" grew a second
+ * answer.
+ */
+async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Uint8Array | null> {
+  if (slot.slotType === SLOT_TYPE_PASSPHRASE) {
+    if (secrets.password === undefined) return null;
+    return buildKdfInput(secrets.password, secrets.keyFile ?? null);
+  }
+
+  if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) {
+    if (!secrets.shares || secrets.shares.length === 0) return null;
+    const { combineShares, shareSetId } = await import("./keym-v2-shamir");
+    try {
+      // Checked against *this* slot's salt, so a share set belonging to a
+      // different Shamir slot declines rather than reconstructing a clean
+      // secret that is simply the wrong one.
+      const shareSecret = await combineShares(secrets.shares, await shareSetId(slot.salt));
+      const input = buildShamirInput(shareSecret);
+      secureErase(shareSecret);
+      return input;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Walk the slot table until one opens, returning the master key.
  *
  * §4.4 and finding F6: a slot is passed over when its type is not implemented,
@@ -671,13 +800,17 @@ async function wrapMasterKey(
  */
 async function unwrapMasterKey(
   container: Keym2Container,
-  kdfInput: Uint8Array
+  secrets: Keym2Secrets
 ): Promise<{ master: Uint8Array; slot: Keym2Slot }> {
   for (const record of container.records) {
     const slot = parseKeym2Slot(record);
     if (slot === null) continue;
 
-    const slotKey = await deriveSlotKey(kdfInput, slot.salt, slot.kdf);
+    const slotSecret = await slotSecretFor(slot, secrets);
+    if (slotSecret === null) continue;
+
+    const slotKey = await deriveSlotKey(slotSecret, slot.salt, slot.kdf);
+    if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) secureErase(slotSecret);
     const keys = await wrapKeys(slotKey, container.core.cipher);
     let master: Uint8Array | null;
     try {
@@ -802,6 +935,83 @@ export async function encryptKeym2WithExplicitSecrets(
   }
 }
 
+export interface Keym2ShareSet {
+  container: Uint8Array;
+  /** The share texts, produced once. Nothing can reissue them. */
+  shares: string[];
+}
+
+/**
+ * §4.6. Enrol a k-of-n share set on an existing container, holding one other
+ * secret. Returns the new container and the shares.
+ *
+ * This is the composition the envelope was built for: slot 0 stays the
+ * passphrase the owner uses daily, slot 1 becomes shares for whoever inherits
+ * it, neither knows the other exists, and **the payload is not re-encrypted**
+ * however large it is.
+ *
+ * The share secret is discarded before this returns. The only way back to it is
+ * `k` shares, so the returned strings are the only copy that will ever exist.
+ *
+ * `explicit` is for conformance harnesses only (§4.5), and is more directly
+ * dangerous than a fixed salt: the coefficients are the only thing standing
+ * between one share and the secret.
+ */
+export async function addShamirSlotKeym2(
+  container: Uint8Array,
+  secrets: Keym2Secrets,
+  threshold: number,
+  count: number,
+  explicit?: { salt?: Uint8Array; shareSecret?: Uint8Array; coefficients?: Uint8Array }
+): Promise<Keym2ShareSet> {
+  const { shamirSplit, shareSetId, encodeShare, SHARE_VALUE_LEN } = await import("./keym-v2-shamir");
+
+  const parsed = parseKeym2Container(container);
+  if (parsed.records.length >= KEYM2_MAX_SLOTS) {
+    throw new KeymakerError("invalid-input", `A container can hold at most ${KEYM2_MAX_SLOTS} slots.`);
+  }
+  const { master } = await unwrapMasterKey(parsed, secrets);
+
+  // The salt is chosen before the shares exist, because share_set_id derives
+  // from it (§4.6). Two slots cannot share a salt without sharing a set id.
+  const salt = explicit?.salt ?? crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  if (salt.length !== SALT_LEN) {
+    throw new KeymakerError("invalid-input", "KEYM v2 requires a 32-byte salt.");
+  }
+  const shareSecret = explicit?.shareSecret ?? crypto.getRandomValues(new Uint8Array(SHARE_VALUE_LEN));
+
+  const prefix = packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, salt, KEYM2_SLOT_TYPE_SHAMIR);
+  // Same round-trip through the reader's own validator as the passphrase path.
+  if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + parsed.core.tagOverhead)])) === null) {
+    throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
+  }
+
+  const slotSecret = buildShamirInput(shareSecret);
+  const slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
+  secureErase(slotSecret);
+
+  let record: Uint8Array;
+  try {
+    record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
+  } finally {
+    secureErase(slotKey);
+    secureErase(master);
+  }
+
+  const setId = await shareSetId(salt);
+  const shares: string[] = [];
+  for (const part of shamirSplit(shareSecret, threshold, count, explicit?.coefficients)) {
+    shares.push(await encodeShare({ setId, threshold, index: part.index, value: part.value }));
+  }
+  if (explicit?.shareSecret === undefined) secureErase(shareSecret);
+
+  const records = [...parsed.records, record];
+  return {
+    container: concat([parsed.coreBytes, new Uint8Array([records.length]), ...records, parsed.payload]),
+    shares,
+  };
+}
+
 export interface Keym2DecryptResult {
   data: Uint8Array;
   keyFileUsed: boolean;
@@ -824,19 +1034,21 @@ export interface Keym2DecryptResult {
 export async function decryptKeym2(
   container: Uint8Array,
   password: string,
-  keyFile: Uint8Array | null
+  keyFile: Uint8Array | null,
+  shares?: string[]
 ): Promise<Keym2DecryptResult> {
   const parsed = parseKeym2Container(container); // every structural §6 check
   const sizes = chunkLayout(parsed.payload.length, parsed.core.tagOverhead); // also before any KDF
 
-  const kdfInput = await buildKdfInput(password, keyFile);
-  let master: Uint8Array;
-  let slot: Keym2Slot;
-  try {
-    ({ master, slot } = await unwrapMasterKey(parsed, kdfInput));
-  } finally {
-    secureErase(kdfInput);
-  }
+  // An heir holds shares and no password, so an empty password must not become
+  // a passphrase attempt: it would burn a full Argon2id derivation per slot to
+  // reach the same failure, on the one path where the caller is least likely to
+  // understand what went wrong.
+  const { master, slot } = await unwrapMasterKey(parsed, {
+    password: password === "" && shares && shares.length > 0 ? undefined : password,
+    keyFile,
+    shares,
+  });
 
   const keys = await payloadKeys(master, parsed.core.cipher);
   secureErase(master);
@@ -953,9 +1165,14 @@ export function inspectKeym2(data: Uint8Array): { kdfLabel: string; cipherLabel:
     const kdfLabel =
       slot === null
         ? "unrecognised slot"
-        : slot.kdf.kdf === KdfId.PBKDF2
-          ? `PBKDF2 (${slot.kdf.params.iterations.toLocaleString("en-US")} iters)`
-          : `Argon2id (${Math.round(slot.kdf.params.memoryKiB / 1024)} MiB, t=${slot.kdf.params.timeCost}, p=${slot.kdf.params.parallelism})`;
+        : // §4.6. A share set has no cost parameters to report, and inventing a
+          // threshold would be worse than saying nothing: the container does not
+          // carry k or n, so anything shown here would be a guess.
+          slot.kdf.kdf === KEYM2_KDF_HKDF
+          ? "Shamir share set (HKDF-SHA-256)"
+          : slot.kdf.kdf === KdfId.PBKDF2
+            ? `PBKDF2 (${slot.kdf.params.iterations.toLocaleString("en-US")} iters)`
+            : `Argon2id (${Math.round(slot.kdf.params.memoryKiB / 1024)} MiB, t=${slot.kdf.params.timeCost}, p=${slot.kdf.params.parallelism})`;
     const cipherLabel =
       core.cipher === CipherId.AES_256_GCM
         ? "AES-256-GCM"

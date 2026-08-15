@@ -36,6 +36,7 @@ import {
   CipherId,
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
+import { addShamirSlotKeym2 } from "../src/lib/keym-v2.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIR = join(HERE, "fixtures", "keymaker");
@@ -148,6 +149,55 @@ async function main() {
     });
     wrote++;
     console.log(`wrote ${file} (${ct.byteLength} bytes)`);
+  }
+
+  // §4.6. One share-set fixture per cipher, because the wrap uses the
+  // container's cipher — a chained container chains its wrap too — so a bug in
+  // the chained path would be invisible in an AES-only vector.
+  //
+  // These carry their shares in the metadata, which is the point: a fixture is
+  // a promise that a container written today still opens tomorrow, and for a
+  // share set that promise is about the *printed strings*, not only the bytes.
+  // The corpus is the only place they can be frozen.
+  for (const cipher of CIPHERS) {
+    const name = `v2-shamir-${cipher.slug}`;
+    const file = `${name}.keym`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+      continue;
+    }
+
+    const plaintext = `Keymaker fixture — v2 shamir 3-of-5 / ${cipher.name}`;
+    const base = await encryptContainer(
+      new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
+      PASSWORD,
+      null,
+      { kdf: PBKDF2_V2_PARAMS, cipher: cipher.id }
+    );
+    const { container, shares } = await addShamirSlotKeym2(
+      new Uint8Array(base),
+      { password: PASSWORD },
+      3,
+      5
+    );
+    writeFileSync(join(DIR, file), Buffer.from(container));
+    fixtures.push({
+      name,
+      file,
+      version: 2,
+      kdf: "pbkdf2",
+      cipher: cipher.name,
+      keyFile: false,
+      plaintext,
+      // Real random secrets, not pinned: byte equality against the reference is
+      // crosstest2.py's job. What a fixture pins is that these exact strings
+      // keep opening this exact container.
+      shamir: { threshold: 3, shares },
+    });
+    wrote++;
+    console.log(`wrote ${file} (${container.byteLength} bytes, 5 shares)`);
   }
 
   writeFileSync(
