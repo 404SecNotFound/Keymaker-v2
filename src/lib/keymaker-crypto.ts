@@ -991,11 +991,26 @@ async function legacyDecryptWithNormalizationFallback(
 export async function decryptData(
   encryptedBuffer: ArrayBuffer,
   password: string,
-  keyFileBuffer: ArrayBuffer | null
+  keyFileBuffer: ArrayBuffer | null,
+  /**
+   * KEYM v2 §4.6 recovery shares. Additive and v2-only: a v1 container has no
+   * slot table to hold a share set, so this reaches nothing but the v2 branch
+   * below.
+   *
+   * A fourth optional parameter rather than an options object, because every
+   * existing caller — the worker, the conformance bridge, four test suites —
+   * passes three arguments, and widening is the change that cannot disturb the
+   * v1 path.
+   */
+  shares?: string[]
 ): Promise<DecryptResult> {
   validateCommon(encryptedBuffer, password, false);
-  if (!password && !keyFileBuffer) {
-    throw new KeymakerError("credential-required", "A password or key file is required for decryption.");
+  const hasShares = !!shares && shares.length > 0;
+  if (!password && !keyFileBuffer && !hasShares) {
+    throw new KeymakerError(
+      "credential-required",
+      "A password, key file, or set of recovery shares is required for decryption."
+    );
   }
   if (!crypto.subtle) {
     throw new Error("Web Crypto API not available.");
@@ -1015,7 +1030,8 @@ export async function decryptData(
       const result = await decryptKeym2(
         fullData,
         password,
-        keyFileBuffer ? new Uint8Array(keyFileBuffer) : null
+        keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+        shares
       );
       return {
         data: result.data.buffer.slice(
