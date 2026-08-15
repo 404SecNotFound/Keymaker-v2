@@ -236,7 +236,7 @@ Only after Phase 3 ships. Ordered by value.
 |---|---|---|
 | 1 | **Shamir k-of-n key splitting** — **shipped**, §4.1 below | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
 | 2 | **Paper vault print kit** — **shipped**, §4.2 below | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Composes directly with 4.1, and there is now a concrete debt to pay: the share modal's Print button is `window.print()` against a screen layout, which is the weakest part of what 4.1 shipped. A share set printed from a dark-themed dialog is not a paper backup. |
-| 3 | **Self-extracting HTML decryptor** | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym.py` as the second line. Must be PBKDF2/AES-GCM only — no WASM — or it does not survive the decade. |
+| 3 | **Self-extracting HTML decryptor** — **shipped**, §4.3 below | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym2.py` as the second line. PBKDF2/AES-GCM only — no WASM — and §7.2 now says so normatively rather than as advice. |
 | 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
 | 5 | **Inheritance wizard** | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
 
@@ -326,6 +326,77 @@ the sheet's own colours under print media and passed happily with the
 `body * { visibility: hidden }` rule deleted — i.e. with the whole dark app
 printing around it, which is the entire bug 4.2 exists to fix. The test now
 asserts the app's own `main` and `h1` are hidden, and the control bites.
+
+### 4.3 Self-extracting page — what shipped
+
+**Format first.** §7.2 defines a *profile* rather than an encoding: the subset
+of KEYM v2 a reader can implement with `crypto.subtle` alone — cipher `0x00`,
+`slot_type 0x00`, `slot_kdf_id 0x00`, no key file. The subset is **forced, not
+chosen**: WebCrypto has PBKDF2, HKDF, SHA-256 and AES-GCM, has never had
+Argon2id or ChaCha20-Poly1305, and no proposal adds either.
+
+Then Python, then TypeScript, then the parity gate. Reference self-test
+203 → 225, v2 conformance 87 → 107.
+
+**The container inside a page is an ordinary container**, so `keym2.py`, the app
+and the page are three independent readers of one file. A bespoke "simplified"
+container for the artefact would have thrown that away for nothing.
+
+Four decisions worth recording:
+
+- **The page carries its own container, not a second slot on the user's.** The
+  envelope makes the other option look free — add a PBKDF2 slot beside the
+  Argon2id one and the page opens the same file — and it is wrong, for a reason
+  that generalises past this feature: **a container is only as strong as its
+  weakest slot.** Anyone holding those bytes would attack the PBKDF2 slot and
+  ignore the other, so enabling the convenience would silently downgrade the
+  real backup. Slots are an unlock-path mechanism, not a strength mechanism.
+- **Key files are refused rather than supported.** Embedding one puts both
+  factors in a single file, which is the property a key file exists to deny;
+  dropping it writes a weaker container than the user believes they have.
+  Refusing is the only honest third option.
+- **Shamir is excluded for a smaller reason, and it is named** because GF(256)
+  is forty lines and the exclusion looks over-cautious beside two that are
+  forced. §4.6's share *text* is a second encoding, and every line of it in the
+  page has to still be right in 2040 with nobody to fix it.
+- **Sentinel comments, not "find the `keym2:` in the file".** The page's own
+  prose contains that string — it tells the reader to run `keym2.py` — so a
+  scanner finds a sentence before it finds the backup. Comments rather than a
+  `<script>` or a data attribute keep the armor as *visible text*, which is the
+  case the artefact exists for: if the JavaScript will not run, the container is
+  still there in a text editor. A browser test reads it back with JavaScript
+  disabled entirely.
+
+**The UI names its own refusal.** Argon2id is the recommended default, so most
+containers cannot become a page — and the export does not disappear for them, it
+says which change would allow one and states the trade in both directions.
+Hiding it would make the feature invisible to the majority.
+
+**Found by running it rather than reading it.** The decryptor's element handles
+were `var status = …`, and `window.status` is a legacy *string* property, so the
+element was coerced and every later use failed on a string. Invisible to review,
+to `tsc` and to the conformance suite; a browser found it on the first click.
+
+**Two conformance gaps found by controls that failed to bite.** The suite never
+checked the key-file exclusion against the TypeScript, and never handed its
+extractor a page it was supposed to refuse — so removing either check changed
+nothing. Both are covered now. A third control appeared not to bite because a
+sentinel mismatch *crashed* the suite instead of naming the disagreement, which
+is the lesson `bridge()` already records, now applied to the section that needed
+it.
+
+**And one redundancy the controls exposed as untestable.** `extract` stripped
+whitespace across the whole armor body, which `dearmor` then did again — so
+deleting the first copy was unobservable and no control could be written for it.
+It now strips only the ends, which is the part with an actual job: letting the
+prefix check see the prefix.
+
+**A 4.2 gap closed on the way past.** §7.1 requires a paper part pasted into the
+container field to be reported as *part i of n*; the encoding and
+`looksLikePaperPart` shipped, and nothing ever called them. The rule was
+unimplemented in the shipping UI. It is wired now, beside §7.2's own wrong-box
+paste — which extracts and proceeds rather than reporting, because unlike a
+share, a page in that box *can* be used.
 
 ---
 
@@ -848,10 +919,12 @@ Phase 5.1 The OOM crash (U4)           ─ done ─  jumped the queue, see below
 Phase 5  UAT remediation               ─ done ─  26 of 28; U14 refused, U27 parked
          └ correctness · a11y second pass · polish
 Phase 4.1 Shamir k-of-n                ─ done ─  format · reference · parity · UI
-Phase 6  Make the claims checkable     ──────    version · release · verify page · README · mobile
-Phase 7  Documentation                 ──────    walkthrough · trust postures · limitations
-Phase 4  The rest of what v2 unlocks   ──────    print kit · self-extracting HTML · passkey · wizard
-Phase 8  Outreach                      ──────    gated on 6
+Phase 6  Make the claims checkable     ─ done ─  version · release · verify page · README · (6.5 owner)
+Phase 7  Documentation                 ─ done ─  walkthrough · trust postures · limitations
+Phase 4.2 Paper vault print kit        ─ done ─  §7.1 parts · the sheet · the debt paid
+Phase 4.3 Self-extracting page         ─ done ─  §7.2 subset · the page · three readers, one file
+Phase 4  The rest of what v2 unlocks   ──────    passkey (4.4) · inheritance wizard (4.5)
+Phase 8  Outreach                      ──────    gated on 6, and on a tag existing
 ```
 
 **Phase 6 goes before the rest of Phase 4, and that reverses the usual order.**
