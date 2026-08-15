@@ -38,6 +38,7 @@ of v2, none of which any other suite could have noticed:
 from __future__ import annotations
 
 import base64
+import re
 import subprocess
 import sys
 import tempfile
@@ -280,12 +281,126 @@ def main() -> int:
             r = cli(version, ["inspect", "--in", str(junk)])
             check(r.returncode != 0, f"v{version} non-container rejected by inspect")
 
+    walkthrough()
+
     print(f"\n{passed} passed, {failed} failed")
     if failed:
-        print("RECOVERY PROCEDURE BROKEN — docs/RECOVERY.md no longer describes reality.")
+        print("RECOVERY PROCEDURE BROKEN — the documents no longer describe reality.")
         return 1
-    print("Recovery procedure verified: docs/RECOVERY.md works as written.")
+    print("Verified: docs/RECOVERY.md and docs/WALKTHROUGH.md work as written.")
     return 0
+
+
+# ----------------------------------------------------------------------------
+# docs/WALKTHROUGH.md — Part 3, executed rather than transcribed
+# ----------------------------------------------------------------------------
+
+WALKTHROUGH = ROOT / "docs" / "WALKTHROUGH.md"
+
+# Needs the network and a package index. Skipped rather than dropped silently,
+# and *reported* as skipped, because a suite that quietly stops covering a step
+# reads exactly like one that covers it.
+SKIP_PREFIXES = ("pip install",)
+
+
+def bash_blocks(markdown: str) -> list[str]:
+    """Every ```bash fence in a document, in order."""
+    blocks, inside, current = [], False, []
+    for line in markdown.splitlines():
+        if line.strip() == "```bash":
+            inside, current = True, []
+        elif inside and line.strip() == "```":
+            inside = False
+            blocks.append("\n".join(current))
+        elif inside:
+            current.append(line)
+    return blocks
+
+
+def walkthrough() -> None:
+    """
+    Run Part 3 of the walkthrough the way a reader would, from the document.
+
+    Extracted rather than re-typed here, for the same reason the release notes
+    are generated from docs/VERIFYING.md: a second hand-maintained copy of a
+    command is free to drift from the one people actually follow, and the copy
+    that drifts is the one nobody runs. This *is* the copy people follow.
+
+    The container comes from the shipping encryptor, not the reference, because
+    the promise the page makes is about backups the app wrote.
+    """
+    print("\ndocs/WALKTHROUGH.md — Part 3, executed:")
+
+    try:
+        doc = WALKTHROUGH.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        check(False, "docs/WALKTHROUGH.md exists")
+        return
+
+    commands = [
+        line.strip()
+        for block in bash_blocks(doc)
+        for line in block.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    runnable = [c for c in commands if not c.startswith(SKIP_PREFIXES)]
+    skipped = [c for c in commands if c.startswith(SKIP_PREFIXES)]
+
+    check(len(runnable) >= 3,
+          f"the walkthrough carries runnable commands ({len(runnable)} found)")
+    for c in skipped:
+        print(f"  skip {c}  (needs a package index; the libraries are a prerequisite, not a step)")
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+
+        # The page tells the reader to keep a copy of keym2.py beside the
+        # backup, and then runs `python3 keym2.py` — not a path into a clone.
+        # Reproduce that exactly: the file sits in the working directory.
+        (tmp / "keym2.py").write_bytes(SCRIPTS[2].read_bytes())
+
+        produced = js_encrypt(2, SECRET, "argon2id", "chained", None, tmp, tag="-walk")
+        vault = tmp / "vault.keym"
+        vault.write_bytes(produced.read_bytes())
+
+        # The armored form the page offers as the alternative: the same bytes,
+        # wrapped the way the app wraps them. The page says both forms hold
+        # identical bytes, so this is built from the container rather than
+        # produced separately — if that claim stops being true, the decrypt of
+        # vault.txt below stops matching SECRET.
+        body = base64.urlsafe_b64encode(vault.read_bytes()).decode().rstrip("=")
+        wrapped = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
+        (tmp / "vault.txt").write_text("keym2:" + wrapped + "\n")
+
+        for command in runnable:
+            argv = command.split()
+            if argv[:1] == ["python3"]:
+                argv[0] = sys.executable
+            r = subprocess.run(argv, input=PASSWORD + "\n", capture_output=True,
+                               text=True, cwd=tmp)
+            check(r.returncode == 0, f"`{command}` succeeds",
+                  (r.stderr or r.stdout).strip()[:200])
+
+            # Step 5's claim: inspect reports what the app called the
+            # "Effective configuration", with no password involved.
+            if "inspect" in argv:
+                for expected in ("KEYM v2", "Argon2id", "ChaCha20-Poly1305"):
+                    check(expected in r.stdout,
+                          f"  inspect reports {expected}", r.stdout.strip()[:200])
+
+        # Step 6's claim, and the only one that matters: the bytes come back.
+        recovered = tmp / "recovered.txt"
+        check(recovered.exists(), "the walkthrough produced recovered.txt")
+        if recovered.exists():
+            check(recovered.read_bytes() == SECRET,
+                  "recovered.txt is byte-identical to what was encrypted",
+                  f"{recovered.read_bytes()[:60]!r}")
+
+        # Every screenshot the page embeds has to be a file that exists. A
+        # broken image in a walkthrough is a step the reader cannot follow.
+        for image in re.findall(r"!\[[^\]]*\]\(([^)]+)\)", doc):
+            path = (WALKTHROUGH.parent / image).resolve()
+            check(path.is_file(), f"illustration {image} exists")
 
 
 if __name__ == "__main__":

@@ -35,8 +35,10 @@ receives patches.
 Keymaker is a **client-side** browser encryption PWA. In scope:
 
 - The cryptographic core (`src/lib/crypto.ts` — frozen legacy format;
-  `src/lib/keymaker-crypto.ts` — KEYM v1) and its wire formats (IBTZ v0/v1,
-  KEYM v1). See `docs/FORMAT.md`.
+  `src/lib/keymaker-crypto.ts` — KEYM v1; `src/lib/keym-v2.ts` and
+  `src/lib/keym-v2-shamir.ts` — KEYM v2, the format the app writes today) and
+  its wire formats (IBTZ v0/v1, KEYM v1, KEYM v2). See `docs/FORMAT.md` and
+  `docs/FORMAT-V2-DESIGN.md`.
 - Key derivation, nonce/salt generation, memory handling (`secureErase`),
   and authentication of ciphertext and header metadata (AAD).
 - The static export's content security policy and supply-chain (dependency)
@@ -46,12 +48,24 @@ Out of scope / known limitations:
 
 - **Endpoint compromise.** All cryptography runs in the user's browser. If
   the device is compromised (malware, malicious extensions, keyloggers), no
-  web app can protect the plaintext or password.
+  web app can protect the plaintext or password. Browser extensions are worth
+  naming separately: they run inside the page's origin and the CSP does not
+  constrain them, so an extension with access to the tab can read a secret
+  before it is ever encrypted.
+- **The clipboard, and the screen.** Copying puts a secret somewhere every
+  other application can read and, on some platforms, somewhere it syncs off the
+  device. Keymaker clears its own clipboard writes on a timer, best-effort.
+  Secret fields blur by default, which is a defence against a passing glance
+  and not against a camera.
 - **JavaScript memory hygiene is best-effort.** `secureErase` zero-fills
   buffers, but the JS engine/GC may retain copies of secrets. WebCrypto keys
   are non-extractable where the API allows.
-- **Deniability / traffic analysis.** File sizes are not padded; ciphertext
-  length leaks plaintext length (plus a small constant).
+- **Deniability / traffic analysis.** Containers are not padded, so their
+  length reveals the plaintext's length — to within a 1 MiB chunk for KEYM v2,
+  plus a small constant for v1. If the *size* of what is being protected is
+  itself sensitive, the cipher does not help. `docs/FORMAT-V2-DESIGN.md` §8
+  records why a padding scheme was deliberately left out of v2 rather than
+  bundled into it.
 - **Password strength.** Weak passwords undermine any KDF. Argon2id
   (memory-hard) is the default recommendation, but cannot fix a weak
   password.

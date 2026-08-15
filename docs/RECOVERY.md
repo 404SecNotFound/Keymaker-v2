@@ -9,6 +9,11 @@ this page is for. Your data is not tied to the app that produced it.
 Everything below uses one small Python file and two mainstream libraries. No
 browser, no Node, no npm, no network.
 
+If nothing has gone wrong yet and you are reading to find out how the whole
+thing works, [WALKTHROUGH.md](WALKTHROUGH.md) is the illustrated version — a
+first encryption through to this page's procedure. This one is the emergency
+card: shorter, printable, and assuming the worst.
+
 ---
 
 ## What you need

@@ -36,6 +36,7 @@ build is a static export that makes zero network requests after load, enforced b
 - [Seed-phrase awareness](#seed-phrase-awareness)
 - [Dice entropy calculator](#dice-entropy-calculator)
 - [Full feature list](#full-feature-list)
+- [A backup, end to end](#a-backup-end-to-end)
 - [Security model](#security-model)
 - [Run it locally](#run-it-locally)
 - [Documentation](#documentation)
@@ -294,6 +295,50 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 
 ---
 
+## A backup, end to end
+
+[**docs/WALKTHROUGH.md**](docs/WALKTHROUGH.md) is the illustrated version: an
+empty browser tab through to opening the file years later with Python and no
+website. Every command in it is executed on each change and every screenshot is
+generated from the production build, so it cannot quietly stop being true.
+
+---
+
+## Three ways to run this, and what each one costs
+
+They are not the same trust model, and the difference deserves stating plainly
+rather than being left in a footnote.
+
+| | What you trust | What it costs |
+|---|---|---|
+| **Hosted** — [the live site](https://404secnotfound.github.io/Keymaker-v2/) | Whoever serves the bundle, **on every visit** | Nothing. Open a URL |
+| **Downloaded and verified** — a [release](https://github.com/404SecNotFound/Keymaker-v2/releases), checked, then opened from disk | Whoever served it **once**, at a moment you chose and checked | One download, two commands, and re-doing it on upgrade |
+| **Built from source** | The toolchain and the source you read | Node, an `npm ci`, and the willingness to read a diff |
+
+**Hosted is the weakest, and it is the default**, because a tool nobody can open
+protects nothing. But be clear what it means: the JavaScript is fetched fresh
+every time, so a compromise of the host — or of anything between the host and
+you — is a compromise of every future session, not only the one it happened in.
+Verifying today says nothing about tomorrow's visit.
+
+**Downloaded-and-verified is the real upgrade**, and it is why releases exist.
+Fetch the tarball, check `SHA256SUMS` against its Sigstore signature, extract,
+and open `index.html` from disk. From then on the code is a file you control:
+nothing re-fetches it, and an attacker needs your machine rather than the host.
+[docs/VERIFYING.md](docs/VERIFYING.md) has the commands, and the in-app
+[verify page](https://404secnotfound.github.io/Keymaker-v2/verify.html) prints
+them filled in for the build in front of you.
+
+**Built-from-source removes the last party**, at the cost of trusting Node and
+the dependency tree instead. The build is reproducible and CI enforces that, so
+there is also a fourth posture — build it, compare your manifest to the
+deployment's, and keep using the hosted one having *checked* it rather than
+adopted it.
+
+None of the three protects a compromised device. That is the next section.
+
+---
+
 ## Security model
 
 | Property | Strength of guarantee |
@@ -305,9 +350,38 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 | Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
 | Clipboard is cleared | **Best-effort.** The browser may refuse the write. |
 
-Keymaker protects **data at rest**. It cannot defend against a compromised device, a
-malicious browser extension, a keylogger, or a weak password. For the highest-value
-secrets, run it offline on a machine that never rejoins a network.
+### What this does not protect against
+
+Keymaker protects **data at rest**. Named plainly, because a vague disclaimer is
+a way of not saying anything:
+
+- **A compromised device.** Malware, a keylogger, or a hostile OS sees the
+  plaintext and the password as you type them. No web app can fix this, and one
+  that implied otherwise would be lying.
+- **A malicious browser extension.** Extensions run inside the page's origin
+  with permission to read the DOM. The CSP does not apply to them. An extension
+  with access to this tab can read a secret before it is ever encrypted.
+- **The clipboard.** Copying a container or a password puts it somewhere every
+  other app on the machine can read, and on some platforms somewhere it syncs to
+  other devices. Keymaker clears its own copies on a timer, but the browser can
+  refuse, and anything that read it in the meantime already has it.
+- **Someone looking at your screen.** Secret fields blur by default and reveal
+  toggles exist for that reason, but a shoulder, a webcam and a screen-recorder
+  all defeat it.
+- **How long your plaintext is.** The container is not padded, so its length
+  reveals the plaintext's length to within a 1 MiB chunk. If the mere *size* of
+  what you are protecting is sensitive — which document, which of two possible
+  answers — that leaks regardless of the cipher. This is stated in
+  [§8 of the format design](docs/FORMAT-V2-DESIGN.md) and a padding scheme is
+  deliberately not in v2: it is its own design with its own trade-offs.
+- **A weak password.** Argon2id makes guessing expensive; it cannot make a
+  guessable password unguessable.
+- **Forgetting the password.** There is no reset, no recovery email and nobody
+  to call. This is the failure that actually happens.
+
+For the highest-value secrets, run a
+[verified download](#three-ways-to-run-this-and-what-each-one-costs) offline, on
+a machine that never rejoins a network.
 
 Report vulnerabilities via the contact in [SECURITY.md](SECURITY.md).
 
@@ -349,14 +423,19 @@ ships in this repository.
 ```bash
 pip install cryptography argon2-cffi
 
-python3 reference/keym.py inspect --in backup.keym    # what is this file?
-python3 reference/keym.py decrypt --in backup.keym    # prompts for the password
+python3 reference/keym2.py inspect --in backup.keym   # what is this file?
+python3 reference/keym2.py decrypt --in backup.keym   # prompts for the password
 ```
 
-No browser, no Node, no npm, no network. It reads both backup forms — a
-`.keym` file or pasted `KEYM1:` text — and `inspect` reports the container's
-KDF, cipher, and whether a key file is needed **without** asking for a
-password.
+No browser, no Node, no npm, no network. `inspect` reports the container's KDF,
+cipher, and whether a key file is needed **without** asking for a password.
+
+**Two scripts, because there are two container versions.** The app writes
+**KEYM v2** and `keym2.py` reads it. Backups made before that are **v1** and
+need `keym.py`; neither script reads the other's format, and the one that
+refuses is telling you which you have.
+[docs/RECOVERY.md](docs/RECOVERY.md) is the printable procedure, and
+[docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) walks the whole path with pictures.
 
 [`docs/RECOVERY.md`](docs/RECOVERY.md) is the full procedure, written to be
 printed and stored alongside your backups. `npm run test:recovery` executes
@@ -413,9 +492,10 @@ every KDF and cipher combination, and takes a few minutes.
 |---|---|
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
-| [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Proposed KEYM v2 — design only, nothing implemented |
+| [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Normative KEYM v2 specification — the format the app writes today |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased plan: what ships next, and what was cut |
 | [`docs/VERIFYING.md`](docs/VERIFYING.md) | Checking that the site you loaded is the code you read |
+| [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md) | A backup end to end, illustrated — first encryption through to recovery |
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
