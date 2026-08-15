@@ -20,7 +20,16 @@ export default defineConfig({
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
   retries: 0,
-  reporter: process.env.CI ? [["github"], ["list"]] : [["list"]],
+  // `html` is what writes playwright-report/, which the browser workflow
+  // uploads when the job fails. Without it that upload had nothing to find, so
+  // every red run discarded its own traces and screenshots — the two artifacts
+  // that make a CI-only failure diagnosable instead of guessable from a log.
+  //
+  // The report is self-contained: attachments are copied into it, so the
+  // uploaded directory alone is enough for `npx playwright show-report`.
+  reporter: process.env.CI
+    ? [["github"], ["list"], ["html", { open: "never" }]]
+    : [["list"]],
   // Argon2id at 64 MiB is deliberately slow, and a CI runner is slower still.
   timeout: 120_000,
   expect: { timeout: 30_000 },
