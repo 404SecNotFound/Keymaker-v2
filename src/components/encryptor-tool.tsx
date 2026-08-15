@@ -129,6 +129,15 @@ const OFFSCREEN_STYLE = { position: 'absolute', left: '-9999px', top: '-9999px' 
 const KEYMAKER_REPO = "https://github.com/404SecNotFound/Keymaker-v2";
 
 /**
+ * 6.1. Injected from package.json by next.config.js, never written twice.
+ *
+ * The fallback is a visible placeholder rather than a plausible number: if the
+ * injection ever breaks, the footer should say something obviously wrong rather
+ * than confidently report a version that is not the one running.
+ */
+const APP_VERSION = process.env.KEYMAKER_APP_VERSION || "unknown";
+
+/**
  * §4.6. One share per line, blanks and `#` comments dropped.
  *
  * Comments are stripped because the reference CLI prints share sets with
@@ -1719,9 +1728,17 @@ export function EncryptorTool() {
         resultBuffer = decryptResult.data;
 
         // Info line + legacy-format nudge.
+        //
+        // 6.1. These name a *container*, so they carry the format's name and
+        // not the application's. "Keymaker v2" became ambiguous the moment the
+        // app's own version reached 2.0.0: `Format: Keymaker v2` gives a reader
+        // no way to tell whether it describes the file they just opened or the
+        // program that opened it — and this line is exactly where someone looks
+        // when a file will not open. The legacy labels below already carry
+        // their own format's name, which is why they never had the problem.
         const formatLabels: Record<DetectedFormat, string> = {
-          "keym-v1": "Keymaker v1",
-          "keym-v2": "Keymaker v2",
+          "keym-v1": "KEYM v1",
+          "keym-v2": "KEYM v2",
           "ibtz-v1": "IttyBitz v1 (legacy)",
           "ibtz-v0": "IttyBitz v0 (legacy)",
         };
@@ -3172,7 +3189,22 @@ export function EncryptorTool() {
               Recovery kit
             </button>
             <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="py-1.5 hover:underline">GitHub</a>
-            <span>Keymaker v1.0.0</span>
+            {/*
+              6.1. Two numbers, stated separately and on purpose.
+
+              The app version comes from package.json at build time, so there is
+              no second literal to drift from it. The format version is what a
+              *container* is, and moves only when the format does — §9 of the v2
+              design says that is now frozen.
+
+              Both appear because this is the line someone reads out when a file
+              will not open, and "v2" alone does not say whether they mean the
+              app or the file.
+            */}
+            <span>
+              Keymaker v{APP_VERSION}
+              <span className="text-muted-foreground/60"> · writes KEYM v2</span>
+            </span>
           </div>
         </div>
       </footer>

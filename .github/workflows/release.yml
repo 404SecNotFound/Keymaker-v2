@@ -1,0 +1,236 @@
+name: Release
+
+# Publishes a tagged release: the built site, its manifest, and the Sigstore
+# signature over that manifest.
+#
+# Roadmap 6.2. The point is not that a tarball exists — it is that `SHA256SUMS`
+# and `SHA256SUMS.sigstore` become *reachable*. Until there was a release, the
+# only copy of either lived at the root of the deployed site, which meant the
+# verification story in docs/VERIFYING.md had nothing a stranger could download
+# and check against.
+#
+# The artifact is built with the Pages base path on purpose, so it is
+# byte-comparable to the deployment. Its job is making the live site checkable,
+# not being a portable build.
+#
+# Cutting a release is `git tag -a v2.0.0 && git push origin v2.0.0`. Use an
+# *annotated* tag: its message becomes the "What changed" section, and the
+# person cutting the release is the right author for that. The version in the
+# tag must match package.json — scripts/release-notes.mjs refuses otherwise,
+# which is the cheap place to catch it, since a published release is immutable.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+# No workflow-level permissions. Each job takes only what it needs, so the job
+# running untrusted transitive install scripts via `npm ci` never holds a token
+# that can mint an OIDC identity or write to the repository. Same reasoning as
+# deploy.yml, and it matters more here: this workflow's identity is what the
+# published verification command names.
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  NEXT_TELEMETRY_DISABLED: "1"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't persist the GITHUB_TOKEN in .git/config where dependency
+          # install scripts could read it.
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # Fail in the first thirty seconds rather than after a four-minute build
+      # and a Sigstore signature. This runs the same generator `publish` uses,
+      # so there is no second copy of the rule to drift: it rejects a ref that
+      # is not `v<package.json version>`, and it proves the notes compose at all
+      # before anything gets signed.
+      - name: The release notes must compose for this ref
+        run: |
+          node scripts/release-notes.mjs '${{ github.ref_name }}' \
+            '${{ github.server_url }}/${{ github.workflow_ref }}' > /dev/null
+
+      - run: npm ci
+
+      # The same base path deploy.yml uses. A root build would produce a
+      # different manifest, and then the release could not be compared against
+      # the live site — which is the one thing it is for.
+      - run: npm run build
+        env:
+          KEYMAKER_BASE_PATH: /Keymaker-v2
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: site
+          path: out
+          retention-days: 1
+          include-hidden-files: true
+
+  # Signing and packaging happen here, in the job that holds `id-token: write`
+  # but has run no install scripts. Packaging is here rather than in publish so
+  # that the job holding `contents: write` installs nothing at all.
+  sign:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+
+      # No lifecycle scripts: this job holds the token, so nothing it installs
+      # is allowed to run code.
+      - run: npm ci --ignore-scripts
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: site
+          path: out
+
+      - name: Sign the build manifest
+        run: node scripts/sign-manifest.mjs
+
+      # Check the signature from the bundle alone before anything is published.
+      # The identity is this workflow on this tag, not deploy.yml on main —
+      # a release verified against the deployment's identity would pass here
+      # and fail for every user, which is the failure worth catching now.
+      - name: Verify the signature before packaging
+        run: node scripts/verify-manifest.mjs
+        env:
+          KEYMAKER_CERT_IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
+
+      # Deterministic flags so two runs of the same tag produce the same
+      # tarball. Not load-bearing for verification — SHA256SUMS covers the
+      # contents, and it travels inside — but a release artifact that changes
+      # bytes on a re-run invites a question nobody should have to answer.
+      - name: Package
+        run: |
+          set -euo pipefail
+          TAG='${{ github.ref_name }}'
+          cp -r out "keymaker-$TAG"
+          tar --sort=name --owner=0 --group=0 --numeric-owner \
+              --mtime='UTC 1970-01-01' \
+              -cf - "keymaker-$TAG" | gzip -n -9 > "keymaker-$TAG.tar.gz"
+
+      # Run the first command the release notes will print, against the archive
+      # a user will actually download. `sha256sum` is not this project's code,
+      # which is the property that makes the check worth anything.
+      - name: Verify the packaged archive the way the notes tell users to
+        run: |
+          set -euo pipefail
+          TAG='${{ github.ref_name }}'
+          mkdir -p /tmp/unpack && cd /tmp/unpack
+          tar -xzf "$GITHUB_WORKSPACE/keymaker-$TAG.tar.gz"
+          cd "keymaker-$TAG"
+          sha256sum -c SHA256SUMS
+
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: release-assets
+          path: |
+            keymaker-${{ github.ref_name }}.tar.gz
+            out/SHA256SUMS
+            out/SHA256SUMS.sigstore
+          retention-days: 1
+
+  publish:
+    needs: sign
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The tag message is the "What changed" section, and it only exists
+          # in the object, not the ref — so fetch tags rather than just the
+          # commit. Still no persisted credentials.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      # Deliberately no `npm ci`. scripts/release-notes.mjs reads two files and
+      # writes text; it has no dependencies. This job can write to the
+      # repository, so it installs nothing.
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: release-assets
+          path: assets
+
+      - name: Compose the release notes
+        run: |
+          set -euo pipefail
+          TAG='${{ github.ref_name }}'
+          # An annotated tag's message is the changelog.
+          #
+          # The objecttype guard is not paranoia: for a *lightweight* tag,
+          # %(contents:subject) silently falls through to the commit it points
+          # at, so without this a release would announce "Merge pull request
+          # #29" as its changelog. Better to omit the section than to fake it.
+          #
+          # subject+body rather than %(contents): the latter includes the PGP
+          # block on a signed tag, and pasting an armoured signature into the
+          # release body would be a strange thing to do to a reader.
+          : > /tmp/changelog.txt
+          if [ "$(git cat-file -t "refs/tags/$TAG" 2>/dev/null || true)" = tag ]; then
+            git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG" \
+              > /tmp/changelog.txt
+          fi
+          node scripts/release-notes.mjs "$TAG" \
+            '${{ github.server_url }}/${{ github.workflow_ref }}' \
+            /tmp/changelog.txt > /tmp/NOTES.md
+          cat /tmp/NOTES.md
+
+      # `gh` is preinstalled on GitHub-hosted runners, so this needs no
+      # third-party action. Every action in this repository is pinned to a
+      # commit SHA; adding an unpinned one to a workflow whose entire output is
+      # a supply-chain claim would be a poor trade.
+      #
+      # Re-runnable on purpose: if publishing failed after the release object
+      # was created, a re-run must converge rather than error.
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='${{ github.ref_name }}'
+          ASSETS=(
+            "assets/keymaker-$TAG.tar.gz"
+            "assets/out/SHA256SUMS"
+            "assets/out/SHA256SUMS.sigstore"
+          )
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --notes-file /tmp/NOTES.md
+            gh release upload "$TAG" --clobber "${ASSETS[@]}"
+          else
+            gh release create "$TAG" \
+              --verify-tag \
+              --title "Keymaker $TAG" \
+              --notes-file /tmp/NOTES.md \
+              "${ASSETS[@]}"
+          fi

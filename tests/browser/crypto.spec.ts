@@ -69,7 +69,16 @@ test("the self-describing header is read back on decrypt", async ({ page }) => {
   // The container states its own parameters, and the UI surfaces them.
   const body = await page.evaluate(() => document.body.innerText);
   expect(body).toContain("Argon2id");
-  expect(body).toMatch(/Format:\s*Keymaker v2/);
+  expect(body).toMatch(/Format:\s*KEYM v2/);
+
+  // 6.1. The format is named after the format. Labelling a container
+  // "Keymaker v2" collides with the application's own version, and leaves a
+  // reader unable to tell which of the two the line is about — on the very
+  // line they go looking at when a file will not open.
+  expect(
+    /Format:\s*Keymaker/.test(body),
+    "the decrypt info line named the container after the application"
+  ).toBe(false);
 });
 
 test("a wrong password is refused", async ({ page }) => {

@@ -60,6 +60,39 @@ npm ci
 node scripts/verify-manifest.mjs ./site
 ```
 
+### The same check, against a tagged release
+
+A release carries those same two files as assets, alongside a tarball of the
+build. Its purpose is to give you something to download and check *against* —
+without one, both files exist only at the root of the live site, which is the
+very thing in question.
+
+One thing changes, and only one: a release is produced by
+`.github/workflows/release.yml` running on a tag, not `deploy.yml` running on
+`main`, so the certificate identity ends in `release.yml@refs/tags/<tag>`.
+Substitute that into the command above and nothing else moves.
+
+Do not skip the substitution and do not guess at it. Neither identity verifies
+the other's artifact, and that failure looks exactly like tampering. You do not
+have to retype it either — every release's notes print the command already
+filled in, and those notes are **generated from this file** by
+`scripts/release-notes.mjs`. There is one copy of that command in this
+repository, and `scripts/release-notes-test.mjs` fails the build if a second one
+appears or if the two drift.
+
+From a clone, the same substitution works for the script:
+
+```bash
+tar -xzf keymaker-v2.0.0.tar.gz
+KEYMAKER_CERT_IDENTITY='https://github.com/404SecNotFound/Keymaker-v2/.github/workflows/release.yml@refs/tags/v2.0.0' \
+  node scripts/verify-manifest.mjs ./keymaker-v2.0.0
+```
+
+A release is built with the Pages base path, so its manifest is directly
+comparable to the deployment's — that is what the artifact is for, and it is
+also why it is not a drop-in for hosting somewhere else. Section 2 below
+rebuilds it unchanged.
+
 ### What the signature actually asserts
 
 Keyless signing means there is no long-lived private key to store, rotate, or
@@ -145,7 +178,10 @@ Do not use the deployment, and do not assume it is a bug in these instructions.
 - `verify-manifest.mjs` reporting an **unsigned** file means something is being
   served from the same origin, under the same CSP, that nobody signed for.
 - A signature failure with the correct identity flags means the manifest was not
-  signed by this repository's deploy workflow.
+  signed by this repository's workflow. Check first that the identity matches
+  the artifact in front of you — `deploy.yml@refs/heads/main` for the live site,
+  `release.yml@refs/tags/<tag>` for a release. Verifying one against the other's
+  identity fails, and it fails in a way indistinguishable from a forgery.
 
 Any of the three is worth reporting through
 [SECURITY.md](../SECURITY.md). Your existing `.keym` files are unaffected either
