@@ -1,9 +1,16 @@
 # Keymaker
 
+[![CI](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/ci.yml)
+[![Browser tests](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/browser.yml/badge.svg)](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/browser.yml)
+[![Format conformance](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/conformance.yml/badge.svg)](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/conformance.yml)
+[![Reproducible build](https://img.shields.io/badge/build-reproducible-2ea44f)](docs/VERIFYING.md)
+[![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
+
 ### [→ Launch the app](https://404secnotfound.github.io/Keymaker-v2/)
 
 <sub>Runs entirely in the browser. Nothing is uploaded, no account is needed, and it keeps
-working offline once loaded.</sub>
+working offline once loaded. &nbsp;·&nbsp;
+[Verify the build you are running](https://404secnotfound.github.io/Keymaker-v2/verify.html)</sub>
 
 ---
 
@@ -22,6 +29,7 @@ build is a static export that makes zero network requests after load, enforced b
 
 ## Contents
 
+- [Why Keymaker?](#why-keymaker)
 - [What's new in v2](#whats-new-in-v2)
 - [The Advanced panel](#the-advanced-panel)
 - [Self-describing containers](#self-describing-containers)
@@ -32,6 +40,55 @@ build is a static export that makes zero network requests after load, enforced b
 - [Run it locally](#run-it-locally)
 - [Documentation](#documentation)
 - [Attribution and license](#attribution-and-license)
+
+---
+
+## Why Keymaker?
+
+Four tools already do encryption well. Keymaker is not trying to replace them, and the
+comparison is only worth reading if it says where they win — so it does.
+
+| | Keymaker | [age](https://age-encryption.org/) | GPG | [Cryptomator](https://cryptomator.org/) | Typical browser tools |
+|---|---|---|---|---|---|
+| **Install needed** | none — open a URL | CLI binary | CLI + keyring | desktop/mobile app | none |
+| **Trust anchor** | **whoever serves the page** | the binary you installed | the binary you installed | the app you installed | whoever serves the page |
+| Format specified in writing | [yes](docs/FORMAT-V2-DESIGN.md) | yes | yes (RFC 4880) | yes | rarely |
+| Independent implementation you can decrypt with | [`keym2.py`](reference/keym2.py), no browser | rage and others | many | Cyberduck, Mountain Duck | almost never |
+| Signed releases | [Sigstore, keyless](docs/VERIFYING.md) | checksums + signed tags | distro-dependent | signed installers | almost never |
+| [Reproducible](docs/VERIFYING.md) build, enforced in CI | yes | — | — | — | almost never |
+| Hardware keys / smartcards | no | plugins | **yes** | no | no |
+| Whole-folder, continuous use | no | no | no | **yes** | no |
+| Works on a phone with nothing installed | **yes** | no | no | app | yes |
+| Split a secret k-of-n | **yes** ([Shamir](docs/FORMAT-V2-DESIGN.md)) | no | no | no | no |
+| Seed-phrase tooling (BIP-39, SeedQR, dice) | **yes** | no | no | no | no |
+
+A dash means *not claimed here* rather than *absent* — these projects are Go, C and Java
+respectively, and whether any given release is bit-reproducible is a question for their
+own documentation, not one this table should answer on their behalf.
+
+**Where the others are the better answer.** If you are comfortable at a terminal, `age`
+is simpler than this and has no served-bundle problem at all — its trust anchor is a
+binary you installed once and can pin. GPG is the only one here that talks to a YubiKey
+or a smartcard, and the only one whose files anything will still open in twenty years.
+Cryptomator solves a genuinely different problem: a vault you keep working inside, synced
+to cloud storage, mounted like a drive. None of those jobs is Keymaker's.
+
+**The honest weakness.** A web app has the weakest trust anchor of the four: code
+delivered fresh on every visit by whoever controls the host. That is not a footnote — it
+is the main reason to prefer a CLI. Keymaker's answer is not to deny it but to make it
+checkable: every deployment ships a signed `SHA256SUMS`, the build is byte-for-byte
+reproducible from a commit you can read, and the app tells you how to check the copy you
+were served on its own [verify page](https://404secnotfound.github.io/Keymaker-v2/verify.html).
+That narrows the gap. It does not close it, and [docs/VERIFYING.md](docs/VERIFYING.md)
+says exactly what it leaves open.
+
+**Where Keymaker is the better answer.** Someone needs to encrypt a seed phrase, a
+recovery document or a photo of a passport, on a device whose toolchain they do not
+control, without installing anything — and needs to open it again years later on a
+machine that may not have this website, this app, or a browser. That is the case the
+whole design is bent around: a specified container format, an independent Python
+implementation shipped alongside the app, and a printed recovery procedure that involves
+no software of ours at all.
 
 ---
 

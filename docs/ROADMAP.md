@@ -550,6 +550,38 @@ hands the user the commands and gets out of the way.
 the built `SHA256SUMS`. Otherwise the page becomes wrong on the first build that
 changes it, silently, and a stale hash is worse than no hash.
 
+**Shipped, with one deliberate change to the spec above.** `/verify.html` states
+the commit, the app version and the format version, prints the two commands, and
+spends its last section on what none of it proves. Reachable from the footer.
+
+**The manifest hash is not on the page, and could not honestly be.** Three
+independent reasons, found while building it:
+
+1. *Baking it is circular.* `SHA256SUMS` covers the page, so writing the digest
+   into the page changes the page, which changes the manifest, which changes the
+   digest. There is no fixed point.
+2. *Fetching it needs `connect-src 'self'`.* The policy is `connect-src 'none'`,
+   which KM-07 was raised to obtain. This is not merely a test: `apply-csp-hashes.mjs`
+   **fails the build** if the directive is anything else, and says to update the
+   claim in README.md at the same time. Confirmed by trying it.
+3. *It would prove nothing.* A digest served by the same host as the bundle it
+   describes is a number that host chose.
+
+So the gate checks the value the page does carry — the commit — against the build
+id Next embedded in the landing page's router payload. Two independent paths out
+of one `resolveBuildId()`, which is the staleness the gate was written for. Three
+further checks came with it: the commands must match `docs/VERIFYING.md`
+byte-for-byte, the page must not claim to have verified anything, and the CSP on
+that route must still be `connect-src 'none'`.
+
+Controls all confirmed: a hardcoded commit, a retyped cosign command, a "this
+build is verified" banner, and a removed footer link each fail exactly one test;
+relaxing the CSP fails the build outright.
+
+The commands come from `docs/VERIFYING.md` via `scripts/verifying-doc.cjs`, now
+shared with the release-notes generator — one extractor, three consumers, one
+hand-written copy of each command.
+
 ### 6.4 README top matter
 
 Live-demo link, CI / licence / reproducible-build badges, and a short **"Why
@@ -559,6 +591,20 @@ screenshot references already exist; badges and the comparison are the gap.
 The comparison must be honest about where the alternatives win — `age` and GPG
 are not browser tools and do not carry this project's threat model, and saying
 so is what makes the rest of the table credible.
+
+**Shipped.** Five badges (CI, browser tests across three engines, format
+conformance, reproducible build, GPL-3.0), the demo link already present, and a
+link to the verify page beside it. The comparison runs Keymaker against `age`,
+GPG, Cryptomator and typical browser tools over eleven rows, then spends three
+paragraphs on where each of the others is the better answer, on the honest
+weakness — *a web app has the weakest trust anchor of the four* — and on the
+narrow case Keymaker is actually built for.
+
+Two rows were deliberately weakened while writing it. Claims about whether other
+projects ship reproducible builds, and how many independent implementations read
+their formats, are not this repository's to make; a dash now means "not claimed
+here" and the table says so. A table that overstates a competitor's weakness is
+worth less than no table, which is the same reasoning as the item above it.
 
 ### 6.5 Mobile and PWA polish
 

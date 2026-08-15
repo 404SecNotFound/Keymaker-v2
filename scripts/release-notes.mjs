@@ -37,33 +37,15 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
+// Shared with next.config.js, which injects the same commands into the in-app
+// verify page (roadmap 6.3). One extractor, three consumers, one hand-written
+// copy of each command — in docs/VERIFYING.md.
+import verifyingDoc from './verifying-doc.cjs';
+
+const { extractBlock } = verifyingDoc;
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const ROOT = join(HERE, '..');
-
-/**
- * Pull the fenced bash block containing a given command out of the document.
- *
- * Fails loudly rather than returning something empty. A release whose notes
- * silently lost their verification section is the outcome worth preventing:
- * nobody notices a missing instruction until they need it, which is the worst
- * possible moment to discover it.
- *
- * Requiring *exactly* one match is deliberate. Two blocks would mean the
- * document grew a second copy of the command, and picking one arbitrarily would
- * be this script guessing which copy is current.
- */
-function extractBlock(doc, needle) {
-  const blocks = [...doc.matchAll(/```bash\n([\s\S]*?)```/g)].map((m) => m[1].trimEnd());
-  const found = blocks.filter((b) => b.includes(needle));
-  if (found.length !== 1) {
-    throw new Error(
-      `expected exactly one bash block in docs/VERIFYING.md containing ${JSON.stringify(needle)}, found ${found.length}. ` +
-        'The notes generator reads that document; if the command moved or was duplicated, this needs to follow it.'
-    );
-  }
-  return found[0];
-}
 
 /**
  * Compose the notes.

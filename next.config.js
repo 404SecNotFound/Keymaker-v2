@@ -55,6 +55,30 @@ function resolveBuildId() {
  */
 const appVersion = require('./package.json').version;
 
+/**
+ * The verify page's contents, resolved at build time.
+ *
+ * Roadmap 6.3. The page tells a visitor which commit the running build claims
+ * to be and hands them the commands to check that claim. Both come from
+ * somewhere authoritative rather than being typed into a component:
+ *
+ * - the commit is the same value `generateBuildId` pins the build to, so the
+ *   page cannot name a different commit than the one in the asset paths;
+ * - the commands are extracted from `docs/VERIFYING.md`, the single place they
+ *   are written by hand, for the reason the 6.2 gate gives — a verification
+ *   command that does not work is worse than none.
+ *
+ * Note what is deliberately *not* here: the manifest digest. `SHA256SUMS`
+ * covers this page, so baking its digest into the page changes the page and
+ * therefore the digest — there is no fixed point. Fetching it at runtime would
+ * need `connect-src 'self'`, and `connect-src 'none'` is a property KM-07 was
+ * raised to obtain and `platform.spec.ts` exists to keep. A digest served by
+ * the same host as the bundle it describes would prove nothing anyway; the
+ * commands are the deliverable.
+ */
+const { deploymentCommands } = require('./scripts/verifying-doc.cjs');
+const verifyCommands = deploymentCommands();
+
 const nextConfig = {
   output: 'export',
   generateBuildId: async () => resolveBuildId(),
@@ -62,7 +86,13 @@ const nextConfig = {
   // Exposed to client code so the hand-written <link> tags and the service
   // worker registration in layout.tsx can prefix themselves. Next rewrites
   // its own asset URLs, but not ones we author by hand.
-  env: { KEYMAKER_BASE_PATH: basePath, KEYMAKER_APP_VERSION: appVersion },
+  env: {
+    KEYMAKER_BASE_PATH: basePath,
+    KEYMAKER_APP_VERSION: appVersion,
+    KEYMAKER_COMMIT: resolveBuildId(),
+    KEYMAKER_VERIFY_COSIGN: verifyCommands.cosign,
+    KEYMAKER_VERIFY_SHA256SUM: verifyCommands.sums,
+  },
 };
 
 // The bundle analyzer is a Webpack-only plugin.

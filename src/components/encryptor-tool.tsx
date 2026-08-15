@@ -3190,6 +3190,19 @@ export function EncryptorTool() {
             </button>
             <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="py-1.5 hover:underline">GitHub</a>
             {/*
+              6.3. The signed manifest and the reproducible build had existed
+              for a while and were reachable only from a document in the repo —
+              the one place someone worried about the *served* bundle has no
+              particular reason to look.
+
+              `.html` rather than a bare `/verify`: the export emits verify.html
+              beside a verify/ directory of router payloads, so the
+              extensionless path resolves to a directory with no index and 404s.
+            */}
+            <a href={`${BASE_PATH}/verify.html`} className="py-1.5 hover:underline">
+              Verify this build
+            </a>
+            {/*
               6.1. Two numbers, stated separately and on purpose.
 
               The app version comes from package.json at build time, so there is
