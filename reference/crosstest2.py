@@ -167,8 +167,35 @@ def main() -> int:
                 check(f["name"], got.decode() == f["plaintext"])
             except keym2.KeymError as e:
                 check(f["name"], False, str(e))
-        check("v2 corpus has all six vectors", len(v2_fixtures) == 6,
-              f"found {len(v2_fixtures)}")
+
+            # §4.6. The share strings in the corpus were written by the
+            # TypeScript. Nothing else in this project checks that the *other*
+            # implementation can use them, and that is the whole promise a share
+            # fixture makes — the paper outlives whichever implementation
+            # printed it.
+            if "shamir" in f:
+                k = f["shamir"]["threshold"]
+                shares = f["shamir"]["shares"]
+                try:
+                    got = keym2.decrypt(blob, shares=shares[-k:])
+                    check(f"{f['name']}: python reconstructs from js-written shares",
+                          got.decode() == f["plaintext"])
+                except keym2.KeymError as e:
+                    check(f"{f['name']}: python reconstructs from js-written shares",
+                          False, str(e))
+                try:
+                    keym2.decrypt(blob, shares=shares[:k - 1])
+                    check(f"{f['name']}: k-1 js-written shares still refused", False)
+                except keym2.KeymError:
+                    check(f"{f['name']}: k-1 js-written shares still refused", True)
+
+        shamir_fixtures = [f for f in v2_fixtures if "shamir" in f]
+        # Counted rather than assumed, because the corpus is append-only and a
+        # fixture that silently stopped being listed would otherwise just stop
+        # being tested. Update deliberately when the corpus grows.
+        check("v2 corpus has all nine vectors, three of them share sets",
+              len(v2_fixtures) == 9 and len(shamir_fixtures) == 3,
+              f"found {len(v2_fixtures)} v2, {len(shamir_fixtures)} shamir")
 
         # ---------------------------------------------------------------
         # 1. Byte equality — the check that catches a writer disagreement
