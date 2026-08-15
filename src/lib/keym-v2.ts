@@ -85,9 +85,27 @@ export const KEYM2_CHUNK_SIZE = 1024 * 1024;
 /** §7. Lowercase `k` (0x6B) is what distinguishes armor from the magic (0x4B). */
 export const KEYM2_ARMOR_PREFIX = "keym2:";
 
-/** §4.4. Only 0x00 is implemented; 0x01 (passkey PRF) and 0x02 (Shamir) are
- *  reserved for Phase 4 and their layouts are deliberately unspecified until
- *  something implements them. Unknown types are skipped, never rejected. */
+/**
+ * §7. Column width for armored output. Line breaks are **not** part of the
+ * encoding — every reader strips whitespace — so this is presentation only and
+ * changing it breaks nothing.
+ *
+ * Wrapped because one unbroken line is genuinely hostile, and measurably so.
+ * A `<textarea>` laying out a single 1 MiB line blocks the main thread for
+ * ~12 400 ms; the same megabyte wrapped costs ~407 ms. Since Keymaker's armor
+ * is what a user copies out and pastes back into Decrypt, emitting one line
+ * meant the app handed people input it then choked on — the self-inflicted
+ * half of U4.
+ *
+ * 64 rather than MIME's 76: it is what PGP has always used, it survives
+ * quoted-printable mail without re-wrapping, and it fits an 80-column terminal
+ * with room for a quote marker.
+ */
+export const KEYM2_ARMOR_COLUMNS = 64;
+
+/** §4.4. 0x01 (passkey PRF) is still reserved and its layout deliberately
+ *  unspecified until something implements it. Unknown types are skipped, never
+ *  rejected — getting that wrong is a data-loss bug, not an interop one. */
 const SLOT_TYPE_PASSPHRASE = 0x00;
 /** §4.6. Same 48-byte prefix; only the slot secret's origin differs. */
 export const KEYM2_SLOT_TYPE_SHAMIR = 0x02;
@@ -1118,6 +1136,23 @@ function fromBase64Url(text: string): Uint8Array {
 
 /** §7 `keym2:<base64url-unpadded>`. */
 export function armorKeym2(container: Uint8Array): string {
+  const body = toBase64Url(container);
+  const lines: string[] = [];
+  for (let i = 0; i < body.length; i += KEYM2_ARMOR_COLUMNS) {
+    lines.push(body.slice(i, i + KEYM2_ARMOR_COLUMNS));
+  }
+  return KEYM2_ARMOR_PREFIX + lines.join("\n");
+}
+
+/**
+ * Armored text with every line break removed.
+ *
+ * For channels that are not line-oriented and where each byte costs — a QR
+ * code, where capacity is a hard cliff at QR_MAX_BYTES and newlines would be
+ * ~1.5% of pure overhead. Whitespace is not part of the encoding, so this and
+ * `armorKeym2` decode to the same container.
+ */
+export function armorKeym2Compact(container: Uint8Array): string {
   return KEYM2_ARMOR_PREFIX + toBase64Url(container);
 }
 

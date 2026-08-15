@@ -1082,6 +1082,28 @@ A share pasted into the container field is precisely the wrong-box paste this
 section exists for, so it must report *this is a share, not a container* rather
 than a version error.
 
+Armored output is **wrapped at 64 columns**. Line breaks are not part of the
+encoding — every reader strips ASCII whitespace, v2's `dearmor` explicitly and
+v1's via `atob`'s forgiving-base64 decode — so this is presentation only, needs
+no version bump, and does not change any existing container.
+
+It is not cosmetic, though. One unbroken line is measurably hostile: a
+`<textarea>` laying out a single 1 MiB line blocks the main thread for
+~12 400 ms, against ~407 ms for the same megabyte wrapped. Since armor is
+precisely what a user copies out and pastes back in to recover, emitting one
+line meant handing people input the app then choked on. 64 rather than MIME's
+76 because it is what PGP uses, it survives quoted-printable mail without
+re-wrapping, and it fits an 80-column terminal with a quote marker.
+
+A writer **MAY** emit unwrapped armor where line breaks are pure overhead — a
+QR code, where capacity is a hard cliff. Both forms decode identically.
+
+**§4.6's share text wraps differently** — groups of four separated by hyphens,
+not lines of 64 — and the difference is not inconsistency. Container armor is
+sized for a terminal and a mail client; a share is sized for someone reading it
+off paper into a keyboard, where a fixed small group is what keeps your place.
+A hyphen also lies inside QR alphanumeric mode, where a newline does not.
+
 The prefix is **case-sensitive** and matched byte-for-byte. A reader that
 accepted `KEYM2:` would reintroduce the exact collision this section removes,
 while believing it was being lenient.
