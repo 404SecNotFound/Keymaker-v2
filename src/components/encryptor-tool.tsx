@@ -392,7 +392,14 @@ const FileSelector = ({
           {icon}
         </div>
         <div className="w-full overflow-hidden">
-          <h3 className="text-[15px] font-medium text-foreground">{label}</h3>
+          {/*
+            U18. The only headings on the page are the hero h1 and this one, so
+            h3 skipped a level — a screen-reader user navigating by heading
+            hears a gap and reasonably assumes they have missed something.
+            Visual weight is set by the class, not the tag, so this changes
+            nothing on screen.
+          */}
+          <h2 className="text-[15px] font-medium text-foreground">{label}</h2>
           <p className={cn(
             "mt-1 w-full overflow-hidden truncate text-[13px]",
             selectedFile ? "font-medium text-accent" : "text-muted-foreground"
@@ -641,7 +648,11 @@ function InfoTip({ label, children }: { label: string; children: ReactNode }) {
         <button
           type="button"
           aria-label={label}
-          className="rounded-sm text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
+          // U8. The icon stays 14x14; the *target* grows to 26x26 via padding
+          // pulled straight back out with a negative margin, so nothing moves
+          // on screen and no neighbouring text reflows. WCAG 2.5.8 measures the
+          // target, not the glyph.
+          className="-m-1.5 rounded-sm p-1.5 text-muted-foreground/60 transition-colors hover:text-muted-foreground focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent"
         >
           <Info className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
@@ -1718,6 +1729,22 @@ export function EncryptorTool() {
             ? `${done} This was a legacy IttyBitz file; consider re-encrypting it in Keymaker format.`
             : done,
         });
+
+        // U13. The clear lives here rather than in the `finally`, so a failed
+        // attempt keeps what the user typed.
+        //
+        // It was in the `finally` because of B1, and that constraint is intact:
+        // the `!isStale()` guard is what stops an abandoned operation wiping a
+        // password typed since, and this is inside the same guard. What changes
+        // is only *when* a live operation clears — on success, not on every
+        // outcome.
+        //
+        // The security argument for clearing after a failure is weaker than it
+        // looks. A wrong password is not the secret, the exposure window is
+        // already bounded by the auto-lock and the panic wipe, and the cost is
+        // real: a single typo means retyping 24+ characters, which is exactly
+        // the pressure that pushes people towards shorter passwords.
+        setPassword('');
       }
     } catch (error: unknown) {
         // Which failures may be shown verbatim is decided by the crypto core's
@@ -1748,10 +1775,11 @@ export function EncryptorTool() {
           });
         }
     } finally {
-      // Only the operation that still owns the UI may touch it. A stale one
-      // clearing the password here is the data-loss half of the bug above.
+      // Only the operation that still owns the UI may touch it — a stale one
+      // writing here is the data-loss half of B1. The password clear moved to
+      // the success path (U13); the spinner has to come down on every outcome,
+      // so it stays.
       if (!isStale()) {
-        setPassword('');
         setIsLoading(false);
       }
     }
@@ -2222,7 +2250,23 @@ export function EncryptorTool() {
                   isAdvancedOpen ? "[grid-template-rows:1fr]" : "[grid-template-rows:0fr]"
                 )}
               >
-                <div className="min-h-0 overflow-hidden">
+                {/*
+                  U5. `grid-template-rows: 0fr` with `overflow-hidden` clips the
+                  panel but leaves everything inside it focusable, so a keyboard
+                  user tabbed through twelve controls they could not see — two
+                  KDF buttons, three ciphers, four sliders, and the rest.
+
+                  `inert` rather than unmounting, because unmounting would throw
+                  away the user's chosen parameters every time the panel closes,
+                  and because the collapse is animated: a `hidden` attribute
+                  would make it disappear instantly instead of sliding.
+
+                  React renders `inert` as a real attribute from 19 onwards, and
+                  as the boolean-attribute string before that; `|| undefined`
+                  keeps it absent rather than `inert="false"`, which browsers
+                  treat as *inert*.
+                */}
+                <div className="min-h-0 overflow-hidden" inert={!isAdvancedOpen || undefined}>
                   <div className="space-y-4 border-t border-white/6 px-4 pb-4 pt-4">
                     {/* KDF choice */}
                     <div className="space-y-2">
@@ -2802,13 +2846,24 @@ export function EncryptorTool() {
           {/* Card. 24px of padding either side of a 320px screen leaves 240px
               of usable width; p-5 buys back 16px where it is scarcest. */}
           <section className="glass-card rounded-[20px] p-5 sm:p-8">
-            <TabsContent value="encrypt" className="mt-0">
+            {/*
+              U18. Radix gives every TabsContent `tabIndex={0}` so a scrollable
+              panel is reachable by keyboard. Here the panels are not scrollable
+              and every control inside is focusable on its own, so it is a tab
+              stop that lands on a 566x533 div, shows no focus ring, and does
+              nothing — a keyboard user presses Tab and appears to lose focus.
+
+              -1 keeps the panel programmatically focusable (which Radix relies
+              on when switching tabs) while removing it from the sequential
+              order.
+            */}
+            <TabsContent value="encrypt" className="mt-0" tabIndex={-1}>
               {renderContent("encrypt")}
             </TabsContent>
-            <TabsContent value="decrypt" className="mt-0">
+            <TabsContent value="decrypt" className="mt-0" tabIndex={-1}>
               {renderContent("decrypt")}
             </TabsContent>
-            <TabsContent value="tools" className="mt-0">
+            <TabsContent value="tools" className="mt-0" tabIndex={-1}>
               <DiceEntropyTool />
             </TabsContent>
           </section>
@@ -2843,16 +2898,22 @@ export function EncryptorTool() {
               by seQRets (GPL-3).
             </span>
           </div>
-          <div className="flex items-center gap-3">
+          {/*
+            U8. These two are standalone footer controls, not links inside a
+            sentence, so WCAG 2.5.8's inline exception does not cover them and
+            16px tall is simply too small to hit. `py-1.5` takes both past 24px;
+            the negative margin keeps the footer's own spacing where it was.
+          */}
+          <div className="-my-1.5 flex items-center gap-3">
             <button
               type="button"
               onClick={() => setIsRecoveryOpen(true)}
-              className="flex cursor-pointer items-center gap-1.5 text-accent hover:underline"
+              className="flex cursor-pointer items-center gap-1.5 py-1.5 text-accent hover:underline"
             >
               <LifeBuoy className="h-3.5 w-3.5" />
               Recovery kit
             </button>
-            <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="hover:underline">GitHub</a>
+            <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="py-1.5 hover:underline">GitHub</a>
             <span>Keymaker v1.0.0</span>
           </div>
         </div>
