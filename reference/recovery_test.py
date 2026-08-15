@@ -372,6 +372,17 @@ def walkthrough() -> None:
         wrapped = "\n".join(body[i:i + 64] for i in range(0, len(body), 64))
         (tmp / "vault.txt").write_text("keym2:" + wrapped + "\n")
 
+        # §7.1 paper parts, pre-created for the same reason vault.keym is:
+        # someone following Part 3 already *has* their backup, in whichever
+        # form they kept it. The page presents `join` before `split` because
+        # that is the order a reader needs them — recovery first, reprinting
+        # second — and the runner supplies what recovery assumes.
+        subprocess.run(
+            [sys.executable, "keym2.py", "split", "--in", "vault.keym",
+             "--out", "parts.txt"],
+            capture_output=True, text=True, cwd=tmp, check=True,
+        )
+
         for command in runnable:
             argv = command.split()
             if argv[:1] == ["python3"]:

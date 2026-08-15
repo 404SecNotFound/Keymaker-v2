@@ -181,6 +181,26 @@ That is the whole recovery path. One Python file, two mainstream libraries, no
 browser, no Node, no npm, no network — and nothing from this project that you
 have to trust, beyond a file you can read in an afternoon.
 
+### Step 7 — if your backup is on paper
+
+If you printed the paper vault instead of keeping a file, scan every symbol.
+Each one decodes to a line starting `KMPART1:`. Put them all in one file, one
+per line, and join them — order does not matter, each part says which it is:
+
+```bash
+python3 keym2.py join --in parts.txt --out vault.keym
+```
+
+You can go the other way too, to reprint a backup you still have:
+
+```bash
+python3 keym2.py split --in vault.keym --out parts.txt
+```
+
+Every part is needed. This is not a k-of-n share set — those are a different
+thing, and `join` will tell you which parts are missing rather than handing you
+a container that fails to open for reasons you cannot see.
+
 ### If it does not work
 
 The error will not tell you *which* input was wrong, and that is deliberate: an

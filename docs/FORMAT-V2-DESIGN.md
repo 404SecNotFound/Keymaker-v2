@@ -1112,6 +1112,60 @@ Base64url without padding, so the armored form survives being pasted into a
 URL, a filename, or a QR code without escaping — and so `=` never has to be
 stripped by hand from a backup someone is trying to recover.
 
+### 7.1 Paper parts
+
+A container of any interesting size does not fit in one QR code. Version 40 at
+error-correction level L holds 2,953 bytes, and **level L is the wrong choice
+for paper**: it recovers 7% of a damaged symbol, and paper in a drawer for a
+decade gets folded, stained, photocopied and sun-bleached. Paper wants level M
+(15%, 2,331 bytes) at least. Either way a real backup spans several symbols, so
+the format has to say how they are split and how they go back together.
+
+```
+KMPART1:<index>/<total>:<base64url-unpadded>
+```
+
+`index` is 1-based, `total` is the number of parts, both decimal without
+leading zeros. The payload is a **slice of the raw container bytes**, not of the
+armored text — slicing bytes and encoding each slice independently removes any
+question about where one base64 group ends and the next begins.
+
+Reassembly: collect the parts, require exactly one of each index in `1..total`
+with every part agreeing on `total`, sort by index, concatenate the decoded
+slices. The result is the container, byte for byte.
+
+There is deliberately **no checksum**. An AEAD already covers the whole
+container, so a mis-assembly fails authentication; a second integrity mechanism
+would add nothing except a case where the two disagree and a reader has to
+decide which to believe.
+
+**The prefix continues §7's rule rather than bending it.** The two-byte table
+above gains a third member and stays disjoint:
+
+| starts | encoding |
+|---|---|
+| `KE` | binary container, and the legacy `KEYM1:` armor |
+| `ke` | `keym2:` armor |
+| `KM` | an auxiliary text artefact — **`KMS`** a share (§4.6), **`KMP`** a paper part |
+
+`KM` is a family now rather than a single case, disambiguated at byte 2. A
+prefix inside the `ke` family — `keym2p:`, say — was the obvious alternative and
+is rejected: it would leave the container armor and a *fragment* of one
+distinguishable only at byte 6, which is exactly the "correctness depends on the
+order of two checks" problem §7 exists to remove.
+
+A part pasted into the container field is the §7 wrong-box paste again, and gets
+the same treatment: a reader **MUST** report *this is part i of n of a paper
+backup, and you need all n of them* rather than failing it as a corrupt
+container. It is the most likely wrong-box paste of the three, because someone
+reassembling a paper backup is scanning symbols one at a time and the first one
+has to go somewhere.
+
+A single-part backup is still written `KMPART1:1/1:…` rather than as plain
+armor. Special-casing `1/1` would mean an untested branch on the path that only
+ever runs for the smallest backups, and the printed page saying "part 1 of 1" is
+what stops someone searching a drawer for pages that were never printed.
+
 ## 8. What this does not fix
 
 - **Chained mode remains unproven as a combiner.** v2 does not change that and

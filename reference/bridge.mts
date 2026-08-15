@@ -55,6 +55,7 @@ import {
   decryptKeym2,
   addShamirSlotKeym2,
 } from "../src/lib/keym-v2.ts";
+import { encodePaperParts, decodePaperParts } from "../src/lib/keym-v2-paper.ts";
 
 if (!globalThis.crypto) {
   (globalThis as { crypto?: Crypto }).crypto = webcrypto as unknown as Crypto;
@@ -168,6 +169,17 @@ try {
     );
     writeFileSync(outFile, Buffer.from(container));
     writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
+  } else if (cmd === "split") {
+    // §7.1. Emitted so crosstest2.py can compare the *strings*, not only the
+    // reassembled container: transposing a slice boundary leaves reassembly
+    // correct and the two implementations' printed pages mutually unusable.
+    const parts = encodePaperParts(new Uint8Array(inputBuf), Number(flag("capacity") ?? 1734));
+    writeFileSync(outFile, parts.join("\n") + "\n");
+  } else if (cmd === "join") {
+    const lines = readFileSync(inFile, "utf8")
+      .split("\n")
+      .filter((l) => l.trim() && !l.trimStart().startsWith("#"));
+    writeFileSync(outFile, Buffer.from(decodePaperParts(lines)));
   } else if (cmd === "decrypt2") {
     // Deliberately the v2 module directly rather than decryptData(), so a
     // failure here points at the format code instead of at the dispatch. The

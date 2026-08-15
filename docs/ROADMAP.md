@@ -235,7 +235,7 @@ Only after Phase 3 ships. Ordered by value.
 | # | Feature | Why it survives |
 |---|---|---|
 | 1 | **Shamir k-of-n key splitting** — **shipped**, §4.1 below | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
-| 2 | **Paper vault print kit** — *next up in this phase* | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Composes directly with 4.1, and there is now a concrete debt to pay: the share modal's Print button is `window.print()` against a screen layout, which is the weakest part of what 4.1 shipped. A share set printed from a dark-themed dialog is not a paper backup. |
+| 2 | **Paper vault print kit** — **shipped**, §4.2 below | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Composes directly with 4.1, and there is now a concrete debt to pay: the share modal's Print button is `window.print()` against a screen layout, which is the weakest part of what 4.1 shipped. A share set printed from a dark-themed dialog is not a paper backup. |
 | 3 | **Self-extracting HTML decryptor** | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym.py` as the second line. Must be PBKDF2/AES-GCM only — no WASM — or it does not survive the decade. |
 | 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
 | 5 | **Inheritance wizard** | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
@@ -284,6 +284,48 @@ Three things that shaped it:
 **Before the UI lands, re-read *Honest framing to preserve*.** Any `k` shares
 open the container without the password, which makes each share as sensitive as
 the password itself. That belongs on the screen and on the paper, not only here.
+
+### 4.2 Paper vault — what shipped
+
+**Format first, as always.** §7.1 specifies `KMPART1:<i>/<n>:<base64url>`, a
+paper transport encoding, because a container of any interesting size does not
+fit in one QR. The prefix continues §7's disjointness rule rather than bending
+it: `KM` is now a family, `KMS` a share and `KMP` a part, separated at byte 2. A
+prefix inside the `ke` family — `keym2p:` — was the obvious choice and was
+rejected for leaving armor and a *fragment* of armor distinguishable only at
+byte 6.
+
+Then Python, then TypeScript, then the parity gate. `keym2.py` gained `split`
+and `join`; the conformance suite compares the **emitted strings**, not just the
+reassembled container, for the same reason §4.6 had to compare shares —
+transposing a slice boundary leaves both sides reassembling correctly while
+their printed pages are mutually unusable. Reference self-test 189 → 203, v2
+conformance 74 → 87.
+
+**The debt is paid.** The share modal's Print was `window.print()` against a dark
+dialog, which produced a screenshot of a modal. It now renders a real sheet:
+the container as scannable symbols, a ruled reminder line, share slips with cut
+lines and a holder field, and the procedure to open it all with `keym2.py`.
+
+Four decisions worth recording:
+
+- **Error-correction level M, not L.** The screen QR uses L, right for a phone
+  two feet away. Paper gets folded, stained and photocopied; 15% recovery for a
+  third fewer bytes is the trade that matches the medium.
+- **The hint is a ruled line, not a container field.** The roadmap asked for a
+  "password hint field". A hint stored in the ciphertext is a hint handed to
+  whoever steals the ciphertext, and it travels everywhere the file goes. On
+  paper it is exactly as exposed as the paper.
+- **No checksum on a part.** The AEAD already covers the container. A second
+  integrity mechanism only creates a case where the two disagree.
+- **A single-part backup is still `1/1`.** Special-casing it buys an untested
+  branch and a drawer search for pages that were never printed.
+
+**Found by a negative control.** The first version of the browser gate asserted
+the sheet's own colours under print media and passed happily with the
+`body * { visibility: hidden }` rule deleted — i.e. with the whole dark app
+printing around it, which is the entire bug 4.2 exists to fix. The test now
+asserts the app's own `main` and `h1` are hidden, and the control bites.
 
 ---
 
