@@ -1188,33 +1188,53 @@ Added by the slot amendment (§4):
 
 Added by the Shamir slot (§4.6):
 
-- [ ] Are the polynomial coefficients independent across all 32 byte positions,
-      demonstrated rather than asserted? — the negative control is a split that
-      shares one coefficient set across positions; it must still round-trip, and
-      a `k−1`-share attack against it must then succeed. A test that only shows
-      round-tripping proves nothing here (§4.5).
-- [ ] Does `k−1` shares yield nothing? — must be checked by attempting
-      reconstruction from every `k−1` subset and confirming each produces a
-      distinct wrong secret, not by arguing from the theorem.
+- [x] Are the polynomial coefficients independent across all 32 byte positions,
+      demonstrated rather than asserted? — ✅ and this is the row that justifies
+      the whole checklist. The control splits with one coefficient set shared
+      across positions; it **still round-trips**, and a one-share attack then
+      recovers the secret from 256 candidates. The suite carries both halves
+      permanently: the attack must succeed against the degenerate split and fail
+      against the real one. Reverting `shamir_split` to reuse coefficients fails
+      exactly one check — the one that exists for it.
+- [x] Does `k−1` shares yield nothing? — ✅ all ten 2-subsets of a 3-of-5 split
+      reconstructed; none is the secret and all ten differ from each other. By
+      enumeration, not by citing the theorem.
 - [ ] Do the Python and TypeScript implementations produce identical share bytes
       from identical coefficients, and identical containers from identical share
-      secrets?
-- [ ] Does a reader skip a Shamir slot it does not implement and still open the
-      container from a passphrase slot beside it? — this is §4.4's skip rule with
-      a real slot type behind it for the first time.
-- [ ] Is the share text encoding injective — does exactly one text decode to a
-      given share, with non-zero padding bits rejected?
-- [ ] Does a share from a different set fail on `share_set_id` rather than
-      reconstructing a plausible wrong secret?
-- [ ] Is the GF(256) multiply free of secret-indexed table lookups and
-      data-dependent branches? — reading the code, since no test can see this.
+      secrets? — **open until the TypeScript exists.**
+- [x] Does a reader skip a Shamir slot it does not implement and still open the
+      container from a passphrase slot beside it? — ✅ §4.4's skip rule with a
+      real slot type behind it for the first time, tested by narrowing the
+      implemented-types set to simulate a reader shipped before §4.6. Getting
+      this wrong is a data-loss bug: enrolling shares would make the container
+      unopenable by the passphrase still sitting in slot 0.
+- [x] Is the share text encoding injective — does exactly one text decode to a
+      given share, with non-zero padding bits rejected? — ✅ removing the padding
+      check fails exactly that test; without it each share has 16 spellings.
+- [x] Does a share from a different set fail on `share_set_id` rather than
+      reconstructing a plausible wrong secret? — ✅ two checks, and removing the
+      id comparison fails both and nothing else.
+- [x] Is the GF(256) multiply free of secret-indexed table lookups and
+      data-dependent branches? — ✅ by reading it, since no test can see this;
+      both conditionals are arithmetic masks and the only branch is on the
+      public constant 254. The suite additionally asserts the function holds no
+      large constant, which catches a later "optimisation" back to tables.
+
+One more row, added by implementing it rather than by planning it:
+
+- [x] Is "reconstruct from exactly the `k` lowest-indexed shares" observable, or
+      is it unfalsifiable prose? — ✅ it looked unfalsifiable, since genuine
+      shares agree on every subset. Corrupting a high-indexed share *with a
+      valid checksum* makes the rule the difference between recovering the
+      secret and not, and removing the sort fails that check alone.
 
 ## 11. Findings from the reference implementation
 
-`reference/keym2.py` was written from this document and nothing else, across two
-passes. Four gaps came from the first draft (F1–F4), a fifth from writing the
-TypeScript against the same prose (F5), and two more from re-deriving the
-reference against the slot amendment (F6–F7). All seven are fixed above.
+`reference/keym2.py` was written from this document and nothing else, across
+three passes. Four gaps came from the first draft (F1–F4), a fifth from writing
+the TypeScript against the same prose (F5), two more from re-deriving the
+reference against the slot amendment (F6–F7), and an eighth from deriving it
+against §4.6 (F8). All eight are fixed above.
 
 They are recorded here because the point of the exercise is the document, and a
 fix with no record of what it fixed invites the same gap back on the next edit.
@@ -1237,6 +1257,24 @@ repeating it.
 | F5 | §5.2 | Salt freshness stated as description, not requirement, though deterministic nonces make reuse catastrophic | **Normative gap** — since amended, §11.1 |
 | F6 | §6, §4.4 | Rejection condition stated as "no slot of an implemented type" — a proxy for slot-table exhaustion that disagrees with it whenever a slot has a known type but unusable parameters | **Normative gap** |
 | F7 | §4.4, §3.3 | Whether a *skipped* slot's reserved fields must still be rejected is unstated, and the two readings differ by whether a Phase 4 slot type bricks older readers | **Normative gap** |
+| F8 | §4.6, §F | Re-passwording a slot writes a *passphrase* slot, so aiming it at a share-set slot converts one and invalidates every printed share, silently | **Data loss**, tool-level |
+
+**F8 is the first finding in this project that is not about the format at all.**
+The container is fine either way: replacing one unlock path with another is
+exactly what a mutable slot table is for, and §4.3's constant wrap nonce exists
+so that it can be done holding one secret. What the amendment changed is what
+sits on the other end of a slot. Re-passwording used to move a secret that lives
+in someone's head; now it can annihilate `n` pieces of paper distributed to `n`
+people, with the same call and no output.
+
+Fixed in the reference by refusing unless `replace_slot_type=True` is passed,
+which is the same shape as `remove_slot`'s refusal to remove the last slot. It
+is recorded here rather than only in the code because any second implementation
+inherits the hazard the moment it implements §4.6, and nothing in §4.6 warns it.
+
+That the reference has this guard and the specification cannot mandate it is the
+honest position: "do not silently destroy an artifact the user is holding in
+their hand" is a property of a tool, not of a byte layout.
 
 **F5 came from writing the second implementation**, not the first: building a
 byte-equality harness forces you to ask for a fixed salt, and asking exposes

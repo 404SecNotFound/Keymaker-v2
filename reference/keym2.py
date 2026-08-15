@@ -17,6 +17,7 @@ finding rather than resolved by looking at what some other code happens to do.
     §B  constants and bounds
     §C  core header and slot table
     §D  key derivation and the envelope
+    §D2 Shamir share sets (document §4.6)
     §E  payload
     §F  slot mutation
     §G  armor and format detection
@@ -30,9 +31,9 @@ Two dependencies, pinned in requirements.txt, both for primitives only:
 §A  WHAT THE SPECIFICATION DID NOT PIN DOWN
 ================================================================================
 
-Six gaps across two passes. A1–A4 came from the first draft of the document.
-A5–A6 came from the multi-slot amendment (document §4) and are new; they are
-recorded in the document as F6 and F7.
+Seven gaps across three passes. A1–A4 came from the first draft of the document.
+A5–A6 came from the multi-slot amendment (document §4). A7 came from the Shamir
+amendment (document §4.6). They are recorded in the document as F6, F7 and F8.
 
 Only A1 can make two conforming implementations disagree on the bytes, and it is
 the reason this exercise exists.
@@ -139,6 +140,27 @@ by a rule from a different section.
     is the only place it was ever doing work.
 
 --------------------------------------------------------------------------------
+A7. SUBSTANTIVE (new; document F8) — §4.6 adds a slot type whose secret is a
+    physical artifact, and nothing warns that the existing slot operations can
+    destroy it.
+
+Re-passwording writes a *passphrase* slot. Point it at a share-set slot and it
+converts one: the container stays valid, the new password works, and every
+printed share for that set is now scrap, with no output saying so. Before §4.6
+the worst case was forgetting a password you had just replaced. Now it is `n`
+pieces of paper in `n` people's hands.
+
+The format cannot fix this — replacing one unlock path with another is exactly
+what a mutable slot table is for, and §4.3's constant wrap nonce exists so that
+it can be done holding a single secret. The hazard is that "re-password" and
+"annihilate the share set" became the same call.
+
+    RESOLVED HERE AS: ``rewrap_slot`` refuses unless ``replace_slot_type=True``,
+    the same shape as ``remove_slot``'s refusal to remove the last slot. Recorded
+    in the document as F8 so that a second implementation inherits the warning
+    rather than the bug — nothing in §4.6 itself would have told it.
+
+--------------------------------------------------------------------------------
 Not a defect, but worth a sentence in the document: ``keyfile_digest``
 concatenates without a length prefix, in a section whose subject is that
 unprefixed concatenation is ambiguous. It is fine — the prefix is a fixed
@@ -158,6 +180,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import math
 import os
 import struct
@@ -208,17 +231,27 @@ CHUNK_SIZE = 1024 * 1024
 
 KDF_PBKDF2 = 0x00
 KDF_ARGON2ID = 0x01
+KDF_HKDF = 0x02          # §3.2, added by §4.6 — no cost parameters, on purpose
 CIPHER_AES = 0x00
 CIPHER_CHACHA = 0x01
 CIPHER_CHAINED = 0x02
 
-# §4.4. Only 0x00 is implemented; 0x01 and 0x02 are reserved for Phase 4 and
-# their wire layouts are deliberately unspecified until something implements
-# them. A reader skips what it does not implement (§4.4, finding A6).
+# §4.4. 0x01's wire layout is deliberately unspecified until something
+# implements it. A reader skips what it does not implement (§4.4, finding A6).
 SLOT_TYPE_PASSPHRASE = 0x00
 SLOT_TYPE_PASSKEY_PRF = 0x01     # reserved, unimplemented
-SLOT_TYPE_SHAMIR = 0x02          # reserved, unimplemented
-IMPLEMENTED_SLOT_TYPES = frozenset({SLOT_TYPE_PASSPHRASE})
+SLOT_TYPE_SHAMIR = 0x02          # §4.6
+IMPLEMENTED_SLOT_TYPES = frozenset({SLOT_TYPE_PASSPHRASE, SLOT_TYPE_SHAMIR})
+
+# §6, and normative in both directions. A passphrase under HKDF is a password
+# with no stretching at all, and nothing in any output would reveal it; a
+# 32-byte CSPRNG secret under Argon2id is a memory-hard cost paid to defend an
+# unguessable value. Only the first is a vulnerability, but a rule that admits
+# the second invites a writer to read the pairing as advice.
+LEGAL_KDFS_FOR_SLOT_TYPE = {
+    SLOT_TYPE_PASSPHRASE: frozenset({KDF_PBKDF2, KDF_ARGON2ID}),
+    SLOT_TYPE_SHAMIR: frozenset({KDF_HKDF}),
+}
 
 # §3.3. The container flags byte is entirely reserved now; the key-file hint
 # moved to slot_flags, because it describes a slot and not a container.
@@ -241,6 +274,40 @@ INFO_AES = b"keymaker-v2-aes"
 INFO_CHACHA = b"keymaker-v2-chacha"
 INFO_SLOT_AES = b"keymaker-v2-slot-aes"
 INFO_SLOT_CHACHA = b"keymaker-v2-slot-chacha"
+
+# §4.6 domain separation. The input string differs from CTX_KDF_INPUT so that a
+# 32-byte passphrase and a 32-byte share secret can never derive the same slot
+# key, and INFO_SLOT_KEY is HKDF's info rather than a context prefix.
+CTX_SHAMIR_INPUT = b"keymaker.v2.shamir-input"
+CTX_SHARE_SET = b"keymaker.v2.share-set"
+CTX_SHARE_CHECKSUM = b"keymaker.v2.share-checksum"
+INFO_SLOT_KEY = b"keymaker.v2.slot-key"
+
+# §4.6, the share record. 42 bytes: set id, threshold, index, value, checksum.
+SHARE_SET_ID_LEN = 4
+SHARE_VALUE_LEN = 32
+SHARE_CHECKSUM_LEN = 4
+SHARE_BODY_LEN = SHARE_SET_ID_LEN + 1 + 1 + SHARE_VALUE_LEN   # 38, checksummed
+SHARE_LEN = SHARE_BODY_LEN + SHARE_CHECKSUM_LEN               # 42
+
+# §4.6. k binds on read; n is absent from the share record, so its bound binds
+# the writer only. 16 is a print-kit bound rather than a field bound — the index
+# byte allows 255 — so it can be raised without touching the encoding.
+SHAMIR_K_MIN, SHAMIR_K_MAX = 2, 16
+SHAMIR_N_MAX = 16
+
+# §4.6 share text. Crockford's alphabet, which omits I, L, O and U.
+SHARE_PREFIX = "KMSHARE1:"
+B32_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+SHARE_GROUP = 4
+# Explicitly ASCII rather than str.isspace(), which is Unicode-aware. Two
+# implementations that disagree about whether U+00A0 is whitespace disagree
+# about whether a share decodes.
+ASCII_WHITESPACE = " \t\n\r\v\f"
+
+# §4.6. GF(2^8) modulo x^8 + x^4 + x^3 + x + 1 — the AES field. 0x1B is the low
+# byte of 0x11B, which is what gets folded back in after a shift overflows.
+GF_REDUCTION = 0x1B
 
 # §6. Upper bounds are the security control and are enforced on read; lower
 # bounds are policy for new containers only, so that files written with older or
@@ -344,6 +411,8 @@ class Slot:
             params = struct.pack(">I4x", self.iterations)
         elif self.kdf_id == KDF_ARGON2ID:
             params = struct.pack(">HIBx", self.time_cost, self.memory_kib, self.parallelism)
+        elif self.kdf_id == KDF_HKDF:
+            params = b"\x00" * KDF_PARAM_LEN   # §3.2, all reserved
         else:
             raise UsageError(f"unknown kdf_id {self.kdf_id}")
         assert len(params) == KDF_PARAM_LEN
@@ -444,6 +513,16 @@ def parse_slot(record: bytes) -> Slot:
         raise _reject()
     if slot_flags & SLOT_FLAGS_RESERVED_MASK:  # §4.4 reserved bits
         raise _reject()
+    # §6, the slot_type/slot_kdf_id pairing, checked before any KDF runs. This
+    # is what makes "a passphrase slot declaring HKDF" unreachable rather than
+    # merely discouraged.
+    if kdf_id not in LEGAL_KDFS_FOR_SLOT_TYPE[slot_type]:
+        raise _reject()
+
+    if kdf_id == KDF_HKDF:
+        if params != b"\x00" * KDF_PARAM_LEN:   # §3.2, all eight reserved
+            raise _reject()
+        return Slot(slot_type, kdf_id, slot_flags, salt, wrapped_key)
 
     if kdf_id == KDF_PBKDF2:
         (iterations,) = struct.unpack(">I", params[:4])
@@ -530,8 +609,33 @@ def build_kdf_input(password: str, keyfile_bytes: Optional[bytes]) -> bytes:
     return lp(CTX_KDF_INPUT) + lp(normalized) + lp(digest)
 
 
+def build_shamir_input(share_secret: bytes) -> bytes:
+    """
+    §4.6, the slot secret for ``slot_type = 0x02``.
+
+    Same shape as build_kdf_input and a different domain string, which is the
+    entire reason a 32-byte passphrase and a 32-byte share secret cannot collide
+    into the same slot key.
+    """
+    if len(share_secret) != SHARE_VALUE_LEN:
+        raise UsageError("share secret must be 32 bytes")
+    return lp(CTX_SHAMIR_INPUT) + lp(share_secret)
+
+
 def derive_slot_key(slot: Slot, kdf_input: bytes) -> bytes:
     """§4.3. Assumes `slot` came from parse_slot, i.e. is already bounded."""
+    if slot.kdf_id == KDF_HKDF:
+        # §3.2. No cost parameters, because the secret this stretches is
+        # already 32 CSPRNG bytes and 2^256 does not get larger when multiplied
+        # by a work factor. parse_slot is what guarantees this branch is only
+        # reachable for a slot type whose secret has that property.
+        return HKDF(
+            algorithm=hashes.SHA256(),
+            length=SLOT_KEY_LEN,
+            salt=slot.salt,
+            info=INFO_SLOT_KEY,
+        ).derive(kdf_input)
+
     if slot.kdf_id == KDF_PBKDF2:
         return PBKDF2HMAC(
             algorithm=hashes.SHA256(),
@@ -638,6 +742,353 @@ def unwrap_master_key_from_slot(core: CoreHeader, record: bytes, slot: Slot,
     if len(master) != MASTER_KEY_LEN:
         return None
     return master
+
+
+# =============================================================================
+# §D2  SHAMIR SHARE SETS (§4.6)
+# =============================================================================
+#
+# Nothing below touches the container layout. A share set is a slot whose secret
+# is reconstructed from paper instead of typed; §4.3 onwards is unchanged.
+
+
+def gf_mul(a: int, b: int) -> int:
+    """
+    §4.6. Multiply in GF(2^8) modulo x^8 + x^4 + x^3 + x + 1.
+
+    Carry-less multiply-and-reduce, with both conditionals expressed as
+    arithmetic masks. §4.6 forbids the log/antilog table version: every value
+    this multiplies is a share value or a coefficient, so a table indexed by one
+    of them is a cache-timing oracle on the secret. ``-(x & 1)`` is 0 or -1, and
+    -1 & v == v for the non-negative v used here.
+    """
+    p = 0
+    for _ in range(8):
+        p ^= a & -(b & 1)
+        b >>= 1
+        high = a & 0x80
+        a = (a << 1) & 0xFF
+        a ^= GF_REDUCTION & -(high >> 7)
+    return p & 0xFF
+
+
+def gf_inv(a: int) -> int:
+    """
+    §4.6. a^254 == a^-1 in GF(2^8), by Fermat: the multiplicative group has
+    order 255.
+
+    Square-and-multiply over the *public* constant 254, so branching on the
+    exponent's bits is not a secret-dependent branch. gf_inv(0) is 0, which is
+    never reached: the only inversions here are of ``x_i ^ x_m`` for distinct
+    indices, and combine_shares rejects duplicates before it gets this far.
+    """
+    result = 1
+    for bit in (1, 1, 1, 1, 1, 1, 1, 0):   # 254, most significant bit first
+        result = gf_mul(result, result)
+        if bit:
+            result = gf_mul(result, a)
+    return result
+
+
+def shamir_split(secret: bytes, k: int, n: int, *,
+                 coefficients: Optional[bytes] = None) -> list[tuple[int, bytes]]:
+    """
+    §4.6. Split ``secret`` into ``n`` shares, any ``k`` of which reconstruct it.
+
+    Returns [(index, value)], indices 1..n.
+
+    ``coefficients`` exists for cross-implementation byte comparison and nothing
+    else — §4.5 forbids caller-supplied values in any interface meant for real
+    data, and here the reason is unusually direct: the coefficients *are* the
+    only thing standing between one share and the secret. Layout is (k-1) blocks
+    of 32 bytes, block c-1 holding a_{c,j} for every byte position j, which is
+    the convention crosstest2.py drives both implementations with.
+    """
+    if not (SHAMIR_K_MIN <= k <= SHAMIR_K_MAX):
+        raise UsageError(f"threshold must be {SHAMIR_K_MIN}..{SHAMIR_K_MAX}")
+    if not (k <= n <= SHAMIR_N_MAX):
+        raise UsageError(f"share count must be {k}..{SHAMIR_N_MAX}")
+    if len(secret) != SHARE_VALUE_LEN:
+        raise UsageError("share secret must be 32 bytes")
+
+    width = SHARE_VALUE_LEN
+    need = (k - 1) * width
+    if coefficients is None:
+        # §4.5: independently per byte position *and* per coefficient index.
+        # One draw of (k-1)*32 bytes is exactly that; the failure mode the
+        # section describes is drawing (k-1) bytes and reusing them across j.
+        coefficients = os.urandom(need)
+    elif len(coefficients) != need:
+        raise UsageError(f"expected {need} coefficient bytes for k={k}")
+
+    shares: list[tuple[int, bytes]] = []
+    for x in range(1, n + 1):
+        value = bytearray(width)
+        for j in range(width):
+            # Horner from the highest-degree coefficient down to the secret.
+            acc = 0
+            for c in range(k - 1, 0, -1):
+                acc = gf_mul(acc, x) ^ coefficients[(c - 1) * width + j]
+            value[j] = gf_mul(acc, x) ^ secret[j]
+        shares.append((x, bytes(value)))
+    return shares
+
+
+def shamir_combine(shares: list[tuple[int, bytes]]) -> bytes:
+    """
+    §4.6. Lagrange interpolation at x = 0, per byte position.
+
+    ``s_j = XOR_i  y_i,j * PROD_{m != i} x_m * inv(x_i ^ x_m)``
+
+    Both subtractions from the textbook form vanished in characteristic 2:
+    (0 - x_m) is x_m, and (x_i - x_m) is x_i ^ x_m. Transcribing the rational
+    version and leaving a minus sign in place is the classic way to get an
+    implementation that is wrong only for some inputs.
+
+    Caller-side selection: this reconstructs from exactly the shares it is
+    given. combine_shares applies §4.6's "k lowest-indexed distinct" rule.
+    """
+    if not shares:
+        raise _reject()
+    xs = [x for x, _ in shares]
+    if len(set(xs)) != len(xs):
+        raise _reject()
+    if any(x == 0 for x in xs):
+        raise _reject()
+    width = len(shares[0][1])
+    if any(len(v) != width for _, v in shares):
+        raise _reject()
+
+    out = bytearray(width)
+    for x_i, y_i in shares:
+        num, den = 1, 1
+        for x_m, _ in shares:
+            if x_m == x_i:
+                continue
+            num = gf_mul(num, x_m)
+            den = gf_mul(den, x_i ^ x_m)
+        basis = gf_mul(num, gf_inv(den))
+        for j in range(width):
+            out[j] ^= gf_mul(y_i[j], basis)
+    return bytes(out)
+
+
+def share_set_id(slot_salt: bytes) -> bytes:
+    """
+    §4.6. Derived from the slot salt, not stored.
+
+    The salt is already in the container in the clear, so this lets a reader
+    reject a share from a different set before doing any field arithmetic —
+    mixing two sets otherwise reconstructs a perfectly clean secret that happens
+    to be the wrong one, and fails at the unwrap with the same generic error as
+    a wrong password.
+    """
+    if len(slot_salt) != SALT_LEN:
+        raise UsageError("slot salt must be 32 bytes")
+    return hashlib.sha256(CTX_SHARE_SET + slot_salt).digest()[:SHARE_SET_ID_LEN]
+
+
+def _share_checksum(body: bytes) -> bytes:
+    """§4.6. Four bytes of SHA-256 over share bytes [0, 38)."""
+    return hashlib.sha256(CTX_SHARE_CHECKSUM + body).digest()[:SHARE_CHECKSUM_LEN]
+
+
+@dataclass(frozen=True)
+class Share:
+    """§4.6's 42-byte share record, parsed and validated."""
+
+    set_id: bytes
+    threshold: int
+    index: int
+    value: bytes
+
+    def pack(self) -> bytes:
+        if len(self.set_id) != SHARE_SET_ID_LEN:
+            raise UsageError("share set id must be 4 bytes")
+        if len(self.value) != SHARE_VALUE_LEN:
+            raise UsageError("share value must be 32 bytes")
+        if not (SHAMIR_K_MIN <= self.threshold <= SHAMIR_K_MAX):
+            raise UsageError(f"threshold must be {SHAMIR_K_MIN}..{SHAMIR_K_MAX}")
+        if not (1 <= self.index <= 255):
+            raise UsageError("share index must be 1..255")
+        body = self.set_id + bytes([self.threshold, self.index]) + self.value
+        assert len(body) == SHARE_BODY_LEN
+        return body + _share_checksum(body)
+
+
+def parse_share(record: bytes) -> Share:
+    """§4.6 and §6, for one share. Parsing is validation, as with Slot."""
+    if len(record) != SHARE_LEN:
+        raise _reject()
+    body, checksum = record[:SHARE_BODY_LEN], record[SHARE_BODY_LEN:]
+    # Public data, but compared in constant time so that nobody has to work out
+    # whether it is public before deciding the comparison is safe.
+    if not hmac.compare_digest(checksum, _share_checksum(body)):
+        raise _reject()
+
+    threshold = body[SHARE_SET_ID_LEN]
+    index = body[SHARE_SET_ID_LEN + 1]
+    if not (SHAMIR_K_MIN <= threshold <= SHAMIR_K_MAX):
+        raise _reject()
+    if index == 0:
+        raise _reject()
+    return Share(
+        set_id=body[:SHARE_SET_ID_LEN],
+        threshold=threshold,
+        index=index,
+        value=body[SHARE_SET_ID_LEN + 2:],
+    )
+
+
+def _b32_encode(data: bytes) -> str:
+    """§4.6. Crockford base32, no padding character, zero padding bits."""
+    nchars = (len(data) * 8 + 4) // 5
+    pad = nchars * 5 - len(data) * 8
+    bits = int.from_bytes(data, "big") << pad
+    return "".join(B32_ALPHABET[(bits >> (5 * i)) & 31] for i in range(nchars - 1, -1, -1))
+
+
+def _b32_decode(text: str, nbytes: int) -> bytes:
+    """
+    §4.6. Case-insensitive, I/L map to 1, O maps to 0, hyphens and ASCII
+    whitespace ignored, everything else rejected.
+
+    Non-zero padding bits in the final character are rejected so that one share
+    has exactly one encoding — without that check, 16 texts decode to each share
+    and a printed share is no longer something two people can compare by eye.
+    """
+    cleaned: list[int] = []
+    for ch in text:
+        if ch == "-" or ch in ASCII_WHITESPACE:
+            continue
+        u = ch.upper()
+        if u in ("I", "L"):
+            u = "1"
+        elif u == "O":
+            u = "0"
+        pos = B32_ALPHABET.find(u)
+        if pos < 0:
+            raise _reject()
+        cleaned.append(pos)
+
+    nchars = (nbytes * 8 + 4) // 5
+    if len(cleaned) != nchars:
+        raise _reject()
+
+    bits = 0
+    for pos in cleaned:
+        bits = (bits << 5) | pos
+    pad = nchars * 5 - nbytes * 8
+    if bits & ((1 << pad) - 1):
+        raise _reject()
+    return (bits >> pad).to_bytes(nbytes, "big")
+
+
+def encode_share(share: Share) -> str:
+    """§4.6 ``KMSHARE1:`` plus Crockford base32 in groups of four."""
+    body = _b32_encode(share.pack())
+    groups = [body[i:i + SHARE_GROUP] for i in range(0, len(body), SHARE_GROUP)]
+    return SHARE_PREFIX + "-".join(groups)
+
+
+def decode_share(text: str) -> Share:
+    """§4.6. The inverse, with every rejection in §6 applied."""
+    stripped = text.strip()
+    if not stripped.upper().startswith(SHARE_PREFIX):
+        raise _reject()
+    return parse_share(_b32_decode(stripped[len(SHARE_PREFIX):], SHARE_LEN))
+
+
+def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) -> bytes:
+    """
+    §4.6 and §6. Decode, validate as a set, and reconstruct the share secret.
+
+    The set-level rules live here rather than in parse_share because none of
+    them are properties of one share: agreement on k, distinct indices, and
+    "exactly the k lowest-indexed distinct shares".
+
+    That last rule is why this sorts. With genuine shares every k-subset gives
+    the same answer, so it looks like it does not matter — but with one corrupt
+    share the subsets give *different* wrong answers, and two implementations
+    that disagree about which wrong answer they produce cannot be compared by
+    the person trying to work out which share is bad.
+    """
+    if not texts:
+        raise _reject()
+    shares = [decode_share(t) for t in texts]
+
+    thresholds = {s.threshold for s in shares}
+    if len(thresholds) != 1:
+        raise _reject()
+    k = thresholds.pop()
+
+    if len({s.set_id for s in shares}) != 1:
+        raise _reject()
+    if expected_set_id is not None and not hmac.compare_digest(
+            shares[0].set_id, expected_set_id):
+        raise _reject()
+
+    indices = [s.index for s in shares]
+    if len(set(indices)) != len(indices):
+        raise _reject()
+    if len(shares) < k:
+        raise _reject()
+
+    chosen = sorted(shares, key=lambda s: s.index)[:k]
+    return shamir_combine([(s.index, s.value) for s in chosen])
+
+
+def build_shamir_slot(
+    core: CoreHeader,
+    master_key: bytes,
+    k: int,
+    n: int,
+    *,
+    salt: Optional[bytes] = None,
+    share_secret: Optional[bytes] = None,
+    coefficients: Optional[bytes] = None,
+) -> tuple[bytes, list[str]]:
+    """
+    §4.6. Build one ``slot_type = 0x02`` record and the ``n`` shares that open
+    it. Returns (slot record, share texts).
+
+    The salt has to be chosen before the shares exist, because share_set_id is
+    derived from it — which is also why enrolling a share set cannot reuse an
+    existing slot's salt without reusing its share set id.
+
+    ``share_secret`` and ``coefficients`` are for byte comparison only (§4.5).
+    """
+    if salt is None:
+        salt = os.urandom(SALT_LEN)
+    if len(salt) != SALT_LEN:
+        raise UsageError("slot salt must be 32 bytes")
+    if len(master_key) != MASTER_KEY_LEN:
+        raise UsageError("master key must be 32 bytes")
+    if share_secret is None:
+        share_secret = os.urandom(SHARE_VALUE_LEN)
+
+    draft = Slot(
+        slot_type=SLOT_TYPE_SHAMIR,
+        kdf_id=KDF_HKDF,
+        slot_flags=0,
+        salt=salt,
+        wrapped_key=b"",
+    )
+    prefix = draft.pack_prefix()
+    # Same round-trip through the reader's own validator as the passphrase path:
+    # a writer that can emit a slot its own parser rejects is worth catching
+    # here rather than in someone's hands.
+    parse_slot(prefix + b"\x00" * (MASTER_KEY_LEN + core.tag_overhead))
+
+    slot_key = derive_slot_key(draft, build_shamir_input(share_secret))
+    record = prefix + wrap_master_key(core, prefix, slot_key, master_key)
+
+    set_id = share_set_id(salt)
+    texts = [
+        encode_share(Share(set_id=set_id, threshold=k, index=x, value=value))
+        for x, value in shamir_split(share_secret, k, n, coefficients=coefficients)
+    ]
+    return record, texts
 
 
 # =============================================================================
@@ -850,29 +1301,71 @@ def encrypt(
     return assemble(core, [record], encrypt_payload(core, master_key, plaintext))
 
 
+def slot_secret_for(
+    slot: Slot,
+    *,
+    password: Optional[str],
+    keyfile_bytes: Optional[bytes],
+    shares: Optional[list[str]],
+) -> Optional[bytes]:
+    """
+    §4.1 / §4.6. The slot secret this caller can offer *this* slot, or None if
+    it holds nothing of the kind the slot wants.
+
+    This is the whole of what the Shamir slot changed about the read path: the
+    walk below is unchanged, and only the question "what secret does this slot
+    take" grew a second answer.
+    """
+    if slot.slot_type == SLOT_TYPE_PASSPHRASE:
+        if password is None:
+            return None
+        return build_kdf_input(password, keyfile_bytes)
+
+    if slot.slot_type == SLOT_TYPE_SHAMIR:
+        if not shares:
+            return None
+        try:
+            # The set id is checked against *this* slot's salt, so a share set
+            # belonging to a different Shamir slot declines rather than
+            # reconstructing a clean secret that is simply the wrong one.
+            secret = combine_shares(shares, expected_set_id=share_set_id(slot.salt))
+        except KeymError:
+            return None
+        return build_shamir_input(secret)
+
+    return None
+
+
 def recover_master_key(
     container: bytes,
-    password: str,
+    password: Optional[str] = None,
     *,
     keyfile_bytes: Optional[bytes] = None,
+    shares: Optional[list[str]] = None,
 ) -> tuple[CoreHeader, list[bytes], bytes, bytes]:
     """
     Walk the slot table until one opens, returning everything the caller needs
     to either decrypt or rewrite the container.
 
     §4.4 and finding A5: a slot is passed over when its type is not implemented,
-    when its parameters are out of bounds, or when its secret is not the one we
-    hold. All three are the same event from here — this slot did not open it —
-    and only exhausting the table is a failure.
+    when its parameters are out of bounds, when the caller holds no secret of
+    the kind it wants, or when the secret it does hold is the wrong one. All
+    four are the same event from here — this slot did not open it — and only
+    exhausting the table is a failure.
     """
     core, records, payload = parse_container(container)
-    kdf_input = build_kdf_input(password, keyfile_bytes)
+    if password is None and not shares:
+        raise UsageError("need a password or a set of shares")
 
     for record in records:
         slot = _attemptable(record)
         if slot is None:
             continue
-        master = unwrap_master_key_from_slot(core, record, slot, kdf_input)
+        secret = slot_secret_for(
+            slot, password=password, keyfile_bytes=keyfile_bytes, shares=shares)
+        if secret is None:
+            continue
+        master = unwrap_master_key_from_slot(core, record, slot, secret)
         if master is not None:
             return core, records, payload, master
 
@@ -881,9 +1374,10 @@ def recover_master_key(
 
 def decrypt(
     container: bytes,
-    password: str,
+    password: Optional[str] = None,
     *,
     keyfile_bytes: Optional[bytes] = None,
+    shares: Optional[list[str]] = None,
 ) -> bytes:
     """
     Decrypt a v2 container, or raise KeymError with a single generic message.
@@ -894,7 +1388,7 @@ def decrypt(
     caller cannot accidentally treat 899 good chunks out of 900 as a result.
     """
     core, _records, payload, master = recover_master_key(
-        container, password, keyfile_bytes=keyfile_bytes)
+        container, password, keyfile_bytes=keyfile_bytes, shares=shares)
 
     tag = core.tag_overhead
     sizes = _chunk_layout(len(payload), tag)
@@ -940,10 +1434,11 @@ def decrypt(
 
 def add_slot(
     container: bytes,
-    unlock_password: str,
+    unlock_password: Optional[str],
     new_password: str,
     *,
     unlock_keyfile: Optional[bytes] = None,
+    unlock_shares: Optional[list[str]] = None,
     new_keyfile: Optional[bytes] = None,
     kdf_id: int = KDF_ARGON2ID,
     iterations: int = 1_000_000,
@@ -955,7 +1450,8 @@ def add_slot(
 ) -> bytes:
     """Enrol a second secret, holding only the first. §5.3."""
     core, records, payload, master = recover_master_key(
-        container, unlock_password, keyfile_bytes=unlock_keyfile)
+        container, unlock_password, keyfile_bytes=unlock_keyfile,
+        shares=unlock_shares)
     if len(records) >= SLOT_COUNT_MAX:
         raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
 
@@ -966,6 +1462,42 @@ def add_slot(
         salt=salt, enforce_write_policy=enforce_write_policy,
     )
     return assemble(core, records + [record], payload)
+
+
+def add_shamir_slot(
+    container: bytes,
+    unlock_password: Optional[str],
+    k: int,
+    n: int,
+    *,
+    unlock_keyfile: Optional[bytes] = None,
+    unlock_shares: Optional[list[str]] = None,
+    salt: Optional[bytes] = None,
+    share_secret: Optional[bytes] = None,
+    coefficients: Optional[bytes] = None,
+) -> tuple[bytes, list[str]]:
+    """
+    §4.6. Enrol a share set on an existing container, holding one other secret.
+    Returns (container, share texts).
+
+    This is the composition the envelope was built for: slot 0 stays the
+    passphrase the owner uses daily, slot 1 becomes k-of-n shares for whoever
+    inherits it, neither knows the other exists, and the payload is not
+    re-encrypted however large it is.
+
+    The share texts are returned once and are not recoverable afterwards. The
+    share secret is discarded here; the only way back to it is k shares.
+    """
+    core, records, payload, master = recover_master_key(
+        container, unlock_password, keyfile_bytes=unlock_keyfile,
+        shares=unlock_shares)
+    if len(records) >= SLOT_COUNT_MAX:
+        raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
+
+    record, texts = build_shamir_slot(
+        core, master, k, n,
+        salt=salt, share_secret=share_secret, coefficients=coefficients)
+    return assemble(core, records + [record], payload), texts
 
 
 def remove_slot(container: bytes, index: int) -> bytes:
@@ -985,10 +1517,11 @@ def remove_slot(container: bytes, index: int) -> bytes:
 def rewrap_slot(
     container: bytes,
     index: int,
-    unlock_password: str,
+    unlock_password: Optional[str],
     new_password: str,
     *,
     unlock_keyfile: Optional[bytes] = None,
+    unlock_shares: Optional[list[str]] = None,
     new_keyfile: Optional[bytes] = None,
     kdf_id: int = KDF_ARGON2ID,
     iterations: int = 1_000_000,
@@ -997,13 +1530,32 @@ def rewrap_slot(
     parallelism: int = 4,
     salt: Optional[bytes] = None,
     enforce_write_policy: bool = True,
+    replace_slot_type: bool = False,
 ) -> bytes:
-    """Re-password in place. The payload is not re-encrypted — §4's first
-    consequence, and the cheapest thing the envelope buys."""
+    """
+    Re-password in place. The payload is not re-encrypted — §4's first
+    consequence, and the cheapest thing the envelope buys.
+
+    ``replace_slot_type`` is finding F8. Rewrapping always writes a passphrase
+    slot, so aiming it at a Shamir slot silently converts one and every printed
+    share for that set becomes scrap. Replacing a share set with a password is a
+    legitimate thing to want; arriving at it by asking to re-password is not.
+    """
     core, records, payload, master = recover_master_key(
-        container, unlock_password, keyfile_bytes=unlock_keyfile)
+        container, unlock_password, keyfile_bytes=unlock_keyfile,
+        shares=unlock_shares)
     if not (0 <= index < len(records)):
         raise UsageError(f"no slot at index {index}")
+
+    existing = _attemptable(records[index])
+    if (existing is not None and existing.slot_type != SLOT_TYPE_PASSPHRASE
+            and not replace_slot_type):
+        raise UsageError(
+            f"slot {index} is type 0x{existing.slot_type:02x}, not a passphrase "
+            f"slot; rewrapping writes a passphrase slot, which would invalidate "
+            f"every secret already issued for this one. Pass "
+            f"replace_slot_type=True if that is the intent."
+        )
 
     record = build_passphrase_slot(
         core, master, new_password,
@@ -1055,16 +1607,27 @@ def detect(data: bytes) -> str:
     §7 / §10's last checklist item: distinguish the encodings by inspecting
     bytes alone, with no dependence on the order the checks are written in.
 
-    The three cases are disjoint on byte 0 — ``k`` (0x6B) for v2 armor, ``K``
-    (0x4B) for the binary magic, ``I`` for legacy IBTZ — so this returns the
-    same answer under any permutation of the branches. That is the property §7
-    was written to buy, and it is worth asserting rather than assuming: v1's
-    ``KEYM1:`` armor shares all four magic bytes, which is the bug.
+    §7 as amended by §4.6: the cases are disjoint on the first *two* bytes —
+    ``ke`` for v2 armor, ``KE`` for the binary magic and the legacy ``KEYM1:``
+    armor (separated from each other at byte 4), ``KM`` for a share, ``IB`` for
+    legacy IBTZ. So this returns the same answer under any permutation of the
+    branches, which is the property §7 was written to buy.
+
+    It was one byte until the share prefix arrived. ``KMSHARE1:`` deliberately
+    does not begin ``KEYM``, because that is v1's bug — ``KEYM1:`` shares all
+    four magic bytes with the binary magic, so a text backup pasted into the app
+    reported ``unsupported version 49``.
+
+    A share is included here even though it is not a container, because the
+    wrong-box paste is the whole reason this function exists and "this is a
+    share, not a container" is the only useful thing to say about it.
     """
     if data.startswith(ARMOR_PREFIX):
         return "keym2-armor"
     if data.startswith(b"KEYM1:"):
         return "keym1-armor"
+    if data.startswith(SHARE_PREFIX.encode()):
+        return "keym2-share"
     if data.startswith(MAGIC):
         return f"keym-binary-v{data[4]}" if len(data) > 4 else "keym-binary"
     if data.startswith(b"IBTZ"):
@@ -1082,6 +1645,16 @@ def _describe_slot(index: int, record: bytes) -> list[str]:
         # Finding A6: a reader does not validate slots it cannot attempt, so
         # inspect does not pretend to know more about one than a reader would.
         return [f"  slot {index}     type 0x{record[0]:02x}, not usable by this implementation"]
+    if slot.slot_type == SLOT_TYPE_SHAMIR:
+        # No threshold and no share count: §4.6 keeps both out of the container,
+        # so inspect reports what is actually there rather than inventing it.
+        # k comes off a share when one is presented.
+        return [
+            f"  slot {index}       type 0x{slot.slot_type:02x} (Shamir share set)",
+            f"    kdf         HKDF-SHA-256",
+            f"    set id      {share_set_id(slot.salt).hex()}",
+            f"    salt        {slot.salt.hex()}",
+        ]
     kdf = (
         f"PBKDF2-HMAC-SHA-256, iterations={slot.iterations}"
         if slot.kdf_id == KDF_PBKDF2
@@ -1578,6 +2151,269 @@ def _selftest() -> int:
     check("a reused salt does not reuse the payload key",
           same_salt[0][one_slot_aes:] != same_salt[1][one_slot_aes:])
 
+    # =========================================================================
+    # §4.6 — Shamir share sets
+    # =========================================================================
+
+    secret32 = bytes(range(32))
+
+    # --- the field, against AES's own published products -------------------
+    check("gf_mul matches AES's worked example 0x57*0x83=0xc1",
+          gf_mul(0x57, 0x83) == 0xC1)
+    check("gf_mul matches AES's worked example 0x57*0x13=0xfe",
+          gf_mul(0x57, 0x13) == 0xFE)
+    check("gf_inv inverts every non-zero element",
+          all(gf_mul(a, gf_inv(a)) == 1 for a in range(1, 256)))
+    # Not a stylistic preference: §4.6 forbids the log/antilog version because
+    # every value multiplied here is a share value or a coefficient, so a table
+    # indexed by one is a cache-timing oracle. No test can see this, so this
+    # asserts the shape of the code instead of its behaviour.
+    check("gf_mul holds no lookup table",
+          not any(isinstance(c, (bytes, tuple, list)) and len(c) > 16
+                  for c in (gf_mul.__code__.co_consts or ())))
+
+    # --- round-trips over the useful (k, n) space ---------------------------
+    for k, n in ((2, 2), (2, 3), (3, 5), (5, 5), (8, 12), (16, 16)):
+        parts = shamir_split(secret32, k, n)
+        check(f"{k}-of-{n} reconstructs from the first k",
+              shamir_combine(parts[:k]) == secret32)
+        check(f"{k}-of-{n} reconstructs from the last k",
+              shamir_combine(parts[-k:]) == secret32)
+
+    # --- §10: k-1 shares must yield nothing ---------------------------------
+    #
+    # By subsets, not by citing the theorem. The theorem is about the scheme;
+    # this is about the code in this file.
+    import itertools
+    parts35 = shamir_split(secret32, 3, 5)
+    short = [shamir_combine(list(sub)) for sub in itertools.combinations(parts35, 2)]
+    check("no 2-subset of a 3-of-5 split reveals the secret",
+          all(s != secret32 for s in short))
+    check("each 2-subset of a 3-of-5 split gives a different wrong answer",
+          len(set(short)) == len(short))
+
+    # --- §4.5's negative control: coefficients reused across byte positions --
+    #
+    # The failure mode is invisible to round-trip testing, so the control has to
+    # be an attack. With one coefficient set shared across all 32 positions,
+    # share i is the secret XOR a single repeated byte, so 256 candidates
+    # exhaust it — from *one* share.
+    shared_coeffs = os.urandom(32)          # 32 bytes = a_1 for one position...
+    bad_split = shamir_split(               # ...reused for all 32 of them
+        secret32, 3, 5,
+        coefficients=bytes(shared_coeffs[c] for c in range(2) for _ in range(32)))
+    check("the degenerate split still round-trips, which is why it is dangerous",
+          shamir_combine(bad_split[:3]) == secret32)
+
+    def one_share_attack(share_value: bytes) -> bool:
+        """True if XOR-ing one repeated byte over a single share finds it."""
+        return any(bytes(b ^ c for b in share_value) == secret32 for c in range(256))
+
+    check("CONTROL: reusing coefficients across byte positions breaks it from one share",
+          one_share_attack(bad_split[0][1]))
+    check("independent coefficients survive the same attack",
+          not one_share_attack(parts35[0][1]))
+
+    # --- the share record and its text encoding -----------------------------
+    set_id = share_set_id(fixed_salt)
+    sh = Share(set_id=set_id, threshold=3, index=2, value=secret32)
+    text = encode_share(sh)
+    check("a share is 42 bytes", len(sh.pack()) == SHARE_LEN)
+    check("share text is the documented shape",
+          text.startswith("KMSHARE1:") and len(text) == len(SHARE_PREFIX) + 68 + 16)
+    check("share text round-trips", decode_share(text) == sh)
+    check("share text is entirely QR-alphanumeric",
+          all(c in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ $%*+-./:" for c in text))
+    # Crockford's whole point: the characters a human confuses are accepted as
+    # what they were meant to be, and case does not matter.
+    # Only the body is mangled: the prefix contains a "1" of its own, and
+    # KMSHAREL: is not this format.
+    confusable = text[len(SHARE_PREFIX):].lower().replace("1", "l").replace("0", "o")
+    check("Crockford confusables and case decode to the same share",
+          decode_share(SHARE_PREFIX + confusable) == sh)
+    check("whitespace and hyphens are insignificant",
+          decode_share(SHARE_PREFIX + " \n".join(text[len(SHARE_PREFIX):].split("-"))) == sh)
+
+    rejects("a share with a flipped character",
+            lambda: decode_share(text[:-2] + ("Z" if text[-2] != "Z" else "Y") + text[-1]))
+    rejects("a share truncated by one character", lambda: decode_share(text[:-1]))
+    rejects("a share with a character outside Crockford's alphabet",
+            lambda: decode_share(text[:-1] + "U"))
+    # §4.6: one share, one encoding. Without this the last character has 16
+    # spellings and two people cannot compare printed shares by eye.
+    rejects("a share whose final character carries non-zero padding bits",
+            lambda: decode_share(
+                text[:-1] + B32_ALPHABET[B32_ALPHABET.index(text[-1]) | 1]))
+
+    # --- set-level rules (§6) -----------------------------------------------
+    known_secret = bytes(range(200, 232))
+    _, texts35 = build_shamir_slot(CoreHeader(cipher_id=CIPHER_AES),
+                                   fixed_mk, 3, 5, salt=fixed_salt,
+                                   share_secret=known_secret)
+    check("combine_shares recovers the secret it was built from",
+          combine_shares(texts35[:3]) == known_secret)
+    check("combine_shares accepts more than k",
+          combine_shares(texts35) == known_secret)
+    rejects("fewer shares than the threshold", lambda: combine_shares(texts35[:2]))
+
+    # §4.6's "exactly the k lowest-indexed distinct shares", made observable.
+    #
+    # With genuine shares every k-subset agrees, so the rule looks like it
+    # cannot be tested. Corrupt one high-indexed share — with a *valid*
+    # checksum, so nothing upstream catches it — and the rule becomes the
+    # difference between recovering the secret and not.
+    corrupt_body = set_id + bytes([3, 5]) + bytes(32)
+    corrupt5 = encode_share(parse_share(corrupt_body + _share_checksum(corrupt_body)))
+    check("a corrupt high share is ignored when k good ones are present",
+          combine_shares(texts35[:3] + [corrupt5]) == known_secret)
+    check("...and that same corrupt share does change the answer if it is used",
+          shamir_combine([(1, decode_share(texts35[0]).value),
+                          (2, decode_share(texts35[1]).value),
+                          (3, decode_share(texts35[2]).value),
+                          (5, decode_share(corrupt5).value)]) != known_secret)
+    rejects("the same share supplied twice",
+            lambda: combine_shares([texts35[0], texts35[0], texts35[1]]))
+
+    other_salt = bytes(32)
+    _, other_texts = build_shamir_slot(CoreHeader(cipher_id=CIPHER_AES),
+                                       fixed_mk, 3, 5, salt=other_salt)
+    rejects("shares from two different sets mixed together",
+            lambda: combine_shares([texts35[0], texts35[1], other_texts[2]]))
+    rejects("a complete share set from the wrong slot",
+            lambda: combine_shares(other_texts[:3], expected_set_id=share_set_id(fixed_salt)))
+
+    forged = Share(set_id=set_id, threshold=4, index=4, value=secret32)
+    rejects("a share set whose members disagree about k",
+            lambda: combine_shares(texts35[:2] + [encode_share(forged)]))
+
+    # Reader-side, so the bytes are forged directly with a *valid* checksum.
+    # Going through Share.pack() would only prove the writer refuses to build
+    # one, which is a different and much weaker claim than the reader refusing
+    # to accept one somebody else built.
+    def _forge_share(threshold: int, index: int) -> bytes:
+        body = set_id + bytes([threshold, index]) + secret32
+        return body + _share_checksum(body)
+
+    for bad_k in (0, 1, 17, 255):
+        rejects(f"a forged share declaring threshold {bad_k}",
+                lambda bad_k=bad_k: parse_share(_forge_share(bad_k, 1)))
+    rejects("a forged share with index zero", lambda: parse_share(_forge_share(3, 0)))
+    check("a forged share that stays in bounds is still accepted",
+          parse_share(_forge_share(3, 7)).index == 7)
+
+    # Writer-side bounds raise UsageError rather than KeymError, because "you
+    # asked for a 1-of-3 split" is a caller mistake and not untrusted input.
+    def refuses(name: str, fn) -> None:
+        try:
+            fn()
+            check(f"refuse {name}", False)
+        except UsageError:
+            check(f"refuse {name}", True)
+
+    refuses("splitting with a threshold above the share count",
+            lambda: shamir_split(secret32, 4, 3))
+    refuses("splitting into more shares than the bound allows",
+            lambda: shamir_split(secret32, 2, SHAMIR_N_MAX + 1))
+    refuses("a 1-of-n split", lambda: shamir_split(secret32, 1, 3))
+    refuses("a split of something that is not 32 bytes",
+            lambda: shamir_split(secret32[:16], 2, 3))
+    refuses("the wrong number of explicit coefficients",
+            lambda: shamir_split(secret32, 3, 5, coefficients=os.urandom(32)))
+
+    # --- the slot, in a container -------------------------------------------
+    for cipher_id, c_name in ((CIPHER_AES, "aes"), (CIPHER_CHACHA, "chacha"),
+                              (CIPHER_CHAINED, "chained")):
+        msg = b"an inheritance, in " + c_name.encode()
+        base = encrypt(msg, pw, kdf_id=KDF_PBKDF2, cipher_id=cipher_id, **fast)
+        enrolled, share_texts = add_shamir_slot(base, pw, 3, 5)
+        opens(f"{c_name}: the passphrase still opens a container after enrolment",
+              lambda: decrypt(enrolled, pw), msg)
+        opens(f"{c_name}: three shares open it with no password",
+              lambda: decrypt(enrolled, shares=share_texts[:3]), msg)
+        opens(f"{c_name}: a different three shares open it",
+              lambda: decrypt(enrolled, shares=share_texts[2:5]), msg)
+        rejects(f"{c_name}: two shares",
+                lambda: decrypt(enrolled, shares=share_texts[:2]))
+        check(f"{c_name}: the payload was not re-encrypted by enrolment",
+              enrolled.endswith(base[9 + slot_len(cipher_id):]))
+
+    # The composition the envelope exists for, exercised rather than described:
+    # enrol shares holding only the password, then re-password holding only the
+    # shares. Neither operation has the other's secret at any point.
+    base = encrypt(b"succession", pw, kdf_id=KDF_PBKDF2, **fast)
+    enrolled, share_texts = add_shamir_slot(base, pw, 2, 3)
+    repassworded = rewrap_slot(enrolled, 0, None, pw2,
+                               unlock_shares=share_texts[:2],
+                               kdf_id=KDF_PBKDF2, **fast)
+    opens("shares can re-password a slot whose password nobody has",
+          lambda: decrypt(repassworded, pw2), b"succession")
+    rejects("the replaced password stops working",
+            lambda: decrypt(repassworded, pw))
+    opens("the shares still open the re-passworded container",
+          lambda: decrypt(repassworded, shares=share_texts[1:3]), b"succession")
+
+    # Finding F8. Rewrapping writes a passphrase slot, so pointing it at the
+    # share slot converts one and turns n printed papers into scrap. Refused by
+    # default, because "re-password" is not a request to do that.
+    refuses("rewrapping a Shamir slot without saying so",
+            lambda: rewrap_slot(enrolled, 1, pw, pw2, kdf_id=KDF_PBKDF2, **fast))
+    converted = rewrap_slot(enrolled, 1, pw, pw2, replace_slot_type=True,
+                            kdf_id=KDF_PBKDF2, **fast)
+    opens("...and does it when asked explicitly",
+          lambda: decrypt(converted, pw2), b"succession")
+    rejects("the shares stop working once their slot is deliberately replaced",
+            lambda: decrypt(converted, shares=share_texts[:2]))
+
+    # --- §4.4's skip rule, with a real slot type behind it for the first time
+    #
+    # Simulating a reader shipped before §4.6 by narrowing the implemented set.
+    # The claim being tested is a data-loss claim: enrolling shares must not
+    # make the container unopenable by the passphrase sitting in slot 0.
+    two_slot, _ = add_shamir_slot(encrypt(b"skip me", pw, kdf_id=KDF_PBKDF2, **fast),
+                                  pw, 2, 3)
+    saved_types = IMPLEMENTED_SLOT_TYPES
+    try:
+        globals()["IMPLEMENTED_SLOT_TYPES"] = frozenset({SLOT_TYPE_PASSPHRASE})
+        opens("a reader without Shamir skips the share slot and uses the passphrase",
+              lambda: decrypt(two_slot, pw), b"skip me")
+    finally:
+        globals()["IMPLEMENTED_SLOT_TYPES"] = saved_types
+
+    # --- §6's KDF/slot-type pairing, in both directions ----------------------
+    def _prefix(slot_type: int, kdf_id: int, params: bytes) -> bytes:
+        return bytes([slot_type, kdf_id, 0]) + b"\x00" * 5 + fixed_salt + params
+
+    rejects("a passphrase slot declaring HKDF",
+            lambda: parse_slot(_prefix(SLOT_TYPE_PASSPHRASE, KDF_HKDF, bytes(8))
+                               + b"\x00" * 48))
+    rejects("a Shamir slot declaring Argon2id",
+            lambda: parse_slot(_prefix(SLOT_TYPE_SHAMIR, KDF_ARGON2ID,
+                                       struct.pack(">HIBx", 1, 8, 1)) + b"\x00" * 48))
+    rejects("a Shamir slot declaring PBKDF2",
+            lambda: parse_slot(_prefix(SLOT_TYPE_SHAMIR, KDF_PBKDF2,
+                                       struct.pack(">I4x", 1000)) + b"\x00" * 48))
+    rejects("an HKDF slot with a non-zero parameter block",
+            lambda: parse_slot(_prefix(SLOT_TYPE_SHAMIR, KDF_HKDF,
+                                       b"\x00" * 7 + b"\x01") + b"\x00" * 48))
+
+    # --- determinism, for the cross-implementation comparison ----------------
+    fixed_secret = bytes(range(100, 132))
+    fixed_coeffs = bytes(range(64))
+    twice_shamir = [
+        build_shamir_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk, 3, 5,
+                          salt=fixed_salt, share_secret=fixed_secret,
+                          coefficients=fixed_coeffs)
+        for _ in range(2)
+    ]
+    check("explicit secret and coefficients give byte-identical slots and shares",
+          twice_shamir[0] == twice_shamir[1])
+    check("a share set does not repeat itself by default",
+          build_shamir_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk, 3, 5)[1]
+          != build_shamir_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk, 3, 5)[1])
+
+    check("a share is recognised as a share and not as a container",
+          detect(text.encode()) == "keym2-share")
+
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print(f"  {'ok  ' if ok else 'FAIL'} {name}")
@@ -1635,6 +2471,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         p.add_argument("--out", dest="outfile", help="output path (default: stdout)")
         p.add_argument("--armor", action="store_true",
                        help="encrypt: emit keym2: text. decrypt: expect it.")
+        if name == "decrypt":
+            # §4.6. Repeatable, and enough of them means no password is needed
+            # at all — which is the entire point of a share set and the thing an
+            # heir will be doing with this script.
+            p.add_argument("--share", action="append", dest="shares", metavar="KMSHARE1:...",
+                           help="a share; repeat until you have the threshold")
+            p.add_argument("--shares-from", metavar="PATH",
+                           help="read shares from a file, one per line")
         if name == "encrypt":
             p.add_argument("--kdf", choices=["pbkdf2", "argon2id"], default="argon2id")
             p.add_argument("--cipher", choices=["aes", "chacha", "chained"], default="aes")
@@ -1657,6 +2501,25 @@ def main(argv: Optional[list[str]] = None) -> int:
     insp = sub.add_parser("inspect", help="describe a container without decrypting it")
     insp.add_argument("--in", dest="infile", help="input path (default: stdin)")
 
+    shr = sub.add_parser(
+        "add-shares",
+        help="enrol a k-of-n Shamir share set on an existing container (§4.6)")
+    shr.add_argument("--password", help="a password that already opens the container")
+    shr.add_argument("--key-file")
+    shr.add_argument("--in", dest="infile", help="input path (default: stdin)")
+    shr.add_argument("--out", dest="outfile", required=True,
+                     help="where to write the container with the new slot")
+    shr.add_argument("--threshold", type=int, required=True, metavar="K")
+    shr.add_argument("--shares", type=int, required=True, metavar="N")
+    shr.add_argument("--armor", action="store_true", help="input is keym2: text")
+    # Conformance only, and more directly dangerous than --salt: the
+    # coefficients are the only thing between one share and the secret (§4.5).
+    shr.add_argument("--salt", help="32-byte hex slot salt (conformance testing only)")
+    shr.add_argument("--share-secret",
+                     help="32-byte hex share secret (conformance testing only)")
+    shr.add_argument("--share-coefficients",
+                     help="(k-1)*32 hex coefficient bytes (conformance testing only)")
+
     sub.add_parser("selftest", help="round-trip this implementation against itself")
 
     args = ap.parse_args(argv)
@@ -1674,8 +2537,48 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     keyfile = open(args.key_file, "rb").read() if args.key_file else None
 
+    if args.cmd == "add-shares":
+        if args.armor or detect(data) == "keym2-armor":
+            data = dearmor(data.decode())
+        try:
+            container, texts = add_shamir_slot(
+                data, resolve_password(args.password), args.threshold, args.shares,
+                unlock_keyfile=keyfile,
+                salt=bytes.fromhex(args.salt) if args.salt else None,
+                share_secret=(bytes.fromhex(args.share_secret)
+                              if args.share_secret else None),
+                coefficients=(bytes.fromhex(args.share_coefficients)
+                              if args.share_coefficients else None),
+            )
+        except (KeymError, UsageError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        open(args.outfile, "wb").write(container)
+        # To stdout, so the shares can be piped or redirected, and never into
+        # the container file. They are printed exactly once: the share secret is
+        # gone by the time this returns, and nothing can reissue them.
+        print(f"# {args.threshold} of these {args.shares} shares open the container.")
+        print("# Each is as sensitive as the password. Anyone holding "
+              f"{args.threshold} of them needs nothing else.")
+        for i, t in enumerate(texts, 1):
+            print(f"# share {i} of {args.shares}")
+            print(t)
+        return 0
+
+    shares: Optional[list[str]] = None
+    if args.cmd == "decrypt":
+        shares = list(args.shares or [])
+        if args.shares_from:
+            shares += [ln.strip() for ln in open(args.shares_from, encoding="utf-8")
+                       if ln.strip() and not ln.lstrip().startswith("#")]
+
     try:
-        password = resolve_password(args.password, confirm=(args.cmd == "encrypt"))
+        # With enough shares in hand the password prompt would be a dead end —
+        # an heir does not have one. Skipping it is the difference between this
+        # script being usable for inheritance and merely supporting it.
+        password = (None if shares
+                    else resolve_password(args.password,
+                                          confirm=(args.cmd == "encrypt")))
     except UsageError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
@@ -1700,7 +2603,7 @@ def main(argv: Optional[list[str]] = None) -> int:
         else:
             if args.armor or detect(data) == "keym2-armor":
                 data = dearmor(data.decode())
-            out = decrypt(data, password, keyfile_bytes=keyfile)
+            out = decrypt(data, password, keyfile_bytes=keyfile, shares=shares)
     except (KeymError, UsageError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
