@@ -36,7 +36,7 @@ import {
   CipherId,
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
-import { addShamirSlotKeym2 } from "../src/lib/keym-v2.ts";
+import { addShamirSlotKeym2, addPasskeySlotKeym2 } from "../src/lib/keym-v2.ts";
 import { buildSelfExtractingPage } from "../src/lib/keym-v2-selfextract.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -199,6 +199,58 @@ async function main() {
     });
     wrote++;
     console.log(`wrote ${file} (${container.byteLength} bytes, 5 shares)`);
+  }
+
+  // §4.7. Passkey slots, one per cipher — the slot's length follows the
+  // cipher's tag overhead exactly as every other slot's does, so a
+  // cipher-specific mistake in the wrap only shows up if all three are frozen.
+  //
+  // The PRF output is recorded in the metadata for the same reason the shares
+  // are: it is the only way back into the container, no authenticator exists
+  // here to produce it again, and a fixture nobody can open is not a fixture.
+  // It stands in for a security key, which is all a PRF output ever is to the
+  // format — 32 bytes that came from somewhere the format does not model.
+  for (const cipher of CIPHERS) {
+    const name = `v2-passkey-${cipher.slug}`;
+    const file = `${name}.keym`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+      continue;
+    }
+
+    const plaintext = `Keymaker fixture — v2 passkey / ${cipher.name}`;
+    const base = await encryptContainer(
+      new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
+      PASSWORD,
+      null,
+      { kdf: PBKDF2_V2_PARAMS, cipher: cipher.id }
+    );
+    // §4.7 keeps the salt out of the record for the PRF, but the *slot* salt is
+    // still chosen by the caller here, because deriving the PRF salt needs it
+    // before the authenticator is asked anything.
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    const prfOutput = crypto.getRandomValues(new Uint8Array(32));
+    const container = await addPasskeySlotKeym2(
+      new Uint8Array(base),
+      { password: PASSWORD },
+      prfOutput,
+      salt
+    );
+    writeFileSync(join(DIR, file), Buffer.from(container));
+    fixtures.push({
+      name,
+      file,
+      version: 2,
+      kdf: "pbkdf2",
+      cipher: cipher.name,
+      keyFile: false,
+      plaintext,
+      passkey: { prfOutputHex: Buffer.from(prfOutput).toString("hex") },
+    });
+    wrote++;
+    console.log(`wrote ${file} (${container.byteLength} bytes, passkey slot)`);
   }
 
   // §7.2. A self-extracting page, frozen whole.

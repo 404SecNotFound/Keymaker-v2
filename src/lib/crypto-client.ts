@@ -205,12 +205,29 @@ export async function encryptViaWorker(
   password: string,
   keyFile: ArrayBuffer | null,
   options: KeymakerOptions,
-  shamir?: { threshold: number; count: number }
+  shamir?: { threshold: number; count: number },
+  passkey?: { prfOutput: Uint8Array; salt: Uint8Array }
 ): Promise<EncryptOutcome> {
   const w = (await ready()) ? spawn() : null;
   if (!w) {
     lastRunUsedWorker = false;
-    const out = await encryptContainer(data, password, keyFile, options);
+    let out = await encryptContainer(data, password, keyFile, options);
+    // §4.7, and the same argument the share fallback makes below: a browser
+    // where the Worker failed to start must not quietly produce a container
+    // with no passkey slot, reported as success.
+    if (passkey) {
+      const { addPasskeySlotKeym2 } = await import("./keym-v2");
+      const enrolled = await addPasskeySlotKeym2(
+        new Uint8Array(out),
+        { password, keyFile: keyFile ? new Uint8Array(keyFile) : null },
+        passkey.prfOutput,
+        passkey.salt
+      );
+      out = enrolled.buffer.slice(
+        enrolled.byteOffset,
+        enrolled.byteOffset + enrolled.byteLength
+      ) as ArrayBuffer;
+    }
     if (!shamir) return { data: out };
     // The no-worker fallback has to do the same work, or enabling shares would
     // silently produce a container with no share slot on a browser where the
@@ -241,11 +258,14 @@ export async function encryptViaWorker(
   // worker needs it twice, once for the container and once to unwrap the slot
   // it is about to add, and a detached buffer cannot be read a second time.
   const transfer: Transferable[] = [data];
-  if (keyFile && !shamir) transfer.push(keyFile);
+  // A transferred buffer is detached on this side, so it can only be handed
+  // over when nothing here needs it afterwards. Both enrolment paths re-derive
+  // from the key file inside the worker, so neither may transfer it.
+  if (keyFile && !shamir && !passkey) transfer.push(keyFile);
 
   const res = await post<Extract<CryptoResponse, { op: "encrypt"; ok: true }>>(
     w,
-    { id, op: "encrypt", data, password, keyFile, options, shamir },
+    { id, op: "encrypt", data, password, keyFile, options, shamir, passkey },
     transfer
   );
   return { data: res.data, shares: res.shares };
@@ -287,12 +307,13 @@ export async function decryptViaWorker(
   data: ArrayBuffer,
   password: string,
   keyFile: ArrayBuffer | null,
-  shares?: string[]
+  shares?: string[],
+  prfOutput?: Uint8Array
 ): Promise<DecryptOutcome> {
   const w = (await ready()) ? spawn() : null;
   if (!w) {
     lastRunUsedWorker = false;
-    return decryptData(data, password, keyFile, shares);
+    return decryptData(data, password, keyFile, shares, prfOutput);
   }
   lastRunUsedWorker = true;
 
@@ -302,7 +323,7 @@ export async function decryptViaWorker(
 
   const res = await post<Extract<CryptoResponse, { op: "decrypt"; ok: true }>>(
     w,
-    { id, op: "decrypt", data, password, keyFile, shares },
+    { id, op: "decrypt", data, password, keyFile, shares, prfOutput },
     transfer
   );
   return { data: res.data, format: res.format, keyFileUsed: res.keyFileUsed };

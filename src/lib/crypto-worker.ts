@@ -66,6 +66,13 @@ export type CryptoRequest =
        * asking the user to type it a second time.
        */
       shamir?: { threshold: number; count: number } | undefined;
+      /**
+       * §4.7. Obtained on the main thread, because `navigator.credentials` does
+       * not exist here — a Worker cannot tap a security key. The 32 bytes and
+       * the salt they were derived for come in together; everything after that
+       * is ordinary slot arithmetic.
+       */
+      passkey?: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
     }
   | {
       id: number;
@@ -75,6 +82,8 @@ export type CryptoRequest =
       keyFile: ArrayBuffer | null;
       /** §4.6. Enough of these and no password is needed at all. */
       shares?: string[] | undefined;
+      /** §4.7. Obtained on the main thread; a Worker cannot tap a security key. */
+      prfOutput?: Uint8Array | undefined;
     }
   /**
    * Time Argon2id at two memory sizes so the caller can solve for parameters
@@ -211,12 +220,30 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
         shares = enrolled.shares;
       }
 
+      if (req.passkey) {
+        // §4.7. Added after encryption for the same reason a share set is: the
+        // container has to exist before a slot can be added to it. The rule
+        // that a passkey never travels alone is satisfied structurally here —
+        // `out` already carries the passphrase slot encryptContainer wrote.
+        const { addPasskeySlotKeym2 } = await import("./keym-v2");
+        const enrolled = await addPasskeySlotKeym2(
+          new Uint8Array(out),
+          { password: req.password, keyFile: req.keyFile ? new Uint8Array(req.keyFile) : null },
+          req.passkey.prfOutput,
+          req.passkey.salt
+        );
+        out = enrolled.buffer.slice(
+          enrolled.byteOffset,
+          enrolled.byteOffset + enrolled.byteLength
+        ) as ArrayBuffer;
+      }
+
       const response: CryptoResponse = { id: req.id, ok: true, op: "encrypt", data: out, shares };
       ctx.postMessage(response, [out]);
       return;
     }
 
-    const result = await decryptData(req.data, req.password, req.keyFile, req.shares);
+    const result = await decryptData(req.data, req.password, req.keyFile, req.shares, req.prfOutput);
     const response: CryptoResponse = {
       id: req.id,
       ok: true,

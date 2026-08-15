@@ -16,6 +16,9 @@
  *   bridge addshares --threshold K --shares N --salt HEX --share-secret HEX
  *                    --share-coefficients HEX --shares-out FILE  (§4.6)
  *   bridge decrypt2 --share-file FILE                 (§4.6, no password)
+ *   bridge addpasskey --prf-output HEX --salt HEX     (§4.7)
+ *   bridge decrypt2 --prf-output HEX                  (§4.7, no password)
+ *   bridge prfsalt --slot-salt HEX                    (§4.7, prints hex)
  *
  * `encryptapp` goes through `encryptContainer` — the function the worker and
  * the UI actually call, with real random secrets. `recovery_test.py` uses it,
@@ -54,6 +57,8 @@ import {
   encryptKeym2WithExplicitSecrets,
   decryptKeym2,
   addShamirSlotKeym2,
+  addPasskeySlotKeym2,
+  derivePrfSalt,
 } from "../src/lib/keym-v2.ts";
 import { encodePaperParts, decodePaperParts } from "../src/lib/keym-v2-paper.ts";
 import {
@@ -85,7 +90,9 @@ const keyFile = keyfileHex
     })()
   : null;
 
-const input = readFileSync(inFile);
+// `prfsalt` is the one command with no container: it derives 32 bytes from a
+// slot salt and prints them. Everything else reads its input here.
+const input = cmd === "prfsalt" ? Buffer.alloc(0) : readFileSync(inFile);
 const inputBuf = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength) as ArrayBuffer;
 
 const CIPHERS: Record<string, CipherId> = {
@@ -175,6 +182,25 @@ try {
     );
     writeFileSync(outFile, Buffer.from(container));
     writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
+  } else if (cmd === "addpasskey") {
+    // §4.7. Both random inputs pinned, for the same reason addshares pins its
+    // three: the salt, because the PRF salt derives from it and so does every
+    // wrapped byte, and the PRF output, because it stands in for an
+    // authenticator this process does not have.
+    const out = await addPasskeySlotKeym2(
+      new Uint8Array(inputBuf),
+      { password, keyFile: keyFile ? new Uint8Array(keyFile) : null },
+      Uint8Array.from(Buffer.from(flag("prf-output")!, "hex")),
+      Uint8Array.from(Buffer.from(flag("salt")!, "hex"))
+    );
+    writeFileSync(outFile, Buffer.from(out));
+  } else if (cmd === "prfsalt") {
+    // §4.7. Printed rather than written to --out, because it is 32 bytes of
+    // derivation with no container involved — the one thing the two
+    // implementations must agree on before either can ask an authenticator
+    // anything.
+    const salt = await derivePrfSalt(Uint8Array.from(Buffer.from(flag("slot-salt")!, "hex")));
+    process.stdout.write(Buffer.from(salt).toString("hex") + "\n");
   } else if (cmd === "split") {
     // §7.1. Emitted so crosstest2.py can compare the *strings*, not only the
     // reassembled container: transposing a slice boundary leaves reassembly
@@ -223,11 +249,13 @@ try {
     const shares = shareFile
       ? readFileSync(shareFile, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
       : undefined;
+    const prfFlag = flag("prf-output");
     const out = await decryptKeym2(
       new Uint8Array(inputBuf),
       password,
       keyFile ? new Uint8Array(keyFile) : null,
-      shares
+      shares,
+      prfFlag ? Uint8Array.from(Buffer.from(prfFlag, "hex")) : undefined
     );
     writeFileSync(outFile, Buffer.from(out.data));
   } else {

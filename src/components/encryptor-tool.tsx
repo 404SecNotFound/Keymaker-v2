@@ -964,6 +964,11 @@ export function EncryptorTool() {
    * completes protects nothing. The picker goes to 8 either way.
    */
   const [shamirEnabled, setShamirEnabled] = useState(false);
+  // §4.7. Encrypt side: enrol a passkey alongside the password. Never instead
+  // of it — the container the writer produces always carries the passphrase
+  // slot too, which is how the never-travels-alone rule is satisfied here.
+  const [passkeyEnabled, setPasskeyEnabled] = useState(false);
+  const [passkeySupported, setPasskeySupported] = useState(false);
   const [shamirThreshold, setShamirThreshold] = useState(2);
   const [shamirCount, setShamirCount] = useState(3);
   const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
@@ -992,6 +997,23 @@ export function EncryptorTool() {
     The sheet is cleared afterwards so the container bytes do not sit in state
     for the rest of the session.
   */
+  // §4.7. Whether to offer the control at all. Deliberately not a claim that
+  // the *authenticator* can do PRF — there is no way to learn that without
+  // prompting, and probing by prompting is what a capability check must not do.
+  // A key that cannot derive is caught at enrolment, against an action the user
+  // just took.
+  useEffect(() => {
+    let live = true;
+    void (async () => {
+      const { probePasskeySupport } = await import("@/lib/webauthn-prf");
+      const support = await probePasskeySupport();
+      if (live) setPasskeySupported(support.available);
+    })();
+    return () => {
+      live = false;
+    };
+  }, []);
+
   useEffect(() => {
     if (!paperVault) return;
     let cancelled = false;
@@ -1017,6 +1039,8 @@ export function EncryptorTool() {
    * person who most needs it to be obvious.
    */
   const [useShares, setUseShares] = useState(false);
+  /** §4.7. Decrypt side: unlock with an enrolled passkey instead of a password. */
+  const [usePasskey, setUsePasskey] = useState(false);
   const [shareInput, setShareInput] = useState("");
 
   // U25. The toggle can be on while the field is empty — the password is
@@ -1676,7 +1700,11 @@ export function EncryptorTool() {
     // unreachable while every control leading to it looked live.
     const suppliedShares =
       mode === "decrypt" && useShares ? parseShareLines(shareInput) : [];
-    if (!mutablePassword && suppliedShares.length === 0) {
+    // §4.7 joins §4.6 in the same guard, for the same reason: someone unlocking
+    // with a passkey has no password either, and the credential does not exist
+    // yet at this point — it is produced by tapping the key further down.
+    const unlockingWithPasskey = mode === "decrypt" && usePasskey;
+    if (!mutablePassword && suppliedShares.length === 0 && !unlockingWithPasskey) {
         toast({
           title: mode === "decrypt" && useShares ? "Shares Required" : "Password Required",
           description:
@@ -1729,6 +1757,20 @@ export function EncryptorTool() {
 
         const encoder = new TextEncoder();
         const inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
+        // §4.7. The authenticator has to be asked *here*, on the main thread,
+        // before any work is handed over: a Worker cannot reach
+        // navigator.credentials. The slot salt is chosen first because the PRF
+        // salt derives from it, so the question put to the key depends on a
+        // value the container does not yet contain.
+        let passkey: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
+        if (passkeyEnabled) {
+          const { derivePrfSalt } = await import("@/lib/keym-v2");
+          const { enrolPasskey } = await import("@/lib/webauthn-prf");
+          const slotSalt = crypto.getRandomValues(new Uint8Array(32));
+          const prfOutput = await enrolPasskey(await derivePrfSalt(slotSalt));
+          passkey = { prfOutput, salt: slotSalt };
+        }
+
         // §4.6. Requested in the same call that writes the container, so the
         // share secret is generated and dropped inside the worker and the
         // password is not held past the operation that already needed it.
@@ -1737,7 +1779,8 @@ export function EncryptorTool() {
           mutablePassword,
           keyFileBuffer,
           { kdf, cipher: cipherChoice },
-          shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : undefined
+          shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : undefined,
+          passkey
         );
         resultBuffer = encrypted.data;
         if (encrypted.shares && !isStale()) {
@@ -1812,11 +1855,40 @@ export function EncryptorTool() {
         // 128 bytes covers the largest KEYM v1 header (71) with room to spare.
         const headerPeek = new Uint8Array(inputBuffer.slice(0, Math.min(128, inputBuffer.byteLength)));
 
+        // §4.7. A passkey unlock reads before it asks. The PRF salt derives
+        // from the slot's own salt, so the container has to be parsed, the
+        // passkey slot found and its salt turned into a question before the
+        // authenticator has anything to answer — the reverse of every other
+        // unlock, where the secret comes first.
+        //
+        // The *first* passkey slot is used, not all of them. Nothing in the
+        // container says which key belongs to which slot (§4.7 stores no
+        // identifier), so trying several would mean one authenticator tap per
+        // slot, most of them wrong, with no way to explain why. One tap against
+        // one slot fails the same way a wrong password does, which is at least
+        // a failure the user already understands. Containers with more than one
+        // enrolled passkey are the case this does not serve; enrol the second
+        // key on its own copy until that changes.
+        let prfOutput: Uint8Array | undefined;
+        if (usePasskey) {
+          const { passkeySlotSaltsKeym2, derivePrfSalt } = await import("@/lib/keym-v2");
+          const { assertPasskeyPrf } = await import("@/lib/webauthn-prf");
+          const salts = passkeySlotSaltsKeym2(new Uint8Array(inputBuffer));
+          if (salts.length === 0) {
+            throw new KeymakerError(
+              "invalid-input",
+              "This container has no passkey enrolled. Unlock it with its password."
+            );
+          }
+          prfOutput = await assertPasskeyPrf(await derivePrfSalt(salts[0]!));
+        }
+
         const decryptResult = await decryptViaWorker(
           inputBuffer,
           mutablePassword,
           keyFileBuffer,
-          suppliedShares.length > 0 ? suppliedShares : undefined
+          suppliedShares.length > 0 ? suppliedShares : undefined,
+          prfOutput
         );
         resultBuffer = decryptResult.data;
 
@@ -1991,7 +2063,7 @@ export function EncryptorTool() {
     // the render before the user touched any of them, so the share path took
     // the no-credential exit while every control leading to it looked live —
     // a click that did nothing at all, with no error to explain it.
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, shamirThreshold, shamirCount]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, shamirThreshold, shamirCount, passkeyEnabled, usePasskey]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -2026,7 +2098,13 @@ export function EncryptorTool() {
     // §4.6. An heir holds shares and no password, so shares are a credential
     // in their own right — requiring a password here would leave the one flow
     // this feature exists for permanently unreachable.
-    const hasCredential = !!password || (mode === 'decrypt' && useShares && parseShareLines(shareInput).length > 0);
+    const hasCredential =
+      !!password ||
+      (mode === 'decrypt' && useShares && parseShareLines(shareInput).length > 0) ||
+      // §4.7. The credential is a tap that has not happened yet, so the button
+      // has to be live before it exists — otherwise the only control leading to
+      // a passkey unlock is disabled by the absence of the thing it produces.
+      (mode === 'decrypt' && usePasskey);
     if (!hasInput || !hasCredential) return true;
 
     if (mode === 'encrypt' && !passwordMeetsPolicy) {
@@ -2284,6 +2362,25 @@ export function EncryptorTool() {
                   className="ml-auto rounded-md px-2 py-1 text-[12px] text-accent transition-colors hover:bg-accent/10"
                 >
                   {useShares ? "Use a password instead" : "Use recovery shares"}
+                </button>
+              )}
+
+              {/*
+                §4.7. Offered without knowing whether this container has a
+                passkey slot: finding out means parsing a file the user may not
+                have chosen yet, and a control that appears halfway through
+                filling the form is worse than one that explains itself when
+                pressed. Pressing it on a container with no passkey slot says
+                so, in those words.
+              */}
+              {currentMode === "decrypt" && passkeySupported && !useShares && (
+                <button
+                  type="button"
+                  onClick={() => setUsePasskey((v) => !v)}
+                  aria-pressed={usePasskey}
+                  className="rounded-md px-2 py-1 text-[12px] text-accent transition-colors hover:bg-accent/10"
+                >
+                  {usePasskey ? "Use a password instead" : "Use a passkey"}
                 </button>
               )}
             </div>
@@ -2691,6 +2788,60 @@ export function EncryptorTool() {
                         </InfoTip>
                       </div>
                     </div>
+
+                    {/*
+                      §4.7 passkey. Encrypt only, and additive by construction:
+                      the container still gets the passphrase slot, so a passkey
+                      is never the only way in. That is the format's rule, not a
+                      UI preference — a passkey is hardware, and hardware is
+                      lost.
+
+                      Hidden rather than disabled where WebAuthn is missing. A
+                      disabled control invites the question "why", and the
+                      answer is about the browser rather than anything the user
+                      can act on here.
+                    */}
+                    {currentMode === "encrypt" && passkeySupported && (
+                      <div className="space-y-3 rounded-lg border border-white/8 p-3">
+                        <div className="flex items-center gap-3">
+                          <Switch
+                            id="passkey-enabled"
+                            checked={passkeyEnabled}
+                            onCheckedChange={setPasskeyEnabled}
+                            className="data-[state=checked]:bg-success"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <Label htmlFor="passkey-enabled" className="cursor-pointer text-sm text-foreground">
+                              Also unlock with a passkey
+                            </Label>
+                            <InfoTip label="What does a passkey add?">
+                              <p>
+                                A second way in, from a key you tap rather than a
+                                phrase you remember — phishing-proof, and quicker
+                                day to day.
+                              </p>
+                              <p className="mt-2">
+                                It is <strong>not stronger</strong> than the
+                                password: the password still opens this container,
+                                so the backup is exactly as strong as the weaker of
+                                the two. That is deliberate. A passkey can be lost,
+                                broken or wiped, and a backup only a lost key opens
+                                is a lost backup.
+                              </p>
+                            </InfoTip>
+                          </div>
+                        </div>
+                        {passkeyEnabled && (
+                          <p className="text-[12px] leading-relaxed text-muted-foreground">
+                            You will be asked to tap twice — once to create the
+                            passkey, once to use it. Some keys only produce what
+                            Keymaker needs on the second tap, so it asks for both
+                            rather than enrolling a passkey that turns out not to
+                            open anything.
+                          </p>
+                        )}
+                      </div>
+                    )}
 
                     {/*
                       §4.6 recovery shares. Encrypt only — a share set is

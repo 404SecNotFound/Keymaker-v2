@@ -374,6 +374,31 @@ async function main() {
         }
         check(refused, `v2 ${fx.name} — ${k - 1} shares still do not`);
       }
+
+      // §4.7. Same promise in the other shape: the recorded PRF output is the
+      // only way back into this container, and a fixture nobody can open is
+      // not a fixture. What it pins is that the derivation from those 32 bytes
+      // to this container's master key has not moved.
+      if (fx.passkey) {
+        const { decryptKeym2 } = await import("../src/lib/keym-v2.ts");
+        const prf = Uint8Array.from(Buffer.from(fx.passkey.prfOutputHex, "hex"));
+        try {
+          const viaPrf = await decryptKeym2(new Uint8Array(blob), "", null, undefined, prf);
+          check(
+            dec.decode(viaPrf.data) === fx.plaintext,
+            `v2 ${fx.name} — the recorded PRF output still opens it`
+          );
+        } catch (err) {
+          check(false, `${fx.name} passkey — threw: ${(err as Error).message}`);
+        }
+        let prfRefused = false;
+        try {
+          await decryptKeym2(new Uint8Array(blob), "", null, undefined, new Uint8Array(32));
+        } catch {
+          prfRefused = true;
+        }
+        check(prfRefused, `v2 ${fx.name} — a wrong PRF output does not`);
+      }
     }
     // Asserting the format as well as the plaintext is what makes these
     // fixtures a dispatch test too: a v1 vector that started coming back as
@@ -382,13 +407,15 @@ async function main() {
     const v1Count = meta.fixtures.filter((f: any) => (f.version ?? 1) === 1).length;
     const v2Count = meta.fixtures.filter((f: any) => f.version === 2).length;
     const shamirCount = meta.fixtures.filter((f: any) => f.shamir).length;
+    const passkeyCount = meta.fixtures.filter((f: any) => f.passkey).length;
     const pageCount = meta.fixtures.filter((f: any) => f.selfextract).length;
     check(
-      fixtureCount === 16 && v1Count === 6 && v2Count === 10 &&
-        shamirCount === 3 && pageCount === 1,
+      fixtureCount === 19 && v1Count === 6 && v2Count === 13 &&
+        shamirCount === 3 && passkeyCount === 3 && pageCount === 1,
       `corpus covers both versions and all three ciphers per slot type ` +
-        `(${v1Count} v1 + ${v2Count} v2, of which ${shamirCount} share sets and ` +
-        `${pageCount} self-extracting page = ${fixtureCount}/16)`
+        `(${v1Count} v1 + ${v2Count} v2, of which ${shamirCount} share sets, ` +
+        `${passkeyCount} passkey slots and ${pageCount} self-extracting page ` +
+        `= ${fixtureCount}/19)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);
