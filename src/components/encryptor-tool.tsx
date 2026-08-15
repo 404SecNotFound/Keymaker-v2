@@ -5,6 +5,7 @@ import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, typ
 import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
 import { SelfExtractExport } from "@/components/self-extract-export";
+import { InheritanceWizard } from "@/components/inheritance-wizard";
 import { armorKeym2 } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart } from "@/lib/keym-v2-paper";
@@ -33,6 +34,7 @@ import {
   ShieldAlert,
   LifeBuoy,
   Printer,
+  Package,
   Trash2,
   Timer,
 } from "lucide-react";
@@ -967,6 +969,9 @@ export function EncryptorTool() {
   const [shamirThreshold, setShamirThreshold] = useState(2);
   const [shamirCount, setShamirCount] = useState(3);
   const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
+  // 4.5. The wizard is mounted only while open, so its state resets between
+  // packages rather than carrying one build's answers into the next.
+  const [inheritanceOpen, setInheritanceOpen] = useState(false);
   /**
    * 4.2. What the paper vault sheet should render on the next print.
    *
@@ -3129,6 +3134,68 @@ export function EncryptorTool() {
             ? `Verify ${inputType === 'file' ? 'File' : 'Text'}`
             : `Decrypt ${inputType === 'file' ? 'File' : 'Text'}`}
       </Button>
+
+      {/*
+        4.5. The inheritance wizard.
+
+        On the encrypt form rather than beside the result, because unlike the
+        paper vault and the page it does the encrypting itself — a package holds
+        two containers, so it needs the secret and the password *before* either
+        exists. Offering it afterwards would mean asking for the password a
+        second time, which is what U13 already refused to do.
+
+        Text mode only, and deliberately: a package is what someone assembles
+        for a seed phrase or a set of account details, and the paper vault's QR
+        grid is what carries it. A 40 MB file has no business being printed, and
+        offering it anyway would produce a sheet nobody can use.
+      */}
+      {currentMode === 'encrypt'
+        && inputType === 'text'
+        && textSecret.length > 0
+        && password.length > 0
+        && !blockedByPasswordPolicy && (
+        <button
+          type="button"
+          data-testid="open-inheritance-wizard"
+          onClick={() => setInheritanceOpen(true)}
+          className="mt-2 flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/2 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:border-white/20 hover:text-foreground"
+        >
+          <Package className="h-3.5 w-3.5" />
+          Prepare an inheritance package — backup, recovery slips and a letter
+        </button>
+      )}
+
+      {inheritanceOpen && (
+        <InheritanceWizard
+          open={inheritanceOpen}
+          onOpenChange={setInheritanceOpen}
+          plaintext={new TextEncoder().encode(textSecret)}
+          password={password}
+          kdf={
+            kdfChoice === "argon2id"
+              ? {
+                  kdf: KdfId.ARGON2ID,
+                  params: {
+                    timeCost: argonTimeCost,
+                    memoryKiB: argonMemoryMiB * 1024,
+                    parallelism: argonParallelism,
+                  },
+                }
+              : { kdf: KdfId.PBKDF2, params: { iterations: 1_000_000 } }
+          }
+          cipher={cipherChoice}
+          createdOn={new Date().toISOString().slice(0, 10)}
+          onPrint={(pkg) => {
+            setInheritanceOpen(false);
+            setPaperVault({
+              container: pkg.container,
+              shares: pkg.shares,
+              threshold: pkg.threshold,
+              printedOn: new Date().toISOString().slice(0, 10),
+            });
+          }}
+        />
+      )}
 
       {/*
         U15. `role="status"` rather than an alert: it is the explanation for a

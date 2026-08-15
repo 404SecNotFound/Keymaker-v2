@@ -721,6 +721,93 @@ def main() -> int:
             except (keym2.KeymError, ValueError) as e:
                 check(f"{f['name']}: the frozen page still opens", False, str(e))
 
+        # ---------------------------------------------------------------
+        # 10. The inheritance package (roadmap 4.5) opens every way it claims
+        # ---------------------------------------------------------------
+        #
+        # 4.5 adds no wire format — it is composition — so there is nothing new
+        # here for byte equality to check. What there *is* to check is the claim
+        # the package makes as a whole, and it is a claim about the independent
+        # implementation: an heir holding this box gets in with `keym2.py` and
+        # nothing else.
+        #
+        # Every route is tested because the package's value is that they are
+        # alternatives. A package where two of the three work is one that fails
+        # for exactly the heir who was given the route that does not.
+        print("\nInheritance package (4.5):")
+
+        pkg_dir = tmp / "package"
+        pkg_src = tmp / "pkg-pt.bin"
+        pkg_src.write_bytes("the wallet seed is in the safe 🔐 ".encode() * 12)
+        bridge("package", "--password", PASSWORD, "--in", str(pkg_src),
+               "--out", str(pkg_dir), "--kdf", "argon2id", "--cipher", "chained",
+               "--threshold", "2", "--shares", "3",
+               "--created-on", "2026-01-01", "--app-version", "0.0.0",
+               *kdf_flags("argon2id")[1:])
+
+        primary = (pkg_dir / "backup.keym").read_bytes()
+        shares = [s for s in (pkg_dir / "shares.txt").read_text().splitlines() if s.strip()]
+        want = pkg_src.read_bytes()
+
+        check("the package holds every artefact it promises",
+              all((pkg_dir / f).is_file() for f in
+                  ("backup.keym", "backup.txt", "shares.txt", "LETTER.txt", "backup.html")))
+        check("route 1 — the password opens the primary container",
+              keym2.decrypt(primary, PASSWORD) == want)
+        # Non-leading, for §4.6's reason: shares 1 and 3 catch a reconstruction
+        # that had quietly become positional.
+        check("route 2 — two of the three shares open it with no password",
+              keym2.decrypt(primary, shares=[shares[0], shares[2]]) == want)
+        check("route 3 — the self-extracting page holds the same secret",
+              keym2.decrypt(
+                  keym2.extract_selfextract((pkg_dir / "backup.html").read_bytes()),
+                  PASSWORD) == want)
+        try:
+            keym2.decrypt(primary, shares=[shares[0]])
+            check("one share alone still opens nothing", False)
+        except keym2.KeymError:
+            check("one share alone still opens nothing", True)
+
+        # The two containers are *different files*, and that is the design rather
+        # than a duplication bug: §7.2's subset cannot hold Argon2id, so a page
+        # gets its own weaker container instead of a weaker slot being added to
+        # the strong one. If these ever became the same bytes, the primary
+        # backup would have been silently downgraded to PBKDF2.
+        page_container = keym2.extract_selfextract((pkg_dir / "backup.html").read_bytes())
+        check("the page carries its own container, not the primary one",
+              page_container != primary)
+        check("the primary container is not in §7.2's subset — it is the strong one",
+              keym2.webcrypto_profile_violations(primary) != [])
+        check("only the page's container is",
+              keym2.webcrypto_profile_violations(page_container) == [])
+        # A share set on the page would mean the same k slips also open a PBKDF2
+        # container, which is strictly worse than the trade the page already makes.
+        check("the page's container carries no share slot",
+              all(rec[0] != 0x02 for rec in keym2.parse_container(page_container)[1]))
+
+        letter = (pkg_dir / "LETTER.txt").read_text()
+        # "Honest framing to preserve": any k shares decrypt without the
+        # password, which makes each share as sensitive as the password itself.
+        # The person who needs that sentence is whoever is about to put three
+        # slips in one envelope, so it has to be on the paper, not only here.
+        check("the letter says the slips are as sensitive as the password",
+              "as carefully as the password" in letter)
+        check("the letter says how many slips are needed",
+              "any 2 of the 3" in letter.lower())
+        check("the letter names the page as the weakest way in",
+              "weakest" in letter.lower())
+
+        # And with the page declined, nothing weak is left behind at all.
+        nopage_dir = tmp / "package-nopage"
+        bridge("package", "--password", PASSWORD, "--in", str(pkg_src),
+               "--out", str(nopage_dir), "--kdf", "argon2id", "--cipher", "chained",
+               "--threshold", "2", "--shares", "3", "--no-page", "1",
+               *kdf_flags("argon2id")[1:])
+        check("declining the page leaves no PBKDF2 container in the package",
+              not (nopage_dir / "backup.html").exists())
+        check("...and the letter says so rather than describing a file that is absent",
+              "No self-extracting page" in (nopage_dir / "LETTER.txt").read_text())
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

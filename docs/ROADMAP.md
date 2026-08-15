@@ -238,7 +238,7 @@ Only after Phase 3 ships. Ordered by value.
 | 2 | **Paper vault print kit** — **shipped**, §4.2 below | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Composes directly with 4.1, and there is now a concrete debt to pay: the share modal's Print button is `window.print()` against a screen layout, which is the weakest part of what 4.1 shipped. A share set printed from a dark-themed dialog is not a paper backup. |
 | 3 | **Self-extracting HTML decryptor** — **shipped**, §4.3 below | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym2.py` as the second line. PBKDF2/AES-GCM only — no WASM — and §7.2 now says so normatively rather than as advice. |
 | 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
-| 5 | **Inheritance wizard** | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
+| 5 | **Inheritance wizard** — **shipped**, §4.5 below | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before — and the composition turned out to have one real decision in it, which is the section below. |
 
 **Gate for each:** fixture-corpus entries and Python-reference parity, per the
 append-only rule. No exceptions — that rule is the moat.
@@ -397,6 +397,63 @@ container field to be reported as *part i of n*; the encoding and
 unimplemented in the shipping UI. It is wired now, beside §7.2's own wrong-box
 paste — which extracts and proceeds rather than reporting, because unlike a
 share, a page in that box *can* be used.
+
+### 4.5 Inheritance wizard — what shipped
+
+**No format, no crypto, no new artefact.** Every piece already existed, already
+had a Python counterpart and already had a gate. This item is the orchestration,
+and it earns its place because the composition turned out not to be neutral.
+
+**The three artefacts disagree about the container, and something had to
+decide.** The backup file and the paper vault want the strongest settings the
+device can carry. §7.2's page cannot have them — WebCrypto has never had
+Argon2id. Left unresolved, a user picks Argon2id (the recommended default),
+reaches the page export, and is refused; or worse, is quietly given something
+weaker than they chose.
+
+The resolution: **a package holds two containers of the same plaintext**, the
+primary under the user's settings and the page's under PBKDF2/AES. Not one
+container with two slots, which is the tempting version and is the same mistake
+§7.2 already refuses — a container is only as strong as its weakest slot, so a
+PBKDF2 slot beside an Argon2id one downgrades the backup outright. Two
+containers keep the weakness inside the artefact that needs it, and **declining
+the page leaves nothing weak in the package at all**. That is a real choice with
+a real cost, so it is on the screen where the choice is made.
+
+Three smaller decisions:
+
+- **The page gets no share set.** It is the copy most likely to be stored
+  casually — emailed to an executor, left on a drive — and enrolling shares on it
+  would mean the same *k* slips also open a PBKDF2 container. Strictly worse than
+  the trade the page already makes. The heirs' route is the primary container.
+- **One password, taken once.** A package whose two halves take different
+  passwords half-works at the worst possible moment, and asking twice is what
+  U13 already refused to do. Both encryptions happen in one operation.
+- **The letter is plain text and does not soften the share warning.** "Honest
+  framing to preserve" says any *k* shares decrypt without the password, which
+  makes each share as sensitive as the password itself — and the person who needs
+  that sentence is whoever is about to put three slips in one envelope.
+
+**The orchestration is a library function, not logic inside the dialog**, so
+`crosstest2.py` drives the same function the wizard drives. A separate assembly
+path in the test would be a second implementation of the package and the first
+thing to drift. The gate opens a package **three ways** — password, two of three
+shares, and through the page — because the package's whole value is that they
+are alternatives, and one that works two ways out of three fails precisely the
+heir who was handed the third. v2 conformance 107 → 121.
+
+**One control bit harder than its test.** Making the page reuse the primary
+container does not produce a wrong package — it produces *no* package, because
+§7.2's policy check refuses to embed a chained/Argon2id container. The guard is
+structural rather than test-enforced, which is the stronger outcome.
+
+**And one more test found to be weaker than it looked.** The threshold-clamp
+check filled the threshold before shrinking the count, so the threshold input's
+own bound did the work and the assertion passed with the count's clamp deleted.
+Raising the count, raising the threshold into the new room, then shrinking the
+count is the only sequence that constructs an impossible pair — third time this
+session that a control which failed to bite found a real gap in a test rather
+than a defect in the feature.
 
 ---
 
@@ -923,9 +980,16 @@ Phase 6  Make the claims checkable     ─ done ─  version · release · verif
 Phase 7  Documentation                 ─ done ─  walkthrough · trust postures · limitations
 Phase 4.2 Paper vault print kit        ─ done ─  §7.1 parts · the sheet · the debt paid
 Phase 4.3 Self-extracting page         ─ done ─  §7.2 subset · the page · three readers, one file
-Phase 4  The rest of what v2 unlocks   ──────    passkey (4.4) · inheritance wizard (4.5)
+Phase 4.5 Inheritance wizard           ─ done ─  composition of 4.1–4.3 · three ways in · the letter
+Phase 4.4 Passkey / WebAuthn PRF       ──────    the only feature item left; see below
 Phase 8  Outreach                      ──────    gated on 6, and on a tag existing
 ```
+
+**4.4 is deliberately last, and 4.5 did not wait for it.** The wizard composes
+4.1–4.3 and a passkey slot would add a fourth unlock path to a package that
+already has two; nothing in 4.5 assumes 4.4 exists. Keeping the order as written
+would have meant blocking a finished composition on the one item the roadmap
+itself reframes as convenience rather than strength.
 
 **Phase 6 goes before the rest of Phase 4, and that reverses the usual order.**
 Phase 4 makes the tool do more for people already using it. Phase 6 is what lets
