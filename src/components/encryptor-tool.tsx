@@ -48,6 +48,7 @@ import {
   MAX_BASE64_INPUT_CHARS,
   MAX_TEXT_PLAINTEXT_BYTES,
   MAX_TEXT_ARMOR_CHARS,
+  MAX_PASSWORD_LENGTH,
   KdfId,
   CipherId,
   DEFAULT_ARGON2ID,
@@ -2147,6 +2148,16 @@ export function EncryptorTool() {
                   not a strength measurement: Keymaker cannot tell how you chose a
                   password. For a figure it can actually stand behind, use Generate.
                 </p>
+                {/*
+                  U24. The ceiling existed and was stated nowhere, so the first
+                  time anyone met it was as a rejection *after* typing or pasting
+                  something long.
+                */}
+                <p className="mt-2">
+                  Maximum {MAX_PASSWORD_LENGTH.toLocaleString()} characters — far past
+                  any useful passphrase. It bounds the KDF input rather than limiting
+                  you.
+                </p>
               </InfoTip>
               {/*
                 §4.6. Offered only on decrypt, and only as an explicit switch.
@@ -3098,7 +3109,19 @@ export function EncryptorTool() {
             <TabsContent value="decrypt" className="mt-0" tabIndex={-1}>
               {renderContent("decrypt")}
             </TabsContent>
-            <TabsContent value="tools" className="mt-0" tabIndex={-1}>
+            {/*
+              U2b. Radix unmounts an inactive tab panel, so switching away from
+              Tools destroyed the dice roll log — a tally someone had physically
+              rolled, gone because they glanced at the Encrypt tab.
+
+              forceMount keeps it in the DOM; Radix still applies `hidden` while
+              the tab is unselected, so it stays out of the accessibility tree
+              and the tab order. Only this panel gets it. Encrypt and Decrypt
+              deliberately reset on a mode change, and mounting both permanently
+              would keep two sets of secret-bearing fields alive at once for no
+              benefit.
+            */}
+            <TabsContent value="tools" className="mt-0" tabIndex={-1} forceMount>
               <DiceEntropyTool />
             </TabsContent>
           </section>

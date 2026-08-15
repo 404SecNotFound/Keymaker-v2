@@ -326,3 +326,69 @@ test.describe("U26 — the typography floor", () => {
     expect(tooSmall, `text below the 12px floor: ${tooSmall.join(" | ")}`).toEqual([]);
   });
 });
+
+/**
+ * U2b and U24 — the two findings that were enumerated as open and then not
+ * fixed, which is a different failure from missing them.
+ *
+ * U2b is the one with teeth. The dice log is a tally of physical rolls someone
+ * has actually performed; losing it to a tab switch means rolling again.
+ */
+test.describe("U2b — the dice log survives a tab switch", () => {
+  test("a roll tally is still there after visiting another tab", async ({ page }) => {
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Tools" })).click();
+
+    // Both pieces of state a user builds by rolling: the tally, and the
+    // per-roll log behind the validator. The log is what the report names, and
+    // it is opt-in, so it has to be opened before it can be typed into.
+    await visible(page.getByLabel("Rolls completed")).fill("64");
+    await visible(page.getByRole("button", { name: /Check a roll log/i })).click();
+
+    const rolls = "4 6 2 3 1 5 5 2 6 4 3 1";
+    await visible(page.locator("#roll-log")).fill(rolls);
+
+    // The exact journey from the report: leave, come back.
+    await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+    await expect(visible(page.getByPlaceholder("Enter a strong password"))).toBeVisible();
+    await visible(page.getByRole("tab", { name: "Tools" })).click();
+
+    await expect(
+      visible(page.locator("#roll-log")),
+      "the dice log was destroyed by a tab switch — those rolls have to be rolled again"
+    ).toHaveValue(rolls);
+    await expect(
+      visible(page.getByLabel("Rolls completed")),
+      "the roll tally was destroyed by a tab switch"
+    ).toHaveValue("64");
+  });
+
+  test("the mounted-but-hidden panel stays out of the tab order", async ({ page }) => {
+    await page.goto("/");
+
+    // forceMount keeps Tools in the DOM at all times, so the thing it must not
+    // cost is what #27 established: no focusable content behind a hidden panel.
+    const reachable = await page.evaluate(() => {
+      const sel = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
+      return Array.from(document.querySelectorAll('[role="tabpanel"][hidden]'))
+        .flatMap((p) => Array.from(p.querySelectorAll(sel)))
+        .filter((el) => !(el as HTMLElement).closest("[inert]")).length;
+    });
+
+    expect(
+      reachable,
+      "forceMount put a hidden panel's controls back into the tab order"
+    ).toBe(0);
+  });
+});
+
+test.describe("U24 — the password ceiling is disclosed", () => {
+  test("states the maximum, and states the one actually enforced", async ({ page }) => {
+    await page.goto("/");
+
+    await visible(page.getByRole("button", { name: "Password requirements" })).hover();
+    // The number comes from the crypto core's own constant, so this fails if
+    // the copy and the enforcement ever disagree.
+    await expect(page.getByText(/Maximum 1,024 characters/i).first()).toBeVisible();
+  });
+});
