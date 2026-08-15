@@ -106,6 +106,63 @@
       "cipher": "chained",
       "keyFile": false,
       "plaintext": "Keymaker fixture — v2 argon2id / chained"
+    },
+    {
+      "name": "v2-shamir-aes256gcm",
+      "file": "v2-shamir-aes256gcm.keym",
+      "version": 2,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v2 shamir 3-of-5 / aes-256-gcm",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE1:05DZ-4EG3-07VX-TDNP-J21H-K81F-5P11-ZPRS-H0PG-NGC1-PJAP-9ZZY-W78Z-GT37-NF2B-RXE1-JYF0",
+          "KMSHARE1:05DZ-4EG3-095E-01FR-2W41-DTRC-G4Z5-YVCK-MRX3-8TVN-5FGC-63MX-3H4B-7PMX-FVDK-Z4V5-0KTG",
+          "KMSHARE1:05DZ-4EG3-0CAP-5ZZK-P8QF-D5DZ-AJA9-FWVW-0J26-KPD9-B6B1-4ZG8-6WFZ-Z845-067Y-3Y0V-7XY0",
+          "KMSHARE1:05DZ-4EG3-0GE8-SQB0-MS6Y-SF9Y-0XXX-0ACA-937X-HH0Q-4DT4-G2DD-9EDF-0TE5-T2KH-TBK3-ZQ90",
+          "KMSHARE1:05DZ-4EG3-0N1G-W9VB-0DNG-SGWD-TB8H-HDV5-X9RR-AXPB-A419-JY9R-C36V-R4YX-NZSW-6BFD-ZKA0"
+        ]
+      }
+    },
+    {
+      "name": "v2-shamir-chacha20poly1305",
+      "file": "v2-shamir-chacha20poly1305.keym",
+      "version": 2,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v2 shamir 3-of-5 / chacha20-poly1305",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE1:J1AE-B2G3-042Z-H0WD-D6SW-7KQ1-V45Q-1EYW-WHB7-V4CC-7EM3-8C4P-56EY-CPV6-FZ94-M8KZ-TDEG",
+          "KMSHARE1:J1AE-B2G3-090J-0W70-YAZ2-EQY9-K7MS-ZQ7V-D160-CJEH-8D8H-8VZN-4NKX-3GS7-RA70-YECD-PQN0",
+          "KMSHARE1:J1AE-B2G3-0F4Y-0YKB-MJXS-S0S4-65NV-N3ZQ-7X12-5JQ8-DEDS-NJ1E-5Q17-MQJ9-WN6C-D7QD-TYVG",
+          "KMSHARE1:J1AE-B2G3-0GZK-5YAG-46Q0-W7CD-02QE-SZJA-T58B-Q9S5-PF16-ZZKJ-F6Z0-EQ5Q-18SS-9S6J-NCB0",
+          "KMSHARE1:J1AE-B2G3-0PVZ-5WYV-EYNV-BGB0-N0PC-KBA6-GSF9-Y90W-KC4E-2PD9-E4DT-SGES-5QRN-TDFN-JD6G"
+        ]
+      }
+    },
+    {
+      "name": "v2-shamir-chained",
+      "file": "v2-shamir-chained.keym",
+      "version": 2,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v2 shamir 3-of-5 / chained",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE1:ADA8-RV83-061B-ZYSV-EKAE-XF1S-KYWH-PDPR-HAJ4-Z2TY-HR69-19SW-EB6A-NN0T-5Z6Z-FZCB-9870",
+          "KMSHARE1:ADA8-RV83-09M4-XRET-F0GJ-Y7GC-KK2H-FG92-JEHF-G8XQ-F6FF-Y3CP-T28R-MNTZ-K6V6-5CRX-Q2NG",
+          "KMSHARE1:ADA8-RV83-0DQC-TTSW-9HD8-W4BC-P3FX-ABQN-XMZE-10GV-DHXT-4FD4-15V0-BWXK-7P8C-X1MR-7NZG",
+          "KMSHARE1:ADA8-RV83-0KN7-Y05Y-DD9P-P24H-58Y0-3C03-C32N-GRV0-96MV-YZFR-73HZ-XX8C-P0AX-M68K-QANG",
+          "KMSHARE1:ADA8-RV83-0QPF-S2JR-BWMC-M1ZH-0RKC-6QYM-3SCM-1GPC-BH6E-4KEA-W427-2MF0-2GSQ-CBE0-VR50"
+        ]
+      }
     }
   ]
 }

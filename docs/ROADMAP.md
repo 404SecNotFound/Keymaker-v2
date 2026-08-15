@@ -234,7 +234,7 @@ Only after Phase 3 ships. Ordered by value.
 
 | # | Feature | Why it survives |
 |---|---|---|
-| 1 | **Shamir k-of-n key splitting** | Slots make this clean: a share set is a slot, not a bolted-on layer. ~150 lines of GF(256). Inheritance is the single most common real use of personal encryption. |
+| 1 | **Shamir k-of-n key splitting** — *format and core shipped, §4.1 below; no UI yet* | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
 | 2 | **Paper vault print kit** | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Small, and it composes with everything else. |
 | 3 | **Self-extracting HTML decryptor** | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym.py` as the second line. Must be PBKDF2/AES-GCM only — no WASM — or it does not survive the decade. |
 | 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
@@ -242,6 +242,36 @@ Only after Phase 3 ships. Ordered by value.
 
 **Gate for each:** fixture-corpus entries and Python-reference parity, per the
 append-only rule. No exceptions — that rule is the moat.
+
+### 4.1 Shamir — what shipped, and what has not
+
+**Shipped, in that order:** `FORMAT-V2-DESIGN` §4.6 written first, the Python
+reference derived from it, then the TypeScript, then byte equality on the
+container *and* all five share strings. Three fixtures added, one per cipher,
+each carrying its shares; the twelve existing entries untouched. Reference
+self-test 109 → 189 checks, v2 conformance 61 → 74.
+
+**Not shipped: any UI.** A share set can be enrolled and used from
+`reference/keym2.py` and from the library, and nowhere else. That split is
+deliberate — the format gate and the interface are separate work, and reviewing
+them together would bury the first — but item 1 is not usable by a user yet, and
+item 5's wizard has nothing to compose until it is.
+
+**Two things the exercise turned up**, both recorded in the design document:
+
+- **F8**, the first finding in this project that is not about the format.
+  Re-passwording writes a *passphrase* slot, so aiming it at a share-set slot
+  converts one and turns `n` printed papers into scrap, silently. `rewrap_slot`
+  now refuses without an explicit flag.
+- The conformance test had to compare **shares**, not only containers.
+  Transposing the coefficient layout in one implementation leaves the container
+  byte-identical and changes only the printed strings — so a container-only
+  comparison would have passed while the two sides issued mutually-unusable
+  share sets.
+
+**Before the UI lands, re-read *Honest framing to preserve*.** Any `k` shares
+open the container without the password, which makes each share as sensitive as
+the password itself. That belongs on the screen and on the paper, not only here.
 
 ---
 

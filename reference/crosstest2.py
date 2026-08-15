@@ -167,8 +167,35 @@ def main() -> int:
                 check(f["name"], got.decode() == f["plaintext"])
             except keym2.KeymError as e:
                 check(f["name"], False, str(e))
-        check("v2 corpus has all six vectors", len(v2_fixtures) == 6,
-              f"found {len(v2_fixtures)}")
+
+            # §4.6. The share strings in the corpus were written by the
+            # TypeScript. Nothing else in this project checks that the *other*
+            # implementation can use them, and that is the whole promise a share
+            # fixture makes — the paper outlives whichever implementation
+            # printed it.
+            if "shamir" in f:
+                k = f["shamir"]["threshold"]
+                shares = f["shamir"]["shares"]
+                try:
+                    got = keym2.decrypt(blob, shares=shares[-k:])
+                    check(f"{f['name']}: python reconstructs from js-written shares",
+                          got.decode() == f["plaintext"])
+                except keym2.KeymError as e:
+                    check(f"{f['name']}: python reconstructs from js-written shares",
+                          False, str(e))
+                try:
+                    keym2.decrypt(blob, shares=shares[:k - 1])
+                    check(f"{f['name']}: k-1 js-written shares still refused", False)
+                except keym2.KeymError:
+                    check(f"{f['name']}: k-1 js-written shares still refused", True)
+
+        shamir_fixtures = [f for f in v2_fixtures if "shamir" in f]
+        # Counted rather than assumed, because the corpus is append-only and a
+        # fixture that silently stopped being listed would otherwise just stop
+        # being tested. Update deliberately when the corpus grows.
+        check("v2 corpus has all nine vectors, three of them share sets",
+              len(v2_fixtures) == 9 and len(shamir_fixtures) == 3,
+              f"found {len(v2_fixtures)} v2, {len(shamir_fixtures)} shamir")
 
         # ---------------------------------------------------------------
         # 1. Byte equality — the check that catches a writer disagreement
@@ -402,7 +429,120 @@ def main() -> int:
               two_slot[payload_offset("aes", 2):] == one_slot[payload_offset("aes", 1):])
 
         # ---------------------------------------------------------------
-        # 6. Armor agrees
+        # 6. Shamir share sets (§4.6) — byte equality, both directions
+        # ---------------------------------------------------------------
+        #
+        # Round-trips would not settle this. Two implementations can decode each
+        # other's shares perfectly while disagreeing about how to *write* them —
+        # a different Horner order, a different coefficient layout, base32 padded
+        # the other way — and every one of those disagreements is silent until
+        # someone tries to reconstruct a set written by the other side.
+        #
+        # So every random input is pinned and the bytes are compared: the slot
+        # record, the container, and all five share strings.
+        print("\nShamir share sets (§4.6):")
+        SHAMIR_MSG = b"an inheritance, byte for byte"
+        SH_SALT = bytes(range(32))
+        SH_SECRET = bytes(range(100, 132))
+        SH_COEFFS = bytes(range(64))          # k-1 = 2 blocks of 32
+        K, N = 3, 5
+
+        base = py_encrypt(SHAMIR_MSG, "pbkdf2", "aes", None, os.urandom(32), os.urandom(32))
+        base_path = tmp / "shamir-base.keym2"
+        base_path.write_bytes(base)
+
+        py_container, py_shares = keym2.add_shamir_slot(
+            base, PASSWORD, K, N,
+            salt=SH_SALT, share_secret=SH_SECRET, coefficients=SH_COEFFS)
+
+        js_container_path = tmp / "shamir-js.keym2"
+        js_shares_path = tmp / "shamir-js.txt"
+        bridge("addshares", "--password", PASSWORD, "--in", str(base_path),
+               "--out", str(js_container_path), "--shares-out", str(js_shares_path),
+               "--threshold", str(K), "--shares", str(N),
+               "--salt", SH_SALT.hex(), "--share-secret", SH_SECRET.hex(),
+               "--share-coefficients", SH_COEFFS.hex())
+        js_container = js_container_path.read_bytes()
+        js_shares = [ln for ln in js_shares_path.read_text().split("\n") if ln.strip()]
+
+        check("the enrolled container is byte-identical",
+              py_container == js_container,
+              f"py={len(py_container)}B js={len(js_container)}B")
+        check("all five shares are byte-identical", py_shares == js_shares,
+              f"first mismatch: {next((f'{a} != {b}' for a, b in zip(py_shares, js_shares) if a != b), 'none')}")
+        share_slot_at = keym2.SLOT_TABLE_OFFSET + keym2.slot_len(keym2.CIPHER_AES)
+        check("the new slot declares type 0x02 and kdf 0x02",
+              py_container[share_slot_at] == 0x02 and py_container[share_slot_at + 1] == 0x02)
+        check("its parameter block is eight reserved zero bytes",
+              py_container[share_slot_at + 40:share_slot_at + 48] == bytes(8))
+        check("the payload survived enrolment byte for byte",
+              py_container[payload_offset("aes", 2):] == base[payload_offset("aes", 1):])
+
+        def js_opens_with_shares(blob: bytes, shares: list[str]) -> bool:
+            path = tmp / "shamir-in.keym2"
+            path.write_bytes(blob)
+            sf = tmp / "shamir-in.txt"
+            sf.write_text("\n".join(shares) + "\n")
+            out = tmp / "shamir.out"
+            if out.exists():
+                out.unlink()
+            try:
+                # No --password at all. An heir has none, and a bridge that
+                # quietly supplied one would test a path nobody will walk.
+                bridge("decrypt2", "--share-file", str(sf), "--in", str(path),
+                       "--out", str(out))
+            except BridgeError:
+                return False
+            return out.read_bytes() == SHAMIR_MSG
+
+        def py_opens_with_shares(blob: bytes, shares: list[str]) -> bool:
+            try:
+                return keym2.decrypt(blob, shares=shares) == SHAMIR_MSG
+            except keym2.KeymError:
+                return False
+
+        # Each side reads the other's output, which is the claim byte equality
+        # is a proxy for and worth checking directly anyway.
+        check("js opens the python container with python's shares",
+              js_opens_with_shares(py_container, py_shares))
+        check("python opens the js container with js's shares",
+              py_opens_with_shares(js_container, js_shares))
+        check("js opens with a different k of the n",
+              js_opens_with_shares(py_container, py_shares[2:5]))
+        check("python opens with a different k of the n",
+              py_opens_with_shares(js_container, py_shares[2:5]))
+
+        check("neither opens on k-1 shares",
+              not js_opens_with_shares(py_container, py_shares[:2])
+              and not py_opens_with_shares(py_container, py_shares[:2]))
+
+        # The passphrase slot is untouched by enrolment, on both sides. This is
+        # the data-loss claim: enrolling shares must not cost the owner the way
+        # in they already had.
+        def js_opens_with_password(blob: bytes, password: str) -> bool:
+            path = tmp / "shamir-pw.keym2"
+            path.write_bytes(blob)
+            out = tmp / "shamir-pw.out"
+            out.unlink(missing_ok=True)
+            try:
+                bridge("decrypt2", "--password", password, "--in", str(path), "--out", str(out))
+            except BridgeError:
+                return False
+            return out.read_bytes() == SHAMIR_MSG
+
+        check("the original password still opens it (js)",
+              js_opens_with_password(py_container, PASSWORD))
+        check("the original password still opens it (python)",
+              py_opens_with_shares(py_container, py_shares)
+              and keym2.decrypt(py_container, PASSWORD) == SHAMIR_MSG)
+
+        # A share is not a container, and both sides must say so rather than
+        # reporting a version error — §7 as amended by §4.6.
+        check("py classifies a share as a share",
+              keym2.detect(py_shares[0].encode()) == "keym2-share")
+
+        # ---------------------------------------------------------------
+        # 7. Armor agrees
         # ---------------------------------------------------------------
         print("\nText armor:")
         check("py armor round-trips", keym2.dearmor(keym2.armor(good)) == good)

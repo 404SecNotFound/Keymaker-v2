@@ -339,6 +339,32 @@ async function main() {
       } catch (err) {
         check(false, `${fx.name} — threw: ${(err as Error).message}`);
       }
+
+      // §4.6. A share-set fixture also promises that these printed strings
+      // still open this container — the half of the promise the bytes alone do
+      // not carry. Deliberately a *non-leading* subset: taking shares 3, 4 and
+      // 5 would catch a reconstruction that had quietly become positional.
+      if (fx.shamir) {
+        const { decryptKeym2 } = await import("../src/lib/keym-v2.ts");
+        const all: string[] = fx.shamir.shares;
+        const k: number = fx.shamir.threshold;
+        try {
+          const viaShares = await decryptKeym2(new Uint8Array(blob), "", null, all.slice(-k));
+          check(
+            dec.decode(viaShares.data) === fx.plaintext,
+            `v2 ${fx.name} — the last ${k} of ${all.length} shares still open it`
+          );
+        } catch (err) {
+          check(false, `${fx.name} shares — threw: ${(err as Error).message}`);
+        }
+        let refused = false;
+        try {
+          await decryptKeym2(new Uint8Array(blob), "", null, all.slice(0, k - 1));
+        } catch {
+          refused = true;
+        }
+        check(refused, `v2 ${fx.name} — ${k - 1} shares still do not`);
+      }
     }
     // Asserting the format as well as the plaintext is what makes these
     // fixtures a dispatch test too: a v1 vector that started coming back as
@@ -346,9 +372,11 @@ async function main() {
     // and the plaintext alone would not notice.
     const v1Count = meta.fixtures.filter((f: any) => (f.version ?? 1) === 1).length;
     const v2Count = meta.fixtures.filter((f: any) => f.version === 2).length;
+    const shamirCount = meta.fixtures.filter((f: any) => f.shamir).length;
     check(
-      fixtureCount === 12 && v1Count === 6 && v2Count === 6,
-      `corpus covers both versions (${v1Count} v1 + ${v2Count} v2 = ${fixtureCount}/12)`
+      fixtureCount === 15 && v1Count === 6 && v2Count === 9 && shamirCount === 3,
+      `corpus covers both versions and all three ciphers per slot type ` +
+        `(${v1Count} v1 + ${v2Count} v2, of which ${shamirCount} share sets = ${fixtureCount}/15)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);

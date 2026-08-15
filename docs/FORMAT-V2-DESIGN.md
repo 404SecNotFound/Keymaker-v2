@@ -161,8 +161,13 @@ full KDF invocation. Eight slots at §6's maximum Argon2id cost is eight times
 the work of one, all of it spent to reach a generic failure. That is a
 denial-of-service amplification the first draft did not have. It is bounded
 (8 × a bound §6 already fixes), the operation is cancellable in the Worker, and
-the writer emits exactly one slot until Phase 4 — but it is a real price and it
-should not have to be rediscovered by whoever profiles a slow failure.
+a container only carries the slots someone deliberately enrolled — but it is a
+real price and it should not have to be rediscovered by whoever profiles a slow
+failure.
+
+§4.6 lowers the worst case rather than raising it: a Shamir slot derives under
+HKDF (§3.2), so it costs microseconds to try and fail. The eight-Argon2id
+scenario needs eight *passphrase* slots.
 
 ### 3.2 KDF parameter block (8 bytes, fixed)
 
@@ -186,6 +191,32 @@ slot, not the start of the container.
 | 42 | 4 | memory_kib, uint32 |
 | 46 | 1 | parallelism, uint8 |
 | 47 | 1 | reserved, MUST be zero |
+
+`slot_kdf_id = 0x02` — HKDF-SHA-256 (added by §4.6):
+
+| Offset | Size | Field |
+|--------|------|-------|
+| 40 | 8 | reserved, MUST be zero |
+
+```
+slot_key = HKDF-SHA-256(ikm  = slot_secret,
+                        salt = slot_salt,
+                        info = "keymaker.v2.slot-key",
+                        L    = 32)
+```
+
+**A KDF with no cost parameters is the point, not an omission.** 0x00 and 0x01
+exist to make a low-entropy secret expensive to guess. A slot secret that is
+already 32 CSPRNG bytes (§4.6) gains nothing from either: 2^256 does not get
+larger when multiplied by a work factor, and the memory cost would be paid on
+every unlock in exchange for that nothing.
+
+The corollary is that 0x02 is only correct for a slot type whose secret is
+uniformly random and full-width, so §6 makes the pairing normative in both
+directions rather than leaving it as advice. A passphrase slot declaring 0x02
+would be a password with no stretching at all — a failure mode worth making
+structurally unreachable rather than merely discouraged, since it would be
+invisible in every output the user ever sees.
 
 ### 3.3 Flags
 
@@ -250,8 +281,8 @@ Three consequences worth naming before the details:
 
 ### 4.1 Slot secret for a passphrase slot (closes KM-05)
 
-This section defines the KDF input for `slot_type = 0x00`, which is the only
-slot type v2 implements. It is unchanged from the first draft except in what it
+This section defines the KDF input for `slot_type = 0x00`; §4.6 defines it for
+`slot_type = 0x02`. It is unchanged from the first draft except in what it
 produces: a **slot key** that unwraps the master key, rather than the payload
 key itself.
 
@@ -395,17 +426,41 @@ a slot is 96 or 112 bytes.
 | Value | Meaning | Status in v2 |
 |---|---|---|
 | 0x00 | Passphrase, optionally with a key file (§4.1) | Implemented |
-| 0x01 | Passkey / WebAuthn PRF | **Reserved**, Phase 4 |
-| 0x02 | Shamir share set | **Reserved**, Phase 4 |
+| 0x01 | Passkey / WebAuthn PRF | **Reserved** |
+| 0x02 | Shamir share set (§4.6) | Implemented |
 | 0x03–0xFF | Unassigned | Reserved |
 
-The wire layouts for 0x01 and 0x02 are deliberately **not** written here. This
-project's rule is that a specification is tested by an implementation written
-from it, and neither has one — so specifying them now would be adding prose that
-nothing has yet tried and failed to follow, which is the precise condition that
-produced KM-14. Reserving the type code is what the *format* needs in order not
-to require a second migration. The layouts are Phase 4's to add, under the same
-process as everything else.
+The wire layout for 0x01 is deliberately **not** written here. This project's
+rule is that a specification is tested by an implementation written from it, and
+0x01 has none — so specifying it now would be adding prose that nothing has yet
+tried and failed to follow, which is the precise condition that produced KM-14.
+Reserving the type code is what the *format* needs in order not to require a
+second migration. The layout is that feature's to add, under the same process as
+everything else.
+
+0x02 was reserved on those terms and is now specified on them: §4.6 was written
+first and `reference/keym2.py` was derived from it, which is what moved it out of
+this paragraph.
+
+**The slot record's shape does not change for 0x02.** Same 48-byte prefix, same
+offsets, same `wrapped_key`, and bytes 3..7 stay reserved and stay zero. Only two
+things differ, and neither is a wire field: where `slot_secret` comes from
+(§4.6 rather than §4.1) and which `slot_kdf_id` is legal (§6).
+
+That is the envelope earning its cost. A share set is a slot, so a container can
+carry a passphrase in slot 0 and a share set in slot 1, either one opens it, and
+neither knows the other is there. A reader that only implements 0x00 skips the
+share slot under the rule above and opens the container by passphrase — which is
+the case §4.4's skip rule was written for, now with something real to skip.
+
+One thing considered here and rejected: putting a four-byte digest of the
+reconstructed secret into the reserved bytes, so a reader could tell "these
+shares do not reconstruct this slot's secret" from "this container is damaged".
+It buys little — the share checksum already catches transcription damage and the
+set id already catches mixing — and it costs twice. It publishes a commitment to
+a secret that nothing else commits to, and §6 requires every rejection to be
+reported identically anyway, so the distinction it creates could not be shown to
+the user without breaking that rule.
 
 **`slot_flags`:**
 
@@ -473,7 +528,14 @@ it is normative rather than advisory.
 > A writer **MUST** generate `slot_salt` with a CSPRNG, independently for every
 > slot, including any slot added to a container that already exists.
 >
-> A writer **MUST NOT** expose caller-supplied values for either one in any
+> A writer **MUST** generate `share_secret` with a CSPRNG, independently for
+> every share set (§4.6).
+>
+> A writer **MUST** generate every Shamir polynomial coefficient with a CSPRNG,
+> independently **per byte position and per coefficient index** — that is,
+> `(k - 1) × 32` independent bytes for one share set.
+>
+> A writer **MUST NOT** expose caller-supplied values for any of these in any
 > interface intended for encrypting real data.
 
 The master-key requirement is what §5.2's nonce construction now rests on; §11.1
@@ -481,10 +543,239 @@ records how it inherited that role from the salt. The salt requirement is what
 keeps slot keys distinct — which is what makes a constant wrap nonce safe (§4.3)
 — and what stops one precomputation from attacking many containers.
 
+The coefficient requirement is stated at this length because the natural
+shortcut is fatal and does not look it. Suppose the same coefficients
+`a_1 .. a_{k-1}` are reused across all 32 byte positions, so position `j` uses
+`f_j(x) = s_j + a_1·x + … + a_{k-1}·x^{k-1}`. Write
+`C(x) = a_1·x + … + a_{k-1}·x^{k-1}`, which no longer depends on `j`. Then the
+share at index `x_i` is
+
+```
+y_i,j = s_j ⊕ C(x_i)        for every j
+```
+
+— the secret masked by **one** byte, repeated 32 times. A single share therefore
+narrows the secret to 256 candidates, and the slot's own `wrapped_key` is an
+oracle that tests all 256 in microseconds. A k-of-n scheme becomes 1-of-n, and
+the shares still reconstruct correctly under every round-trip test, because
+reconstruction is not what breaks.
+
+That is the same class of error as reusing a nonce, with the same property of
+being invisible to any test that only checks that the thing round-trips. §10 has
+a checklist row for it and the reference has a negative control, because "we were
+careful" is not evidence.
+
 The one place fixed values are genuinely needed is cross-implementation byte
 comparison, which both implementations expose under a separately named entry
 point whose documentation states the hazard
-(`encryptKeym2WithExplicitSecrets`, `--salt` and `--master-key`).
+(`encryptKeym2WithExplicitSecrets`, `--salt`, `--master-key`,
+`--share-secret` and `--share-coefficients`).
+
+### 4.6 Slot secret for a Shamir slot (`slot_type = 0x02`)
+
+A share set is one slot. The container holds no shares and no threshold: it holds
+a slot whose secret happens to be reconstructed from paper rather than typed.
+Everything from §4.3 onwards is unchanged — the reconstructed secret goes through
+`slot_kdf_id` into `slot_key`, which unwraps the same `master_key` every other
+slot unwraps.
+
+```
+share_secret = CSPRNG(32)                                  never stored anywhere
+
+shamir_input = LP("keymaker.v2.shamir-input") || LP(share_secret)
+
+slot_key     = HKDF-SHA-256(shamir_input, slot_salt, "keymaker.v2.slot-key", 32)
+```
+
+`LP` is §4.1's length prefix, and the domain string differs from §4.1's so a
+32-byte passphrase and a 32-byte share secret can never produce the same slot
+key.
+
+`share_secret` exists only during enrolment. Once the shares are produced and the
+slot is wrapped, the writer discards it; there is nothing left in the container
+from which it can be recovered short of unwrapping the slot, which requires it.
+
+#### The field
+
+GF(2^8) modulo `x^8 + x^4 + x^3 + x + 1` (0x11B) — the AES field, chosen because
+every implementer already has a correct one to check against.
+
+Addition and subtraction are both XOR, which matters twice below and is the usual
+place a Shamir implementation transcribed from a textbook over the rationals goes
+wrong.
+
+> Multiplication **MUST NOT** be implemented with logarithm/antilogarithm
+> tables.
+
+Table lookups indexed by secret bytes leak through the cache, and every value
+this multiplies is either a share value or a coefficient. Carry-less
+multiply-and-reduce over the 8 bit positions, with the reduction applied through
+an arithmetic mask rather than a branch, is around fifteen lines and has no
+data-dependent memory access or control flow. Nothing here is hot enough for the
+table version to buy anything worth that.
+
+#### Splitting
+
+For threshold `k` and share count `n`, and for each byte position `j` in
+`0..31` **independently**:
+
+```
+f_j(x) = s_j + a_{1,j}·x + a_{2,j}·x² + … + a_{k-1,j}·x^{k-1}
+```
+
+where `s_j` is byte `j` of `share_secret` and every `a_{c,j}` is a fresh CSPRNG
+byte. §4.5 is normative about the independence and explains what reusing
+coefficients across `j` actually costs.
+
+Share `i`, for `i` in `1..n`, is the index `x_i = i` together with
+`[f_j(x_i) for j in 0..31]`.
+
+Indices are `1..n` rather than random distinct values in `1..255`. Both are
+sound, sequential is what makes a share referable as "share 3", and the index is
+public either way — it is printed in the clear on the paper.
+
+**`n` is deliberately not in the share record.** A share carries what recovery
+needs, which is `k`; how many other shares exist is not needed to reconstruct and
+is not something a share should tell whoever picks it up. A print kit knows `n`
+at print time and can put "3 of 5" on the paper as text — that is a label, not
+data the format has to carry.
+
+#### Reconstruction
+
+Lagrange interpolation at `x = 0`, per byte position, over a set `S` of `k`
+shares:
+
+```
+s_j = Σ_{i∈S}  y_i,j · Π_{m∈S, m≠i}  x_m · inv(x_i ⊕ x_m)
+```
+
+`Σ` is XOR, `inv` is inversion in the field. The two places subtraction
+disappeared: `(0 − x_m)` became `x_m`, and `(x_i − x_m)` became `x_i ⊕ x_m`.
+
+> A reader given more than `k` shares **MUST** reconstruct from exactly the `k`
+> lowest-indexed distinct shares.
+
+Not because using all of them is wrong — with genuine shares every subset of size
+`k` gives the same answer — but because with a corrupt share they give
+*different* wrong answers, and two implementations that disagree about which
+wrong answer they produce are two implementations a user cannot compare. Both
+fail either way; determinism costs one sort.
+
+#### The share record
+
+42 bytes. This is the only structure in the format a human is expected to
+transcribe, which is what shapes it.
+
+```
++--------+------+------------------------------------------------+
+| Offset | Size | Field                                          |
++--------+------+------------------------------------------------+
+| 0      | 4    | share_set_id                                   |
+| 4      | 1    | threshold: k                                   |
+| 5      | 1    | index: x, 1..n                                 |
+| 6      | 32   | value: [f_j(x) for j in 0..31]                 |
++========+======+================================================+
+                   checksummed body = share bytes [0, 38)
++--------+------+------------------------------------------------+
+| 38     | 4    | checksum                                       |
++--------+------+------------------------------------------------+
+```
+
+```
+share_set_id = SHA-256("keymaker.v2.share-set"      || slot_salt)[0:4]
+checksum     = SHA-256("keymaker.v2.share-checksum" || body)[0:4]
+```
+
+Both prefixes are fixed constants, so the unprefixed concatenation is injective
+for the same reason §4.1's `keyfile_digest` is.
+
+**`share_set_id` is derived, not stored.** It comes from `slot_salt`, which is
+already in the container in the clear, so a reader can compute the id a slot
+expects and reject a share from a different set before touching the field
+arithmetic. Mixing two sets otherwise produces a clean reconstruction of a secret
+that is not the right one, failing at the unwrap with the same generic error as a
+wrong password — the specific confusion this catches.
+
+It leaks, and the leak is worth naming rather than leaving to be found: anyone
+holding a share and a container can test whether they belong together. That is
+four bytes of linkability against a party who already holds both artifacts, and
+the alternative — a random id stored in the slot — would leak the same fact to
+anyone holding the container alone.
+
+**The checksum catches transcription damage, and that is all it claims.** Four
+bytes of SHA-256 is one in 4.3 billion for random corruption. It is deliberately
+*not* a transcription-optimised code like SLIP-39's Reed-Solomon checksum, which
+guarantees detection of specific human error classes rather than a probability
+against all of them. Shares here are primarily scanned rather than typed, the
+encoding below removes the confusable characters that produce most of those error
+classes at the source, and a truncated hash is a construction both
+implementations already have and cannot get subtly different. If shares turn out
+to be typed more often than scanned, this is the decision to revisit.
+
+#### Share text encoding
+
+```
+KMSHARE1:<Crockford base32, uppercase, in groups of 4 separated by ->
+```
+
+42 bytes is 336 bits, so 68 characters carrying 4 bits of zero padding in the
+last one, in 17 groups of four. A reader **MUST** reject a share whose final
+character carries non-zero padding bits, so that one share has exactly one
+encoding.
+
+Alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ` — Crockford's, which omits I, L, O
+and U. A reader is case-insensitive, maps `I`/`L` to `1` and `O` to `0`, and
+ignores hyphens and ASCII whitespace; every other character is rejected.
+
+**Why base32 and not the base64url used everywhere else in this document.** The
+whole string — uppercase letters, digits, `-` and `:` — lies inside QR code
+*alphanumeric* mode, which packs two characters into 11 bits. base64url needs
+lowercase and `_`, forcing byte mode at 8 bits per character:
+
+| encoding | chars | QR mode | bits |
+|---|---|---|---|
+| Crockford base32 | 68 | alphanumeric | 374 |
+| base64url | 56 | byte | 448 |
+
+So the longer string produces the smaller QR code, by 16%, while also being the
+one that survives being read aloud, faxed, or copied by hand. There is no
+trade-off to make here; base64url loses on both axes.
+
+**Why the prefix is not `KEYMSHARE1:`.** It would begin with the four bytes
+`KEYM`, which is the binary magic, and §7 exists because that exact collision
+made a text backup pasted into the app report `unsupported version 49`. Repeating
+it while adding the feature that puts the most paper in front of users would be
+hard to defend. `KM` is disjoint from every other prefix at byte 1 — `KE` for the
+binary magic and the legacy `KEYM1:`, `ke` for `keym2:`, `KM` here — so the
+detection property §7 established survives, over two bytes instead of one.
+
+The prefix is uppercase, unlike `keym2:`, because `keym2:`'s lowercase `k` exists
+solely to break the `KEYM` collision and there is nothing here to break.
+
+#### Bounds
+
+`k` in `2..16` and `n` in `k..16`, both normative on read and write.
+
+`k = 1` is refused rather than treated as a degenerate case: it produces `n`
+shares each of which *is* the secret, which is not what anyone reading "1 of 5"
+on a piece of paper expects it to mean. `n = 1` is refused for the same reason.
+
+16 is a print-kit bound, not a field bound — the field allows 255 — so it can be
+raised later without touching the encoding. §6 carries the rest.
+
+#### What this does and does not give the holder of one share
+
+One share is information-theoretically independent of the secret: for any
+candidate secret there are coefficients making that share consistent with it, so
+a single share rules nothing out. This is the property that makes distributing
+shares to people you trust unevenly reasonable.
+
+Any `k` shares open the container without the password. **Each share is
+therefore as sensitive as the password**, and the threat model changes from "one
+secret I know" to "k secrets other people hold, who can combine them without
+asking me". The UI and the print kit must say this on the artifact itself, not
+only in the documentation — a share that ends up in a drawer because it looked
+like a receipt is the realistic failure, not a cryptographic one.
 
 ## 5. Payload: chunked AEAD
 
@@ -690,6 +981,37 @@ that files written with older or lower settings still open.
 Every bound above applies **per slot**, to that slot's own parameter block, and
 disqualifies that slot rather than the container (§4.4).
 
+`slot_kdf_id = 0x02` has no cost parameters and therefore no row: its eight
+parameter bytes are reserved and the "reject non-zero reserved fields" rule below
+is the whole of its validation.
+
+**KDF and slot type are paired, in both directions:**
+
+| `slot_type` | legal `slot_kdf_id` |
+|---|---|
+| 0x00 passphrase | 0x00, 0x01 — **never 0x02** |
+| 0x02 Shamir | 0x02 — **only** |
+
+A reader MUST disqualify a slot that violates either direction, before invoking
+any KDF. The forbidden combinations are the two that would be silently wrong
+rather than noisily wrong: a passphrase under HKDF is a password with no
+stretching, and a 32-byte CSPRNG secret under Argon2id is a memory-hard cost paid
+to defend an unguessable value. Only the first is a vulnerability, but a rule
+that admits the second invites a writer to conclude the pairing is advisory.
+
+Shamir-specific (§4.6). `n` is absent from the share record, so its bound binds
+the writer only; everything else here is normative on read:
+
+- a writer MUST reject `n` outside `k`..16;
+- reject `k` outside 2..16;
+- reject a share index of 0, and reject a supplied share set containing two
+  shares with the same index;
+- reject a share whose recomputed checksum differs, or whose `share_set_id` does
+  not match the one derived from the slot's `slot_salt`;
+- reject a share text whose final base32 character carries non-zero padding bits;
+- reject a share set whose members disagree about `k`;
+- reconstruct from exactly the `k` lowest-indexed distinct shares.
+
 Additionally, a reader MUST:
 
 - reject `slot_count` outside 1..8;
@@ -742,6 +1064,24 @@ Lowercase `k` is 0x6B; the magic's `K` is 0x4B. One byte at offset 0
 distinguishes the two encodings, so detection is a switch on the first byte
 with no ordering dependency and no way for a reader to get it subtly wrong.
 
+**Amended by §4.6.** The share prefix `KMSHARE1:` also begins with 0x4B, so byte
+0 alone no longer separates every encoding this project defines. Byte 1 does:
+
+| starts | encoding |
+|---|---|
+| `KE` | binary container, and the legacy `KEYM1:` armor — separated from each other at byte 4, as before |
+| `ke` | `keym2:` armor |
+| `KM` | `KMSHARE1:` share (§4.6) |
+
+The property that mattered survives — the cases are disjoint on a fixed-length
+prefix, so no reader depends on the order its checks are written in — but it is
+now a two-byte property, and a sentence that says one byte should be corrected
+rather than left to be true only of the version that wrote it.
+
+A share pasted into the container field is precisely the wrong-box paste this
+section exists for, so it must report *this is a share, not a container* rather
+than a version error.
+
 Armored output is **wrapped at 64 columns**. Line breaks are not part of the
 encoding — every reader strips ASCII whitespace, v2's `dearmor` explicitly and
 v1's via `atob`'s forgiving-base64 decode — so this is presentation only, needs
@@ -757,6 +1097,12 @@ re-wrapping, and it fits an 80-column terminal with a quote marker.
 
 A writer **MAY** emit unwrapped armor where line breaks are pure overhead — a
 QR code, where capacity is a hard cliff. Both forms decode identically.
+
+**§4.6's share text wraps differently** — groups of four separated by hyphens,
+not lines of 64 — and the difference is not inconsistency. Container armor is
+sized for a terminal and a mail client; a share is sized for someone reading it
+off paper into a keyboard, where a fixed small group is what keeps your place.
+A hyphen also lies inside QR alphanumeric mode, where a newline does not.
 
 The prefix is **case-sensitive** and matched byte-for-byte. A reader that
 accepted `KEYM2:` would reintroduce the exact collision this section removes,
@@ -862,12 +1208,64 @@ Added by the slot amendment (§4):
       bounds worst-case failure time at eight KDF invocations (§6). Nobody has
       yet needed more than four slots, but nobody has used this yet either.
 
+Added by the Shamir slot (§4.6):
+
+- [x] Are the polynomial coefficients independent across all 32 byte positions,
+      demonstrated rather than asserted? — ✅ and this is the row that justifies
+      the whole checklist. The control splits with one coefficient set shared
+      across positions; it **still round-trips**, and a one-share attack then
+      recovers the secret from 256 candidates. The suite carries both halves
+      permanently: the attack must succeed against the degenerate split and fail
+      against the real one. Reverting `shamir_split` to reuse coefficients fails
+      exactly one check — the one that exists for it.
+- [x] Does `k−1` shares yield nothing? — ✅ all ten 2-subsets of a 3-of-5 split
+      reconstructed; none is the secret and all ten differ from each other. By
+      enumeration, not by citing the theorem.
+- [x] Do the Python and TypeScript implementations produce identical share bytes
+      from identical coefficients, and identical containers from identical share
+      secrets? — ✅ `crosstest2.py` compares the enrolled container and all five
+      share strings. Both controls confirm it bites: transposing the coefficient
+      block and regrouping the base32 each fail the share comparison.
+
+      **The first control is the reason this row is worded about shares and not
+      just containers.** Transposing the coefficients leaves the container
+      *byte-identical* — the wrapped key does not depend on them — and changes
+      only the printed strings. A conformance test that compared containers
+      alone would have passed while the two implementations issued
+      mutually-unusable share sets.
+- [x] Does a reader skip a Shamir slot it does not implement and still open the
+      container from a passphrase slot beside it? — ✅ §4.4's skip rule with a
+      real slot type behind it for the first time, tested by narrowing the
+      implemented-types set to simulate a reader shipped before §4.6. Getting
+      this wrong is a data-loss bug: enrolling shares would make the container
+      unopenable by the passphrase still sitting in slot 0.
+- [x] Is the share text encoding injective — does exactly one text decode to a
+      given share, with non-zero padding bits rejected? — ✅ removing the padding
+      check fails exactly that test; without it each share has 16 spellings.
+- [x] Does a share from a different set fail on `share_set_id` rather than
+      reconstructing a plausible wrong secret? — ✅ two checks, and removing the
+      id comparison fails both and nothing else.
+- [x] Is the GF(256) multiply free of secret-indexed table lookups and
+      data-dependent branches? — ✅ by reading it, since no test can see this;
+      both conditionals are arithmetic masks and the only branch is on the
+      public constant 254. The suite additionally asserts the function holds no
+      large constant, which catches a later "optimisation" back to tables.
+
+One more row, added by implementing it rather than by planning it:
+
+- [x] Is "reconstruct from exactly the `k` lowest-indexed shares" observable, or
+      is it unfalsifiable prose? — ✅ it looked unfalsifiable, since genuine
+      shares agree on every subset. Corrupting a high-indexed share *with a
+      valid checksum* makes the rule the difference between recovering the
+      secret and not, and removing the sort fails that check alone.
+
 ## 11. Findings from the reference implementation
 
-`reference/keym2.py` was written from this document and nothing else, across two
-passes. Four gaps came from the first draft (F1–F4), a fifth from writing the
-TypeScript against the same prose (F5), and two more from re-deriving the
-reference against the slot amendment (F6–F7). All seven are fixed above.
+`reference/keym2.py` was written from this document and nothing else, across
+three passes. Four gaps came from the first draft (F1–F4), a fifth from writing
+the TypeScript against the same prose (F5), two more from re-deriving the
+reference against the slot amendment (F6–F7), and an eighth from deriving it
+against §4.6 (F8). All eight are fixed above.
 
 They are recorded here because the point of the exercise is the document, and a
 fix with no record of what it fixed invites the same gap back on the next edit.
@@ -890,6 +1288,24 @@ repeating it.
 | F5 | §5.2 | Salt freshness stated as description, not requirement, though deterministic nonces make reuse catastrophic | **Normative gap** — since amended, §11.1 |
 | F6 | §6, §4.4 | Rejection condition stated as "no slot of an implemented type" — a proxy for slot-table exhaustion that disagrees with it whenever a slot has a known type but unusable parameters | **Normative gap** |
 | F7 | §4.4, §3.3 | Whether a *skipped* slot's reserved fields must still be rejected is unstated, and the two readings differ by whether a Phase 4 slot type bricks older readers | **Normative gap** |
+| F8 | §4.6, §F | Re-passwording a slot writes a *passphrase* slot, so aiming it at a share-set slot converts one and invalidates every printed share, silently | **Data loss**, tool-level |
+
+**F8 is the first finding in this project that is not about the format at all.**
+The container is fine either way: replacing one unlock path with another is
+exactly what a mutable slot table is for, and §4.3's constant wrap nonce exists
+so that it can be done holding one secret. What the amendment changed is what
+sits on the other end of a slot. Re-passwording used to move a secret that lives
+in someone's head; now it can annihilate `n` pieces of paper distributed to `n`
+people, with the same call and no output.
+
+Fixed in the reference by refusing unless `replace_slot_type=True` is passed,
+which is the same shape as `remove_slot`'s refusal to remove the last slot. It
+is recorded here rather than only in the code because any second implementation
+inherits the hazard the moment it implements §4.6, and nothing in §4.6 warns it.
+
+That the reference has this guard and the specification cannot mandate it is the
+honest position: "do not silently destroy an artifact the user is holding in
+their hand" is a property of a tool, not of a byte layout.
 
 **F5 came from writing the second implementation**, not the first: building a
 byte-equality harness forces you to ask for a fixed salt, and asking exposes

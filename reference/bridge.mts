@@ -13,6 +13,9 @@
  *   bridge encrypt2 ... --salt HEX --master-key HEX   (KEYM v2, deterministic)
  *   bridge encryptapp ...                             (KEYM v2, the real writer)
  *   bridge decrypt2 ...                               (KEYM v2)
+ *   bridge addshares --threshold K --shares N --salt HEX --share-secret HEX
+ *                    --share-coefficients HEX --shares-out FILE  (§4.6)
+ *   bridge decrypt2 --share-file FILE                 (§4.6, no password)
  *
  * `encryptapp` goes through `encryptContainer` — the function the worker and
  * the UI actually call, with real random secrets. `recovery_test.py` uses it,
@@ -47,7 +50,11 @@ import {
   KdfId,
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
-import { encryptKeym2WithExplicitSecrets, decryptKeym2 } from "../src/lib/keym-v2.ts";
+import {
+  encryptKeym2WithExplicitSecrets,
+  decryptKeym2,
+  addShamirSlotKeym2,
+} from "../src/lib/keym-v2.ts";
 
 if (!globalThis.crypto) {
   (globalThis as { crypto?: Crypto }).crypto = webcrypto as unknown as Crypto;
@@ -142,14 +149,38 @@ try {
       cipher: CIPHERS[flag("cipher") ?? "aes"]!,
     });
     writeFileSync(outFile, Buffer.from(out));
+  } else if (cmd === "addshares") {
+    // §4.6. Every random input pinned, for the same reason encrypt2 pins the
+    // salt and master key: the two implementations decode each other's shares
+    // happily even if they disagree about how to *write* them, and only
+    // comparing bytes catches that. The coefficients matter most — they are the
+    // one input that changes every share byte.
+    const { container, shares } = await addShamirSlotKeym2(
+      new Uint8Array(inputBuf),
+      { password, keyFile: keyFile ? new Uint8Array(keyFile) : null },
+      Number(flag("threshold")),
+      Number(flag("shares")),
+      {
+        salt: Uint8Array.from(Buffer.from(flag("salt")!, "hex")),
+        shareSecret: Uint8Array.from(Buffer.from(flag("share-secret")!, "hex")),
+        coefficients: Uint8Array.from(Buffer.from(flag("share-coefficients")!, "hex")),
+      }
+    );
+    writeFileSync(outFile, Buffer.from(container));
+    writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
   } else if (cmd === "decrypt2") {
     // Deliberately the v2 module directly rather than decryptData(), so a
     // failure here points at the format code instead of at the dispatch. The
     // dispatch has its own test.
+    const shareFile = flag("share-file");
+    const shares = shareFile
+      ? readFileSync(shareFile, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
+      : undefined;
     const out = await decryptKeym2(
       new Uint8Array(inputBuf),
       password,
-      keyFile ? new Uint8Array(keyFile) : null
+      keyFile ? new Uint8Array(keyFile) : null,
+      shares
     );
     writeFileSync(outFile, Buffer.from(out.data));
   } else {
