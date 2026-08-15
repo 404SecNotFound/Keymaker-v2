@@ -811,6 +811,22 @@ export function EncryptorTool() {
   >("none");
   const { toast } = useToast();
 
+  /**
+   * The armored output with its line breaks removed, for the QR code only.
+   *
+   * Armor is wrapped at 64 columns because that is what makes it survivable in
+   * a textarea, an email and on paper. A QR code is none of those: capacity is
+   * a hard cliff at QR_MAX_BYTES, and the newlines are pure overhead against
+   * it. Measured on a container that just fits — 2 942 bytes compact becomes
+   * 2 987 wrapped, over the 2 953 limit — so wrapping the QR payload would
+   * take codes that scan today and turn them into "use the copy button
+   * instead".
+   *
+   * Whitespace is not part of the encoding, so this scans to the same
+   * container.
+   */
+  const outputTextForQr = outputText.replace(/\s+/g, "");
+
   // Derived, not stored — cheap (5 regex tests) and always consistent with
   // `password`, removing a state variable and its sync points.
   const passwordMeetsPolicy = meetsPasswordPolicy(password, generated !== null);
@@ -2368,13 +2384,13 @@ export function EncryptorTool() {
                       </DialogDescription>
                     </DialogHeader>
                     <div className="flex flex-col items-center gap-4 py-4">
-                      {qrByteLength(outputText) <= QR_MAX_BYTES ? (
+                      {qrByteLength(outputTextForQr) <= QR_MAX_BYTES ? (
                         <>
                           <div className="rounded-lg bg-white p-4">
-                            <QRCodeCanvas value={outputText} size={256} level="L" marginSize={0} />
+                            <QRCodeCanvas value={outputTextForQr} size={256} level="L" marginSize={0} />
                           </div>
                           <div ref={hiResQrRef} style={OFFSCREEN_STYLE}>
-                            <QRCodeCanvas value={outputText} size={900} level="L" />
+                            <QRCodeCanvas value={outputTextForQr} size={900} level="L" />
                           </div>
                           <Button onClick={handleDownloadQrCode}>
                             <Download className="mr-2 h-4 w-4" />
@@ -2384,7 +2400,7 @@ export function EncryptorTool() {
                       ) : (
                         <div className="rounded-md bg-yellow-900/20 p-3 text-center text-sm text-yellow-400">
                           <p className="font-medium">QR code unavailable</p>
-                          <p className="mt-1">Output is {qrByteLength(outputText).toLocaleString()} bytes, which exceeds the QR code capacity of {QR_MAX_BYTES.toLocaleString()} bytes. Use the copy button instead.</p>
+                          <p className="mt-1">Output is {qrByteLength(outputTextForQr).toLocaleString()} bytes, which exceeds the QR code capacity of {QR_MAX_BYTES.toLocaleString()} bytes. Use the copy button instead.</p>
                         </div>
                       )}
                     </div>
