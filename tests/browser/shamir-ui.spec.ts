@@ -42,7 +42,13 @@ async function encryptWithShares(
     timeout: 90_000,
   });
   const shares = await page.locator("p.font-mono").allTextContents();
-  await page.getByRole("button", { name: /^Close$/ }).or(page.locator("[data-radix-dialog-close]")).first().click();
+  // Escape rather than hunting for a close control. Radix's dismiss button is
+  // an icon whose accessible name and attributes are an implementation detail
+  // of the component library, and a locator built on those is a portability
+  // hazard between engines — which is precisely how the U28 clipboard test put
+  // main red on two of three.
+  await page.keyboard.press("Escape");
+  await expect(page.getByText(/Save these/)).toHaveCount(0);
 
   const armored = await page.evaluate(
     () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
