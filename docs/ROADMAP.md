@@ -592,6 +592,20 @@ The comparison must be honest about where the alternatives win — `age` and GPG
 are not browser tools and do not carry this project's threat model, and saying
 so is what makes the rest of the table credible.
 
+**Shipped.** Five badges (CI, browser tests across three engines, format
+conformance, reproducible build, GPL-3.0), the demo link already present, and a
+link to the verify page beside it. The comparison runs Keymaker against `age`,
+GPG, Cryptomator and typical browser tools over eleven rows, then spends three
+paragraphs on where each of the others is the better answer, on the honest
+weakness — *a web app has the weakest trust anchor of the four* — and on the
+narrow case Keymaker is actually built for.
+
+Two rows were deliberately weakened while writing it. Claims about whether other
+projects ship reproducible builds, and how many independent implementations read
+their formats, are not this repository's to make; a dash now means "not claimed
+here" and the table says so. A table that overstates a competitor's weakness is
+worth less than no table, which is the same reasoning as the item above it.
+
 ### 6.5 Mobile and PWA polish
 
 Install prompt, offline behaviour after install, and touch targets on a real
