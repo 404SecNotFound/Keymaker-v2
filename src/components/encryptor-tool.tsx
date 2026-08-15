@@ -1728,9 +1728,17 @@ export function EncryptorTool() {
         resultBuffer = decryptResult.data;
 
         // Info line + legacy-format nudge.
+        //
+        // 6.1. These name a *container*, so they carry the format's name and
+        // not the application's. "Keymaker v2" became ambiguous the moment the
+        // app's own version reached 2.0.0: `Format: Keymaker v2` gives a reader
+        // no way to tell whether it describes the file they just opened or the
+        // program that opened it — and this line is exactly where someone looks
+        // when a file will not open. The legacy labels below already carry
+        // their own format's name, which is why they never had the problem.
         const formatLabels: Record<DetectedFormat, string> = {
-          "keym-v1": "Keymaker v1",
-          "keym-v2": "Keymaker v2",
+          "keym-v1": "KEYM v1",
+          "keym-v2": "KEYM v2",
           "ibtz-v1": "IttyBitz v1 (legacy)",
           "ibtz-v0": "IttyBitz v0 (legacy)",
         };

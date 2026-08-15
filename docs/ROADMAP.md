@@ -482,6 +482,22 @@ the app gains a feature that does not change the format.
 version string maintained in two places drifts, and the one place it must not
 drift is the line a user quotes in a bug report.
 
+**Shipped.** `next.config.js` injects `KEYMAKER_APP_VERSION` from `package.json`;
+the footer reads `Keymaker v2.0.0 · writes KEYM v2`. The fallback is the literal
+`unknown` rather than a plausible number, so a broken injection looks broken.
+Version went to 2.0.0 — the app no longer *writes* KEYM v1, which is breaking
+for anything consuming its output; existing v1 containers still decrypt.
+`tests/browser/version.spec.ts` is the gate, and restoring a hardcoded
+`Keymaker v1.0.0` fails it.
+
+One thing the item did not anticipate, found while merging: the decrypt info
+line labelled containers `Keymaker v1` / `Keymaker v2`, which collided with the
+application version the moment it reached 2.0.0. Those are now `KEYM v1` /
+`KEYM v2` per the rule above, gated in `crypto.spec.ts` — which asserts both the
+new label and that no container is named after the application. That line is
+where someone looks when a file will not open, so it is the worst place for the
+ambiguity this item exists to remove.
+
 ### 6.2 A tagged release, with the verification path attached
 
 No release exists, which makes `SHA256SUMS` and the Sigstore signature
@@ -494,6 +510,30 @@ it currently reads as an implementation detail buried in `docs/VERIFYING.md`.
 **Gate:** the release workflow attaches `SHA256SUMS` and its signature, and the
 `cosign verify-blob` line in the notes is copied from `docs/VERIFYING.md` rather
 than retyped. A verification command that does not work is worse than none.
+
+**Shipped, except the tag itself.** `.github/workflows/release.yml` fires on a
+`v*` tag with `deploy.yml`'s three-way token split: `build` runs `npm ci` holding
+only `contents: read`, `sign` holds `id-token: write` and installs with
+`--ignore-scripts`, `publish` holds `contents: write` and installs nothing.
+Before publishing it verifies the signature against *this* workflow's identity on
+the tag — not `deploy.yml@refs/heads/main`, which would pass in CI and fail for
+every reader — then unpacks the tarball and runs `sha256sum -c` inside it.
+
+`scripts/release-notes.mjs` extracts the command from `docs/VERIFYING.md` and
+substitutes only `--certificate-identity`, the one value that genuinely differs.
+`scripts/release-notes-test.mjs` masks that value and demands the two commands
+match byte for byte, so editing either side alone fails; it runs on every PR
+rather than at release time, because a PR is when the document gets edited.
+
+Two things the item did not anticipate, both found by testing rather than
+reading: release bodies do not resolve repo-relative links, so the notes carry
+absolute URLs pinned at the tag; and a *lightweight* tag's `%(contents:subject)`
+falls through to the commit, which would have made a release announce "Merge
+pull request #29" as its changelog.
+
+**No tag is pushed.** A public release cannot be withdrawn, so cutting one is an
+owner action: `git tag -a v2.0.0` — annotated, because the message becomes the
+"What changed" section — and push it. That remains open in the register below.
 
 ### 6.3 "Verify this build" — in the app, not only in a doc
 
@@ -610,6 +650,7 @@ outstanding across every session and each one costs minutes.
 | O2 | **Two stale `claude/*` branches** on the old repo | Force-push was permission-denied |
 | O3 | **The live site has never been opened on a phone** | Several rounds of UI change have shipped; this container is egress-blocked from the deployed site, so it cannot be checked here. It is also 6.5's gate |
 | O4 | **U27 unpark** — confirm the non-ASCII download filename in a real browser | Suspected harness artifact; a fix aimed at one would be worse than none |
+| O5 | **Cut the `v2.0.0` tag** — `git tag -a v2.0.0 && git push origin v2.0.0` | 6.2 built and tested the whole release path but deliberately stops here: a public release cannot be withdrawn, so pushing the tag is a decision rather than a step. Annotated, because the message becomes the "What changed" section |
 
 ---
 
