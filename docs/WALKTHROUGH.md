@@ -201,6 +201,28 @@ Every part is needed. This is not a k-of-n share set — those are a different
 thing, and `join` will tell you which parts are missing rather than handing you
 a container that fails to open for reasons you cannot see.
 
+### Step 8 — if your backup is a web page
+
+If you saved a **self-extracting page**, you were left one `.html` file holding
+the backup and a decryptor for it. Open it in any browser, type the password,
+and it opens with no installation and no network. That is the whole point of it:
+whoever finds the file does not have to find this page first.
+
+It is an ordinary container underneath, so this script reads the file directly —
+you do not have to pull the backup out of it by hand:
+
+```bash
+python3 keym2.py decrypt --in backup.html --out recovered-from-page.txt
+```
+
+Two things to know about that file. It uses **PBKDF2 rather than Argon2id**,
+because browsers have had PBKDF2 built in for a decade while Argon2id needs a
+WebAssembly module a page cannot count on carrying into 2040 — the trade is
+"easier to open later" against "weaker if someone copies it today". And the
+backup text is plainly visible inside the file, so even if the page's JavaScript
+refuses to run, you can open it in a text editor, find the block beginning
+`keym2:`, and use it like any other backup.
+
 ### If it does not work
 
 The error will not tell you *which* input was wrong, and that is deliberate: an

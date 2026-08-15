@@ -161,6 +161,10 @@ def main() -> int:
         v2_fixtures = [f for f in meta["fixtures"] if f.get("version") == 2]
         for f in v2_fixtures:
             blob = (corpus / f["file"]).read_bytes()
+            # §7.2. A page is a container wearing an HTML document; unwrap it and
+            # it takes exactly the same checks as every other frozen vector.
+            if f.get("selfextract"):
+                blob = keym2.extract_selfextract(blob)
             try:
                 got = keym2.decrypt(blob, fx_pw,
                                     keyfile_bytes=fx_kf if f["keyFile"] else None)
@@ -193,8 +197,9 @@ def main() -> int:
         # Counted rather than assumed, because the corpus is append-only and a
         # fixture that silently stopped being listed would otherwise just stop
         # being tested. Update deliberately when the corpus grows.
-        check("v2 corpus has all nine vectors, three of them share sets",
-              len(v2_fixtures) == 9 and len(shamir_fixtures) == 3,
+        check("v2 corpus has all ten vectors, three share sets and one page",
+              len(v2_fixtures) == 10 and len(shamir_fixtures) == 3
+              and len([f for f in v2_fixtures if f.get("selfextract")]) == 1,
               f"found {len(v2_fixtures)} v2, {len(shamir_fixtures)} shamir")
 
         # ---------------------------------------------------------------
@@ -581,6 +586,140 @@ def main() -> int:
         # A part is not a container, and §7.1 requires both sides to say which.
         check("py classifies a part as a part",
               keym2.detect(py_parts[0].encode()) == "keym2-part")
+
+        # ---------------------------------------------------------------
+        # 9. §7.2 self-extracting pages agree
+        # ---------------------------------------------------------------
+        #
+        # The page's decryptor is JavaScript and cannot be run from here — that
+        # is tests/browser/self-extract.spec.ts, in a browser, which is the only
+        # environment where the claim means anything. What conformance owns is
+        # the part both implementations must agree on: the *embedding*, and which
+        # containers are allowed inside one.
+        #
+        # The failure this section exists to catch is the quiet one. A page whose
+        # container the app can read and keym2.py cannot is a page that opens for
+        # as long as the app exists and no longer — precisely the promise the
+        # artefact was built to make, and the last thing anyone would think to
+        # test.
+        print("\nSelf-extracting pages (§7.2):")
+
+        se_src = tmp / "se-pt.bin"
+        se_src.write_bytes("read this when I am gone 🗝 ".encode() * 30)
+        se_container = tmp / "se.keym2"
+        bridge("encrypt2", "--password", PASSWORD, "--in", str(se_src),
+               "--out", str(se_container), "--cipher", "aes", "--salt", SALT.hex(),
+               "--master-key", MASTER_KEY.hex(), *kdf_flags("pbkdf2"))
+        se_bytes = se_container.read_bytes()
+
+        js_page = tmp / "js-page.html"
+        bridge("selfextract", "--in", str(se_container), "--out", str(js_page),
+               "--created-on", "2026-01-01", "--app-version", "0.0.0")
+        page_text = js_page.read_text(encoding="utf-8")
+
+        # Guarded, for the reason bridge() is: the disagreement this section
+        # exists to catch — the two sides using different sentinels — makes
+        # extraction *raise* rather than return a wrong answer. Unguarded, that
+        # replaces the one line naming the disagreement with a traceback, and
+        # skips every check below it. Found by a negative control that appeared
+        # not to bite because the suite had already crashed.
+        try:
+            extracted = keym2.extract_selfextract(page_text)
+        except (ValueError, keym2.KeymError) as e:
+            extracted = None
+            check("py extracts the container from a js-written page", False, str(e))
+        if extracted is not None:
+            check("py extracts the container from a js-written page", extracted == se_bytes)
+            check("py decrypts what it extracted",
+                  keym2.decrypt(extracted, PASSWORD) == se_src.read_bytes())
+        check("py classifies a page as a page",
+              keym2.detect(page_text.encode()) == "keym2-selfextract")
+
+        # Both directions, and on the *string*, for the reason §7.1's parts are
+        # compared as strings: two implementations that each read their own
+        # embedding and not the other's would pass every round-trip test either
+        # one ran against itself.
+        py_block = keym2.embed_selfextract(se_bytes)
+        js_block_file = tmp / "js-block.txt"
+        bridge("embed", "--in", str(se_container), "--out", str(js_block_file))
+        check("python and js emit byte-identical sentinel blocks",
+              py_block == js_block_file.read_text(encoding="utf-8").rstrip("\n"))
+
+        py_page = tmp / "py-page.html"
+        py_page.write_text(
+            "<!doctype html><html><body><pre>" + py_block + "</pre></body></html>",
+            encoding="utf-8")
+        js_extracted = tmp / "js-extracted.keym2"
+        try:
+            bridge("unselfextract", "--in", str(py_page), "--out", str(js_extracted))
+            check("js extracts the container from a py-written page",
+                  js_extracted.read_bytes() == se_bytes)
+        except BridgeError as e:
+            check("js extracts the container from a py-written page", False, str(e))
+
+        # A page carrying two backups must be refused by both, and refused as a
+        # *page* problem rather than surfacing as a decryption failure later.
+        # Added because a negative control that relaxed the JS extractor's count
+        # check changed nothing here — the suite only ever handed it valid pages.
+        doubled = tmp / "doubled.html"
+        doubled.write_text(page_text + page_text, encoding="utf-8")
+        try:
+            keym2.extract_selfextract(doubled.read_text(encoding="utf-8"))
+            check("py refuses a page holding two backups", False)
+        except ValueError:
+            check("py refuses a page holding two backups", True)
+        try:
+            bridge("unselfextract", "--in", str(doubled), "--out", str(tmp / "no.bin"))
+            check("js refuses a page holding two backups", False, "the bridge accepted it")
+        except BridgeError:
+            check("js refuses a page holding two backups", True)
+
+        # §7.2's subset, enforced identically on both sides. A disagreement here
+        # means one implementation writes a page the other calls impossible.
+        #
+        # The key-file row is here for the same reason as the doubled page above:
+        # a control that removed the JS key-file check went unnoticed, because
+        # every container this section built was password-only.
+        for cipher, kdf, keyfile, why in (
+            ("chacha", "pbkdf2", None, "a ChaCha20 payload"),
+            ("chained", "pbkdf2", None, "a chained payload"),
+            ("aes", "argon2id", None, "an Argon2id slot"),
+            ("aes", "pbkdf2", KEYFILE, "a key-file slot"),
+        ):
+            outside = tmp / f"outside-{cipher}-{kdf}{'-kf' if keyfile else ''}.keym2"
+            bridge("encrypt2", "--password", PASSWORD, "--in", str(se_src),
+                   "--out", str(outside), "--cipher", cipher, "--salt", SALT.hex(),
+                   "--master-key", MASTER_KEY.hex(), *kdf_flags(kdf),
+                   *(["--keyfile", keyfile.hex()] if keyfile else []))
+            blob = outside.read_bytes()
+            check(f"py refuses to embed {why}",
+                  keym2.webcrypto_profile_violations(blob) != [])
+            try:
+                bridge("profile", "--in", str(outside), "--out", str(tmp / "why.txt"))
+                check(f"js refuses to embed {why}", False, "the bridge accepted it")
+            except BridgeError:
+                check(f"js refuses to embed {why}", True)
+
+        check("py accepts the one container the subset allows",
+              keym2.webcrypto_profile_violations(se_bytes) == [])
+        try:
+            bridge("profile", "--in", str(se_container), "--out", str(tmp / "why.txt"))
+            check("js accepts it too", True)
+        except BridgeError as e:
+            check("js accepts it too", False, str(e))
+
+        # The frozen page from the corpus — the durability claim itself, which is
+        # that a page written on a particular day still gives its container up.
+        se_fixtures = [f for f in v2_fixtures if f.get("selfextract")]
+        check("the corpus carries a frozen self-extracting page", len(se_fixtures) == 1)
+        for f in se_fixtures:
+            frozen = (corpus / f["file"]).read_text(encoding="utf-8")
+            try:
+                got = keym2.decrypt(keym2.extract_selfextract(frozen), fx_pw)
+                check(f"{f['name']}: the frozen page still opens",
+                      got.decode() == f["plaintext"])
+            except (keym2.KeymError, ValueError) as e:
+                check(f"{f['name']}: the frozen page still opens", False, str(e))
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

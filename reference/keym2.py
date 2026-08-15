@@ -301,6 +301,20 @@ SHARE_LEN = SHARE_BODY_LEN + SHARE_CHECKSUM_LEN               # 42
 SHAMIR_K_MIN, SHAMIR_K_MAX = 2, 16
 SHAMIR_N_MAX = 16
 
+# §7.2. The sentinels bracketing the armor inside a self-extracting page.
+#
+# HTML comments rather than a <script> or a data attribute, so the armor is
+# visible text in the document: the case the artefact exists for is the one
+# where the page's JavaScript does not run, and the container has to still be
+# reachable with a text editor.
+#
+# Note these are matched as a *substring*, which is the one place this format is
+# not detected by a prefix. It stays disjoint from every prefixed encoding for a
+# reason that is checked rather than assumed (see _selftest): "<" and "!" are
+# outside base64url, outside Crockford base32, and outside all four prefixes.
+SELFEXTRACT_BEGIN = "<!--KEYM2-BEGIN-->"
+SELFEXTRACT_END = "<!--KEYM2-END-->"
+
 # §4.6 share text. Crockford's alphabet, which omits I, L, O and U.
 SHARE_PREFIX = "KMSHARE1:"
 B32_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
@@ -575,6 +589,71 @@ def check_write_policy(slot: Slot) -> None:
         raise UsageError(
             f"refusing to write Argon2id with memory_kib={slot.memory_kib}; "
             f"policy minimum is {ARGON2_MEM_POLICY_MIN}"
+        )
+
+
+def webcrypto_profile_violations(container: bytes) -> list[str]:
+    """
+    §7.2. The reasons a WebCrypto-only reader could not open this container.
+
+    Empty means it can. Reasons rather than a bool because each one names a
+    different thing the writer has to change — the cipher, the KDF, the key file
+    — and "unsuitable" on its own tells a caller nothing they can act on.
+
+    Everything here is a *write*-side policy question, so it raises nothing and
+    reports freely. §6's rule about indistinguishable rejections governs readers
+    holding someone else's file; this function is asked about a container by the
+    person who just wrote it.
+    """
+    reasons: list[str] = []
+    core, records, _ = parse_container(container)
+
+    if core.cipher_id != CIPHER_AES:
+        reasons.append(
+            f"cipher_id 0x{core.cipher_id:02x} needs ChaCha20-Poly1305, which "
+            "WebCrypto has never had; the subset is AES-256-GCM only"
+        )
+
+    # §4.4's skip rule applies here too: a slot this implementation cannot parse
+    # is not evidence about the container, so an unparseable slot simply is not a
+    # candidate. The question is whether *some* slot is in the subset.
+    usable = False
+    keyfile_only = False
+    for record in records:
+        slot = _attemptable(record)
+        if slot is None:
+            continue
+        if slot.slot_type != SLOT_TYPE_PASSPHRASE or slot.kdf_id != KDF_PBKDF2:
+            continue
+        if slot.keyfile_used:
+            keyfile_only = True
+            continue
+        usable = True
+
+    if not usable:
+        if keyfile_only:
+            reasons.append(
+                "every PBKDF2 passphrase slot declares a key file. Embedding it "
+                "would put both factors in one file, which is the property a key "
+                "file exists to deny; dropping it would write a weaker container "
+                "than you think you have"
+            )
+        else:
+            reasons.append(
+                "no slot is a PBKDF2 passphrase slot. Argon2id needs WebAssembly, "
+                "and a share set needs §4.6's share text — neither survives in a "
+                "page with nobody to maintain it"
+            )
+    return reasons
+
+
+def check_selfextract_policy(container: bytes) -> None:
+    """§7.2, the writer's MUST. Refuses with every reason at once."""
+    reasons = webcrypto_profile_violations(container)
+    if reasons:
+        raise UsageError(
+            "this container is outside the WebCrypto-only subset (§7.2):\n  - "
+            + "\n  - ".join(reasons)
         )
 
 
@@ -1724,6 +1803,73 @@ def paper_capacity(qr_byte_capacity: int, total_hint: int = 9999) -> int:
     return (usable // 4) * 3
 
 
+def embed_selfextract(container: bytes, columns: int = ARMOR_COLUMNS) -> str:
+    """
+    §7.2. The sentinel block a self-extracting page carries.
+
+    This is the whole of what the *format* says about that artefact. The page
+    around it — the decryptor, the prose, the password box — belongs to whoever
+    builds it, and pinning it here would make the specification a description of
+    one implementation's HTML.
+
+    The policy check is not optional and not the caller's to skip: a page built
+    around a ChaCha or Argon2id container is a file whose own decryptor cannot
+    open it, and the person who finds that out is an heir with no other copy.
+    """
+    check_selfextract_policy(container)
+    return f"{SELFEXTRACT_BEGIN}\n{armor(container, columns)}\n{SELFEXTRACT_END}"
+
+
+def extract_selfextract(data: bytes | str) -> bytes:
+    """
+    §7.2. Recover the container from a self-extracting page.
+
+    Decoded with ``errors="replace"`` deliberately. Both the sentinels and the
+    armor are ASCII, so a stray byte anywhere else in a decade-old page — a
+    mojibake filename in a comment, a smart quote saved by some editor — must
+    not be what stops a backup opening.
+
+    Zero pairs or more than one is a rejection rather than a guess. Two pairs
+    means either two backups in one page or a page quoting another, and picking
+    one of them is how a reader hands someone the wrong container with a
+    perfectly ordinary "decryption failed" to explain it.
+    """
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+
+    if text.count(SELFEXTRACT_BEGIN) != 1:
+        raise ValueError(
+            f"expected exactly one {SELFEXTRACT_BEGIN} marker, found "
+            f"{text.count(SELFEXTRACT_BEGIN)}"
+        )
+    start = text.index(SELFEXTRACT_BEGIN) + len(SELFEXTRACT_BEGIN)
+    end = text.find(SELFEXTRACT_END, start)
+    if end == -1:
+        raise ValueError(f"{SELFEXTRACT_BEGIN} is not closed by {SELFEXTRACT_END}")
+
+    # Only the ends, and only so the prefix check below sees the prefix — the
+    # sentinels sit on their own lines. Whitespace *inside* the armor is
+    # dearmor's business, and stripping it twice was a redundancy that made a
+    # negative control here impossible to write: removing this loop changed
+    # nothing observable, because dearmor did the same work again.
+    body = body_raw.strip(ASCII_WHITESPACE) if (body_raw := text[start:end]) else ""
+
+    # Structural failures are ValueError and crypto failures are KeymError, and
+    # the split is load-bearing rather than tidy. dearmor would reject the line
+    # below on its own — with "decryption failed", which a user reads as a wrong
+    # password and acts on by retyping one they already know is right. The real
+    # problem is that the page does not contain what it claims to. §7.1 made the
+    # same argument for a short set of paper parts.
+    if not body.startswith(ARMOR_PREFIX.decode()):
+        raise ValueError("the marked region is not keym2: armor")
+    return dearmor(body)
+
+
+def looks_like_selfextract(data: bytes | str) -> bool:
+    """§7.2's wrong-box paste, answered without committing to the page being valid."""
+    text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
+    return SELFEXTRACT_BEGIN in text
+
+
 def detect(data: bytes) -> str:
     """
     §7 / §10's last checklist item: distinguish the encodings by inspecting
@@ -1744,6 +1890,9 @@ def detect(data: bytes) -> str:
     A share is included here even though it is not a container, because the
     wrong-box paste is the whole reason this function exists and "this is a
     share, not a container" is the only useful thing to say about it.
+
+    §7.2's self-extracting page is the exception to "prefix", and the comment at
+    that branch explains why the exception costs nothing.
     """
     if data.startswith(ARMOR_PREFIX):
         return "keym2-armor"
@@ -1760,6 +1909,16 @@ def detect(data: bytes) -> str:
         return f"keym-binary-v{data[4]}" if len(data) > 4 else "keym-binary"
     if data.startswith(b"IBTZ"):
         return "ibtz"
+    # §7.2. The one case detected by a substring rather than a prefix, because
+    # the artefact is a whole HTML document and the container sits inside it.
+    #
+    # Its position in this function is not load-bearing, which is the property
+    # §7 bought and this case had to keep: "<" and "!" are outside base64url,
+    # outside Crockford base32, and outside all four prefixes above, so no input
+    # can match both this and one of them. _selftest checks that rather than
+    # trusting the paragraph.
+    if looks_like_selfextract(data):
+        return "keym2-selfextract"
     return "unknown"
 
 
@@ -2277,6 +2436,101 @@ def _selftest() -> int:
     check("paper_capacity leaves room for the prefix",
           len(encode_parts(long_container, paper_capacity(2_331))[0]) <= 2_331)
 
+    # --- §7.2: the WebCrypto-only subset and the self-extracting page ---
+    subset = encrypt(b"read this when I am gone", pw, kdf_id=KDF_PBKDF2,
+                     cipher_id=CIPHER_AES, **fast)
+    check("a PBKDF2/AES container is in the subset",
+          webcrypto_profile_violations(subset) == [])
+
+    def page(block: str) -> bytes:
+        """A page shaped like the real one: the block is not the whole file."""
+        return (
+            "<!doctype html><html><head><title>Keymaker backup</title></head>\n"
+            "<body><h1>Encrypted backup</h1>\n"
+            "<p>Type the password. Nothing leaves this page.</p>\n"
+            f'<pre id="keym2-container">{block}</pre>\n'
+            "<p>Or run: <code>python3 keym2.py decrypt --in backup.html</code></p>\n"
+            "<script>/* the decryptor */</script></body></html>\n"
+        ).encode()
+
+    embedded = page(embed_selfextract(subset))
+    check("a self-extracting page round-trips",
+          extract_selfextract(embedded) == subset)
+    check("the extracted container decrypts",
+          decrypt(extract_selfextract(embedded), pw) == b"read this when I am gone")
+    check("a page is detected as a page", detect(embedded) == "keym2-selfextract")
+
+    # §7.2's disjointness claim, checked rather than asserted in prose. If any
+    # prefixed encoding could contain the sentinel, detect() would depend on the
+    # order its branches are written in — which is the property §7 exists to buy.
+    check("no prefixed encoding can contain the sentinel",
+          not any(looks_like_selfextract(x) for x in (
+              armor(subset).encode(),
+              base,
+              b"KEYM1:AAAA",
+              encode_parts(subset, 1_734)[0].encode(),
+              SHARE_PREFIX.encode() + b"ABCD-EFGH",
+          )))
+
+    # The prose says the armor stays reachable with a text editor when the
+    # JavaScript does not run. That is only true if it is *text* in the page.
+    check("the armor is visible text in the page, not an attribute or a script",
+          armor(subset).split("\n")[0].encode() in embedded)
+
+    # Every one of these is a page that would open its own container wrongly or
+    # not at all, discovered by an heir with no second copy.
+    for bad_kwargs, why in (
+        (dict(kdf_id=KDF_ARGON2ID, cipher_id=CIPHER_AES), "an Argon2id slot"),
+        (dict(kdf_id=KDF_PBKDF2, cipher_id=CIPHER_CHACHA), "a ChaCha20 payload"),
+        (dict(kdf_id=KDF_PBKDF2, cipher_id=CIPHER_CHAINED), "a chained payload"),
+    ):
+        outside = encrypt(b"x", pw, **bad_kwargs, **fast)
+        check(f"the subset excludes {why}", webcrypto_profile_violations(outside) != [])
+        try:
+            embed_selfextract(outside)
+            check(f"embedding refuses {why}", False)
+        except UsageError:
+            check(f"embedding refuses {why}", True)
+
+    # A key file is the one exclusion that is a choice rather than WebCrypto's
+    # limit, so it gets its own check and its own reason.
+    kf_container = encrypt(b"x", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
+                           keyfile_bytes=kf, **fast)
+    check("the subset excludes a key-file slot",
+          any("key file" in r for r in webcrypto_profile_violations(kf_container)))
+
+    # ValueError specifically, never KeymError. An extraction failure reported as
+    # a decryption failure sends someone to retype a password that was never the
+    # problem — §7.1's argument about a short set of paper parts, and the reason
+    # the armor check in extract_selfextract is not redundant with dearmor's.
+    for bad, why in (
+        (page("").replace(SELFEXTRACT_BEGIN.encode(), b""), "a page with no marker"),
+        (embedded + embedded, "two backups in one page"),
+        (embedded.replace(SELFEXTRACT_END.encode(), b""), "an unclosed marker"),
+        (page(f"{SELFEXTRACT_BEGIN}KMSHARE1:ABCD{SELFEXTRACT_END}"),
+         "a share where the container should be"),
+        (page(f"{SELFEXTRACT_BEGIN}{SELFEXTRACT_END}"), "a marked region with nothing in it"),
+        (b"<html>nothing here</html>", "a page that is not one of ours"),
+    ):
+        try:
+            extract_selfextract(bad)
+            check(f"extraction refuses {why}", False)
+        except ValueError:
+            check(f"extraction refuses {why}", True)
+        except KeymError:
+            check(f"extraction refuses {why} as a page problem, not a password one",
+                  False)
+
+    # A decade-old page will not have survived unedited. None of this is allowed
+    # to be what stops a backup opening.
+    check("extraction survives a mojibake byte elsewhere in the page",
+          extract_selfextract(embedded.replace(b"Keymaker backup",
+                                               b"Sicherheitskopie \xff")) == subset)
+    check("extraction survives the armor being re-wrapped",
+          extract_selfextract(page(embed_selfextract(subset, columns=20))) == subset)
+    check("extraction survives an unwrapped one-line armor",
+          extract_selfextract(page(embed_selfextract(subset, columns=0))) == subset)
+
     # --- wrong credentials ---
     with_kf = encrypt(b"x", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
                       keyfile_bytes=kf, **fast)
@@ -2685,6 +2939,24 @@ def main(argv: Optional[list[str]] = None) -> int:
     jn.add_argument("--armor", action="store_true",
                     help="write keym2: text instead of a binary container")
 
+    # §7.2. `extract` is the one that matters and the reason both exist: a
+    # self-extracting page whose JavaScript no longer runs is still a file with a
+    # container in it, and this is how it comes back out without a browser.
+    ext = sub.add_parser(
+        "extract",
+        help="recover the container from a self-extracting page (§7.2)")
+    ext.add_argument("--in", dest="infile", help="the .html page (default: stdin)")
+    ext.add_argument("--out", dest="outfile", help="output path (default: stdout)")
+    ext.add_argument("--armor", action="store_true",
+                     help="write keym2: text instead of a binary container")
+
+    emb = sub.add_parser(
+        "embed",
+        help="emit the §7.2 sentinel block for a container, checking the subset")
+    emb.add_argument("--in", dest="infile", help="input path (default: stdin)")
+    emb.add_argument("--out", dest="outfile", help="output path (default: stdout)")
+    emb.add_argument("--armor", action="store_true", help="input is keym2: text")
+
     shr = sub.add_parser(
         "add-shares",
         help="enrol a k-of-n Shamir share set on an existing container (§4.6)")
@@ -2758,6 +3030,39 @@ def main(argv: Optional[list[str]] = None) -> int:
             sys.stdout.buffer.write(container)
         return 0
 
+    # §7.2, and beside split/join for the same reason: neither takes a credential.
+    if args.cmd == "extract":
+        try:
+            container = extract_selfextract(data)
+        except (ValueError, KeymError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if args.armor:
+            out_text = armor(container) + "\n"
+            if args.outfile:
+                open(args.outfile, "w", encoding="utf-8").write(out_text)
+            else:
+                sys.stdout.write(out_text)
+        elif args.outfile:
+            open(args.outfile, "wb").write(container)
+        else:
+            sys.stdout.buffer.write(container)
+        return 0
+
+    if args.cmd == "embed":
+        if args.armor or detect(data) == "keym2-armor":
+            data = dearmor(data.decode())
+        try:
+            text = embed_selfextract(data) + "\n"
+        except (UsageError, KeymError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if args.outfile:
+            open(args.outfile, "w", encoding="utf-8").write(text)
+        else:
+            sys.stdout.write(text)
+        return 0
+
     keyfile = open(args.key_file, "rb").read() if args.key_file else None
 
     if args.cmd == "add-shares":
@@ -2824,7 +3129,13 @@ def main(argv: Optional[list[str]] = None) -> int:
             if args.armor:
                 out = armor(out).encode()
         else:
-            if args.armor or detect(data) == "keym2-armor":
+            # §7.2. Handing this script the page itself is the obvious thing for
+            # an heir to try — it is the file they were left — so it works,
+            # rather than reporting a corrupt container at the one person least
+            # able to work out why.
+            if detect(data) == "keym2-selfextract":
+                data = extract_selfextract(data)
+            elif args.armor or detect(data) == "keym2-armor":
                 data = dearmor(data.decode())
             out = decrypt(data, password, keyfile_bytes=keyfile, shares=shares)
     except (KeymError, UsageError) as e:

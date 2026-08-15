@@ -322,7 +322,16 @@ async function main() {
     const meta = JSON.parse(readFileSync(join(fixtureDir, "fixtures.json"), "utf8"));
     for (const fx of meta.fixtures) {
       fixtureCount++;
-      const blob = readFileSync(join(fixtureDir, fx.file));
+      let blob = readFileSync(join(fixtureDir, fx.file));
+      // §7.2. A self-extracting page is a container wearing an HTML document.
+      // Unwrapping it here rather than special-casing it below means the frozen
+      // page takes every check the other vectors take — and the unwrap becomes
+      // part of what the corpus freezes, which is the artefact's whole
+      // durability claim.
+      if (fx.selfextract) {
+        const { extractSelfExtract } = await import("../src/lib/keym-v2-selfextract.ts");
+        blob = Buffer.from(extractSelfExtract(blob.toString("utf8")));
+      }
       const ab = blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength) as ArrayBuffer;
       const keyFile = fx.keyFile ? KEYFILE.slice(0).buffer as ArrayBuffer : null;
       // A fixture with no `version` field predates v2 joining the corpus. The
@@ -373,10 +382,13 @@ async function main() {
     const v1Count = meta.fixtures.filter((f: any) => (f.version ?? 1) === 1).length;
     const v2Count = meta.fixtures.filter((f: any) => f.version === 2).length;
     const shamirCount = meta.fixtures.filter((f: any) => f.shamir).length;
+    const pageCount = meta.fixtures.filter((f: any) => f.selfextract).length;
     check(
-      fixtureCount === 15 && v1Count === 6 && v2Count === 9 && shamirCount === 3,
+      fixtureCount === 16 && v1Count === 6 && v2Count === 10 &&
+        shamirCount === 3 && pageCount === 1,
       `corpus covers both versions and all three ciphers per slot type ` +
-        `(${v1Count} v1 + ${v2Count} v2, of which ${shamirCount} share sets = ${fixtureCount}/15)`
+        `(${v1Count} v1 + ${v2Count} v2, of which ${shamirCount} share sets and ` +
+        `${pageCount} self-extracting page = ${fixtureCount}/16)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);

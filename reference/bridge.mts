@@ -56,6 +56,12 @@ import {
   addShamirSlotKeym2,
 } from "../src/lib/keym-v2.ts";
 import { encodePaperParts, decodePaperParts } from "../src/lib/keym-v2-paper.ts";
+import {
+  buildSelfExtractingPage,
+  embedSelfExtract,
+  extractSelfExtract,
+  webcryptoProfileViolations,
+} from "../src/lib/keym-v2-selfextract.ts";
 
 if (!globalThis.crypto) {
   (globalThis as { crypto?: Crypto }).crypto = webcrypto as unknown as Crypto;
@@ -175,6 +181,35 @@ try {
     // correct and the two implementations' printed pages mutually unusable.
     const parts = encodePaperParts(new Uint8Array(inputBuf), Number(flag("capacity") ?? 1734));
     writeFileSync(outFile, parts.join("\n") + "\n");
+  } else if (cmd === "selfextract") {
+    // §7.2. The whole page, so the conformance suite can check that Python
+    // extracts a container out of the artefact the app actually writes rather
+    // than out of a hand-built approximation of it.
+    //
+    // The date and version are arguments rather than read from the clock, so
+    // the same container always produces the same page — a fixture whose bytes
+    // moved every run would be a fixture nobody could freeze.
+    writeFileSync(
+      outFile,
+      buildSelfExtractingPage({
+        container: new Uint8Array(inputBuf),
+        createdOn: flag("created-on") ?? "2026-01-01",
+        appVersion: flag("app-version") ?? "0.0.0",
+      }),
+      "utf8"
+    );
+  } else if (cmd === "embed") {
+    // Just the sentinel block, which is the part the format actually specifies.
+    writeFileSync(outFile, embedSelfExtract(new Uint8Array(inputBuf)) + "\n", "utf8");
+  } else if (cmd === "unselfextract") {
+    writeFileSync(outFile, Buffer.from(extractSelfExtract(readFileSync(inFile, "utf8"))));
+  } else if (cmd === "profile") {
+    // Exit code carries the verdict; stdout carries the reasons. Both matter —
+    // the reasons are what a user is shown, and an empty list must mean the page
+    // will actually open.
+    const reasons = webcryptoProfileViolations(new Uint8Array(inputBuf));
+    writeFileSync(outFile, reasons.join("\n") + (reasons.length ? "\n" : ""), "utf8");
+    process.exit(reasons.length ? 3 : 0);
   } else if (cmd === "join") {
     const lines = readFileSync(inFile, "utf8")
       .split("\n")
