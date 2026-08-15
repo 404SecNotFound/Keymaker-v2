@@ -203,9 +203,20 @@ test.describe("U21 — the dice tool counts in English", () => {
   });
 });
 
+/**
+ * `clipboard-read` and `clipboard-write` are not permission names Firefox or
+ * WebKit recognise, so `grantPermissions` throws on them rather than being
+ * ignored — the whole test dies before it reaches the page.
+ *
+ * Split rather than skipped. Everything except the clipboard *contents* is
+ * engine-independent: whether the button exists at all, and whether it stays
+ * disabled while the QR is hidden. Skipping the lot on two of three engines
+ * would have surrendered that coverage to a permissions API detail, and the
+ * disabled-until-revealed rule is the one with a security invariant behind it
+ * (`getValue` must not run while the QR is hidden).
+ */
 test.describe("U28 — a SeedQR you can get off the screen without a camera", () => {
-  test("offers Copy digits, and only once the QR is revealed", async ({ page, context }) => {
-    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  test("offers Copy digits, disabled until the QR is revealed", async ({ page }) => {
     await page.goto("/");
     await useTextMode(page);
     await selectCrypto(page, "pbkdf2", "aes");
@@ -248,7 +259,45 @@ test.describe("U28 — a SeedQR you can get off the screen without a camera", ()
 
     await visible(page.getByRole("button", { name: /^Reveal QR$/ })).click();
     await expect(copy).toBeEnabled();
-    await copy.click();
+  });
+
+  test("copies the digits themselves", async ({ page, context, browserName }) => {
+    test.skip(
+      browserName !== "chromium",
+      "clipboard-read/write are not permission names Firefox or WebKit accept"
+    );
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+
+    const seed =
+      "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(seed);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await page.waitForFunction(
+      () => {
+        const el = document.querySelector("#output-text") as HTMLTextAreaElement | null;
+        return el !== null && el.value !== "";
+      },
+      null,
+      { timeout: 90_000 }
+    );
+    const armored = await page.evaluate(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+    );
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(seed, { timeout: 90_000 });
+
+    await visible(page.getByTitle(/Show SeedQR/i)).click();
+    await visible(page.getByRole("button", { name: /^Reveal QR$/ })).click();
+    await visible(page.getByRole("button", { name: /^Copy digits$/ })).click();
 
     // A Standard SeedQR is four digits per word — the whole point of copying
     // it rather than photographing a code.
