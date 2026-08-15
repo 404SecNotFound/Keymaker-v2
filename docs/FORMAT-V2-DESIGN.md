@@ -1166,6 +1166,111 @@ armor. Special-casing `1/1` would mean an untested branch on the path that only
 ever runs for the smallest backups, and the printed page saying "part 1 of 1" is
 what stops someone searching a drawer for pages that were never printed.
 
+### 7.2 The WebCrypto-only subset
+
+A self-extracting page — one `.html` holding a container and a decryptor for it —
+is not a new format. It is a **profile**: the subset of this document a reader
+can implement using nothing but `crypto.subtle`, no WebAssembly and no
+dependencies. Writing the subset down is what makes such a page checkable
+against the specification rather than against itself.
+
+The subset is forced, not chosen. WebCrypto has PBKDF2, HKDF, SHA-256 and
+AES-GCM. It has never had Argon2id or ChaCha20-Poly1305 and no proposal exists
+to add either. So:
+
+| Field | Value in the subset | Why nothing else is possible |
+|---|---|---|
+| `cipher_id` | `0x00` only | 0x01 and 0x02 need ChaCha20-Poly1305 |
+| `slot_type` | `0x00` only | 0x02's reconstruction is arithmetic, but §4.6's share text is a second encoding to get right — see below |
+| `slot_kdf_id` | `0x00` only | 0x01 is Argon2id; §6 forbids 0x02 on a passphrase slot |
+
+A writer of a self-extracting page **MUST** emit a container in this subset, and
+**MUST NOT** emit one that carries a key file (§4.1's third field is `LP("")`).
+A reader of the subset is otherwise an ordinary conforming reader: §4.4's skip
+rule, §5.2's final-chunk rule and §6's bounds all apply unchanged, and a
+subset reader that meets a slot it cannot attempt skips it exactly as §4.4 says.
+
+**The container is ordinary.** That is the property worth protecting. The bytes
+inside a self-extracting page are a KEYM v2 container that `reference/keym2.py`
+opens, that the app opens, and that the page opens — three independent readers
+of one file, which is the same argument the Python reference makes for the
+format as a whole. A bespoke "simplified" container for this artefact would have
+thrown that away in exchange for nothing.
+
+**The downgrade is real and must be stated wherever the artefact is offered.**
+PBKDF2-HMAC-SHA-256 is not Argon2id. It has no memory cost, so it is exactly the
+KDF that GPUs and ASICs are good at, and a self-extracting page is the copy of a
+backup most likely to be sitting somewhere an attacker can copy it from. This is
+a durability-for-strength trade, and it is only worth making deliberately.
+
+**Which is why the page carries its own container rather than a slot on the
+user's.** The envelope makes the other option look free: add a second,
+PBKDF2 slot to the container the user already has, and the page opens it while
+the app keeps using the Argon2id slot. That is wrong, and the reason generalises
+past this feature — **a container is only as strong as its weakest slot.**
+Anyone holding those bytes attacks the PBKDF2 slot and ignores the other one, so
+adding the slot would silently downgrade the user's real backup to buy a
+convenience for a copy of it. The artefact gets a separate container, written
+for it, and the user's backup is not touched. Slots are an unlock-path
+mechanism, not a strength mechanism, and this is the case that shows the
+difference.
+
+**Key files are excluded rather than supported.** A self-extracting page that
+embedded the key file would put both factors in one file, which is precisely the
+property a key file exists to deny; one that silently dropped it would write a
+weaker container than the user believes they have. Refusing is the only honest
+third option, and it is what a writer MUST do.
+
+**Shamir slots are excluded for a smaller reason and it is worth naming**, since
+GF(256) is about forty lines and the exclusion looks over-cautious next to the
+two that are forced. §4.6's share *text* — base32 with a checksum, a set id and a
+threshold agreement rule — is a second encoding, and every line of it in the page
+is a line that has to still be right in 2040 with nobody to fix it. The heir path
+for a share set is `keym2.py`, which implements it once and is tested.
+
+#### The embedding
+
+```
+<!--KEYM2-BEGIN-->
+keym2:<base64url, wrapped per §7>
+<!--KEYM2-END-->
+```
+
+A reader **MUST** take the bytes between the first `KEYM2-BEGIN` sentinel and
+the next `KEYM2-END`, strip ASCII whitespace, and require the result to be a
+single `keym2:` armor string. A page carrying zero sentinel pairs, or more than
+one, **MUST** be rejected rather than guessed at.
+
+**Sentinels rather than "find the `keym2:` in the file", which is the obvious
+alternative and is wrong.** The page's own prose contains that string — it tells
+the reader to run `keym2.py`, and it has to explain what the armor is — so a
+scanner finds a sentence before it finds the backup. The failure would be silent
+and would depend on wording.
+
+**Comments rather than a `<script>` or a data attribute**, so that the armor sits
+in the document as visible text. This is the case the whole artefact exists for:
+if the page's JavaScript does not run in 2040 — a CSP, a locked-down viewer, a
+browser that moved on — the container is still there in a text editor, still
+`keym2:` armor, still openable by `keym2.py` or by any reader written since. The
+sentinels are inside the `<pre>` so a comment node never reaches `textContent`
+and the page's own parser and an external extractor read the same bytes.
+
+This artefact is the one case in this document detected by a **substring** rather
+than a prefix, so §7's order-independence needs restating rather than assuming:
+the sentinel cannot occur inside any of the prefixed encodings, because `<` and
+`!` are outside base64url, base32 and every prefix defined here. The cases stay
+disjoint, so a reader may test for the sentinel before or after the prefix table
+and get the same answer — which is the property §7 bought, kept rather than
+weakened.
+
+**A self-extracting page pasted into the container field is §7's wrong-box paste
+again**, and takes the same treatment: a reader that recognises the sentinels
+**MUST** extract the container and proceed rather than reporting a corrupt one.
+Of the four artefacts this document defines it is the likeliest of all to be
+pasted, because it is the one that looks least like a backup — it is a web page,
+and someone who opens it and sees a password box has no reason to think the
+bytes they need are in the same file.
+
 ## 8. What this does not fix
 
 - **Chained mode remains unproven as a combiner.** v2 does not change that and

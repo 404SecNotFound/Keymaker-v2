@@ -37,6 +37,7 @@ import {
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
 import { addShamirSlotKeym2 } from "../src/lib/keym-v2.ts";
+import { buildSelfExtractingPage } from "../src/lib/keym-v2-selfextract.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIR = join(HERE, "fixtures", "keymaker");
@@ -198,6 +199,54 @@ async function main() {
     });
     wrote++;
     console.log(`wrote ${file} (${container.byteLength} bytes, 5 shares)`);
+  }
+
+  // §7.2. A self-extracting page, frozen whole.
+  //
+  // What this pins is narrower and more important than "the container opens":
+  // it is that a page written on this day stays *extractable* — that the
+  // sentinels, the armor inside them and the way the two are nested do not
+  // drift out from under a file already sitting in someone's drawer. The
+  // decryptor source in the page will change; the container in it must not have
+  // to. That is the artefact's entire durability claim, and a frozen page is
+  // the only thing that can hold anyone to it.
+  //
+  // The date and version are literals rather than the clock, so re-running this
+  // generator on a corpus that already has the page is genuinely a no-op.
+  {
+    const name = "v2-selfextract";
+    const file = `${name}.html`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+    } else {
+      const plaintext = "Keymaker fixture — v2 self-extracting page / aes-256-gcm";
+      const container = await encryptContainer(
+        new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
+        PASSWORD,
+        null,
+        { kdf: PBKDF2_V2_PARAMS, cipher: CipherId.AES_256_GCM }
+      );
+      const page = buildSelfExtractingPage({
+        container: new Uint8Array(container),
+        createdOn: "2026-08-15",
+        appVersion: "2.0.0",
+      });
+      writeFileSync(join(DIR, file), page, "utf8");
+      fixtures.push({
+        name,
+        file,
+        version: 2,
+        kdf: "pbkdf2",
+        cipher: "aes-256-gcm",
+        keyFile: false,
+        plaintext,
+        selfextract: true,
+      });
+      wrote++;
+      console.log(`wrote ${file} (${page.length} bytes)`);
+    }
   }
 
   writeFileSync(

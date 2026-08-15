@@ -163,6 +163,16 @@
           "KMSHARE1:ADA8-RV83-0QPF-S2JR-BWMC-M1ZH-0RKC-6QYM-3SCM-1GPC-BH6E-4KEA-W427-2MF0-2GSQ-CBE0-VR50"
         ]
       }
+    },
+    {
+      "name": "v2-selfextract",
+      "file": "v2-selfextract.html",
+      "version": 2,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v2 self-extracting page / aes-256-gcm",
+      "selfextract": true
     }
   ]
 }
