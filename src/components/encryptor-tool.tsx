@@ -3,6 +3,7 @@
 
 import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, type ReactNode, useCallback, useEffect } from "react";
 import { QRCodeCanvas } from "qrcode.react";
+import { PaperVault } from "@/components/paper-vault";
 import {
   KeyRound,
   Lock,
@@ -27,6 +28,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   LifeBuoy,
+  Printer,
   Trash2,
   Timer,
 } from "lucide-react";
@@ -941,6 +943,7 @@ export function EncryptorTool() {
    */
   const outputTextForQr = outputText.replace(/\s+/g, "");
 
+
   // Derived, not stored — cheap (5 regex tests) and always consistent with
   // `password`, removing a state variable and its sync points.
   const passwordMeetsPolicy = meetsPasswordPolicy(password, generated !== null);
@@ -960,6 +963,46 @@ export function EncryptorTool() {
   const [shamirThreshold, setShamirThreshold] = useState(2);
   const [shamirCount, setShamirCount] = useState(3);
   const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
+  /**
+   * 4.2. What the paper vault sheet should render on the next print.
+   *
+   * Held in state rather than computed inside the print handler because the
+   * sheet is React-rendered: `window.print()` snapshots whatever is in the DOM
+   * at that instant, so the render has to have happened first. The print is
+   * fired from an effect once this lands, not from the click.
+   */
+  const [paperVault, setPaperVault] = useState<{
+    container: Uint8Array;
+    shares?: string[];
+    threshold?: number;
+    printedOn: string;
+  } | null>(null);
+  /*
+    4.2. Print after the sheet is in the DOM, not from the click handler.
+
+    `window.print()` snapshots the document synchronously, so calling it in the
+    same tick as setState prints the previous render — which is an empty sheet.
+    The double rAF waits for React to commit and the browser to lay the QR
+    canvases out; printing between those two produces a page of blank squares.
+
+    The sheet is cleared afterwards so the container bytes do not sit in state
+    for the rest of the session.
+  */
+  useEffect(() => {
+    if (!paperVault) return;
+    let cancelled = false;
+    const id = requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        window.print();
+        setPaperVault(null);
+      })
+    );
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(id);
+    };
+  }, [paperVault]);
 
   /**
    * Shares entered to unlock a container, one per line.
@@ -2922,6 +2965,32 @@ export function EncryptorTool() {
       )}
 
       {/*
+        4.2. The paper route out of the app.
+
+        Offered on the encrypt side only, and only for a v2 container, because
+        that is the only thing §7.1's paper parts describe. Deliberately beside
+        the result rather than buried in a menu: the moment someone is looking
+        at a container they just made is the moment printing it is on their
+        mind, and any later is a moment they have closed the tab.
+      */}
+      {currentMode === 'encrypt' && outputText.startsWith('keym2:') && (
+        <button
+          type="button"
+          onClick={async () => {
+            const { dearmorKeym2 } = await import("@/lib/keym-v2");
+            setPaperVault({
+              container: dearmorKeym2(outputText),
+              printedOn: new Date().toISOString().slice(0, 10),
+            });
+          }}
+          className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-white/10 bg-white/2 px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:border-white/20 hover:text-foreground"
+        >
+          <Printer className="h-3.5 w-3.5" />
+          Print paper vault — scannable backup and the procedure to open it
+        </button>
+      )}
+
+      {/*
         Clipboard countdown and the imminent-lock warning.
 
         Both are here rather than as toasts because both are *states*, not
@@ -3297,19 +3366,49 @@ export function EncryptorTool() {
               <Copy className="mr-2 h-3.5 w-3.5" />
               Copy all
             </Button>
+            {/*
+              4.2. Was `window.print()` against this dark dialog, which produced
+              a screenshot of a modal rather than a backup. Now it renders the
+              paper vault sheet — the container as scannable symbols, the shares
+              on cut-apart slips, and the procedure to open them without this
+              app — and prints that instead.
+            */}
             <Button
               type="button"
               variant="ghost"
               size="sm"
-              onClick={() => window.print()}
+              onClick={async () => {
+                if (!issuedShares) return;
+                const { dearmorKeym2 } = await import("@/lib/keym-v2");
+                setPaperVault({
+                  container: dearmorKeym2(outputText),
+                  shares: issuedShares.shares,
+                  threshold: issuedShares.threshold,
+                  printedOn: new Date().toISOString().slice(0, 10),
+                });
+              }}
               className="text-muted-foreground hover:text-foreground"
             >
-              <Download className="mr-2 h-3.5 w-3.5" />
-              Print
+              <Printer className="mr-2 h-3.5 w-3.5" />
+              Print paper vault
             </Button>
           </div>
         </DialogContent>
       </Dialog>
+
+      {/*
+        4.2. The paper vault sheet. Hidden on screen by `.paper-vault` in
+        globals.css and made the only visible element inside `@media print`, so
+        it does not need to sit at the document root to print cleanly.
+      */}
+      {paperVault ? (
+        <PaperVault
+          container={paperVault.container}
+          shares={paperVault.shares}
+          threshold={paperVault.threshold}
+          printedOn={paperVault.printedOn}
+        />
+      ) : null}
 
       <Dialog open={isRecoveryOpen} onOpenChange={setIsRecoveryOpen}>
         <DialogContent>

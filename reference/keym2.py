@@ -183,11 +183,12 @@ import hashlib
 import hmac
 import math
 import os
+import re
 import struct
 import sys
 import unicodedata
 from dataclasses import dataclass
-from typing import Optional
+from typing import Iterable, Optional
 
 from argon2.low_level import Type as Argon2Type, hash_secret_raw
 from cryptography.hazmat.primitives import hashes
@@ -1619,15 +1620,120 @@ def dearmor(text: str) -> bytes:
         raise _reject() from None
 
 
+PART_PREFIX = "KMPART1:"
+
+# KMPART1:<index>/<total>:<body>. Anchored, and the counts are bounded to four
+# digits: a part claiming 90000 siblings is not a backup anyone printed, and the
+# reassembler below iterates over `total`.
+_PART_RE = re.compile(r"^KMPART1:(\d{1,4})/(\d{1,4}):([A-Za-z0-9_-]+)$")
+
+
+def encode_parts(container: bytes, capacity: int) -> list[str]:
+    """
+    §7.1. Split a container across paper parts of at most ``capacity`` raw bytes.
+
+    ``capacity`` is in *container* bytes, not encoded characters, because the
+    caller's real constraint is a QR symbol's byte capacity and base64 inflates
+    by 4/3. The prefix has to fit inside the symbol too — ``paper_capacity``
+    does that arithmetic.
+
+    A single-part backup is still ``1/1`` rather than plain armor: §7.1 on why
+    special-casing it buys an untested branch and a drawer search.
+    """
+    if capacity < 1:
+        raise ValueError("capacity must be at least one byte")
+    if not container:
+        raise ValueError("refusing to write paper parts for an empty container")
+
+    slices = [container[i:i + capacity] for i in range(0, len(container), capacity)]
+    total = len(slices)
+    if total > 9999:
+        raise ValueError(f"{total} parts is not a paper backup anyone will reassemble")
+    return [
+        f"{PART_PREFIX}{i}/{total}:" + base64.urlsafe_b64encode(s).decode().rstrip("=")
+        for i, s in enumerate(slices, start=1)
+    ]
+
+
+def decode_parts(parts: Iterable[str]) -> bytes:
+    """
+    §7.1. Reassemble paper parts into the container, byte for byte.
+
+    Every failure here is a *reassembly* failure and says so. The alternative —
+    concatenating whatever arrived and letting the AEAD reject it — is
+    indistinguishable to the user from a wrong password, and that is the report
+    they will act on, by retyping a password they already know is right.
+
+    No checksum, per §7.1: the AEAD covers the container, and a second integrity
+    mechanism would only create a case where the two disagree.
+    """
+    seen: dict[int, bytes] = {}
+    totals: set[int] = set()
+
+    for raw in parts:
+        text = "".join(raw.split())
+        if not text:
+            continue
+        m = _PART_RE.match(text)
+        if not m:
+            raise ValueError(
+                f"not a paper part: {text[:24]!r}. Parts look like "
+                f"{PART_PREFIX}1/4:… — check the whole symbol scanned."
+            )
+        index, total = int(m.group(1)), int(m.group(2))
+        if total < 1:
+            raise ValueError("a part claims to be one of zero parts")
+        if not 1 <= index <= total:
+            raise ValueError(f"part {index} of {total} is out of range")
+        if index in seen:
+            raise ValueError(f"part {index} was supplied twice")
+        totals.add(total)
+        body = m.group(3).encode()
+        seen[index] = base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4))
+
+    if not seen:
+        raise ValueError("no parts supplied")
+    if len(totals) != 1:
+        raise ValueError(
+            f"parts disagree about how many there are ({sorted(totals)}) — "
+            "they are from different backups"
+        )
+
+    total = totals.pop()
+    missing = [i for i in range(1, total + 1) if i not in seen]
+    if missing:
+        raise ValueError(
+            f"missing part(s) {', '.join(map(str, missing))} of {total}. "
+            "Every part is needed — this is not a k-of-n share set."
+        )
+    return b"".join(seen[i] for i in range(1, total + 1))
+
+
+def paper_capacity(qr_byte_capacity: int, total_hint: int = 9999) -> int:
+    """
+    Raw container bytes that fit in one symbol of ``qr_byte_capacity`` bytes.
+
+    Subtracts the widest prefix this run can produce, then reverses base64's 4/3
+    inflation. ``total_hint`` keeps a small backup from being charged for the
+    four-digit counts it will never print.
+    """
+    prefix = len(PART_PREFIX) + 2 * len(str(total_hint)) + 2  # index "/" total ":"
+    usable = qr_byte_capacity - prefix
+    if usable < 4:
+        raise ValueError("symbol too small to hold a part")
+    return (usable // 4) * 3
+
+
 def detect(data: bytes) -> str:
     """
     §7 / §10's last checklist item: distinguish the encodings by inspecting
     bytes alone, with no dependence on the order the checks are written in.
 
-    §7 as amended by §4.6: the cases are disjoint on the first *two* bytes —
-    ``ke`` for v2 armor, ``KE`` for the binary magic and the legacy ``KEYM1:``
-    armor (separated from each other at byte 4), ``KM`` for a share, ``IB`` for
-    legacy IBTZ. So this returns the same answer under any permutation of the
+    §7 as amended by §4.6 and §7.1: the cases are disjoint on the first *two*
+    bytes — ``ke`` for v2 armor, ``KE`` for the binary magic and the legacy
+    ``KEYM1:`` armor (separated from each other at byte 4), ``KM`` for an
+    auxiliary artefact, ``IB`` for legacy IBTZ. ``KM`` is a family: byte 2
+    separates a share (``KMS``) from a paper part (``KMP``). So this returns the same answer under any permutation of the
     branches, which is the property §7 was written to buy.
 
     It was one byte until the share prefix arrived. ``KMSHARE1:`` deliberately
@@ -1645,6 +1751,11 @@ def detect(data: bytes) -> str:
         return "keym1-armor"
     if data.startswith(SHARE_PREFIX.encode()):
         return "keym2-share"
+    # §7.1. A part is the likeliest wrong-box paste of them all: reassembling a
+    # paper backup means scanning symbols one at a time, and the first one has
+    # to go somewhere. Naming it is the only useful thing to say.
+    if data.startswith(PART_PREFIX.encode()):
+        return "keym2-part"
     if data.startswith(MAGIC):
         return f"keym-binary-v{data[4]}" if len(data) > 4 else "keym-binary"
     if data.startswith(b"IBTZ"):
@@ -2130,6 +2241,42 @@ def _selftest() -> int:
           detect(b"KEYM1:AAAA") == "keym1-armor")
     check("armor and magic differ at byte 0", armor(base).encode()[0] != MAGIC[0])
 
+    # --- §7.1: paper parts ---
+    long_container = encrypt(os.urandom(5_000), pw, kdf_id=KDF_PBKDF2,
+                             cipher_id=CIPHER_AES, **fast)
+    parts = encode_parts(long_container, 1_734)
+    check("a real container spans several paper parts", len(parts) > 1)
+    check("paper parts round-trip", decode_parts(parts) == long_container)
+    # The order they come off a scanner is the order someone picked them up in.
+    check("parts reassemble out of order",
+          decode_parts(list(reversed(parts))) == long_container)
+    check("a part is recognised as a part, not as a container",
+          detect(parts[0].encode()) == "keym2-part")
+    check("§7.1 parts are disjoint from shares at byte 2",
+          PART_PREFIX[:2] == SHARE_PREFIX[:2] and PART_PREFIX[2] != SHARE_PREFIX[2])
+    check("a one-part backup still says 1/1",
+          encode_parts(b"tiny", 1_734)[0].startswith("KMPART1:1/1:"))
+
+    # Each of these produces the same symptom if it is not caught here — an
+    # AEAD failure, which reads to a user as a wrong password.
+    for bad, why in (
+        (parts[:-1], "a missing part"),
+        (parts + [parts[0]], "a duplicated part"),
+        (["KMPART1:1/2:AAAA", "KMPART1:2/3:AAAA"], "parts from different backups"),
+        (["KMPART1:0/1:AAAA"], "a zero index"),
+        (["KMPART1:2/1:AAAA"], "an index past the total"),
+        (["keym2:AAAA"], "armor supplied as a part"),
+        ([], "no parts at all"),
+    ):
+        try:
+            decode_parts(bad)
+            check(f"reassembly refuses {why}", False)
+        except ValueError:
+            check(f"reassembly refuses {why}", True)
+
+    check("paper_capacity leaves room for the prefix",
+          len(encode_parts(long_container, paper_capacity(2_331))[0]) <= 2_331)
+
     # --- wrong credentials ---
     with_kf = encrypt(b"x", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
                       keyfile_bytes=kf, **fast)
@@ -2518,6 +2665,26 @@ def main(argv: Optional[list[str]] = None) -> int:
     insp = sub.add_parser("inspect", help="describe a container without decrypting it")
     insp.add_argument("--in", dest="infile", help="input path (default: stdin)")
 
+    # §7.1. Paper parts, both directions. `split` is a convenience — the app
+    # prints the kit — but `join` is the one that matters: a paper backup only
+    # anyone with the app can reassemble is not a paper backup.
+    spl = sub.add_parser("split", help="split a container into paper parts (§7.1)")
+    spl.add_argument("--in", dest="infile", help="input path (default: stdin)")
+    spl.add_argument("--out", dest="outfile", help="output path (default: stdout)")
+    spl.add_argument("--armor", action="store_true", help="input is keym2: text")
+    spl.add_argument("--capacity", type=int, default=1734, metavar="BYTES",
+                     help="container bytes per part (default 1734: a version-40 "
+                          "QR at ECC level M, which is what paper needs)")
+
+    jn = sub.add_parser(
+        "join", help="reassemble paper parts into a container (§7.1)")
+    jn.add_argument("--in", dest="infile", help="file of parts, one per line (default: stdin)")
+    jn.add_argument("--out", dest="outfile", help="output path (default: stdout)")
+    jn.add_argument("--part", action="append", dest="parts", metavar="KMPART1:...",
+                    help="a part; repeatable, and mixable with --in")
+    jn.add_argument("--armor", action="store_true",
+                    help="write keym2: text instead of a binary container")
+
     shr = sub.add_parser(
         "add-shares",
         help="enrol a k-of-n Shamir share set on an existing container (§4.6)")
@@ -2550,6 +2717,45 @@ def main(argv: Optional[list[str]] = None) -> int:
         if detect(data) == "keym2-armor":
             data = dearmor(data.decode())
         print(_inspect(data))
+        return 0
+
+    # §7.1, before the key-file lookup: neither of these takes a credential.
+    if args.cmd == "split":
+        if args.armor or detect(data) == "keym2-armor":
+            data = dearmor(data.decode())
+        try:
+            parts = encode_parts(data, args.capacity)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        text = "".join(f"# part {i} of {len(parts)}\n{p}\n"
+                       for i, p in enumerate(parts, 1))
+        if args.outfile:
+            open(args.outfile, "w", encoding="utf-8").write(text)
+        else:
+            sys.stdout.write(text)
+        return 0
+
+    if args.cmd == "join":
+        supplied = list(args.parts or [])
+        if args.infile or not supplied:
+            supplied += [ln for ln in data.decode("utf-8", "replace").splitlines()
+                         if ln.strip() and not ln.lstrip().startswith("#")]
+        try:
+            container = decode_parts(supplied)
+        except ValueError as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        if args.armor:
+            out_text = armor(container) + "\n"
+            if args.outfile:
+                open(args.outfile, "w", encoding="utf-8").write(out_text)
+            else:
+                sys.stdout.write(out_text)
+        elif args.outfile:
+            open(args.outfile, "wb").write(container)
+        else:
+            sys.stdout.buffer.write(container)
         return 0
 
     keyfile = open(args.key_file, "rb").read() if args.key_file else None

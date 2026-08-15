@@ -549,6 +549,39 @@ def main() -> int:
         check("armor is unpadded base64url", "=" not in keym2.armor(good))
         check("armor starts with lowercase k", keym2.armor(good)[0] == "k")
 
+        # ---------------------------------------------------------------
+        # 8. §7.1 paper parts agree — on the strings, not just the bytes
+        # ---------------------------------------------------------------
+        print("\nPaper parts (§7.1):")
+        # `good` is one of the containers built above, so this is a real
+        # container rather than a synthetic buffer.
+        long_src = tmp / "paper-src.bin"
+        long_src.write_bytes(good)
+
+        py_parts = keym2.encode_parts(good, 1_734)
+        js_parts_file = tmp / "js-parts.txt"
+        bridge("split", "--in", str(long_src), "--out", str(js_parts_file),
+               "--capacity", "1734")
+        js_parts = [ln for ln in js_parts_file.read_text().splitlines() if ln.strip()]
+
+        # The whole reason this compares strings: transposing a slice boundary
+        # leaves both sides reassembling correctly while their printed pages are
+        # mutually unusable. A container-only comparison would pass.
+        check("python and js emit byte-identical paper parts", py_parts == js_parts,
+              f"py {len(py_parts)} parts, js {len(js_parts)}")
+
+        check("py reassembles js's parts", keym2.decode_parts(js_parts) == good)
+
+        py_parts_file = tmp / "py-parts.txt"
+        py_parts_file.write_text("\n".join(py_parts) + "\n")
+        js_rejoined = tmp / "js-rejoined.bin"
+        bridge("join", "--in", str(py_parts_file), "--out", str(js_rejoined))
+        check("js reassembles python's parts", js_rejoined.read_bytes() == good)
+
+        # A part is not a container, and §7.1 requires both sides to say which.
+        check("py classifies a part as a part",
+              keym2.detect(py_parts[0].encode()) == "keym2-part")
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
