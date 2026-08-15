@@ -138,3 +138,36 @@
     letter-spacing: -0.025em;
   }
 }
+
+/*
+ * U17. `prefers-reduced-motion` was ignored entirely — no media query anywhere
+ * in this stylesheet, against 25 animated elements.
+ *
+ * A global rule rather than `motion-reduce:` variants on each one. The variant
+ * approach means every future animation is opt-in to being accessible, and the
+ * failure mode is silent: nobody notices the one element that was missed except
+ * the person it makes ill. This inverts that — new animation is covered by
+ * default and has to opt *out* deliberately.
+ *
+ * Near-zero rather than `none`, and that is deliberate too. A duration of 0
+ * cancels `animationend` and `transitionend` in some engines, and any code
+ * waiting on one of those events would hang instead of degrading. 0.01ms fires
+ * the event on the next frame while being imperceptible.
+ *
+ * `scroll-behavior: auto` is part of the same preference: a smooth-scrolled
+ * jump is vestibular motion just as much as a slide is.
+ */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  html {
+    scroll-behavior: auto !important;
+  }
+}
