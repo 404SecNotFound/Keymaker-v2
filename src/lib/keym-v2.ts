@@ -1099,6 +1099,33 @@ export async function addShamirSlotKeym2(
 }
 
 /**
+ * §4.7. The slot salts of every passkey slot in a container.
+ *
+ * Needed before unlocking, and that ordering is the whole shape of a passkey
+ * unlock: the PRF salt derives from the slot salt, so a reader has to open the
+ * file, find the slot, derive the salt, and only then ask the authenticator
+ * anything. A passphrase unlock can ask for the secret first; this cannot.
+ *
+ * Returns one entry per passkey slot rather than the first, because a container
+ * may carry more than one enrolled key and each has its own salt. A caller with
+ * one authenticator tries them in turn; §4.7 stores nothing that would let it
+ * pick.
+ *
+ * Structural parse errors propagate. A container this cannot read is not a
+ * container with no passkey slots, and saying so by returning an empty array
+ * would turn a malformed file into "no passkey enrolled".
+ */
+export function passkeySlotSaltsKeym2(container: Uint8Array): Uint8Array[] {
+  const parsed = parseKeym2Container(container);
+  const salts: Uint8Array[] = [];
+  for (const record of parsed.records) {
+    const slot = parseKeym2Slot(record);
+    if (slot !== null && slot.slotType === KEYM2_SLOT_TYPE_PASSKEY) salts.push(slot.salt);
+  }
+  return salts;
+}
+
+/**
  * True when every slot a reader could attempt is a passkey slot.
  *
  * An unparseable record counts as *not* a passkey slot, which is the

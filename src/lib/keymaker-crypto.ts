@@ -1010,14 +1010,16 @@ export async function decryptData(
    * passes three arguments, and widening is the change that cannot disturb the
    * v1 path.
    */
-  shares?: string[]
+  shares?: string[],
+  /** §4.7. 32 bytes from an authenticator, obtained by the caller. */
+  prfOutput?: Uint8Array
 ): Promise<DecryptResult> {
   validateCommon(encryptedBuffer, password, false);
   const hasShares = !!shares && shares.length > 0;
-  if (!password && !keyFileBuffer && !hasShares) {
+  if (!password && !keyFileBuffer && !hasShares && !prfOutput) {
     throw new KeymakerError(
       "credential-required",
-      "A password, key file, or set of recovery shares is required for decryption."
+      "A password, key file, recovery shares, or a passkey is required for decryption."
     );
   }
   if (!crypto.subtle) {
@@ -1039,7 +1041,8 @@ export async function decryptData(
         fullData,
         password,
         keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
-        shares
+        shares,
+        prfOutput
       );
       return {
         data: result.data.buffer.slice(
