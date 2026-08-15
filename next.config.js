@@ -41,6 +41,20 @@ function resolveBuildId() {
   }
 }
 
+/**
+ * The application version, read from package.json at build time.
+ *
+ * Roadmap 6.1. The footer used to carry its own literal, so two version strings
+ * existed and were free to drift — and the one that drifts is the one a user
+ * quotes in a bug report, because the footer is the one they can see.
+ *
+ * This is the *application* version. It is deliberately not the container
+ * format version, which is "KEYM v2" and moves only on a format change. The
+ * footer states both, separately, because someone whose file will not open
+ * needs to know which of the two numbers they are looking at.
+ */
+const appVersion = require('./package.json').version;
+
 const nextConfig = {
   output: 'export',
   generateBuildId: async () => resolveBuildId(),
@@ -48,7 +62,7 @@ const nextConfig = {
   // Exposed to client code so the hand-written <link> tags and the service
   // worker registration in layout.tsx can prefix themselves. Next rewrites
   // its own asset URLs, but not ones we author by hand.
-  env: { KEYMAKER_BASE_PATH: basePath },
+  env: { KEYMAKER_BASE_PATH: basePath, KEYMAKER_APP_VERSION: appVersion },
 };
 
 // The bundle analyzer is a Webpack-only plugin.
