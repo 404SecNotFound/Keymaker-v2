@@ -237,12 +237,12 @@ CIPHER_AES = 0x00
 CIPHER_CHACHA = 0x01
 CIPHER_CHAINED = 0x02
 
-# §4.4. 0x01's wire layout is deliberately unspecified until something
-# implements it. A reader skips what it does not implement (§4.4, finding A6).
+# §4.4. A reader skips what it does not implement (§4.4, finding A6).
 SLOT_TYPE_PASSPHRASE = 0x00
-SLOT_TYPE_PASSKEY_PRF = 0x01     # reserved, unimplemented
+SLOT_TYPE_PASSKEY_PRF = 0x01     # §4.7
 SLOT_TYPE_SHAMIR = 0x02          # §4.6
-IMPLEMENTED_SLOT_TYPES = frozenset({SLOT_TYPE_PASSPHRASE, SLOT_TYPE_SHAMIR})
+IMPLEMENTED_SLOT_TYPES = frozenset(
+    {SLOT_TYPE_PASSPHRASE, SLOT_TYPE_PASSKEY_PRF, SLOT_TYPE_SHAMIR})
 
 # §6, and normative in both directions. A passphrase under HKDF is a password
 # with no stretching at all, and nothing in any output would reveal it; a
@@ -251,6 +251,7 @@ IMPLEMENTED_SLOT_TYPES = frozenset({SLOT_TYPE_PASSPHRASE, SLOT_TYPE_SHAMIR})
 # the second invites a writer to read the pairing as advice.
 LEGAL_KDFS_FOR_SLOT_TYPE = {
     SLOT_TYPE_PASSPHRASE: frozenset({KDF_PBKDF2, KDF_ARGON2ID}),
+    SLOT_TYPE_PASSKEY_PRF: frozenset({KDF_HKDF}),
     SLOT_TYPE_SHAMIR: frozenset({KDF_HKDF}),
 }
 
@@ -287,6 +288,23 @@ CTX_SHAMIR_INPUT = b"keymaker.v2.shamir-input"
 CTX_SHARE_SET = b"keymaker.v2.share-set"
 CTX_SHARE_CHECKSUM = b"keymaker.v2.share-checksum"
 INFO_SLOT_KEY = b"keymaker.v2.slot-key"
+
+# §4.7, and the same separation argument a third time: a 32-byte passphrase, a
+# 32-byte share secret and a 32-byte PRF output must not be able to reach the
+# same slot key.
+CTX_PASSKEY_INPUT = b"keymaker.v2.passkey-input"
+
+# §4.7. The PRF salt is derived from slot_salt rather than stored.
+#
+# It differs from INFO_SLOT_KEY as hygiene, not because anything rests on it:
+# the two HKDF calls already take different IKMs — slot_salt here, the
+# length-prefixed passkey_input there — and those cannot coincide, since one is
+# 32 bytes and the other 65. Saying so plainly beats implying a separation the
+# info strings are not in fact providing.
+INFO_PRF_SALT = b"keymaker.v2.prf-salt"
+
+# §4.7. WebAuthn's PRF extension returns 32 bytes.
+PRF_OUTPUT_LEN = 32
 
 # §4.6, the share record. 42 bytes: set id, threshold, index, value, checksum.
 SHARE_SET_ID_LEN = 4
@@ -706,6 +724,39 @@ def build_shamir_input(share_secret: bytes) -> bytes:
     return lp(CTX_SHAMIR_INPUT) + lp(share_secret)
 
 
+def derive_prf_salt(slot_salt: bytes) -> bytes:
+    """
+    §4.7. The salt handed to the authenticator, derived rather than stored.
+
+    It is an *input* the authenticator needs before it will produce anything, so
+    a reader must hold it before it can ask — but holding and storing are
+    different things. The slot already carries 32 random bytes, and this spends
+    no wire space to reach a value that is not secret anyway: without the
+    credential the salt buys nothing.
+    """
+    if len(slot_salt) != SALT_LEN:
+        raise UsageError("slot salt must be 32 bytes")
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=PRF_OUTPUT_LEN,
+        salt=b"",
+        info=INFO_PRF_SALT,
+    ).derive(slot_salt)
+
+
+def build_passkey_input(prf_output: bytes) -> bytes:
+    """
+    §4.7, the slot secret for ``slot_type = 0x01``.
+
+    Same shape as build_kdf_input and build_shamir_input, third domain string.
+    The PRF output is 32 unguessable bytes from an authenticator, which is why
+    §6 pairs this slot type with HKDF and nothing else.
+    """
+    if len(prf_output) != PRF_OUTPUT_LEN:
+        raise UsageError(f"PRF output must be {PRF_OUTPUT_LEN} bytes")
+    return lp(CTX_PASSKEY_INPUT) + lp(prf_output)
+
+
 def derive_slot_key(slot: Slot, kdf_input: bytes) -> bytes:
     """§4.3. Assumes `slot` came from parse_slot, i.e. is already bounded."""
     if slot.kdf_id == KDF_HKDF:
@@ -1122,6 +1173,49 @@ def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) ->
     return shamir_combine([(s.index, s.value) for s in chosen])
 
 
+def build_passkey_slot(
+    core: CoreHeader,
+    master_key: bytes,
+    prf_output: bytes,
+    *,
+    salt: Optional[bytes] = None,
+) -> bytes:
+    """
+    §4.7. Build one ``slot_type = 0x01`` record.
+
+    Note what this does *not* take: any identifier for the credential. §4.7
+    stores nothing about it, so this record is the same 48-byte prefix as every
+    other slot and differs only in its type byte and where its secret came from.
+
+    ``prf_output`` is the 32 bytes WebAuthn's PRF extension returned when asked
+    for ``derive_prf_salt(salt)``. This module cannot obtain it — there is no
+    authenticator behind a Python process — so it is a parameter, which is also
+    what makes the derivation testable without one.
+    """
+    if salt is None:
+        salt = os.urandom(SALT_LEN)
+    if len(salt) != SALT_LEN:
+        raise UsageError("slot salt must be 32 bytes")
+    if len(master_key) != MASTER_KEY_LEN:
+        raise UsageError("master key must be 32 bytes")
+
+    draft = Slot(
+        slot_type=SLOT_TYPE_PASSKEY_PRF,
+        kdf_id=KDF_HKDF,
+        slot_flags=0,
+        salt=salt,
+        wrapped_key=b"",
+    )
+    prefix = draft.pack_prefix()
+    # The same round-trip through the reader's own validator that the other two
+    # builders do: a writer that can emit a slot its own parser rejects is worth
+    # catching here rather than in someone's hands.
+    parse_slot(prefix + b"\x00" * (MASTER_KEY_LEN + core.tag_overhead))
+
+    slot_key = derive_slot_key(draft, build_passkey_input(prf_output))
+    return prefix + wrap_master_key(core, prefix, slot_key, master_key)
+
+
 def build_shamir_slot(
     core: CoreHeader,
     master_key: bytes,
@@ -1391,6 +1485,7 @@ def slot_secret_for(
     password: Optional[str],
     keyfile_bytes: Optional[bytes],
     shares: Optional[list[str]],
+    prf_output: Optional[bytes],
 ) -> Optional[bytes]:
     """
     §4.1 / §4.6. The slot secret this caller can offer *this* slot, or None if
@@ -1417,6 +1512,20 @@ def slot_secret_for(
             return None
         return build_shamir_input(secret)
 
+    if slot.slot_type == SLOT_TYPE_PASSKEY_PRF:
+        if prf_output is None:
+            return None
+        # No equivalent of the Shamir set-id check exists, and cannot: §4.7
+        # stores nothing identifying the credential, so there is no way to ask
+        # "is this the right passkey" before trying it. A PRF output from the
+        # wrong credential simply fails to unwrap, which by §6 is
+        # indistinguishable from a wrong password — deliberately, and at the
+        # cost of never being able to say "wrong passkey".
+        try:
+            return build_passkey_input(prf_output)
+        except KeymError:
+            return None
+
     return None
 
 
@@ -1426,6 +1535,7 @@ def recover_master_key(
     *,
     keyfile_bytes: Optional[bytes] = None,
     shares: Optional[list[str]] = None,
+    prf_output: Optional[bytes] = None,
 ) -> tuple[CoreHeader, list[bytes], bytes, bytes]:
     """
     Walk the slot table until one opens, returning everything the caller needs
@@ -1438,15 +1548,16 @@ def recover_master_key(
     exhausting the table is a failure.
     """
     core, records, payload = parse_container(container)
-    if password is None and not shares:
-        raise UsageError("need a password or a set of shares")
+    if password is None and not shares and prf_output is None:
+        raise UsageError("need a password, a set of shares, or a PRF output")
 
     for record in records:
         slot = _attemptable(record)
         if slot is None:
             continue
         secret = slot_secret_for(
-            slot, password=password, keyfile_bytes=keyfile_bytes, shares=shares)
+            slot, password=password, keyfile_bytes=keyfile_bytes, shares=shares,
+            prf_output=prf_output)
         if secret is None:
             continue
         master = unwrap_master_key_from_slot(core, record, slot, secret)
@@ -1462,6 +1573,7 @@ def decrypt(
     *,
     keyfile_bytes: Optional[bytes] = None,
     shares: Optional[list[str]] = None,
+    prf_output: Optional[bytes] = None,
 ) -> bytes:
     """
     Decrypt a v2 container, or raise KeymError with a single generic message.
@@ -1472,7 +1584,8 @@ def decrypt(
     caller cannot accidentally treat 899 good chunks out of 900 as a result.
     """
     core, _records, payload, master = recover_master_key(
-        container, password, keyfile_bytes=keyfile_bytes, shares=shares)
+        container, password, keyfile_bytes=keyfile_bytes, shares=shares,
+        prf_output=prf_output)
 
     tag = core.tag_overhead
     sizes = _chunk_layout(len(payload), tag)
@@ -1523,6 +1636,7 @@ def add_slot(
     *,
     unlock_keyfile: Optional[bytes] = None,
     unlock_shares: Optional[list[str]] = None,
+    unlock_prf_output: Optional[bytes] = None,
     new_keyfile: Optional[bytes] = None,
     kdf_id: int = KDF_ARGON2ID,
     iterations: int = 1_000_000,
@@ -1535,7 +1649,7 @@ def add_slot(
     """Enrol a second secret, holding only the first. §5.3."""
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
-        shares=unlock_shares)
+        shares=unlock_shares, prf_output=unlock_prf_output)
     if len(records) >= SLOT_COUNT_MAX:
         raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
 
@@ -1556,6 +1670,7 @@ def add_shamir_slot(
     *,
     unlock_keyfile: Optional[bytes] = None,
     unlock_shares: Optional[list[str]] = None,
+    unlock_prf_output: Optional[bytes] = None,
     salt: Optional[bytes] = None,
     share_secret: Optional[bytes] = None,
     coefficients: Optional[bytes] = None,
@@ -1574,7 +1689,7 @@ def add_shamir_slot(
     """
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
-        shares=unlock_shares)
+        shares=unlock_shares, prf_output=unlock_prf_output)
     if len(records) >= SLOT_COUNT_MAX:
         raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
 
@@ -1582,6 +1697,59 @@ def add_shamir_slot(
         core, master, k, n,
         salt=salt, share_secret=share_secret, coefficients=coefficients)
     return assemble(core, records + [record], payload), texts
+
+
+def _passkey_only(records: list[bytes]) -> bool:
+    """
+    True when every slot a reader could attempt is a passkey slot.
+
+    Unparseable records are counted as *not* passkey slots, which is the
+    conservative direction: a slot this build cannot read may be a passphrase
+    slot a newer one can, and refusing to write on the strength of a record we
+    do not understand would block a legitimate container.
+    """
+    attemptable = [_attemptable(r) for r in records]
+    return bool(attemptable) and all(
+        s is not None and s.slot_type == SLOT_TYPE_PASSKEY_PRF for s in attemptable)
+
+
+def add_passkey_slot(
+    container: bytes,
+    unlock_password: Optional[str],
+    prf_output: bytes,
+    *,
+    unlock_keyfile: Optional[bytes] = None,
+    unlock_shares: Optional[list[str]] = None,
+    unlock_prf_output: Optional[bytes] = None,
+    salt: Optional[bytes] = None,
+) -> bytes:
+    """
+    §4.7. Enrol a passkey on an existing container, holding one other secret.
+
+    There is no ``encrypt(..., passkey=...)`` counterpart, and that is the
+    never-travels-alone rule expressed as an API rather than as a warning: a
+    container is created with a passphrase, and a passkey is added to one that
+    already opens some other way. A writer cannot reach the forbidden state by
+    following the obvious path, which is the only kind of rule that holds.
+    """
+    core, records, payload, master = recover_master_key(
+        container, unlock_password, keyfile_bytes=unlock_keyfile,
+        shares=unlock_shares, prf_output=unlock_prf_output)
+    if len(records) >= SLOT_COUNT_MAX:
+        raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
+
+    record = build_passkey_slot(core, master, prf_output, salt=salt)
+    out = records + [record]
+
+    # §4.7's one normative rule that is not about bytes. Checked on the result
+    # rather than the input, so it cannot be walked around by ordering.
+    if _passkey_only(out):
+        raise UsageError(
+            "refusing to write a container whose only slot is a passkey slot: "
+            "a passkey is hardware, and a container only a lost key opens is "
+            "lost data (§4.7)"
+        )
+    return assemble(core, out, payload)
 
 
 def remove_slot(container: bytes, index: int) -> bytes:
@@ -1595,7 +1763,19 @@ def remove_slot(container: bytes, index: int) -> bytes:
         raise UsageError(f"no slot at index {index}")
     if len(records) == 1:
         raise UsageError("refusing to remove the last slot; the container would be unopenable")
-    return assemble(core, records[:index] + records[index + 1:], payload)
+
+    remaining = records[:index] + records[index + 1:]
+    # §4.7 again, and this is the path that would otherwise walk around it:
+    # removing the passphrase from a {passphrase, passkey} container leaves a
+    # container only a piece of hardware opens. The rule is about the resulting
+    # file, so every operation that produces one has to ask.
+    if _passkey_only(remaining):
+        raise UsageError(
+            f"refusing to remove slot {index}: it would leave a container whose "
+            "only slot is a passkey slot, and a passkey is hardware (§4.7). "
+            "Add another unlock path first."
+        )
+    return assemble(core, remaining, payload)
 
 
 def rewrap_slot(
@@ -1606,6 +1786,7 @@ def rewrap_slot(
     *,
     unlock_keyfile: Optional[bytes] = None,
     unlock_shares: Optional[list[str]] = None,
+    unlock_prf_output: Optional[bytes] = None,
     new_keyfile: Optional[bytes] = None,
     kdf_id: int = KDF_ARGON2ID,
     iterations: int = 1_000_000,
@@ -1627,7 +1808,7 @@ def rewrap_slot(
     """
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
-        shares=unlock_shares)
+        shares=unlock_shares, prf_output=unlock_prf_output)
     if not (0 <= index < len(records)):
         raise UsageError(f"no slot at index {index}")
 
@@ -1932,6 +2113,17 @@ def _describe_slot(index: int, record: bytes) -> list[str]:
         # Finding A6: a reader does not validate slots it cannot attempt, so
         # inspect does not pretend to know more about one than a reader would.
         return [f"  slot {index}     type 0x{record[0]:02x}, not usable by this implementation"]
+    if slot.slot_type == SLOT_TYPE_PASSKEY_PRF:
+        # Nothing identifies the credential, so there is nothing to print about
+        # it. That absence is the §4.7 design, not missing support, and saying
+        # so here is cheaper than someone concluding inspect is incomplete.
+        return [
+            f"  slot {index}       type 0x{slot.slot_type:02x} (passkey / WebAuthn PRF)",
+            f"    kdf         HKDF-SHA-256",
+            f"    salt        {slot.salt.hex()}",
+            f"    credential  not stored — §4.7 keeps no identifier, so which "
+            f"passkey opens this is not knowable from the file",
+        ]
     if slot.slot_type == SLOT_TYPE_SHAMIR:
         # No threshold and no share count: §4.6 keeps both out of the container,
         # so inspect reports what is actually there rather than inventing it.
@@ -2832,6 +3024,79 @@ def _selftest() -> int:
     check("a share is recognised as a share and not as a container",
           detect(text.encode()) == "keym2-share")
 
+    # --- §4.7, the passkey slot ---------------------------------------------
+    fixed_prf = bytes(range(200, 232))
+    other_prf = bytes(range(1, 33))
+
+    # The derived salt, which is the whole of what replaced a stored field.
+    check("the PRF salt is derived deterministically from the slot salt",
+          derive_prf_salt(fixed_salt) == derive_prf_salt(fixed_salt))
+    check("a different slot salt gives a different PRF salt",
+          derive_prf_salt(fixed_salt) != derive_prf_salt(bytes(32)))
+    check("the PRF salt is 32 bytes",
+          len(derive_prf_salt(fixed_salt)) == PRF_OUTPUT_LEN)
+    # The derivation must actually transform. "Simplifying" it to return
+    # slot_salt would hand the authenticator a value that is stored in the file
+    # and look entirely reasonable doing it.
+    check("the derived PRF salt is not the slot salt passed through",
+          derive_prf_salt(fixed_salt) != fixed_salt)
+
+    # Domain separation, a third time: one 32-byte value must not reach the same
+    # slot key through two different doors.
+    check("a PRF output and a share secret of the same bytes give different inputs",
+          build_passkey_input(fixed_prf) != build_shamir_input(fixed_prf))
+
+    refuses("a PRF output that is not 32 bytes",
+            lambda: build_passkey_input(fixed_prf[:31]))
+    refuses("a slot salt that is not 32 bytes",
+            lambda: derive_prf_salt(fixed_salt[:31]))
+
+    # §6's pairing, refused before any KDF runs.
+    rejects("a passkey slot declaring PBKDF2",
+            lambda: parse_slot(_prefix(SLOT_TYPE_PASSKEY_PRF, KDF_PBKDF2,
+                                       struct.pack(">I4x", 1_000_000)) + b"\x00" * 48))
+    rejects("a passkey slot declaring Argon2id",
+            lambda: parse_slot(_prefix(SLOT_TYPE_PASSKEY_PRF, KDF_ARGON2ID,
+                                       struct.pack(">IHBx", 65536, 3, 4)) + b"\x00" * 48))
+
+    # Round trip, on a container that already has a passphrase — the only way
+    # §4.7 permits a passkey slot to exist at all.
+    pk_base = encrypt(b"opened by a passkey", pw, kdf_id=KDF_PBKDF2, **fast)
+    pk_container = add_passkey_slot(pk_base, pw, fixed_prf)
+    check("a passkey slot opens the container with its PRF output",
+          decrypt(pk_container, prf_output=fixed_prf) == b"opened by a passkey")
+    check("the password that was already there still opens it",
+          decrypt(pk_container, pw) == b"opened by a passkey")
+    rejects("the wrong PRF output",
+            lambda: decrypt(pk_container, prf_output=other_prf))
+    rejects("a PRF output offered to a container with no passkey slot",
+            lambda: decrypt(pk_base, prf_output=fixed_prf))
+    check("a passkey slot adds exactly one slot",
+          len(parse_container(pk_container)[1])
+          == len(parse_container(pk_base)[1]) + 1)
+    check("the payload was not re-encrypted",
+          parse_container(pk_container)[2] == parse_container(pk_base)[2])
+
+    # §4.7's normative rule, from both directions that could reach it.
+    refuses("removing the last non-passkey slot",
+            lambda: remove_slot(pk_container, 0))
+    check("removing the passkey slot itself is fine",
+          len(parse_container(remove_slot(pk_container, 1))[1]) == 1)
+
+    # Determinism, for the cross-implementation comparison.
+    check("an explicit salt gives a byte-identical passkey slot",
+          build_passkey_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk,
+                             fixed_prf, salt=fixed_salt)
+          == build_passkey_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk,
+                                fixed_prf, salt=fixed_salt))
+    check("a passkey slot does not repeat itself by default",
+          build_passkey_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk, fixed_prf)
+          != build_passkey_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk, fixed_prf))
+    check("a passkey slot is the same length as every other slot",
+          len(build_passkey_slot(CoreHeader(cipher_id=CIPHER_AES), fixed_mk,
+                                 fixed_prf, salt=fixed_salt))
+          == slot_len(CIPHER_AES))
+
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print(f"  {'ok  ' if ok else 'FAIL'} {name}")
@@ -2897,6 +3162,10 @@ def main(argv: Optional[list[str]] = None) -> int:
                            help="a share; repeat until you have the threshold")
             p.add_argument("--shares-from", metavar="PATH",
                            help="read shares from a file, one per line")
+            # §4.7. Same role as --share: a secret that is not a password, so
+            # holding it means the password prompt is skipped entirely.
+            p.add_argument("--prf-output", metavar="HEX",
+                           help="32-byte hex WebAuthn PRF output, for a passkey slot")
         if name == "encrypt":
             p.add_argument("--kdf", choices=["pbkdf2", "argon2id"], default="argon2id")
             p.add_argument("--cipher", choices=["aes", "chacha", "chained"], default="aes")
@@ -2976,12 +3245,48 @@ def main(argv: Optional[list[str]] = None) -> int:
     shr.add_argument("--share-coefficients",
                      help="(k-1)*32 hex coefficient bytes (conformance testing only)")
 
+    pk = sub.add_parser(
+        "add-passkey",
+        help="enrol a passkey slot on an existing container (§4.7)")
+    pk.add_argument("--password", help="a password that already opens the container")
+    pk.add_argument("--key-file")
+    pk.add_argument("--in", dest="infile", help="input path (default: stdin)")
+    pk.add_argument("--out", dest="outfile", required=True,
+                    help="where to write the container with the new slot")
+    # Not optional, and there is no way for this script to obtain it: a PRF
+    # output comes from an authenticator, and Python is not a browser. The
+    # recovery story for a passkey slot is the *other* slot §4.7 requires —
+    # this subcommand exists so the format is exercisable and so a container
+    # written by the app can be opened here given the PRF output, not because
+    # a shell is a sensible place to tap a security key.
+    pk.add_argument("--prf-output", required=True, metavar="HEX",
+                    help="32-byte hex WebAuthn PRF output for this slot's derived salt")
+    pk.add_argument("--armor", action="store_true", help="input is keym2: text")
+    pk.add_argument("--salt", help="32-byte hex slot salt (conformance testing only)")
+
+    prf = sub.add_parser(
+        "prf-salt",
+        help="print the PRF salt a passkey slot derives from its slot salt (§4.7)")
+    prf.add_argument("--slot-salt", required=True, metavar="HEX",
+                     help="32-byte hex slot salt")
+
     sub.add_parser("selftest", help="round-trip this implementation against itself")
 
     args = ap.parse_args(argv)
 
     if args.cmd == "selftest":
         return _selftest()
+
+    # Before the unconditional read below: like selftest, this takes no
+    # container. It exists so an implementer can check their own derivation
+    # against this one without building a container first.
+    if args.cmd == "prf-salt":
+        try:
+            print(derive_prf_salt(bytes.fromhex(args.slot_salt)).hex())
+        except (ValueError, KeymError, UsageError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        return 0
 
     data = open(args.infile, "rb").read() if args.infile else sys.stdin.buffer.read()
 
@@ -3093,18 +3398,48 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(t)
         return 0
 
+    if args.cmd == "add-passkey":
+        if args.armor or detect(data) == "keym2-armor":
+            data = dearmor(data.decode())
+        try:
+            container = add_passkey_slot(
+                data, resolve_password(args.password),
+                bytes.fromhex(args.prf_output),
+                unlock_keyfile=keyfile,
+                salt=bytes.fromhex(args.salt) if args.salt else None,
+            )
+        except ValueError:
+            print("error: --prf-output must be hex", file=sys.stderr)
+            return 1
+        except (KeymError, UsageError) as e:
+            print(f"error: {e}", file=sys.stderr)
+            return 1
+        open(args.outfile, "wb").write(container)
+        print("# A passkey slot was added. The container still opens with the "
+              "password it already had —", file=sys.stderr)
+        print("# §4.7 requires that, because a passkey is hardware and hardware "
+              "gets lost.", file=sys.stderr)
+        return 0
+
     shares: Optional[list[str]] = None
+    prf_output: Optional[bytes] = None
     if args.cmd == "decrypt":
         shares = list(args.shares or [])
         if args.shares_from:
             shares += [ln.strip() for ln in open(args.shares_from, encoding="utf-8")
                        if ln.strip() and not ln.lstrip().startswith("#")]
+        if args.prf_output:
+            try:
+                prf_output = bytes.fromhex(args.prf_output)
+            except ValueError:
+                print("error: --prf-output must be hex", file=sys.stderr)
+                return 1
 
     try:
         # With enough shares in hand the password prompt would be a dead end —
         # an heir does not have one. Skipping it is the difference between this
         # script being usable for inheritance and merely supporting it.
-        password = (None if shares
+        password = (None if (shares or prf_output)
                     else resolve_password(args.password,
                                           confirm=(args.cmd == "encrypt")))
     except UsageError as e:
@@ -3137,7 +3472,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 data = extract_selfextract(data)
             elif args.armor or detect(data) == "keym2-armor":
                 data = dearmor(data.decode())
-            out = decrypt(data, password, keyfile_bytes=keyfile, shares=shares)
+            out = decrypt(data, password, keyfile_bytes=keyfile, shares=shares,
+                          prf_output=prf_output)
     except (KeymError, UsageError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
