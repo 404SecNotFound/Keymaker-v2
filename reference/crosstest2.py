@@ -193,6 +193,25 @@ def main() -> int:
             # implementation can use them, and that is the whole promise a share
             # fixture makes — the paper outlives whichever implementation
             # printed it.
+            # §4.7. The PRF output in the corpus was written by the TypeScript.
+            # Same promise as a share: the container outlives whichever
+            # implementation enrolled the key, and the only way to hold anyone
+            # to that is for the other implementation to open it.
+            if "passkey" in f:
+                prf = bytes.fromhex(f["passkey"]["prfOutputHex"])
+                try:
+                    got = keym2.decrypt(blob, prf_output=prf)
+                    check(f"{f['name']}: python opens it with the js-written PRF output",
+                          got.decode() == f["plaintext"])
+                except keym2.KeymError as e:
+                    check(f"{f['name']}: python opens it with the js-written PRF output",
+                          False, str(e))
+                try:
+                    keym2.decrypt(blob, prf_output=bytes(32))
+                    check(f"{f['name']}: a wrong PRF output is still refused", False)
+                except keym2.KeymError:
+                    check(f"{f['name']}: a wrong PRF output is still refused", True)
+
             if "shamir" in f:
                 k = f["shamir"]["threshold"]
                 shares = f["shamir"]["shares"]
@@ -210,13 +229,16 @@ def main() -> int:
                     check(f"{f['name']}: k-1 js-written shares still refused", True)
 
         shamir_fixtures = [f for f in v2_fixtures if "shamir" in f]
+        passkey_fixtures = [f for f in v2_fixtures if "passkey" in f]
         # Counted rather than assumed, because the corpus is append-only and a
         # fixture that silently stopped being listed would otherwise just stop
         # being tested. Update deliberately when the corpus grows.
-        check("v2 corpus has all ten vectors, three share sets and one page",
-              len(v2_fixtures) == 10 and len(shamir_fixtures) == 3
+        check("v2 corpus has all thirteen vectors: three share sets, three passkeys, one page",
+              len(v2_fixtures) == 13 and len(shamir_fixtures) == 3
+              and len(passkey_fixtures) == 3
               and len([f for f in v2_fixtures if f.get("selfextract")]) == 1,
-              f"found {len(v2_fixtures)} v2, {len(shamir_fixtures)} shamir")
+              f"found {len(v2_fixtures)} v2, {len(shamir_fixtures)} shamir, "
+              f"{len(passkey_fixtures)} passkey")
 
         # ---------------------------------------------------------------
         # 1. Byte equality — the check that catches a writer disagreement

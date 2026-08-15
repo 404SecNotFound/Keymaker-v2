@@ -165,6 +165,42 @@
       }
     },
     {
+      "name": "v2-passkey-aes256gcm",
+      "file": "v2-passkey-aes256gcm.keym",
+      "version": 2,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v2 passkey / aes-256-gcm",
+      "passkey": {
+        "prfOutputHex": "0165a6d59a2635da6113855fb9adb7a06a6f2e88cf8cd763bf252df7f43dae5e"
+      }
+    },
+    {
+      "name": "v2-passkey-chacha20poly1305",
+      "file": "v2-passkey-chacha20poly1305.keym",
+      "version": 2,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v2 passkey / chacha20-poly1305",
+      "passkey": {
+        "prfOutputHex": "b1f95151d7ead9ce67713ce2821c810a37a3b7b5c110bd27f2cdc208b1a59a30"
+      }
+    },
+    {
+      "name": "v2-passkey-chained",
+      "file": "v2-passkey-chained.keym",
+      "version": 2,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v2 passkey / chained",
+      "passkey": {
+        "prfOutputHex": "01e2394c628b1a26e669c13e80b7e9c6f96802f3d97f13139fc090ece76a00ad"
+      }
+    },
+    {
       "name": "v2-selfextract",
       "file": "v2-selfextract.html",
       "version": 2,
