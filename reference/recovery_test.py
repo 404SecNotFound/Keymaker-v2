@@ -383,6 +383,26 @@ def walkthrough() -> None:
             capture_output=True, text=True, cwd=tmp, check=True,
         )
 
+        # §7.2. Step 8's page, pre-created for the same reason, and built by the
+        # *shipping* writer rather than assembled here — the page a reader holds
+        # came out of the app, and a hand-built approximation would let the two
+        # drift apart without anything saying so.
+        #
+        # A second container, not `vault.keym`: the walkthrough's backup is
+        # Argon2id + chained, which §7.2's subset excludes outright. That is the
+        # feature rather than an inconvenience to route around — a page carries
+        # its own PBKDF2/AES container precisely so that making one cannot weaken
+        # the backup it came from.
+        page_container = js_encrypt(2, SECRET, "pbkdf2", "aes", None, tmp, tag="-page")
+        r = subprocess.run(
+            ["node", str(BRIDGE), "selfextract", "--in", str(page_container),
+             "--out", str(tmp / "backup.html"),
+             "--created-on", "2026-01-01", "--app-version", "0.0.0"],
+            capture_output=True, text=True, cwd=ROOT,
+        )
+        if r.returncode != 0:
+            raise RuntimeError(f"bridge selfextract failed: {r.stderr.strip()}")
+
         for command in runnable:
             argv = command.split()
             if argv[:1] == ["python3"]:
@@ -406,6 +426,16 @@ def walkthrough() -> None:
             check(recovered.read_bytes() == SECRET,
                   "recovered.txt is byte-identical to what was encrypted",
                   f"{recovered.read_bytes()[:60]!r}")
+
+        # §7.2, Step 8's claim, and the same standard: an exit code of zero from
+        # a decrypt that wrote the wrong bytes would satisfy the loop above and
+        # mean nothing. This is the assertion that makes the page a backup.
+        from_page = tmp / "recovered-from-page.txt"
+        check(from_page.exists(), "the walkthrough produced recovered-from-page.txt")
+        if from_page.exists():
+            check(from_page.read_bytes() == SECRET,
+                  "the self-extracting page gives back exactly what went in",
+                  f"{from_page.read_bytes()[:60]!r}")
 
         # Every screenshot the page embeds has to be a file that exists. A
         # broken image in a walkthrough is a step the reader cannot follow.

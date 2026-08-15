@@ -4,6 +4,10 @@
 import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, type ReactNode, useCallback, useEffect } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
+import { SelfExtractExport } from "@/components/self-extract-export";
+import { armorKeym2 } from "@/lib/keym-v2";
+import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
+import { looksLikePaperPart, describePaperPart } from "@/lib/keym-v2-paper";
 import {
   KeyRound,
   Lock,
@@ -1204,9 +1208,55 @@ export function EncryptorTool() {
       return;
     }
 
+    // §7.2. A self-extracting page pasted here is the wrong-box paste that
+    // section calls the likeliest of all, because the artefact looks least like
+    // a backup: it is a web page, and someone who opens it and sees a password
+    // box has no reason to think the bytes they need are in the same file.
+    //
+    // The rule is different from the share above, and deliberately so. §7.2 says
+    // a reader that recognises the sentinels MUST *extract and proceed* rather
+    // than report — a share in this box cannot be used here, but a page can, so
+    // refusing it would be pedantry aimed at someone recovering an inheritance.
+    if (decrypting && looksLikeSelfExtract(next)) {
+      try {
+        const recovered = armorKeym2(extractSelfExtract(next));
+        setTextInputRejected(null);
+        setTextSecret(recovered);
+        toast({
+          title: "Backup found inside that page",
+          description:
+            "That was a self-extracting Keymaker page. The container has been taken " +
+            "out of it — type the password to open it.",
+        });
+      } catch (e) {
+        // Structural, never routed through the AEAD: a page problem reported as
+        // a decryption failure sends someone to retype a password that was
+        // never wrong.
+        setTextInputRejected((e as Error).message);
+        setTextSecret(next);
+      }
+      return;
+    }
+
+    // §7.1. A part is not a container either, and the section requires a reader
+    // to report *which* part it is holding rather than failing it as corrupt.
+    // The encoding shipped with 4.2 and this report is what it specifies.
+    if (decrypting && looksLikePaperPart(next)) {
+      const part = describePaperPart(next.trim().split(/\s+/)[0] ?? "");
+      setTextInputRejected(
+        part
+          ? `That is part ${part.index} of ${part.total} of a paper backup. Every one ` +
+            `of the ${part.total} parts is needed — scan them all into this box, one per line.`
+          : "That is one part of a paper backup. Every part is needed — scan them " +
+            "all into this box, one per line."
+      );
+      setTextSecret(next);
+      return;
+    }
+
     setTextInputRejected(null);
     setTextSecret(next);
-  }, [mode]);
+  }, [mode, toast]);
 
   const handlePasswordChange = useCallback((pwd: string) => {
     setPassword(pwd);
@@ -2988,6 +3038,25 @@ export function EncryptorTool() {
           <Printer className="h-3.5 w-3.5" />
           Print paper vault — scannable backup and the procedure to open it
         </button>
+      )}
+
+      {/*
+        4.3. The self-extracting page (§7.2).
+
+        Beside the paper vault for the same reason it is: this is the moment
+        someone is looking at a backup they just made and thinking about who
+        else will ever open it.
+
+        When the container is outside §7.2's subset the control does not
+        disappear — it says what would have to change. Hiding it would make the
+        feature invisible to exactly the users who chose Argon2id, which is the
+        recommended default and therefore most of them. The trade has to be made
+        before encrypting, because the page carries its own container and the
+        plaintext is gone by the time this renders, so naming it here is the one
+        place the choice can be taught at the moment it means anything.
+      */}
+      {currentMode === 'encrypt' && outputText.startsWith('keym2:') && (
+        <SelfExtractExport armored={outputText} />
       )}
 
       {/*
