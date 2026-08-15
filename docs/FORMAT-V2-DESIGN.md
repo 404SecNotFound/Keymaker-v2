@@ -777,6 +777,116 @@ asking me". The UI and the print kit must say this on the artifact itself, not
 only in the documentation — a share that ends up in a drawer because it looked
 like a receipt is the realistic failure, not a cryptographic one.
 
+### 4.7 Slot secret for a passkey slot (`slot_type = 0x01`) — **design only**
+
+> **Not implemented.** Unlike every other section of this document, nothing in
+> the codebase reads or writes this yet. It is written down because the design
+> work is done and because §4.7 hit a layout problem worth recording before
+> anyone starts coding — see *The open decision* at the end.
+
+`0x01` has been reserved since §3.2. A passkey slot is a slot whose secret comes
+out of an authenticator rather than off a keyboard.
+
+```
+prf_salt      = CSPRNG(32)                     stored in the slot, not secret
+
+prf_output    = WebAuthn PRF(credential, prf_salt)      32 bytes, from the key
+
+passkey_input = LP("keymaker.v2.passkey-input") || LP(prf_output)
+
+slot_key      = HKDF-SHA-256(passkey_input, slot_salt, "keymaker.v2.slot-key", 32)
+```
+
+`LP` is §4.1's length prefix, and the domain string differs from §4.1's and
+§4.6's for the same reason those differ from each other: a 32-byte passphrase, a
+32-byte share secret and a 32-byte PRF output must never be able to produce the
+same slot key.
+
+`prf_salt` is stored in the clear. It has to be — the salt is an *input* the
+authenticator needs before it will produce anything, so a reader must hold it
+before it can ask. It is not secret: without the credential, the salt buys
+nothing, and the PRF output cannot be computed without the authenticator.
+
+The KDF is **HKDF only**, by the same §6 rule that binds a Shamir slot. The input
+is an unguessable 32-byte value from a hardware key, so Argon2id's memory cost
+over it would defend nothing that needs defending.
+
+#### The slot body
+
+```
+slot_type          1   0x01
+slot_kdf_id        1   0x02  (HKDF)
+slot_flags         1   §4.4 — the key-file bit applies here as elsewhere
+prf_salt          32   the PRF input, in the clear
+credential_id_len  2   uint16_be, 1..1023
+credential_id      N   the WebAuthn credential id, in the clear
+wrapped_key      ...   §4.3, unchanged
+```
+
+The credential id is stored so a reader can name the credential in
+`allowCredentials`. That is a metadata disclosure and worth being explicit about:
+whoever holds the container learns that *a* passkey opens it, and that
+credential's opaque id. They do not learn which authenticator, which account, or
+anything usable at another relying party. **Discoverable credentials would avoid
+even that**, and are rejected here because a reader that cannot name the
+credential has to ask the user to pick from every passkey they own — which is
+the moment a non-technical heir gives up.
+
+#### A passkey slot never travels alone
+
+> A writer **MUST NOT** produce a container whose only slot is a passkey slot.
+
+The one normative rule in this section that is not about bytes. A passkey is
+hardware: it gets lost, broken, wiped, or left in a drawer the person who needs
+the container cannot open. A container only a lost key opens is lost data, and
+the format is the only place that rule can bind every implementation rather than
+being remembered by each UI separately.
+
+A reader **MUST** still open a container that violates it. The rule binds
+writers; refusing to read a file someone already holds helps nobody.
+
+#### The open decision
+
+The body above **does not fit the slot record as it exists.** §4.4 slots are a
+fixed-length prefix — type, kdf, flags, 32-byte salt, a fixed KDF-parameter
+block — followed by the wrapped key. `credential_id` is variable-length, so
+writing this as drawn means changing the slot layout and the table walk that
+parses it. That is surgery on the parser, which is the most security-sensitive
+code here and the place §6's bounds live. It should be a deliberate change, not
+a side effect of adding a feature.
+
+Two resolutions, and picking between them is the first task of implementing this:
+
+1. **Derive `prf_salt` instead of storing it.** The slot already carries a
+   random 32-byte `slot_salt`. Setting
+   `prf_salt = HKDF-SHA-256(slot_salt, "", "keymaker.v2.prf-salt", 32)` removes
+   that field entirely at no cost — one more domain-separated derivation from a
+   value already in the record. This is almost certainly right and removes 32 of
+   the 34 extra bytes.
+2. **Then decide about `credential_id`,** which is the only variable-length part
+   left. Either accept the parser change to store it, or use a *discoverable*
+   credential and let the authenticator find it, which stores nothing and costs
+   the UX argued against above. That trade — a parser change versus asking an
+   heir to pick from a list of passkeys — is a real decision and belongs to
+   whoever implements it, with the §4.5 fixture and parity gates applied as
+   usual.
+
+Everything above the line is settled: the derivation, the HKDF-only pairing, the
+never-travels-alone rule, and the framing below.
+
+#### What this is, and is not
+
+The blueprint proposed passkey PRF as a security upgrade. **It is not, and the UI
+must not say it is.** With a mandatory passphrase slot alongside — which the rule
+above guarantees — the container's strength is still bounded by that passphrase.
+An attacker who would have brute-forced it still can. The passkey adds no bits.
+
+What it does add is real: no password typed into a form that could be watched or
+logged, no password to phish, and a credential the authenticator binds to this
+origin. Convenience and phishing resistance. Saying "hardware-grade security"
+over a file that a 12-character password also opens would be the KM-02
+overstatement in a new place.
+
 ## 5. Payload: chunked AEAD
 
 The change that removes the 100 MB cap.

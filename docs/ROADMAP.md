@@ -237,7 +237,7 @@ Only after Phase 3 ships. Ordered by value.
 | 1 | **Shamir k-of-n key splitting** — **shipped**, §4.1 below | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
 | 2 | **Paper vault print kit** — **shipped**, §4.2 below | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Composes directly with 4.1, and there is now a concrete debt to pay: the share modal's Print button is `window.print()` against a screen layout, which is the weakest part of what 4.1 shipped. A share set printed from a dark-themed dialog is not a paper backup. |
 | 3 | **Self-extracting HTML decryptor** | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym.py` as the second line. Must be PBKDF2/AES-GCM only — no WASM — or it does not survive the decade. |
-| 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
+| 4 | **Passkey / WebAuthn PRF slot** — **designed, not built**, §4.7 of the format doc | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
 | 5 | **Inheritance wizard** | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
 
 **Gate for each:** fixture-corpus entries and Python-reference parity, per the
@@ -745,6 +745,32 @@ scope listed formats only up to KEYM v1.
 
 ---
 
+### 4.4 Passkey — designed, and stopped deliberately
+
+§4.7 of `FORMAT-V2-DESIGN.md` has the derivation, the HKDF-only pairing, the
+never-travels-alone rule and the framing. It is marked **design only** and
+nothing implements it.
+
+**Feasibility was checked before the design, not assumed.** Chromium's virtual
+authenticator supports `hasPrf`, and under it the PRF output is stable across
+assertions for a fixed salt — which is the property the whole feature rests on.
+So this is testable, with one wrinkle worth writing down: WebAuthn refuses an IP
+address as an RP ID, so the suite has to reach the test server on `localhost`
+rather than `127.0.0.1`.
+
+**It stopped at a layout problem, recorded in §4.7 under *The open decision*.**
+A §4.4 slot is a fixed-length prefix plus the wrapped key, and a passkey slot as
+drawn needs a variable-length `credential_id`. Writing it means changing the slot
+record and the table walk that parses it — surgery on the code where §6's bounds
+live, and where this project's worst failure would be a quiet one. Deriving
+`prf_salt` from the slot salt removes 32 of the 34 extra bytes and is almost
+certainly right; whether to store the credential id, or use a discoverable
+credential and store nothing, is a genuine trade between a parser change and
+asking an heir to pick from a list of passkeys.
+
+That decision belongs to a session with room to make it and run the fixture and
+parity gates behind it, rather than to the end of one.
+
 ## Phase 8 — Outreach, and only after 6
 
 Gated deliberately. The first thing a security-minded visitor does is look for a
@@ -756,6 +782,14 @@ Order: Phase 6 lands → tagged release → then posts, leading with the offline
 guarantee and the recovery path rather than the cipher list. The demonstration
 that lands is "every network request blocked, full round trip still works",
 which the UAT already measured.
+
+**Drafts are written** — `docs/OUTREACH.md` carries posts for r/privacy, Show HN
+and r/crypto, a what-to-lead-with and a what-not-to-say list, and a note on how
+to answer the trust-anchor objection when it comes. Nothing is published, and
+nothing should be published by anyone but the owner's own account. The gate
+above still binds: **cut the release first**, because a visitor who arrives
+looking for something to check `SHA256SUMS` against and finds no release has
+been spent.
 
 **One recommendation is reframed rather than adopted.** The review suggests
 seeking independent audits *for publicity*. Commission an audit for findings;
