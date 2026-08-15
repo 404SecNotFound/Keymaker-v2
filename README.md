@@ -57,7 +57,7 @@ comparison is only worth reading if it says where they win — so it does.
 | Independent implementation you can decrypt with | [`keym2.py`](reference/keym2.py), no browser | rage and others | many | Cyberduck, Mountain Duck | almost never |
 | Signed releases | [Sigstore, keyless](docs/VERIFYING.md) | checksums + signed tags | distro-dependent | signed installers | almost never |
 | [Reproducible](docs/VERIFYING.md) build, enforced in CI | yes | — | — | — | almost never |
-| Hardware keys / smartcards | no | plugins | **yes** | no | no |
+| Hardware keys / smartcards | [passkeys](docs/FORMAT-V2-DESIGN.md) only | plugins | **yes** | no | no |
 | Whole-folder, continuous use | no | no | no | **yes** | no |
 | Works on a phone with nothing installed | **yes** | no | no | app | yes |
 | Split a secret k-of-n | **yes** ([Shamir](docs/FORMAT-V2-DESIGN.md)) | no | no | no | no |
@@ -66,6 +66,13 @@ comparison is only worth reading if it says where they win — so it does.
 A dash means *not claimed here* rather than *absent* — these projects are Go, C and Java
 respectively, and whether any given release is bit-reproducible is a question for their
 own documentation, not one this table should answer on their behalf.
+
+**"Passkeys only" is the honest cell.** Keymaker can unlock a backup with a passkey via
+WebAuthn PRF, which is a real hardware path and a phishing-proof one. It is not smartcard
+or PKCS#11 support, and it is **not extra strength**: the format requires a passkey slot
+to sit beside another way in, so a container is exactly as strong as the weaker of the
+two. What it buys is convenience and phishing resistance, which is worth having and is
+not the same claim.
 
 **Where the others are the better answer.** If you are comfortable at a terminal, `age`
 is simpler than this and has no served-bundle problem at all — its trust anchor is a

@@ -426,7 +426,7 @@ a slot is 96 or 112 bytes.
 | Value | Meaning | Status in v2 |
 |---|---|---|
 | 0x00 | Passphrase, optionally with a key file (§4.1) | Implemented |
-| 0x01 | Passkey / WebAuthn PRF | **Reserved** |
+| 0x01 | Passkey / WebAuthn PRF (§4.7) | Implemented |
 | 0x02 | Shamir share set (§4.6) | Implemented |
 | 0x03–0xFF | Unassigned | Reserved |
 
@@ -438,11 +438,11 @@ Reserving the type code is what the *format* needs in order not to require a
 second migration. The layout is that feature's to add, under the same process as
 everything else.
 
-§4.7 now describes 0x01's derivation and is explicit that it is design only, for
-exactly that reason. It reaches the same conclusion 0x02 did: **the slot
-record's shape does not change.** No new field, no variable-length record, no
-change to the table walk below — which is what makes it a feature to add rather
-than a migration to run.
+0x01 was reserved on those terms and is now specified on them: §4.7 was written
+first and `reference/keym2.py` derived from it, which is what moved it out of
+this paragraph — the same route 0x02 took. It reached the same conclusion too:
+**the slot record's shape does not change.** No new field, no variable-length
+record, no change to the table walk below.
 
 0x02 was reserved on those terms and is now specified on them: §4.6 was written
 first and `reference/keym2.py` was derived from it, which is what moved it out of
@@ -783,13 +783,12 @@ asking me". The UI and the print kit must say this on the artifact itself, not
 only in the documentation — a share that ends up in a drawer because it looked
 like a receipt is the realistic failure, not a cryptographic one.
 
-### 4.7 Slot secret for a passkey slot (`slot_type = 0x01`) — **design only**
+### 4.7 Slot secret for a passkey slot (`slot_type = 0x01`)
 
-> **Not implemented.** Unlike every other section of this document, nothing in
-> the codebase reads or writes this yet. It is written down because the design
-> work is done — including the layout question that was left open here, now
-> settled under *The decisions, and what they cost*. What remains is an
-> implementation, under §4.5's fixture and parity gates like everything else.
+> **Implemented.** `reference/keym2.py` was written from this section, the
+> TypeScript matches it byte for byte under `crosstest2.py`, and three frozen
+> fixtures pin the wire format. The section below described a design before any
+> of that existed; it now describes shipped code, like every other section.
 
 `0x01` has been reserved since §3.2. A passkey slot is a slot whose secret comes
 out of an authenticator rather than off a keyboard.
@@ -905,12 +904,26 @@ fixed-width slot keeps §6's table walk and its bounds untouched, and the
 container discloses less than the alternative would have. What this project
 cannot afford is a quiet bug in the parser; what it can afford is a second tap.
 
-**Still the implementer's to establish**, under the same process as everything
-else: `reference/keym2.py` written from this section rather than from the
-TypeScript, byte-equality parity between the two, a frozen fixture in §4.5's
-corpus, and the never-travels-alone rule enforced at the writer. One recorded
-wrinkle for the browser tests: WebAuthn rejects an IP address as an RP ID, so
-the suite has to reach the server on `localhost`, not `127.0.0.1`.
+**Established, by the usual gates.** `reference/keym2.py` was written from this
+section; `crosstest2.py` compares the two implementations byte for byte, and
+checks the derived PRF salt on its own before anything else, because two sides
+computing different salts would ask the authenticator different questions and
+disagree in every byte afterwards for a reason no container comparison names.
+Three fixtures are frozen, one per cipher, since a slot's length follows the
+cipher's tag overhead.
+
+Two things the implementation learned that are worth keeping here:
+
+- **Enrolment asks the authenticator twice.** PRF results at creation time are
+  optional, and an authenticator that omits them would otherwise enrol a
+  credential that can never unlock anything. `create()` then `get()`, and only
+  the assertion's output is used.
+- **`residentKey` must be `required`.** Not a preference: with no credential id
+  in the container, a non-discoverable credential cannot be found at unlock.
+
+And the recorded wrinkle, now confirmed: WebAuthn rejects an IP address as an RP
+ID, so the browser suite reaches the server on `localhost` rather than
+`127.0.0.1`.
 
 #### What this is, and is not
 
