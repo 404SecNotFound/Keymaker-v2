@@ -115,6 +115,17 @@ function base64ToUint8Array(base64: string): Uint8Array {
 // renders instead of allocating a fresh style object each time.
 const OFFSCREEN_STYLE = { position: 'absolute', left: '-9999px', top: '-9999px' } as const;
 
+/**
+ * U16. "GitHub" and "Open source" on a Keymaker page must lead to Keymaker's
+ * source; they pointed at the upstream IttyBitz repo, so anyone looking for
+ * this product's code or issue tracker landed on a different product.
+ *
+ * The fork attribution below is a *separate* link and deliberately still points
+ * at IttyBitz. It is a GPL-3 credit, not a source link, and repointing it while
+ * fixing this would trade a broken link for a licensing discourtesy.
+ */
+const KEYMAKER_REPO = "https://github.com/404SecNotFound/Keymaker-v2";
+
 // Minimum password policy — deliberately NOT called a strength measurement.
 //
 // This check has been wrong twice, in the same way each time. First it accepted
@@ -300,6 +311,15 @@ const FileSelector = ({
 }: FileSelectorProps) => {
   const inputRef = useRef<HTMLInputElement>(null);
   const [isDragging, setIsDragging] = useState(false);
+  // U22. A drop that carried no files was swallowed: the dashed border lit up,
+  // then went dark, and nothing happened. Indistinguishable from a bug in the
+  // page — dragging a selection out of a text editor, or a folder, both land
+  // here.
+  //
+  // An inline notice rather than a toast, for the reason the U4 gate records:
+  // a toast is gone in a second, leaving someone staring at a dropzone that
+  // quietly did not take what they dropped.
+  const [dropRejected, setDropRejected] = useState<string | null>(null);
 
   const handleContainerClick = useCallback(() => {
     inputRef.current?.click();
@@ -327,8 +347,18 @@ const FileSelector = ({
     e.stopPropagation();
     setIsDragging(false);
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      setDropRejected(null);
       onFileChange(e);
+      return;
     }
+    // A directory drop reports zero files in every browser here, so the two
+    // cases are named together rather than guessed apart — claiming "that was
+    // a folder" about a dragged text selection would be worse than vague.
+    setDropRejected(
+      e.dataTransfer.items && e.dataTransfer.items.length > 0
+        ? "That drop carried no file — a folder or a text selection, most likely. Drop a single file, or click to browse."
+        : "Nothing was dropped. Drop a file, or click to browse."
+    );
   }, [onFileChange]);
 
 
@@ -346,7 +376,17 @@ const FileSelector = ({
         onDragLeave={handleDragLeave}
         role="button"
         tabIndex={0}
-        onKeyDown={(e) => e.key === "Enter" && handleContainerClick()}
+        onKeyDown={(e) => {
+          // U18. `role="button"` promises Space activates it as well as Enter —
+          // that is what a native button does and what a keyboard user will
+          // try. Space also scrolls the page by default while this has focus,
+          // so preventing it is part of the fix rather than a flourish:
+          // otherwise it opens the picker *and* jumps the view.
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            handleContainerClick();
+          }
+        }}
       >
         <div className="mb-3 grid h-12 w-12 place-items-center rounded-xl bg-white/5 text-accent">
           {icon}
@@ -361,6 +401,11 @@ const FileSelector = ({
           </p>
         </div>
       </div>
+      {dropRejected && (
+        <p role="status" className="mt-2 text-[12px] leading-snug text-yellow-400">
+          {dropRejected}
+        </p>
+      )}
       {selectedFile && (
         <div className="mt-2 text-right">
           <Button variant="link" size="sm" onClick={onClear} className="h-auto p-0 text-xs text-destructive hover:text-destructive/80">
@@ -373,7 +418,12 @@ const FileSelector = ({
         ref={inputRef}
         type="file"
         className="hidden"
-        onChange={onFileChange}
+        onChange={(e) => {
+          // Clear the drop notice once a file arrives by any route, or it
+          // outlives the problem it describes.
+          setDropRejected(null);
+          onFileChange(e);
+        }}
       />
     </div>
   );
@@ -402,6 +452,19 @@ interface RevealableQrProps {
   hiResRef: RefObject<HTMLDivElement | null>;
   warning: string;
   caption?: ReactNode;
+  /**
+   * U28. Optional, and only the SeedQR branch supplies it.
+   *
+   * A Standard SeedQR *is* a digit string, and an air-gapped workflow often
+   * cannot scan — the device holding the seed is the one with no camera, which
+   * is rather the point of it being air-gapped. Without this the only routes
+   * off the screen are photographing a QR code or reading 48 digits aloud.
+   *
+   * Gated on `revealed` for the same reason Download is: it invokes
+   * `getValue`, and the invariant above is that the encoded secret is never
+   * computed while the QR is hidden.
+   */
+  onCopyDigits?: (() => void) | undefined;
 }
 
 function RevealableQr({
@@ -412,6 +475,7 @@ function RevealableQr({
   hiResRef,
   warning,
   caption,
+  onCopyDigits,
 }: RevealableQrProps) {
   return (
     <>
@@ -461,6 +525,19 @@ function RevealableQr({
           Download PNG
         </Button>
       </div>
+      {onCopyDigits && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={!revealed}
+          onClick={onCopyDigits}
+          className="w-[264px] text-muted-foreground hover:text-foreground"
+        >
+          <Copy className="mr-2 h-3.5 w-3.5" />
+          Copy digits
+        </Button>
+      )}
     </>
   );
 }
@@ -830,6 +907,12 @@ export function EncryptorTool() {
   // Derived, not stored — cheap (5 regex tests) and always consistent with
   // `password`, removing a state variable and its sync points.
   const passwordMeetsPolicy = meetsPasswordPolicy(password, generated !== null);
+
+  // U25. The toggle can be on while the field is empty — the password is
+  // cleared after every operation and the toggle is not — so "revealing" is
+  // the conjunction, not the toggle alone. Nothing is being revealed when
+  // there is nothing there.
+  const revealingPassword = showPassword && password.length > 0;
 
   // Probe Argon2id support once, and demote the default if WebAssembly is
   // unavailable — a locked-down CSP, an exotic browser, or an embedded
@@ -1687,6 +1770,20 @@ export function EncryptorTool() {
     return "border-destructive";
   }, [password]);
 
+  /**
+   * U15. The button is disabled by policy and says nothing about why.
+   *
+   * The requirements are in the InfoTip beside the Password label, and the
+   * toast that spells them out only fires from `processData` — which a disabled
+   * button cannot reach. So the one moment the explanation is needed is the one
+   * moment nothing offers it, and the user is left with a dead control.
+   *
+   * Gated on a non-empty password deliberately: before anything is typed the
+   * button is disabled for the obvious reason, and saying so would be nagging
+   * rather than explaining.
+   */
+  const blockedByPasswordPolicy = mode === "encrypt" && !!password && !passwordMeetsPolicy;
+
   const isProcessButtonDisabled = () => {
     if (isLoading || !isCryptoAvailable) return true;
     const hasInput = inputType === 'file' ? !!file : !!textSecret;
@@ -1739,7 +1836,7 @@ export function EncryptorTool() {
           />
           <div className="flex items-center gap-3">
             <hr className="grow border-t border-white/10" />
-            <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">or</span>
+            <span className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">or</span>
             <hr className="grow border-t border-white/10" />
           </div>
           <Button
@@ -1825,7 +1922,7 @@ export function EncryptorTool() {
                   id="text-secret-seed-status"
                   role="status"
                   className={cn(
-                    "flex shrink-0 items-center gap-1 text-[11px] font-medium",
+                    "flex shrink-0 items-center gap-1 text-[12px] font-medium",
                     textSecretSeedStatus === 'valid' ? "text-success" : "text-destructive"
                   )}
                 >
@@ -1888,6 +1985,7 @@ export function EncryptorTool() {
                 <button
                   type="button"
                   onClick={() => setShowTextSecret(!showTextSecret)}
+                  aria-pressed={showTextSecret}
                   aria-label={showTextSecret ? "Hide secret text" : "Show secret text"}
                   className="absolute right-2 top-2 rounded-lg border border-white/10 bg-white/5 p-1.5 text-muted-foreground transition-all hover:bg-white/10 hover:text-foreground"
                 >
@@ -1899,7 +1997,7 @@ export function EncryptorTool() {
               <p
                 id="text-secret-size-error"
                 role="alert"
-                className="animate-in fade-in-50 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[11px] leading-snug text-destructive"
+                className="animate-in fade-in-50 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12px] leading-snug text-destructive"
               >
                 {textInputRejected} Nothing was pasted, so what you already had is
                 still here.
@@ -1929,6 +2027,21 @@ export function EncryptorTool() {
                 value={password}
                 type={showPassword ? "text" : "password"}
                 onChange={(e) => handlePasswordChange(e.target.value)}
+                onKeyDown={(e) => {
+                  // U23. Enter in a password field means submit, everywhere
+                  // else on the web. Doing nothing is safe but it silently
+                  // costs a keyboard user a Tab to a button they cannot see
+                  // from the field.
+                  //
+                  // Routed through the same guard as the button rather than
+                  // calling processData directly — otherwise Enter becomes a
+                  // way to start an operation the button correctly refuses,
+                  // including one blocked by the password policy.
+                  if (e.key === "Enter" && !isProcessButtonDisabled()) {
+                    e.preventDefault();
+                    void processData();
+                  }
+                }}
                 placeholder={currentMode === 'encrypt' ? "Enter a strong password" : "Enter decryption password"}
                 // A password field reveals its contents whenever "Show" is
                 // pressed, at which point spellcheck and autocorrect apply to
@@ -1942,12 +2055,26 @@ export function EncryptorTool() {
                   getPasswordStrengthColor()
                 )}
               />
+              {/*
+                U25, two halves of one control.
+
+                `aria-pressed` because this is a toggle, and without it a screen
+                reader reads "Show, button" in both states — the one piece of
+                information the label is carrying.
+
+                The label follows `revealingPassword`, not `showPassword`. The
+                password is cleared after an operation while the toggle stays
+                on, which left the button reading "Hide" over an empty field:
+                it claims something is concealed when nothing is.
+              */}
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
+                aria-pressed={revealingPassword}
+                aria-label={revealingPassword ? "Hide password" : "Show password"}
                 className="absolute right-2 top-1/2 -translate-y-1/2 rounded-lg border border-white/10 bg-white/5 px-2.5 py-1 text-xs font-medium text-muted-foreground transition-all hover:bg-white/10 hover:text-foreground"
               >
-                {showPassword ? 'Hide' : 'Show'}
+                {revealingPassword ? 'Hide' : 'Show'}
               </button>
             </div>
             {/*
@@ -2015,7 +2142,7 @@ export function EncryptorTool() {
             */}
             {currentMode === 'encrypt' && password && (
               generated ? (
-                <p className="text-[11px] leading-snug text-success">
+                <p className="text-[12px] leading-snug text-success">
                   {generated.kind === 'passphrase' ? (
                     <>
                       Generated · {generated.words} words drawn uniformly from the{' '}
@@ -2031,13 +2158,13 @@ export function EncryptorTool() {
                   )}
                 </p>
               ) : passwordMeetsPolicy ? (
-                <p className="text-[11px] leading-snug text-muted-foreground">
+                <p className="text-[12px] leading-snug text-muted-foreground">
                   Minimum policy met. This is a floor, not a strength rating — Keymaker
                   cannot tell how you chose this password. Use <strong>Random</strong> or{' '}
                   <strong>Passphrase</strong> for a figure it can stand behind.
                 </p>
               ) : (
-                <p className="text-[11px] leading-snug text-destructive">
+                <p className="text-[12px] leading-snug text-destructive">
                   Below the minimum policy: 24+ characters with mixed classes, or a
                   passphrase of several distinct words.
                 </p>
@@ -2063,7 +2190,7 @@ export function EncryptorTool() {
                 <Label htmlFor="verify-only" className="cursor-pointer text-[13px] font-medium">
                   Verify only — don&apos;t reveal the contents
                 </Label>
-                <p id="verify-only-help" className="text-[11px] leading-snug text-muted-foreground">
+                <p id="verify-only-help" className="text-[12px] leading-snug text-muted-foreground">
                   Checks that the backup still opens with this password, then discards
                   what it found. Nothing is displayed, downloaded, or copied.
                 </p>
@@ -2112,7 +2239,7 @@ export function EncryptorTool() {
                           )}
                         >
                           <p className="text-[13px] font-semibold">PBKDF2</p>
-                          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                          <p className="mt-0.5 text-[12px] leading-snug text-muted-foreground">
                             Fastest and most compatible. 1M iterations of SHA-256.
                           </p>
                         </button>
@@ -2134,7 +2261,7 @@ export function EncryptorTool() {
                               {argon2Available === false ? "· unavailable" : "· recommended · default"}
                             </span>
                           </p>
-                          <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">
+                          <p className="mt-0.5 text-[12px] leading-snug text-muted-foreground">
                             Memory-hard — resists GPU/ASIC password cracking.
                           </p>
                         </button>
@@ -2143,7 +2270,7 @@ export function EncryptorTool() {
                       {argon2Available === false && (
                         <p
                           role="status"
-                          className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[11px] leading-snug text-yellow-400"
+                          className="rounded-lg border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[12px] leading-snug text-yellow-400"
                         >
                           <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
                           WebAssembly is unavailable in this browser, so Argon2id cannot run.
@@ -2194,7 +2321,7 @@ export function EncryptorTool() {
                             >
                               {calibrating ? "Measuring this device…" : "Calibrate for this device"}
                             </button>
-                            <p className="text-[11px] text-muted-foreground">
+                            <p className="text-[12px] text-muted-foreground">
                               {deviceFit
                                 ? `Derivation time: ≈${(predictArgon2Ms(deviceFit, argonTimeCost, argonMemoryMiB * 1024) / 1000).toFixed(1)}s per attempt, measured on this device.`
                                 : `Estimated derivation time: ≈${Math.max(1, Math.round((argonTimeCost * argonMemoryMiB) / 64))}s per attempt on a typical laptop (varies by device).`}
@@ -2202,7 +2329,7 @@ export function EncryptorTool() {
                             {/* Announced, because the result is the whole point
                                 of pressing the button and a sighted user sees
                                 the memory slider jump. */}
-                            <p className="text-[11px] text-muted-foreground" role="status" aria-live="polite">
+                            <p className="text-[12px] text-muted-foreground" role="status" aria-live="polite">
                               {calibrationNote ?? ""}
                             </p>
                           </div>
@@ -2228,7 +2355,7 @@ export function EncryptorTool() {
                           >
                             <span className="mt-0.5 flex-1">
                               <span className="block text-[13px] font-semibold">{name}</span>
-                              <span className="mt-0.5 block text-[11px] leading-snug text-muted-foreground">{blurb}</span>
+                              <span className="mt-0.5 block text-[12px] leading-snug text-muted-foreground">{blurb}</span>
                             </span>
                           </button>
                         ))}
@@ -2296,7 +2423,7 @@ export function EncryptorTool() {
             {verifyResult.detail} · {formatBytes(verifyResult.bytes)} of contents,
             authenticated and discarded without being shown.
           </p>
-          <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">
+          <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground">
             The size is worth a glance: the right password on the wrong backup still
             verifies.
           </p>
@@ -2327,7 +2454,7 @@ export function EncryptorTool() {
                   id="output-seed-status"
                   role="status"
                   className={cn(
-                    "flex shrink-0 items-center gap-1 text-[11px] font-medium",
+                    "flex shrink-0 items-center gap-1 text-[12px] font-medium",
                     decryptedQrStatus.kind === 'seed' ? "text-success" : "text-destructive"
                   )}
                 >
@@ -2451,6 +2578,13 @@ export function EncryptorTool() {
                           hiResRef={decryptedQrHiResRef}
                           warning="Anyone who scans this QR can recover your seed. Show only on a trusted device and screen."
                           caption={`Standard SeedQR · ${decryptedQrStatus.words.length} words · ${decryptedQrStatus.words.length * 4} digits`}
+                          // U28. Through handleCopy, so the digits inherit the
+                          // 2.6 clipboard hardening — the countdown and the
+                          // unconditional clear — rather than being written
+                          // straight to a clipboard nothing then wipes.
+                          onCopyDigits={() =>
+                            handleCopy(bip39Module!.toStandardSeedQR(decryptedQrStatus.words))
+                          }
                         />
                       ) : qrByteLength(outputText) <= QR_MAX_BYTES ? (
                         <RevealableQr
@@ -2552,6 +2686,22 @@ export function EncryptorTool() {
       </Button>
 
       {/*
+        U15. `role="status"` rather than an alert: it is the explanation for a
+        control the user is looking at, not an interruption, and it appears and
+        disappears as they type.
+      */}
+      {blockedByPasswordPolicy && (
+        <p
+          role="status"
+          className="mt-2 text-center text-[12px] leading-snug text-muted-foreground"
+        >
+          Encrypt stays disabled until the password meets the minimum policy —
+          24+ characters with upper and lowercase, a number and a symbol, or a
+          passphrase of several distinct words.
+        </p>
+      )}
+
+      {/*
         Always available while there is something to wipe — the panic button
         for "someone just walked over", which is the case the five-minute timer
         is too slow for.
@@ -2642,7 +2792,7 @@ export function EncryptorTool() {
             </h1>
             <p className="mx-auto mt-4 max-w-md text-[17px] leading-snug text-muted-foreground sm:text-[19px]">
               Client-side encryption that never leaves your browser.{' '}
-              <a href="https://github.com/seQRets/ittybitz" target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
+              <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
                 Open source
               </a>
               , forked from IttyBitz. No accounts. No servers.
@@ -2702,7 +2852,7 @@ export function EncryptorTool() {
               <LifeBuoy className="h-3.5 w-3.5" />
               Recovery kit
             </button>
-            <a href="https://github.com/seQRets/ittybitz" target="_blank" rel="noopener noreferrer" className="hover:underline">GitHub</a>
+            <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="hover:underline">GitHub</a>
             <span>Keymaker v1.0.0</span>
           </div>
         </div>
@@ -2726,7 +2876,7 @@ export function EncryptorTool() {
               Recovery kit
             </DialogTitle>
             <DialogDescription>
-              A <code className="rounded bg-white/8 px-1 py-0.5 text-[11px]">.keym</code> file
+              A <code className="rounded bg-white/8 px-1 py-0.5 text-[12px]">.keym</code> file
               does not need this website. Save these next to your backups.
             </DialogDescription>
           </DialogHeader>
@@ -2759,12 +2909,12 @@ export function EncryptorTool() {
                     Save
                   </a>
                 </div>
-                <p className="mt-1.5 text-[11px] leading-snug text-muted-foreground">{item.what}</p>
+                <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground">{item.what}</p>
               </div>
             ))}
           </div>
 
-          <p className="text-[11px] leading-snug text-muted-foreground">
+          <p className="text-[12px] leading-snug text-muted-foreground">
             These are the same files as in the repository, copied into this build — so
             the copy you save is the one that matches the version that encrypted your
             data. The format itself is documented in{' '}
