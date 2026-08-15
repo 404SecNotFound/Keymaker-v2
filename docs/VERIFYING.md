@@ -8,6 +8,13 @@ phrases.
 
 This document is how you stop taking that on trust.
 
+The running app links to a
+[**Verify this build**](https://404secnotfound.github.io/Keymaker-v2/verify.html) page
+that names the commit it was built from and prints these commands filled in for that
+deployment — generated from this file, so the two cannot drift. Start there if you have
+the app open; this document is the full reasoning behind it, including what the checks
+do not cover.
+
 There are two separate questions, they fail for different reasons, and it is
 worth knowing which one you are answering.
 
