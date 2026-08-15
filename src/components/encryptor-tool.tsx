@@ -25,6 +25,7 @@ import {
   ChevronDown,
   AlertTriangle,
   ShieldCheck,
+  ShieldAlert,
   LifeBuoy,
   Trash2,
   Timer,
@@ -125,6 +126,21 @@ const OFFSCREEN_STYLE = { position: 'absolute', left: '-9999px', top: '-9999px' 
  * fixing this would trade a broken link for a licensing discourtesy.
  */
 const KEYMAKER_REPO = "https://github.com/404SecNotFound/Keymaker-v2";
+
+/**
+ * §4.6. One share per line, blanks and `#` comments dropped.
+ *
+ * Comments are stripped because the reference CLI prints share sets with
+ * `# share 2 of 5` headers, and pasting that output back in unedited is the
+ * obvious thing to do. Rejecting it would be a papercut aimed squarely at the
+ * person recovering a container under stress.
+ */
+function parseShareLines(text: string): string[] {
+  return text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
 
 // Minimum password policy — deliberately NOT called a strength measurement.
 //
@@ -908,6 +924,33 @@ export function EncryptorTool() {
   // `password`, removing a state variable and its sync points.
   const passwordMeetsPolicy = meetsPasswordPolicy(password, generated !== null);
 
+  /**
+   * §4.6 recovery shares.
+   *
+   * Enrolment is a *write* option, so it lives with the cipher and KDF rather
+   * than as a separate flow: the slot has to be added while a secret that opens
+   * the container is in hand, and that moment is the encrypt itself.
+   *
+   * Defaults are 2-of-3, not 3-of-5. Three pieces of paper is a thing a person
+   * will actually place — a lawyer, a sibling, a safe — and a scheme nobody
+   * completes protects nothing. The picker goes to 8 either way.
+   */
+  const [shamirEnabled, setShamirEnabled] = useState(false);
+  const [shamirThreshold, setShamirThreshold] = useState(2);
+  const [shamirCount, setShamirCount] = useState(3);
+  const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
+
+  /**
+   * Shares entered to unlock a container, one per line.
+   *
+   * Kept apart from the password field rather than overloading it. An heir has
+   * no password at all, and a field labelled "Password" that also silently
+   * accepts share text is the kind of cleverness that reads as a bug to the one
+   * person who most needs it to be obvious.
+   */
+  const [useShares, setUseShares] = useState(false);
+  const [shareInput, setShareInput] = useState("");
+
   // U25. The toggle can be on while the field is empty — the password is
   // cleared after every operation and the toggle is not — so "revealing" is
   // the conjunction, not the toggle alone. Nothing is being revealed when
@@ -1078,6 +1121,25 @@ export function EncryptorTool() {
         return;
       }
     }
+    // §7 as amended by §4.6 — the wrong-box paste, with a real second encoding
+    // to be wrong about for the first time.
+    //
+    // A share is not a container. Without this it reaches the parser, fails on
+    // the magic, and reports a generic decryption failure: the exact baffling
+    // outcome §7 exists to remove, aimed at the person least equipped to work
+    // it out — someone recovering an inheritance from paper.
+    //
+    // The text is kept, not refused. Throwing away what they just pasted would
+    // be the second unhelpful thing to do; the notice says where it belongs.
+    if (decrypting && next.trimStart().toUpperCase().startsWith("KMSHARE1:")) {
+      setTextInputRejected(
+        'That is a recovery share, not an encrypted container. Put the container here, ' +
+        'then choose "Use recovery shares" beside the password field to enter it.'
+      );
+      setTextSecret(next);
+      return;
+    }
+
     setTextInputRejected(null);
     setTextSecret(next);
   }, [mode]);
@@ -1494,15 +1556,25 @@ export function EncryptorTool() {
       });
       return;
     }
-    if (!mutablePassword) {
+    // §4.6. Shares are a credential in their own right on the decrypt side —
+    // an heir has no password, which is the entire point of the feature. This
+    // guard predates share sets and would have made the inheritance path
+    // unreachable while every control leading to it looked live.
+    const suppliedShares =
+      mode === "decrypt" && useShares ? parseShareLines(shareInput) : [];
+    if (!mutablePassword && suppliedShares.length === 0) {
         toast({
-          title: "Password Required",
-          description: "Please provide a password.",
+          title: mode === "decrypt" && useShares ? "Shares Required" : "Password Required",
+          description:
+            mode === "decrypt" && useShares
+              ? "Paste at least the number of shares the container needs, one per line."
+              : "Please provide a password.",
           variant: "destructive",
         });
         return;
     }
-    
+
+
     if (mode === "encrypt" && !meetsPasswordPolicy(mutablePassword, generated !== null)) {
         toast({
           title: "Weak Password",
@@ -1543,7 +1615,22 @@ export function EncryptorTool() {
 
         const encoder = new TextEncoder();
         const inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
-        resultBuffer = await encryptViaWorker(inputBuffer, mutablePassword, keyFileBuffer, { kdf, cipher: cipherChoice });
+        // §4.6. Requested in the same call that writes the container, so the
+        // share secret is generated and dropped inside the worker and the
+        // password is not held past the operation that already needed it.
+        const encrypted = await encryptViaWorker(
+          inputBuffer,
+          mutablePassword,
+          keyFileBuffer,
+          { kdf, cipher: cipherChoice },
+          shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : undefined
+        );
+        resultBuffer = encrypted.data;
+        if (encrypted.shares && !isStale()) {
+          // Straight to the modal. These exist exactly once — nothing can
+          // reissue them — so they must not be left to be noticed.
+          setIssuedShares({ threshold: shamirThreshold, shares: encrypted.shares });
+        }
 
         if (inputType === 'file') {
             const blob = new Blob([resultBuffer]);
@@ -1611,7 +1698,12 @@ export function EncryptorTool() {
         // 128 bytes covers the largest KEYM v1 header (71) with room to spare.
         const headerPeek = new Uint8Array(inputBuffer.slice(0, Math.min(128, inputBuffer.byteLength)));
 
-        const decryptResult = await decryptViaWorker(inputBuffer, mutablePassword, keyFileBuffer);
+        const decryptResult = await decryptViaWorker(
+          inputBuffer,
+          mutablePassword,
+          keyFileBuffer,
+          suppliedShares.length > 0 ? suppliedShares : undefined
+        );
         resultBuffer = decryptResult.data;
 
         // Info line + legacy-format nudge.
@@ -1755,7 +1847,12 @@ export function EncryptorTool() {
         setIsLoading(false);
       }
     }
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly]);
+    // §4.6 additions: useShares, shareInput, shamirEnabled, shamirThreshold and
+    // shamirCount. Omitting them left processData closing over the values from
+    // the render before the user touched any of them, so the share path took
+    // the no-credential exit while every control leading to it looked live —
+    // a click that did nothing at all, with no error to explain it.
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, shamirThreshold, shamirCount]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -1787,13 +1884,16 @@ export function EncryptorTool() {
   const isProcessButtonDisabled = () => {
     if (isLoading || !isCryptoAvailable) return true;
     const hasInput = inputType === 'file' ? !!file : !!textSecret;
-    const hasPassword = !!password;
-    if (!hasInput || !hasPassword) return true;
-    
+    // §4.6. An heir holds shares and no password, so shares are a credential
+    // in their own right — requiring a password here would leave the one flow
+    // this feature exists for permanently unreachable.
+    const hasCredential = !!password || (mode === 'decrypt' && useShares && parseShareLines(shareInput).length > 0);
+    if (!hasInput || !hasCredential) return true;
+
     if (mode === 'encrypt' && !passwordMeetsPolicy) {
         return true;
     }
-    
+
     return false;
   }
 
@@ -2020,7 +2120,51 @@ export function EncryptorTool() {
                   password. For a figure it can actually stand behind, use Generate.
                 </p>
               </InfoTip>
+              {/*
+                §4.6. Offered only on decrypt, and only as an explicit switch.
+                Someone recovering a container with shares has no password at
+                all, so the way in has to be visible without one — but it must
+                not be the default path either, since almost every unlock is
+                still a password.
+              */}
+              {currentMode === "decrypt" && (
+                <button
+                  type="button"
+                  onClick={() => setUseShares((v) => !v)}
+                  aria-pressed={useShares}
+                  className="ml-auto rounded-md px-2 py-1 text-[12px] text-accent transition-colors hover:bg-accent/10"
+                >
+                  {useShares ? "Use a password instead" : "Use recovery shares"}
+                </button>
+              )}
             </div>
+
+            {currentMode === "decrypt" && useShares && (
+              <div className="mb-3 space-y-2">
+                <Textarea
+                  id="share-input"
+                  value={shareInput}
+                  onChange={(e) => setShareInput(e.target.value)}
+                  placeholder={"KMSHARE1:...\nKMSHARE1:...\nOne share per line"}
+                  rows={4}
+                  spellCheck={false}
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  className="min-h-[96px] rounded-xl border-white/10 bg-white/4 font-mono text-[12px]"
+                />
+                <p className="text-[12px] leading-snug text-muted-foreground" role="status">
+                  {(() => {
+                    const n = parseShareLines(shareInput).length;
+                    if (n === 0) return "Paste the shares, one per line. Comment lines starting with # are ignored.";
+                    // Deliberately does not say whether this is enough: the
+                    // threshold lives on the shares, not in the container, and
+                    // guessing it here would mean either reading it out of
+                    // input the user might have mistyped or inventing a number.
+                    return `${n} share${n === 1 ? "" : "s"} entered. If the container needs more, the attempt will simply fail.`;
+                  })()}
+                </p>
+              </div>
+            )}
             <div className="relative">
               <Input
                 id="password"
@@ -2382,6 +2526,97 @@ export function EncryptorTool() {
                         </InfoTip>
                       </div>
                     </div>
+
+                    {/*
+                      §4.6 recovery shares. Encrypt only — a share set is
+                      enrolled while writing, and the decrypt side has its own
+                      entry path.
+                    */}
+                    {currentMode === "encrypt" && (
+                      <div className="space-y-3 rounded-lg border border-white/8 p-3">
+                        <div className="flex items-center gap-3">
+                          <Switch
+                            id="shamir-enabled"
+                            checked={shamirEnabled}
+                            onCheckedChange={setShamirEnabled}
+                            className="data-[state=checked]:bg-success"
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <Label htmlFor="shamir-enabled" className="cursor-pointer text-sm text-foreground">
+                              Recovery shares
+                            </Label>
+                            <InfoTip label="What are recovery shares?">
+                              <p>
+                                Splits a second way in across several printed codes. Any{" "}
+                                {shamirThreshold} of the {shamirCount} open this container — without
+                                the password. Fewer than {shamirThreshold} reveal nothing at all.
+                              </p>
+                            </InfoTip>
+                          </div>
+                        </div>
+
+                        {shamirEnabled && (
+                          <>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-1.5">
+                                <Label htmlFor="shamir-threshold" className="text-[12px] text-muted-foreground">
+                                  Needed to open
+                                </Label>
+                                <Input
+                                  id="shamir-threshold"
+                                  type="number"
+                                  min={2}
+                                  max={shamirCount}
+                                  value={shamirThreshold}
+                                  onChange={(e) => {
+                                    // Clamped here rather than trusting min/max, which are a
+                                    // UI affordance: typing 9 into a number field sets 9.
+                                    const n = Math.round(Number(e.target.value));
+                                    if (!Number.isFinite(n)) return;
+                                    setShamirThreshold(Math.min(Math.max(n, 2), shamirCount));
+                                  }}
+                                  className="h-10 rounded-lg border-white/10 bg-white/4"
+                                />
+                              </div>
+                              <div className="space-y-1.5">
+                                <Label htmlFor="shamir-count" className="text-[12px] text-muted-foreground">
+                                  Shares to print
+                                </Label>
+                                <Input
+                                  id="shamir-count"
+                                  type="number"
+                                  min={2}
+                                  max={8}
+                                  value={shamirCount}
+                                  onChange={(e) => {
+                                    const n = Math.round(Number(e.target.value));
+                                    if (!Number.isFinite(n)) return;
+                                    const next = Math.min(Math.max(n, 2), 8);
+                                    setShamirCount(next);
+                                    // The threshold cannot exceed the count, and silently
+                                    // producing a set nobody can ever reach would be the
+                                    // worst possible outcome for a backup feature.
+                                    setShamirThreshold((t) => Math.min(t, next));
+                                  }}
+                                  className="h-10 rounded-lg border-white/10 bg-white/4"
+                                />
+                              </div>
+                            </div>
+                            {/*
+                              Roadmap, "Honest framing to preserve": any k shares
+                              open the container without the password, so each
+                              share is as sensitive as the password itself. That
+                              belongs on the screen, not only in the docs.
+                            */}
+                            <p className="rounded-md bg-yellow-900/20 px-3 py-2 text-[12px] leading-snug text-yellow-400">
+                              Each share is as sensitive as your password. Anyone holding{" "}
+                              {shamirThreshold} of them opens this container without knowing it.
+                              Store them apart, with people who would not combine them casually.
+                            </p>
+                          </>
+                        )}
+                      </div>
+                    )}
 
                     {/* Security summary */}
                     <p className="rounded-lg bg-accent/8 px-3 py-2 text-[12px] text-muted-foreground">
@@ -2868,6 +3103,85 @@ export function EncryptorTool() {
         offline and travels with the app rather than pointing at a repository
         the user may never find.
       */}
+      {/*
+        §4.6. The share set, shown exactly once.
+
+        `onOpenChange` only ever closes — there is no reopening this, because
+        there is nothing left to reopen it from: the share secret was discarded
+        inside the worker the moment the slot was wrapped, so these strings are
+        the only copies that will ever exist. That is a property of the format,
+        not a limitation of this dialog, and the copy says so plainly rather
+        than letting someone discover it by closing the window.
+      */}
+      <Dialog
+        open={issuedShares !== null}
+        onOpenChange={(open) => {
+          if (!open) setIssuedShares(null);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <ShieldAlert className="h-4 w-4 text-yellow-400" />
+              Save these {issuedShares?.shares.length} shares now
+            </DialogTitle>
+            <DialogDescription>
+              Any {issuedShares?.threshold} of them open this container without the
+              password. They are shown once and cannot be reissued — closing this
+              window loses them.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2">
+            {issuedShares?.shares.map((share, i) => (
+              <div key={share} className="rounded-lg border border-white/10 bg-white/4 p-2.5">
+                <p className="mb-1 text-[12px] text-muted-foreground">
+                  Share {i + 1} of {issuedShares.shares.length}
+                </p>
+                <p className="break-all font-mono text-[12px] leading-relaxed text-foreground">
+                  {share}
+                </p>
+              </div>
+            ))}
+          </div>
+
+          <p className="rounded-md bg-yellow-900/20 px-3 py-2 text-[12px] leading-snug text-yellow-400">
+            Each share is as sensitive as your password. Store them in separate
+            places, with people who would not casually combine them — anyone
+            holding {issuedShares?.threshold} needs nothing else from you.
+          </p>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() =>
+                handleCopy(
+                  (issuedShares?.shares ?? [])
+                    .map((s, i) => `# share ${i + 1} of ${issuedShares?.shares.length}\n${s}`)
+                    .join("\n")
+                )
+              }
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Copy className="mr-2 h-3.5 w-3.5" />
+              Copy all
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => window.print()}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Download className="mr-2 h-3.5 w-3.5" />
+              Print
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       <Dialog open={isRecoveryOpen} onOpenChange={setIsRecoveryOpen}>
         <DialogContent>
           <DialogHeader>

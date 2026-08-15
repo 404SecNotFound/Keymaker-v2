@@ -55,6 +55,17 @@ export type CryptoRequest =
       password: string;
       keyFile: ArrayBuffer | null;
       options: KeymakerOptions;
+      /**
+       * KEYM v2 §4.6. Enrol a k-of-n share set in the same operation that
+       * writes the container.
+       *
+       * One op rather than two, because enrolling a slot needs a secret that
+       * already opens the container and the password is the one we have. A
+       * separate "add shares" call would mean either keeping the password
+       * alive in the page past the encrypt that should have cleared it, or
+       * asking the user to type it a second time.
+       */
+      shamir?: { threshold: number; count: number } | undefined;
     }
   | {
       id: number;
@@ -62,6 +73,8 @@ export type CryptoRequest =
       data: ArrayBuffer;
       password: string;
       keyFile: ArrayBuffer | null;
+      /** §4.6. Enough of these and no password is needed at all. */
+      shares?: string[] | undefined;
     }
   /**
    * Time Argon2id at two memory sizes so the caller can solve for parameters
@@ -76,7 +89,13 @@ export type CryptoRequest =
 
 export type CryptoResponse =
   | { id: number; ok: true; op: "ping" }
-  | { id: number; ok: true; op: "encrypt"; data: ArrayBuffer }
+  /**
+   * `shares` is present only when the request asked for them, and this is the
+   * only moment they will ever exist: §4.6 discards the share secret once the
+   * slot is wrapped, so nothing — not this app, not the reference — can reissue
+   * them afterwards.
+   */
+  | { id: number; ok: true; op: "encrypt"; data: ArrayBuffer; shares?: string[] | undefined }
   | { id: number; ok: true; op: "calibrate"; low: Argon2Sample; high: Argon2Sample }
   | {
       id: number;
@@ -171,13 +190,33 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     }
 
     if (req.op === "encrypt") {
-      const out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
-      const response: CryptoResponse = { id: req.id, ok: true, op: "encrypt", data: out };
+      let out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
+      let shares: string[] | undefined;
+
+      if (req.shamir) {
+        // §4.6. Enrolled here rather than in the page so the share secret and
+        // the coefficients are generated, used and dropped inside the worker's
+        // heap — the same reason the derivation lives here.
+        const { addShamirSlotKeym2 } = await import("./keym-v2");
+        const enrolled = await addShamirSlotKeym2(
+          new Uint8Array(out),
+          { password: req.password, keyFile: req.keyFile ? new Uint8Array(req.keyFile) : null },
+          req.shamir.threshold,
+          req.shamir.count
+        );
+        out = enrolled.container.buffer.slice(
+          enrolled.container.byteOffset,
+          enrolled.container.byteOffset + enrolled.container.byteLength
+        ) as ArrayBuffer;
+        shares = enrolled.shares;
+      }
+
+      const response: CryptoResponse = { id: req.id, ok: true, op: "encrypt", data: out, shares };
       ctx.postMessage(response, [out]);
       return;
     }
 
-    const result = await decryptData(req.data, req.password, req.keyFile);
+    const result = await decryptData(req.data, req.password, req.keyFile, req.shares);
     const response: CryptoResponse = {
       id: req.id,
       ok: true,

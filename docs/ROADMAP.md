@@ -234,7 +234,7 @@ Only after Phase 3 ships. Ordered by value.
 
 | # | Feature | Why it survives |
 |---|---|---|
-| 1 | **Shamir k-of-n key splitting** — *format and core shipped, §4.1 below; no UI yet* | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
+| 1 | **Shamir k-of-n key splitting** — **shipped**, §4.1 below | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
 | 2 | **Paper vault print kit** | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Small, and it composes with everything else. |
 | 3 | **Self-extracting HTML decryptor** | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym.py` as the second line. Must be PBKDF2/AES-GCM only — no WASM — or it does not survive the decade. |
 | 4 | **Passkey / WebAuthn PRF slot** | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
@@ -251,11 +251,23 @@ container *and* all five share strings. Three fixtures added, one per cipher,
 each carrying its shares; the twelve existing entries untouched. Reference
 self-test 109 → 189 checks, v2 conformance 61 → 74.
 
-**Not shipped: any UI.** A share set can be enrolled and used from
-`reference/keym2.py` and from the library, and nowhere else. That split is
-deliberate — the format gate and the interface are separate work, and reviewing
-them together would bury the first — but item 1 is not usable by a user yet, and
-item 5's wizard has nothing to compose until it is.
+**The UI shipped separately, and item 1 is now complete.** Enrolment is a write
+option beside the cipher and KDF, because a slot has to be added while a secret
+that opens the container is in hand and that moment is the encrypt itself. On
+the other side, "Use recovery shares" replaces the password field outright — an
+heir has no password, so the way in has to be reachable without one.
+
+Three things that shaped it:
+
+- **One worker op, not two.** Enrolling needs a secret that already opens the
+  container. Splitting it would mean either holding the password in the page
+  past the encrypt that should have cleared it (U13), or asking for it twice.
+- **The shares exist once.** §4.6 discards the share secret when the slot is
+  wrapped, so nothing can reissue them. They go straight to a modal that says
+  so, rather than being left somewhere to be noticed.
+- **A share pasted into the container field is named as a share.** That is §7's
+  wrong-box paste with a second encoding to be wrong about for the first time,
+  aimed at the person least equipped to work it out.
 
 **Two things the exercise turned up**, both recorded in the design document:
 
