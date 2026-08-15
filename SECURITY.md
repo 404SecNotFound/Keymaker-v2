@@ -71,3 +71,34 @@ Out of scope / known limitations:
 
 Format details and AAD rules: see `docs/FORMAT.md`.
 Historical audit notes: see `SECURITY-AUDIT.md`.
+
+## Known CSP trade-off: `wasm-unsafe-eval`
+
+The Content-Security-Policy `script-src` includes `'wasm-unsafe-eval'`. It is
+there because Argon2id is WebAssembly and the browser will not instantiate a
+module without it.
+
+**In Chromium, `'wasm-unsafe-eval'` also permits `eval()`.** That is a quirk of
+the implementation rather than of the specification, which scopes the token to
+WebAssembly compilation. So on Chromium the policy is broader than it reads.
+
+Documented rather than fixed, because there is nothing worth fixing on either
+side of the trade:
+
+- It is **not currently exploitable.** Reaching `eval()` needs script injection,
+  and the rest of the policy is what prevents that: `default-src 'none'`, no
+  `unsafe-inline` (every inline script carries a build-time sha256 hash and the
+  build fails closed if one is missing), and `connect-src 'none'`. A
+  dynamically injected inline script is blocked, and the browser suite asserts
+  that rather than assuming it.
+- It **weakens defence in depth**, which is the honest cost. If an injection
+  ever did become possible, this token means the attacker also gets `eval()`
+  rather than being confined to what the hashed scripts already do.
+
+The alternative is worse. Removing the token means either a JavaScript Argon2id
+— orders of magnitude slower, so in practice users would choose weaker
+parameters — or PBKDF2 as the only KDF. Both trade a real reduction in
+key-derivation strength for a hypothetical one in injection resistance.
+
+Recorded here so it is not rediscovered as a finding by every subsequent audit.
+It has been found once already, as U20 in `docs/reports/UAT-2026-08-14.md`.

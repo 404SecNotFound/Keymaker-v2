@@ -156,12 +156,19 @@ export function DiceEntropyTool() {
     };
   }, [sides, targetBits, rollLog, manualRolls]);
 
+  /**
+   * U21. "1 more rolls" — the last roll before a target is the one most likely
+   * to be read, and it was the one sentence that read as unfinished.
+   */
+  const remaining = calc.rollsNeeded - calc.rolls;
+  const rollWord = remaining === 1 ? "roll" : "rolls";
+
   const verdictUI = {
     below: {
       icon: ShieldAlert,
       classes: "border-destructive/40 bg-destructive/10 text-destructive",
       title: "Below the 128-bit floor",
-      body: `Keep rolling — ${calc.rollsNeeded - calc.rolls} more ${calc.validSides}-sided rolls to reach your ${targetBits}-bit target.`,
+      body: `Keep rolling — ${remaining} more ${calc.validSides}-sided ${rollWord} to reach your ${targetBits}-bit target.`,
     },
     floor: {
       icon: CheckCircle2,
@@ -169,7 +176,7 @@ export function DiceEntropyTool() {
       title: "128-bit floor cleared",
       body:
         targetBits === TARGET_BITS
-          ? `You have a secure minimum. ${calc.rollsNeeded - calc.rolls} more rolls to reach the 256-bit target.`
+          ? `You have a secure minimum. ${remaining} more ${rollWord} to reach the 256-bit target.`
           : "You have reached your selected target.",
     },
     target: {
@@ -218,7 +225,7 @@ export function DiceEntropyTool() {
             )}
           />
           {!calc.sidesValid && (
-            <p id="dice-sides-error" role="alert" className="text-[11px] leading-snug text-destructive">
+            <p id="dice-sides-error" role="alert" className="text-[12px] leading-snug text-destructive">
               Enter the number of sides on your die, between {MIN_SIDES} and {MAX_SIDES}. No
               entropy is calculated until this is a real die.
             </p>
@@ -281,7 +288,7 @@ export function DiceEntropyTool() {
           )}
         />
         {calc.manualRejected ? (
-          <p id="manual-rolls-error" role="alert" className="text-[11px] leading-snug text-destructive">
+          <p id="manual-rolls-error" role="alert" className="text-[12px] leading-snug text-destructive">
             {calc.looksLikeRollValues ? (
               <>
                 That looks like the faces you rolled, not how many times you rolled.
@@ -294,7 +301,7 @@ export function DiceEntropyTool() {
             )}
           </p>
         ) : (
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-[12px] text-muted-foreground">
             Just the count. Keymaker does not need — and deliberately does not ask for —
             the values you rolled.
           </p>
@@ -317,7 +324,7 @@ export function DiceEntropyTool() {
 
         {showValidator && (
           <div className="animate-in fade-in-50 space-y-2 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-3">
-            <p className="text-[11px] leading-snug text-yellow-400">
+            <p className="text-[12px] leading-snug text-yellow-400">
               <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
               The sequence you paste here <strong>is</strong> your entropy. It stays on this
               device — nothing is sent anywhere — but it will exist in browser memory and
@@ -340,7 +347,7 @@ export function DiceEntropyTool() {
               <button
                 type="button"
                 onClick={() => setRollLog("")}
-                className="text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                className="text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
                 Clear the log from memory
               </button>
@@ -362,21 +369,21 @@ export function DiceEntropyTool() {
         */}
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-4">
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Bits / roll</p>
+            <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Bits / roll</p>
             <p className="truncate font-semibold tabular-nums">{calc.bitsPerRoll.toFixed(2)}</p>
           </div>
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Rolls counted</p>
+            <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Rolls counted</p>
             <p className="truncate font-semibold tabular-nums">{calc.rolls.toLocaleString()}</p>
           </div>
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Total entropy</p>
+            <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Total entropy</p>
             <p className="truncate font-semibold tabular-nums">
               {calc.totalBits.toFixed(1)} bits
             </p>
           </div>
           <div className="min-w-0">
-            <p className="text-[11px] uppercase tracking-wide text-muted-foreground">Rolls needed</p>
+            <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Rolls needed</p>
             <p className="truncate font-semibold tabular-nums">
               {calc.rollsFor128} <span className="text-muted-foreground">/128</span>
               {" · "}
@@ -394,7 +401,7 @@ export function DiceEntropyTool() {
               {calc.invalidEntries.length} entr{calc.invalidEntries.length === 1 ? "y" : "ies"} ignored —
               not a possible result for a {calc.validSides}-sided die
             </p>
-            <p className="mt-1 break-all font-mono text-[11px] opacity-80">
+            <p className="mt-1 break-all font-mono text-[12px] opacity-80">
               {calc.invalidEntries.slice(0, 12).join("  ")}
               {calc.invalidEntries.length > 12 && ` … +${calc.invalidEntries.length - 12} more`}
             </p>
@@ -406,7 +413,7 @@ export function DiceEntropyTool() {
         )}
 
         <div>
-          <div className="mb-1 flex justify-between text-[11px] text-muted-foreground">
+          <div className="mb-1 flex justify-between text-[12px] text-muted-foreground">
             <span>0</span>
             <span>{targetBits}-bit target</span>
           </div>
@@ -423,7 +430,7 @@ export function DiceEntropyTool() {
               style={{ width: `${(calc.progress * 100).toFixed(1)}%` }}
             />
           </div>
-          <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
+          <div className="mt-1 flex justify-between text-[12px] text-muted-foreground">
             <span className={cn(calc.totalBits >= FLOOR_BITS && "text-yellow-400")}>128-bit floor @ {calc.rollsFor128} rolls</span>
             <span>{calc.progress >= 1 ? "100%" : `${Math.floor(calc.progress * 100)}%`}</span>
           </div>
