@@ -40,7 +40,8 @@
  * spells out the hazard: §4.5 forbids caller-supplied values for either on real
  * data, because reusing a master key reuses every nonce in the container.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { webcrypto } from "node:crypto";
 import {
   encryptData,
@@ -198,6 +199,66 @@ try {
       }),
       "utf8"
     );
+  } else if (cmd === "package") {
+    // 4.5. Drives the *same* composition function the wizard drives, so what
+    // recovery_test.py opens is what a user is handed. A separate assembly path
+    // here would be a second implementation of the package, and the first thing
+    // to drift.
+    const { buildInheritancePackage, inheritanceLetter } = await import(
+      "../src/lib/keym-v2-inheritance.ts"
+    );
+    const kdf: KdfParams =
+      flag("kdf") === "pbkdf2"
+        ? { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } }
+        : {
+            kdf: KdfId.ARGON2ID,
+            params: {
+              timeCost: Number(flag("time") ?? 2),
+              memoryKiB: Number(flag("mem") ?? 16384),
+              parallelism: Number(flag("par") ?? 2),
+            },
+          };
+    const plan = {
+      threshold: Number(flag("threshold") ?? 2),
+      count: Number(flag("shares") ?? 3),
+      kdf,
+      cipher: CIPHERS[flag("cipher") ?? "aes"]!,
+      includePage: flag("no-page") === undefined,
+      createdOn: flag("created-on") ?? "2026-01-01",
+      appVersion: flag("app-version") ?? "0.0.0",
+    };
+    const pkg = await buildInheritancePackage(
+      new Uint8Array(inputBuf),
+      password,
+      plan,
+      async (plaintext, pw, options, shamir) => {
+        const container = await encryptContainer(
+          plaintext.buffer.slice(
+            plaintext.byteOffset,
+            plaintext.byteOffset + plaintext.byteLength
+          ) as ArrayBuffer,
+          pw,
+          null,
+          options
+        );
+        if (!shamir) return { container: new Uint8Array(container) };
+        const enrolled = await addShamirSlotKeym2(
+          new Uint8Array(container),
+          { password: pw, keyFile: null },
+          shamir.threshold,
+          shamir.count
+        );
+        return { container: enrolled.container, shares: enrolled.shares };
+      }
+    );
+    // One directory, the way a user would keep it.
+    const dir = outFile;
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "backup.keym"), Buffer.from(pkg.container));
+    writeFileSync(join(dir, "backup.txt"), pkg.armored + "\n", "utf8");
+    writeFileSync(join(dir, "shares.txt"), pkg.shares.join("\n") + "\n", "utf8");
+    writeFileSync(join(dir, "LETTER.txt"), inheritanceLetter(pkg, plan), "utf8");
+    if (pkg.page) writeFileSync(join(dir, "backup.html"), pkg.page.html, "utf8");
   } else if (cmd === "embed") {
     // Just the sentinel block, which is the part the format actually specifies.
     writeFileSync(outFile, embedSelfExtract(new Uint8Array(inputBuf)) + "\n", "utf8");
