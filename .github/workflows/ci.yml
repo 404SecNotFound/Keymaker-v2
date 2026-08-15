@@ -48,6 +48,14 @@ jobs:
       - name: EFF wordlist integrity
         run: npm run test:wordlist
 
+      # The release notes are generated from docs/VERIFYING.md so that one copy
+      # of the verification commands exists rather than two. This is what keeps
+      # them from drifting, and it runs on every PR rather than only at release
+      # time — because a PR is when the document gets edited, and a release is
+      # too late to find out.
+      - name: Release notes still track docs/VERIFYING.md
+        run: npm run test:release-notes
+
       - name: KEYM v1 regression suite
         run: npm run test:keymaker
 
