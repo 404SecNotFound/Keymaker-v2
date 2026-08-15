@@ -103,10 +103,11 @@ export const KEYM2_ARMOR_PREFIX = "keym2:";
  */
 export const KEYM2_ARMOR_COLUMNS = 64;
 
-/** §4.4. 0x01 (passkey PRF) is still reserved and its layout deliberately
- *  unspecified until something implements it. Unknown types are skipped, never
- *  rejected — getting that wrong is a data-loss bug, not an interop one. */
+/** §4.4. Unknown types are skipped, never rejected — getting that wrong is a
+ *  data-loss bug, not an interop one. */
 const SLOT_TYPE_PASSPHRASE = 0x00;
+/** §4.7. Same 48-byte prefix again; nothing identifies the credential. */
+export const KEYM2_SLOT_TYPE_PASSKEY = 0x01;
 /** §4.6. Same 48-byte prefix; only the slot secret's origin differs. */
 export const KEYM2_SLOT_TYPE_SHAMIR = 0x02;
 
@@ -131,6 +132,7 @@ export type Keym2KdfParams = KdfParams | { kdf: typeof KEYM2_KDF_HKDF };
 function kdfIsLegalForSlotType(slotType: number, kdfId: number): boolean {
   if (slotType === SLOT_TYPE_PASSPHRASE) return kdfId === KdfId.PBKDF2 || kdfId === KdfId.ARGON2ID;
   if (slotType === KEYM2_SLOT_TYPE_SHAMIR) return kdfId === KEYM2_KDF_HKDF;
+  if (slotType === KEYM2_SLOT_TYPE_PASSKEY) return kdfId === KEYM2_KDF_HKDF;
   return false;
 }
 
@@ -154,6 +156,14 @@ const INFO_SLOT_CHACHA = textEncoder.encode("keymaker-v2-slot-chacha");
 // a 32-byte share secret can never derive the same slot key.
 const CTX_SHAMIR_INPUT = textEncoder.encode("keymaker.v2.shamir-input");
 const INFO_SLOT_KEY = textEncoder.encode("keymaker.v2.slot-key");
+
+// §4.7, the same argument a third time: a passphrase, a share secret and a PRF
+// output are all 32 bytes and must not reach the same slot key.
+const CTX_PASSKEY_INPUT = textEncoder.encode("keymaker.v2.passkey-input");
+// §4.7. The PRF salt is derived from slot_salt rather than stored. This differs
+// from INFO_SLOT_KEY as hygiene rather than as a load-bearing separation: the
+// two HKDF calls already take different IKMs, 32 bytes against 65.
+const INFO_PRF_SALT = textEncoder.encode("keymaker.v2.prf-salt");
 
 const MAGIC = new Uint8Array([0x4b, 0x45, 0x59, 0x4d]); // "KEYM"
 
@@ -360,7 +370,13 @@ export function parseKeym2Slot(record: Uint8Array): Keym2Slot | null {
   const kdfId = record[1] as number;
   const slotFlags = record[2] as number;
 
-  if (slotType !== SLOT_TYPE_PASSPHRASE && slotType !== KEYM2_SLOT_TYPE_SHAMIR) return null;
+  if (
+    slotType !== SLOT_TYPE_PASSPHRASE &&
+    slotType !== KEYM2_SLOT_TYPE_SHAMIR &&
+    slotType !== KEYM2_SLOT_TYPE_PASSKEY
+  ) {
+    return null;
+  }
   for (let i = 3; i < 8; i++) if (record[i] !== 0) return null; // §4.4 reserved
   if (slotFlags & SLOT_FLAGS_RESERVED_MASK) return null; // §4.4 reserved bits
   // §6, the slot_type/slot_kdf_id pairing, checked before any KDF runs. This is
@@ -488,6 +504,43 @@ async function buildKdfInput(password: string, keyFile: Uint8Array | null): Prom
 function buildShamirInput(shareSecret: Uint8Array): Uint8Array {
   if (shareSecret.length !== MASTER_KEY_LEN) reject();
   return concat([lp(CTX_SHAMIR_INPUT), lp(shareSecret)]);
+}
+
+/** §4.7. WebAuthn's PRF extension returns 32 bytes. */
+export const KEYM2_PRF_OUTPUT_LEN = 32;
+
+/**
+ * §4.7. The salt to hand the authenticator, derived from the slot's own salt
+ * rather than stored beside it.
+ *
+ * Exported because the caller needs it *before* it has a PRF output: the salt
+ * is an input the authenticator requires, so unlocking is "read the slot,
+ * derive this, ask the key, then come back".
+ */
+export async function derivePrfSalt(slotSalt: Uint8Array): Promise<Uint8Array> {
+  if (slotSalt.length !== SALT_LEN) reject();
+  const baseKey = await crypto.subtle.importKey("raw", slotSalt as BufferSource, "HKDF", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    {
+      name: "HKDF",
+      hash: "SHA-256",
+      salt: new Uint8Array(0) as BufferSource,
+      info: INFO_PRF_SALT as BufferSource,
+    },
+    baseKey,
+    KEYM2_PRF_OUTPUT_LEN * 8
+  );
+  return new Uint8Array(bits);
+}
+
+/**
+ * §4.7, the slot secret for `slot_type = 0x01`.
+ *
+ * Same shape as the other two, third domain string.
+ */
+function buildPasskeyInput(prfOutput: Uint8Array): Uint8Array {
+  if (prfOutput.length !== KEYM2_PRF_OUTPUT_LEN) reject();
+  return concat([lp(CTX_PASSKEY_INPUT), lp(prfOutput)]);
 }
 
 /** §4.3. The slot key, from that slot's own KDF, salt and parameters. */
@@ -767,6 +820,8 @@ export interface Keym2Secrets {
   password?: string | undefined;
   keyFile?: Uint8Array | null | undefined;
   shares?: string[] | undefined;
+  /** §4.7. 32 bytes from the authenticator, for this slot's derived salt. */
+  prfOutput?: Uint8Array | undefined;
 }
 
 /**
@@ -799,6 +854,17 @@ async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Ui
     }
   }
 
+  if (slot.slotType === KEYM2_SLOT_TYPE_PASSKEY) {
+    if (!secrets.prfOutput) return null;
+    // There is no equivalent of the Shamir set-id check, and there cannot be:
+    // §4.7 stores nothing identifying the credential, so a PRF output from the
+    // wrong passkey simply fails to unwrap. By §6 that is indistinguishable
+    // from a wrong password — deliberately, and at the cost of never being able
+    // to tell the user which of the two happened.
+    if (secrets.prfOutput.length !== KEYM2_PRF_OUTPUT_LEN) return null;
+    return buildPasskeyInput(secrets.prfOutput);
+  }
+
   return null;
 }
 
@@ -828,7 +894,9 @@ async function unwrapMasterKey(
     if (slotSecret === null) continue;
 
     const slotKey = await deriveSlotKey(slotSecret, slot.salt, slot.kdf);
-    if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) secureErase(slotSecret);
+    if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR || slot.slotType === KEYM2_SLOT_TYPE_PASSKEY) {
+      secureErase(slotSecret);
+    }
     const keys = await wrapKeys(slotKey, container.core.cipher);
     let master: Uint8Array | null;
     try {
@@ -1030,6 +1098,83 @@ export async function addShamirSlotKeym2(
   };
 }
 
+/**
+ * True when every slot a reader could attempt is a passkey slot.
+ *
+ * An unparseable record counts as *not* a passkey slot, which is the
+ * conservative direction: a slot this build cannot read may be one a newer
+ * build can, and refusing to write on the strength of a record we do not
+ * understand would block a legitimate container.
+ */
+function passkeyOnly(records: Uint8Array[]): boolean {
+  if (records.length === 0) return false;
+  return records.every((r) => {
+    const slot = parseKeym2Slot(r);
+    return slot !== null && slot.slotType === KEYM2_SLOT_TYPE_PASSKEY;
+  });
+}
+
+/**
+ * §4.7. Enrol a passkey on a container that already opens some other way.
+ *
+ * There is deliberately no `encryptKeym2(..., prfOutput)` counterpart. A
+ * container is created with a passphrase and a passkey is *added*, so the state
+ * §4.7 forbids — a container only a piece of hardware opens — is not reachable
+ * by following the obvious path. That is the only kind of rule that holds.
+ *
+ * `prfOutput` is what the authenticator returned for `derivePrfSalt(salt)`, so
+ * the caller has to choose the salt, ask the key, and then call this. The salt
+ * is therefore a parameter rather than generated here.
+ */
+export async function addPasskeySlotKeym2(
+  container: Uint8Array,
+  secrets: Keym2Secrets,
+  prfOutput: Uint8Array,
+  salt: Uint8Array
+): Promise<Uint8Array> {
+  if (prfOutput.length !== KEYM2_PRF_OUTPUT_LEN) {
+    throw new KeymakerError("invalid-input", "A WebAuthn PRF output is 32 bytes.");
+  }
+  if (salt.length !== SALT_LEN) {
+    throw new KeymakerError("invalid-input", "KEYM v2 requires a 32-byte salt.");
+  }
+
+  const parsed = parseKeym2Container(container);
+  if (parsed.records.length >= KEYM2_MAX_SLOTS) {
+    throw new KeymakerError("invalid-input", `A container can hold at most ${KEYM2_MAX_SLOTS} slots.`);
+  }
+  const { master } = await unwrapMasterKey(parsed, secrets);
+
+  const prefix = packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, salt, KEYM2_SLOT_TYPE_PASSKEY);
+  // Same round-trip through the reader's own validator as the other builders.
+  if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + parsed.core.tagOverhead)])) === null) {
+    throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
+  }
+
+  const slotSecret = buildPasskeyInput(prfOutput);
+  const slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
+  secureErase(slotSecret);
+
+  let record: Uint8Array;
+  try {
+    record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
+  } finally {
+    secureErase(slotKey);
+    secureErase(master);
+  }
+
+  const records = [...parsed.records, record];
+  // §4.7's one normative rule that is not about bytes. Asked of the result
+  // rather than the input, so slot ordering cannot walk around it.
+  if (passkeyOnly(records)) {
+    throw new KeymakerError(
+      "invalid-input",
+      "A container cannot have a passkey as its only unlock path: a passkey is hardware, and a container only a lost key opens is lost data."
+    );
+  }
+  return concat([parsed.coreBytes, new Uint8Array([records.length]), ...records, parsed.payload]);
+}
+
 export interface Keym2DecryptResult {
   data: Uint8Array;
   keyFileUsed: boolean;
@@ -1053,7 +1198,8 @@ export async function decryptKeym2(
   container: Uint8Array,
   password: string,
   keyFile: Uint8Array | null,
-  shares?: string[]
+  shares?: string[],
+  prfOutput?: Uint8Array
 ): Promise<Keym2DecryptResult> {
   const parsed = parseKeym2Container(container); // every structural §6 check
   const sizes = chunkLayout(parsed.payload.length, parsed.core.tagOverhead); // also before any KDF
@@ -1062,10 +1208,15 @@ export async function decryptKeym2(
   // a passphrase attempt: it would burn a full Argon2id derivation per slot to
   // reach the same failure, on the one path where the caller is least likely to
   // understand what went wrong.
+  // §4.7 joins §4.6 here: someone unlocking with a passkey has no password
+  // either, so an empty one must not become a passphrase attempt that burns a
+  // full Argon2id derivation per slot on its way to the same failure.
+  const hasOtherSecret = (shares !== undefined && shares.length > 0) || prfOutput !== undefined;
   const { master, slot } = await unwrapMasterKey(parsed, {
-    password: password === "" && shares && shares.length > 0 ? undefined : password,
+    password: password === "" && hasOtherSecret ? undefined : password,
     keyFile,
     shares,
+    prfOutput,
   });
 
   const keys = await payloadKeys(master, parsed.core.cipher);
@@ -1200,11 +1351,21 @@ export function inspectKeym2(data: Uint8Array): { kdfLabel: string; cipherLabel:
     const kdfLabel =
       slot === null
         ? "unrecognised slot"
-        : // §4.6. A share set has no cost parameters to report, and inventing a
-          // threshold would be worse than saying nothing: the container does not
-          // carry k or n, so anything shown here would be a guess.
-          slot.kdf.kdf === KEYM2_KDF_HKDF
+        : // §4.6 and §4.7 both pair with HKDF, so this has to branch on the slot
+          // *type*: on the KDF alone, a passkey slot would be reported as a
+          // share set. Neither invents what the container does not carry — no k
+          // or n for a share set, and nothing at all naming a credential.
+          slot.slotType === KEYM2_SLOT_TYPE_PASSKEY
+          ? "passkey / WebAuthn PRF (HKDF-SHA-256)"
+          : slot.slotType === KEYM2_SLOT_TYPE_SHAMIR
           ? "Shamir share set (HKDF-SHA-256)"
+          : // Unreachable for the three types above, since §6 forbids a
+            // passphrase slot from declaring HKDF and the parser enforces it.
+            // Kept as the default for a *future* HKDF slot type, which should
+            // degrade to a plain label rather than fall through to a branch
+            // that reads cost parameters HKDF does not have.
+            slot.kdf.kdf === KEYM2_KDF_HKDF
+          ? "HKDF-SHA-256"
           : slot.kdf.kdf === KdfId.PBKDF2
             ? `PBKDF2 (${slot.kdf.params.iterations.toLocaleString("en-US")} iters)`
             : `Argon2id (${Math.round(slot.kdf.params.memoryKiB / 1024)} MiB, t=${slot.kdf.params.timeCost}, p=${slot.kdf.params.parallelism})`;

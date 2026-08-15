@@ -104,6 +104,22 @@ def bridge(*args: str) -> None:
         raise BridgeError(detail[-1] if detail else f"exit {proc.returncode}")
 
 
+def bridge_stdout(*args: str) -> str:
+    """As bridge(), but hands back what the command printed.
+
+    Only `prfsalt` needs this: it produces 32 bytes and no container, and those
+    32 bytes are the one thing both implementations must agree on before either
+    can ask an authenticator anything at all.
+    """
+    proc = subprocess.run(
+        ["node", str(BRIDGE), *args], capture_output=True, cwd=ROOT
+    )
+    if proc.returncode != 0:
+        detail = proc.stderr.decode(errors="replace").strip().splitlines()
+        raise BridgeError(detail[-1] if detail else f"exit {proc.returncode}")
+    return proc.stdout.decode().strip()
+
+
 def kdf_flags(kdf: str) -> list[str]:
     if kdf == "argon2id":
         return ["--kdf", "argon2id", "--time", str(ARGON2["time_cost"]),
@@ -545,6 +561,116 @@ def main() -> int:
         # reporting a version error — §7 as amended by §4.6.
         check("py classifies a share as a share",
               keym2.detect(py_shares[0].encode()) == "keym2-share")
+
+        # ---------------------------------------------------------------
+        # 6b. Passkey slots (§4.7) — byte equality, both directions
+        # ---------------------------------------------------------------
+        #
+        # Neither side can reach an authenticator, and that turns out not to
+        # matter: everything §4.7 specifies happens either side of the PRF call.
+        # Pinning the PRF output stands in for the key, and what is left — the
+        # derived salt, the slot secret, the wrap — is exactly the part two
+        # implementations can disagree about silently.
+        #
+        # The derived salt is checked *first* and on its own. If the two sides
+        # computed different PRF salts they would ask the authenticator
+        # different questions, get different answers, and every byte after that
+        # would differ for a reason no container comparison would name.
+        print("\nPasskey slots (§4.7):")
+        PK_MSG = b"opened by a key you can hold"
+        PK_SALT = bytes(range(40, 72))
+        PK_PRF = bytes(range(200, 232))
+        PK_WRONG_PRF = bytes(range(1, 33))
+
+        check("both derive the same PRF salt from the same slot salt",
+              bridge_stdout("prfsalt", "--slot-salt", PK_SALT.hex())
+              == keym2.derive_prf_salt(PK_SALT).hex(),
+              f"js={bridge_stdout('prfsalt', '--slot-salt', PK_SALT.hex())} "
+              f"py={keym2.derive_prf_salt(PK_SALT).hex()}")
+
+        pk_base = py_encrypt(PK_MSG, "pbkdf2", "aes", None, os.urandom(32), os.urandom(32))
+        pk_base_path = tmp / "passkey-base.keym2"
+        pk_base_path.write_bytes(pk_base)
+
+        py_pk = keym2.add_passkey_slot(pk_base, PASSWORD, PK_PRF, salt=PK_SALT)
+
+        js_pk_path = tmp / "passkey-js.keym2"
+        bridge("addpasskey", "--password", PASSWORD, "--in", str(pk_base_path),
+               "--out", str(js_pk_path), "--prf-output", PK_PRF.hex(),
+               "--salt", PK_SALT.hex())
+        js_pk = js_pk_path.read_bytes()
+
+        check("the enrolled container is byte-identical", py_pk == js_pk,
+              f"py={len(py_pk)}B js={len(js_pk)}B")
+        pk_slot_at = keym2.SLOT_TABLE_OFFSET + keym2.slot_len(keym2.CIPHER_AES)
+        check("the new slot declares type 0x01 and kdf 0x02",
+              py_pk[pk_slot_at] == 0x01 and py_pk[pk_slot_at + 1] == 0x02)
+        check("its parameter block is eight reserved zero bytes",
+              py_pk[pk_slot_at + 40:pk_slot_at + 48] == bytes(8))
+        check("the slot carries no credential id — it is the same length as any other",
+              len(py_pk) == len(pk_base) + keym2.slot_len(keym2.CIPHER_AES))
+        check("the payload survived enrolment byte for byte",
+              py_pk[payload_offset("aes", 2):] == pk_base[payload_offset("aes", 1):])
+
+        def js_opens_with_prf(blob: bytes, prf: bytes) -> bool:
+            path = tmp / "passkey-in.keym2"
+            path.write_bytes(blob)
+            out = tmp / "passkey.out"
+            out.unlink(missing_ok=True)
+            try:
+                # No --password. Someone unlocking with a passkey has none, and
+                # a bridge that quietly supplied one would test a path nobody
+                # walks.
+                bridge("decrypt2", "--prf-output", prf.hex(),
+                       "--in", str(path), "--out", str(out))
+            except BridgeError:
+                return False
+            return out.read_bytes() == PK_MSG
+
+        def py_opens_with_prf(blob: bytes, prf: bytes) -> bool:
+            try:
+                return keym2.decrypt(blob, prf_output=prf) == PK_MSG
+            except keym2.KeymError:
+                return False
+
+        check("js opens the python container with the PRF output",
+              js_opens_with_prf(py_pk, PK_PRF))
+        check("python opens the js container with the PRF output",
+              py_opens_with_prf(js_pk, PK_PRF))
+        check("neither opens on the wrong PRF output",
+              not js_opens_with_prf(py_pk, PK_WRONG_PRF)
+              and not py_opens_with_prf(py_pk, PK_WRONG_PRF))
+
+        # The passphrase slot is untouched, which is §4.7's whole premise: the
+        # passkey is the convenient path, never the only one.
+        def js_opens_passkey_container_with_password(blob: bytes) -> bool:
+            # Not the Shamir block's helper: that one compares against
+            # SHAMIR_MSG, so reusing it here failed for the plaintext rather
+            # than for anything about passkeys.
+            path = tmp / "passkey-pw.keym2"
+            path.write_bytes(blob)
+            out = tmp / "passkey-pw.out"
+            out.unlink(missing_ok=True)
+            try:
+                bridge("decrypt2", "--password", PASSWORD, "--in", str(path), "--out", str(out))
+            except BridgeError:
+                return False
+            return out.read_bytes() == PK_MSG
+
+        check("the original password still opens it (js)",
+              js_opens_passkey_container_with_password(py_pk))
+        check("the original password still opens it (python)",
+              keym2.decrypt(py_pk, PASSWORD) == PK_MSG)
+
+        # §4.7's normative rule, on the side that can express it. The bridge
+        # cannot reach this state either — addPasskeySlotKeym2 refuses — so the
+        # check is that both refuse rather than that one does.
+        pk_only_base = keym2.add_passkey_slot(pk_base, PASSWORD, PK_PRF, salt=PK_SALT)
+        try:
+            keym2.remove_slot(pk_only_base, 0)
+            check("python refuses to leave a passkey as the only slot", False)
+        except (keym2.KeymError, keym2.UsageError):
+            check("python refuses to leave a passkey as the only slot", True)
 
         # ---------------------------------------------------------------
         # 7. Armor agrees
