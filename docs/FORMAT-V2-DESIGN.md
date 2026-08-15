@@ -438,6 +438,12 @@ Reserving the type code is what the *format* needs in order not to require a
 second migration. The layout is that feature's to add, under the same process as
 everything else.
 
+§4.7 now describes 0x01's derivation and is explicit that it is design only, for
+exactly that reason. It reaches the same conclusion 0x02 did: **the slot
+record's shape does not change.** No new field, no variable-length record, no
+change to the table walk below — which is what makes it a feature to add rather
+than a migration to run.
+
 0x02 was reserved on those terms and is now specified on them: §4.6 was written
 first and `reference/keym2.py` was derived from it, which is what moved it out of
 this paragraph.
@@ -781,14 +787,15 @@ like a receipt is the realistic failure, not a cryptographic one.
 
 > **Not implemented.** Unlike every other section of this document, nothing in
 > the codebase reads or writes this yet. It is written down because the design
-> work is done and because §4.7 hit a layout problem worth recording before
-> anyone starts coding — see *The open decision* at the end.
+> work is done — including the layout question that was left open here, now
+> settled under *The decisions, and what they cost*. What remains is an
+> implementation, under §4.5's fixture and parity gates like everything else.
 
 `0x01` has been reserved since §3.2. A passkey slot is a slot whose secret comes
 out of an authenticator rather than off a keyboard.
 
 ```
-prf_salt      = CSPRNG(32)                     stored in the slot, not secret
+prf_salt      = HKDF-SHA-256(slot_salt, "", "keymaker.v2.prf-salt", 32)
 
 prf_output    = WebAuthn PRF(credential, prf_salt)      32 bytes, from the key
 
@@ -802,10 +809,16 @@ slot_key      = HKDF-SHA-256(passkey_input, slot_salt, "keymaker.v2.slot-key", 3
 32-byte share secret and a 32-byte PRF output must never be able to produce the
 same slot key.
 
-`prf_salt` is stored in the clear. It has to be — the salt is an *input* the
-authenticator needs before it will produce anything, so a reader must hold it
-before it can ask. It is not secret: without the credential, the salt buys
-nothing, and the PRF output cannot be computed without the authenticator.
+`prf_salt` is **derived, not stored.** The salt is an *input* the authenticator
+needs before it will produce anything, so a reader must hold it before it can
+ask — but holding it and storing it are different things. The slot already
+carries a random 32-byte `slot_salt`, so one more domain-separated derivation
+from a value already in the record produces the PRF salt without spending 32
+bytes on it. Its domain string differs from the slot key's for the usual reason:
+two derivations from the same `slot_salt` must not be able to collide.
+
+Neither value is secret. Without the credential the salt buys nothing, and the
+PRF output cannot be computed without the authenticator.
 
 The KDF is **HKDF only**, by the same §6 rule that binds a Shamir slot. The input
 is an unguessable 32-byte value from a hardware key, so Argon2id's memory cost
@@ -813,24 +826,31 @@ over it would defend nothing that needs defending.
 
 #### The slot body
 
+**The slot record's shape does not change for 0x01**, exactly as it does not for
+0x02. Same 48-byte prefix, same offsets, same `wrapped_key`, and bytes 3..7 stay
+reserved and stay zero.
+
 ```
 slot_type          1   0x01
 slot_kdf_id        1   0x02  (HKDF)
 slot_flags         1   §4.4 — the key-file bit applies here as elsewhere
-prf_salt          32   the PRF input, in the clear
-credential_id_len  2   uint16_be, 1..1023
-credential_id      N   the WebAuthn credential id, in the clear
+reserved           5   MUST be zero
+slot_salt         32   §4.4 — also the input `prf_salt` is derived from
+KDF parameters     8   §3.2
 wrapped_key      ...   §4.3, unchanged
 ```
 
-The credential id is stored so a reader can name the credential in
-`allowCredentials`. That is a metadata disclosure and worth being explicit about:
-whoever holds the container learns that *a* passkey opens it, and that
-credential's opaque id. They do not learn which authenticator, which account, or
-anything usable at another relying party. **Discoverable credentials would avoid
-even that**, and are rejected here because a reader that cannot name the
-credential has to ask the user to pick from every passkey they own — which is
-the moment a non-technical heir gives up.
+There is no passkey-specific field. Only two things differ from a passphrase
+slot, and neither is a wire field: where `slot_secret` comes from, and which
+`slot_kdf_id` is legal.
+
+That is what makes this section cheap to implement and safe to add. It was not
+cheap in the first draft — see below.
+
+The container therefore discloses **nothing** about the credential. Not its id,
+not the authenticator, not that a particular key was involved beyond
+`slot_type = 0x01` itself saying "a passkey opens this". The earlier draft stored
+the credential id in the clear and accepted that disclosure; it no longer has to.
 
 #### A passkey slot never travels alone
 
@@ -845,34 +865,52 @@ being remembered by each UI separately.
 A reader **MUST** still open a container that violates it. The rule binds
 writers; refusing to read a file someone already holds helps nobody.
 
-#### The open decision
+#### The decisions, and what they cost
 
-The body above **does not fit the slot record as it exists.** §4.4 slots are a
-fixed-length prefix — type, kdf, flags, 32-byte salt, a fixed KDF-parameter
-block — followed by the wrapped key. `credential_id` is variable-length, so
-writing this as drawn means changing the slot layout and the table walk that
-parses it. That is surgery on the parser, which is the most security-sensitive
-code here and the place §6's bounds live. It should be a deliberate change, not
-a side effect of adding a feature.
+The first draft of this section **did not fit the slot record as it exists.** It
+stored `prf_salt` and a variable-length `credential_id`, and §4.4 slots are a
+fixed-length prefix followed by the wrapped key. Writing it as drawn meant
+changing the slot layout and the table walk that parses it — surgery on the most
+security-sensitive code here, and the place §6's bounds live. Two decisions
+removed the need entirely.
 
-Two resolutions, and picking between them is the first task of implementing this:
+**1. Derive `prf_salt` rather than store it.** One more domain-separated
+derivation from the `slot_salt` already in the record. Removes 32 bytes and
+loses nothing: the value was never secret, and a reader that can read the slot
+can compute it.
 
-1. **Derive `prf_salt` instead of storing it.** The slot already carries a
-   random 32-byte `slot_salt`. Setting
-   `prf_salt = HKDF-SHA-256(slot_salt, "", "keymaker.v2.prf-salt", 32)` removes
-   that field entirely at no cost — one more domain-separated derivation from a
-   value already in the record. This is almost certainly right and removes 32 of
-   the 34 extra bytes.
-2. **Then decide about `credential_id`,** which is the only variable-length part
-   left. Either accept the parser change to store it, or use a *discoverable*
-   credential and let the authenticator find it, which stores nothing and costs
-   the UX argued against above. That trade — a parser change versus asking an
-   heir to pick from a list of passkeys — is a real decision and belongs to
-   whoever implements it, with the §4.5 fixture and parity gates applied as
-   usual.
+**2. Use a discoverable credential, so nothing names it.** This is what removes
+the variable-length field, and with it the parser change. It is not free, and
+the costs belong here rather than in an implementer's surprise:
 
-Everything above the line is settled: the derivation, the HKDF-only pairing, the
-never-travels-alone rule, and the framing below.
+- Enrollment must request `residentKey: "required"`. A credential that is not
+  discoverable cannot be found without its id, so this is load-bearing, not a
+  preference.
+- Discoverable credentials occupy **limited storage on hardware security keys** —
+  some hold around 25 — where a non-discoverable credential costs none. Users
+  who keep many resident credentials on one key will feel this.
+- Unlock shows a credential picker. The earlier draft rejected discoverable
+  credentials on the grounds that an heir would face "every passkey they own",
+  and **that was overstated**: the picker is scoped to the relying party, so it
+  lists the passkeys registered to Keymaker, which for most people is one.
+- The real UX cost is narrower and worth stating plainly: with no id in the
+  container, **a reader cannot tell one Keymaker passkey from another.** Someone
+  with several enrolled across different containers who picks the wrong one gets
+  a PRF output that fails to unwrap — and by §6's rule that is indistinguishable
+  from a wrong password. The UI cannot say "wrong passkey", because the format
+  deliberately does not let it know.
+
+The trade is a parser change against a picker, and the picker wins: a
+fixed-width slot keeps §6's table walk and its bounds untouched, and the
+container discloses less than the alternative would have. What this project
+cannot afford is a quiet bug in the parser; what it can afford is a second tap.
+
+**Still the implementer's to establish**, under the same process as everything
+else: `reference/keym2.py` written from this section rather than from the
+TypeScript, byte-equality parity between the two, a frozen fixture in §4.5's
+corpus, and the never-travels-alone rule enforced at the writer. One recorded
+wrinkle for the browser tests: WebAuthn rejects an IP address as an RP ID, so
+the suite has to reach the server on `localhost`, not `127.0.0.1`.
 
 #### What this is, and is not
 

@@ -829,18 +829,29 @@ So this is testable, with one wrinkle worth writing down: WebAuthn refuses an IP
 address as an RP ID, so the suite has to reach the test server on `localhost`
 rather than `127.0.0.1`.
 
-**It stopped at a layout problem, recorded in §4.7 under *The open decision*.**
-A §4.4 slot is a fixed-length prefix plus the wrapped key, and a passkey slot as
-drawn needs a variable-length `credential_id`. Writing it means changing the slot
-record and the table walk that parses it — surgery on the code where §6's bounds
-live, and where this project's worst failure would be a quiet one. Deriving
-`prf_salt` from the slot salt removes 32 of the 34 extra bytes and is almost
-certainly right; whether to store the credential id, or use a discoverable
-credential and store nothing, is a genuine trade between a parser change and
-asking an heir to pick from a list of passkeys.
+**It stopped at a layout problem, and that problem is now decided.** A §4.4 slot
+is a fixed-length prefix plus the wrapped key, and the passkey slot as first
+drawn needed a variable-length `credential_id` — which meant changing the slot
+record and the table walk that parses it, surgery on the code where §6's bounds
+live and where this project's worst failure would be a quiet one.
 
-That decision belongs to a session with room to make it and run the fixture and
-parity gates behind it, rather than to the end of one.
+Both resolutions were taken, and §4.7 now records them under *The decisions, and
+what they cost*: `prf_salt` is **derived** from the slot salt rather than stored,
+and the credential is **discoverable**, so nothing names it. Together they remove
+every passkey-specific field. The slot record's shape does not change for 0x01
+any more than it did for 0x02, the parser is untouched, and the container
+discloses nothing about the credential.
+
+The cost is recorded rather than glossed: enrollment must set
+`residentKey: "required"`, discoverable credentials consume limited storage on
+hardware keys, and — the sharp edge — with no id in the container a reader cannot
+tell one Keymaker passkey from another, so picking the wrong one is
+indistinguishable from a wrong password by §6's rule.
+
+**What remains is implementation**, and it belongs to a session with room for the
+gates behind it: `reference/keym2.py` written from §4.7, byte-equality parity
+against the TypeScript, a frozen fixture in the §4.5 corpus, and the
+never-travels-alone rule enforced at the writer.
 
 ## Phase 8 — Outreach, and only after 6
 
