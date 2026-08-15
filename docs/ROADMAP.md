@@ -400,16 +400,24 @@ share, a page in that box *can* be used.
 
 ---
 
-## Phase 5 — UAT remediation — **26 of 28 closed**
+## Phase 5 — UAT remediation — **27 of 28 closed**
 
 Source: [reports/UAT-2026-08-14.md](reports/UAT-2026-08-14.md) — five agents
 driving the production build in headless Chromium, ~150 automated checks plus
 manual inspection, 28 findings.
 
-**Two remain, both by decision rather than backlog.** U14 is refused — v2 has no
-filename field and should not grow one. U27 is parked until the non-ASCII
-download filename is confirmed in a real browser; the unpark condition is in
-§5.4 and has not been met.
+**One remains, by decision rather than backlog.** U14 is refused — v2 has no
+filename field and should not grow one.
+
+**U27 is closed: it was a harness artifact, as suspected.** Confirmed by looking
+at both sides of the boundary at once. The application sets the anchor's
+`download` attribute to `café-日本語-notes.txt.keym`, intact; Playwright's
+`suggestedFilename()` for the same download reports `download`. Two answers for
+one event, and the one naming the product is correct — so there was nothing to
+fix, and parking it rather than "fixing" it was the right call.
+`tests/browser/download-filename.spec.ts` keeps the finding rather than a note:
+if the app ever does start mangling the name, the report becomes real and that
+test is what says so.
 
 **A counting correction, recorded because the process failed, not just the
 count.** This was reported as 26 of 28 twice while it was actually 24. U2b and
@@ -542,10 +550,11 @@ feedback, Enter doing nothing in the password field, the undisclosed
 exposing no `aria-pressed`, the 11px typography floor, and the SeedQR modal
 offering no "copy digits" path.
 
-**U27 is deliberately not actionable yet.** Non-ASCII download filenames
-collapsing to "download" is suspected to be a harness artifact, and the report
-says to confirm it in a real browser first. Worth honouring — a fix aimed at a
-test-harness bug is worse than no fix.
+**U27 was not actionable, and now it is closed.** Non-ASCII download filenames
+collapsing to "download" was suspected to be a harness artifact, and it was:
+the app hands the browser the correct name and only the harness reports
+otherwise. Worth having honoured — a fix aimed at a test-harness bug would have
+changed working code to satisfy a broken observation.
 
 **Gate:** every item in 5.1 and 5.2 ships with a Playwright regression test that
 has been *seen to fail* without the fix. The UAT produced reproducible scripts
@@ -911,7 +920,6 @@ outstanding across every session and each one costs minutes.
 | O1 | **About panel and topics are empty** on a public repo | The one-line description is the entire first impression, and topics are how anyone finds this at all |
 | O2 | **Two stale `claude/*` branches** on the old repo | Force-push was permission-denied |
 | O3 | **The live site has never been opened on a phone** | Several rounds of UI change have shipped; this container is egress-blocked from the deployed site, so it cannot be checked here. It is also 6.5's gate |
-| O4 | **U27 unpark** — confirm the non-ASCII download filename in a real browser | Suspected harness artifact; a fix aimed at one would be worse than none |
 | O5 | **Cut the `v2.0.0` tag** — `git tag -a v2.0.0 && git push origin v2.0.0` | 6.2 built and tested the whole release path but deliberately stops here: a public release cannot be withdrawn, so pushing the tag is a decision rather than a step. Annotated, because the message becomes the "What changed" section |
 
 ---
@@ -965,7 +973,7 @@ Phase 2  Unfreeze and prove            ─ done ─  format-independent
 Phase 3  KEYM v2                       ─ done ─  Python reference first, then TS
          └ chunked STREAM + envelope slots · the app writes v2
 Phase 5.1 The OOM crash (U4)           ─ done ─  jumped the queue, see below
-Phase 5  UAT remediation               ─ done ─  26 of 28; U14 refused, U27 parked
+Phase 5  UAT remediation               ─ done ─  27 of 28; U14 refused by design
          └ correctness · a11y second pass · polish
 Phase 4.1 Shamir k-of-n                ─ done ─  format · reference · parity · UI
 Phase 6  Make the claims checkable     ─ done ─  version · release · verify page · README · (6.5 owner)
