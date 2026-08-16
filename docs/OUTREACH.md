@@ -28,7 +28,10 @@ Three claims, in this order, all checkable:
 1. **It does not talk to anything.** `connect-src 'none'`, enforced by a build
    that fails closed if the directive changes, and measured in UAT with 100% of
    requests aborted at the browser level while a full Argon2id round trip
-   completed.
+   completed. Say the limit in the same breath: the policy ships as a `<meta>`
+   tag, which does not reach Web Workers, so the browser enforces this on the
+   page and not on the crypto worker. An audience that checks claims will find
+   that in a minute, and finding it unmentioned costs more than saying it.
 2. **Your file outlives the tool.** A specified format, an independent Python
    implementation that decrypts without a browser, and a printed procedure —
    all three tested on every commit rather than asserted.
@@ -63,10 +66,14 @@ Three claims, in this order, all checkable:
 >
 > Keymaker is my attempt at the version you *can* check:
 >
-> - **It cannot open a connection.** The CSP is `connect-src 'none'` — not
+> - **The page cannot open a connection.** The CSP is `connect-src 'none'` — not
 >   "we don't send anything", but the browser refusing to let it. The build
 >   fails if that directive is ever loosened. A UAT run blocked 100% of network
->   requests and a full encrypt → decrypt round trip still completed.
+>   requests and a full encrypt → decrypt round trip still completed. One
+>   caveat I'd rather you hear from me: the policy is a `<meta>` tag, and those
+>   don't apply to Web Workers, so the key derivation runs outside it. Nothing
+>   there makes a request and the build is reproducible so you can confirm it,
+>   but that part is the code's word, not the browser's.
 > - **Your file doesn't depend on the website.** The container format is
 >   specified, and there's a ~600-line Python script that decrypts it with two
 >   mainstream libraries, no browser and no npm. There's a printed recovery
@@ -95,7 +102,9 @@ Three claims, in this order, all checkable:
 > you were served. I couldn't fix that, so I did the next three things instead:
 >
 > 1. `connect-src 'none'` in the CSP, so the page can't open a connection at
->    all, with a build step that fails closed if the directive changes.
+>    all, with a build step that fails closed if the directive changes. It's a
+>    `<meta>` tag, so it covers the page and not the Web Worker the key
+>    derivation runs in — flagging that because you'd find it anyway.
 > 2. An independent Python implementation of the container format, so a file
 >    encrypted today opens in ten years without this site, this app, or a
 >    browser. Both implementations are compared byte-for-byte in CI.

@@ -37,18 +37,19 @@ flowchart TB
     end
 
     net(["Any network"])
-    tab -.->|"blocked by connect-src none"| net
+    tab -.->|"page: blocked by connect-src none"| net
 
     style net stroke-dasharray: 5 5
 ```
 
-This is enforced structurally rather than by policy:
+Most of this is enforced by the browser rather than by our own good behaviour:
 
 | Mechanism | Effect |
 |---|---|
 | `output: 'export'` | No server runtime exists. The build is static files. |
 | `default-src 'none'` | Nothing loads unless explicitly allowed. |
-| `connect-src 'none'` | `fetch`, XHR, EventSource and WebSocket are blocked outright — including to our own origin. |
+| `connect-src 'none'` | In the page, `fetch`, XHR, EventSource and WebSocket are blocked outright — including to our own origin. Not inherited by workers; see below. |
+| `worker-src 'self'` | Only same-origin worker scripts. A `blob:` or `data:` worker — the way injected script would try to escape the policy — will not start. |
 | No third-party assets | No fonts, analytics, or CDN scripts to phone home. |
 | Per-file script hashes | Inline scripts are pinned by SHA-256; injected ones will not run. |
 
@@ -56,6 +57,43 @@ The build fails closed. `scripts/apply-csp-hashes.mjs` refuses to emit a bundle 
 `script-src` still contains `'unsafe-inline'`, and equally refuses one that has lost
 `'wasm-unsafe-eval'` — because without that token, Argon2id cannot instantiate its
 WebAssembly module and would fail silently at runtime.
+
+### The gap: a `<meta>`-tag CSP does not reach workers
+
+The policy is delivered as a `<meta http-equiv>` tag, because a static host
+cannot send response headers. That works for the document and **not** for a
+dedicated worker: a worker fetched over HTTP takes its policy from its own
+response headers, and a static host sends none. So the worker runs
+unconstrained.
+
+Measured against the production export, same-origin target, Chromium:
+
+```
+page   fetch: BLOCKED TypeError
+worker fetch: ALLOWED 200
+```
+
+Keymaker runs its key derivation in a worker, so the directive that carries the
+zero-egress claim does not cover the code handling your password. This page
+previously said the property was structural. It is not, and this section exists
+because that was worth correcting rather than leaving.
+
+What is actually true:
+
+- **The page cannot open a connection.** That part is the browser's doing and is
+  asserted in the browser suite.
+- **A worker could.** Nothing in the shipped code does, and you can check that —
+  the build is reproducible and the manifest is signed, so the bytes you run are
+  the bytes in the repository.
+- **Reaching the worker requires shipping code in it.** `worker-src 'self'` stops
+  injected script from starting its own, so the realistic path is a compromised
+  dependency inside `crypto-worker.js` — a supply-chain problem, which is what
+  reproducible builds and the signed manifest exist to make detectable.
+
+Closing it properly needs a real `Content-Security-Policy` **header**, which
+applies to workers too. That means a host that can send headers; GitHub Pages
+cannot. Until then the honest description is "strong, with one gap", not
+"structural".
 
 ---
 
