@@ -63,6 +63,20 @@ const KIT = [
     minBytes: 5_000,
     mustContain: 'def decrypt',
   },
+  // The two library versions these scripts were actually tested against.
+  //
+  // Without it the kit says "pip install cryptography argon2-cffi" and leaves
+  // the version to whatever the index serves that day, which for a document
+  // whose whole point is working in ten years is the wrong end to leave open.
+  // This does not make the kit offline-complete — the wheels themselves are
+  // not here, and docs/RECOVERY.md no longer claims otherwise — but it does
+  // mean someone assembling an offline bundle knows exactly what to fetch.
+  {
+    from: join(ROOT, 'reference', 'requirements.txt'),
+    to: 'requirements.txt',
+    minBytes: 200,
+    mustContain: 'cryptography==',
+  },
 ];
 
 rmSync(DEST, { recursive: true, force: true });
