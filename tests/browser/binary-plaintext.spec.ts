@@ -1,7 +1,7 @@
 import { test, expect } from "@playwright/test";
-import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { STRONG_PASSWORD, visible, useTextMode } from "./helpers";
+import { visible, useTextMode } from "./helpers";
 
 /**
  * KM-R08: text mode must not silently mangle bytes that are not text.
@@ -12,45 +12,52 @@ import { STRONG_PASSWORD, visible, useTextMode } from "./helpers";
  * binary — so decoding leniently handed the user irreversibly corrupted data
  * under a success message. Authenticate the plaintext, then break it.
  *
- * The container here is built by the **Python reference**, on purpose. Building
- * it through the app would prove only that the app round-trips its own output,
- * and the app has no way to produce a non-UTF-8 payload in text mode. The
- * scenario this guards is exactly a file this app did not write.
+ * ## Why the container is frozen rather than generated
+ *
+ * It was written by the **Python reference**, not by the app. Building it
+ * through the app would prove only that the app round-trips its own output, and
+ * text mode cannot produce a non-UTF-8 payload in the first place — every
+ * JavaScript string encodes to valid UTF-8. The scenario this guards is exactly
+ * a file this app did not write.
+ *
+ * It is checked in rather than generated per run for two reasons. The browser
+ * job installs Node and three browsers and no Python, so shelling out to the
+ * reference made this the one test in the suite that could fail on a toolchain
+ * question rather than on behaviour. And a frozen container is the better
+ * artifact anyway: a generated one is written by today's reference, while this
+ * one was written on a known day by a named revision and has to keep opening.
+ *
+ * Its password lives in the fixture rather than coming from `STRONG_PASSWORD`.
+ * The bytes are frozen, so the password that opens them is frozen with them,
+ * and borrowing the shared constant would mean an edit to that constant
+ * silently breaks a container the browser suite cannot regenerate.
  */
 
-const REFERENCE = resolve(process.cwd(), "reference/keym2.py");
-
-/** A payload with a lone continuation byte and an unpaired 0xFF/0xFE. */
-const RAW = Buffer.from([0x00, 0x80, 0xff, 0xfe, 0x41]);
-
-function armoredBinaryContainer(): string {
-  const script = `
-import sys
-sys.path.insert(0, ${JSON.stringify(resolve(process.cwd(), "reference"))})
-import keym2
-raw = bytes(${JSON.stringify(Array.from(RAW))})
-c = keym2.encrypt(raw, ${JSON.stringify(STRONG_PASSWORD)},
-                  kdf_id=keym2.KDF_PBKDF2,
-                  iterations=keym2.PBKDF2_ITER_POLICY_MIN)
-print(keym2.armor(c))
-`;
-  return execFileSync("python3", ["-c", script], { encoding: "utf8" }).trim();
+interface BinaryFixture {
+  /** A payload with a lone continuation byte and an unpaired 0xFF/0xFE. */
+  plaintextHex: string;
+  password: string;
+  armor: string;
 }
 
+const FIXTURE: BinaryFixture = JSON.parse(
+  readFileSync(resolve(__dirname, "fixtures/binary-plaintext.json"), "utf8")
+);
+
 test("a container of non-UTF-8 bytes is not reported as decrypted text", async ({ page }) => {
-  // Fails loudly rather than skipping if the reference cannot run: a silently
-  // skipped test here would leave the regression unguarded.
-  const container = armoredBinaryContainer();
-  expect(container.startsWith("keym2:"), `the reference did not produce a container: ${container}`).toBe(
-    true
-  );
-  expect(REFERENCE).toBeTruthy();
+  // The fixture is worth nothing unless its payload really is malformed. An
+  // edit that quietly replaced it with text would leave every assertion below
+  // passing against a container that never reaches the guard.
+  expect(() =>
+    new TextDecoder("utf-8", { fatal: true }).decode(Buffer.from(FIXTURE.plaintextHex, "hex"))
+  ).toThrow();
+  expect(FIXTURE.armor.startsWith("keym2:")).toBe(true);
 
   await page.goto("/");
   await visible(page.getByRole("tab", { name: "Decrypt" })).click();
   await useTextMode(page);
-  await visible(page.getByPlaceholder("Enter text to decrypt")).fill(container);
-  await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
+  await visible(page.getByPlaceholder("Enter text to decrypt")).fill(FIXTURE.armor);
+  await visible(page.getByPlaceholder("Enter decryption password")).fill(FIXTURE.password);
 
   const downloadPromise = page.waitForEvent("download", { timeout: 90_000 }).catch(() => null);
   await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
