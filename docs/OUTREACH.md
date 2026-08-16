@@ -25,13 +25,17 @@ here:
 
 Three claims, in this order, all checkable:
 
-1. **It does not talk to anything.** `connect-src 'none'`, enforced by a build
-   that fails closed if the directive changes, and measured in UAT with 100% of
-   requests aborted at the browser level while a full Argon2id round trip
-   completed. Say the limit in the same breath: the policy ships as a `<meta>`
-   tag, which does not reach Web Workers, so the browser enforces this on the
-   page and not on the crypto worker. An audience that checks claims will find
-   that in a minute, and finding it unmentioned costs more than saying it.
+1. **Nothing is sent, and you can check that rather than trust it.** No
+   telemetry, no transmitting code, reproducible build, signed manifest.
+   `connect-src 'none'` is enforced by a build that fails closed if the
+   directive changes, and UAT measured a full Argon2id round trip with 100% of
+   requests aborted at the browser level.
+
+   Claim it as *auditable*, never as *impossible*. `connect-src` covers the
+   connection APIs and not resource loads — one `new Image().src` with a query
+   string leaves the browser, measured — and a `<meta>` policy does not reach
+   the Web Worker the key derivation runs in. This audience checks; an
+   overclaim found by a reader costs more than the caveat ever would.
 2. **Your file outlives the tool.** A specified format, an independent Python
    implementation that decrypts without a browser, and a printed procedure —
    all three tested on every commit rather than asserted.
@@ -66,14 +70,16 @@ Three claims, in this order, all checkable:
 >
 > Keymaker is my attempt at the version you *can* check:
 >
-> - **The page cannot open a connection.** The CSP is `connect-src 'none'` — not
->   "we don't send anything", but the browser refusing to let it. The build
->   fails if that directive is ever loosened. A UAT run blocked 100% of network
->   requests and a full encrypt → decrypt round trip still completed. One
->   caveat I'd rather you hear from me: the policy is a `<meta>` tag, and those
->   don't apply to Web Workers, so the key derivation runs outside it. Nothing
->   there makes a request and the build is reproducible so you can confirm it,
->   but that part is the code's word, not the browser's.
+> - **Nothing is sent, and you don't have to take my word for it.** There's no
+>   telemetry and no code that transmits. The build is reproducible and the
+>   manifest is signed, so you can check the bytes you were served against the
+>   source. The CSP is `connect-src 'none'` and the build fails if that's ever
+>   loosened; a UAT run blocked 100% of network requests and a full encrypt →
+>   decrypt round trip still completed. What I won't claim is that it's
+>   *impossible* — `connect-src` covers fetch and friends, not an image URL with
+>   a query string on it, and a `<meta>` policy doesn't reach the worker the key
+>   derivation runs in. The guarantee is that it's auditable, not that the
+>   browser is stopping me.
 > - **Your file doesn't depend on the website.** The container format is
 >   specified, and there's a ~600-line Python script that decrypts it with two
 >   mainstream libraries, no browser and no npm. There's a printed recovery
@@ -95,16 +101,18 @@ Three claims, in this order, all checkable:
 
 ## Hacker News (Show HN) — draft
 
-> **Title:** Show HN: Keymaker – browser encryption with zero network access and
-> a Python decryptor
+> **Title:** Show HN: Keymaker – browser encryption that makes no network
+> requests, and a Python decryptor
 >
 > The problem with browser-based encryption is that you can't verify the code
 > you were served. I couldn't fix that, so I did the next three things instead:
 >
-> 1. `connect-src 'none'` in the CSP, so the page can't open a connection at
->    all, with a build step that fails closed if the directive changes. It's a
->    `<meta>` tag, so it covers the page and not the Web Worker the key
->    derivation runs in — flagging that because you'd find it anyway.
+> 1. `connect-src 'none'` in the CSP, blocking fetch, XHR, WebSocket and
+>    sendBeacon, with a build step that fails closed if the directive changes.
+>    Not a structural guarantee and I don't pitch it as one: resource loads
+>    aren't covered, and a `<meta>` policy doesn't reach the worker. What's
+>    checkable is that no code in the bundle transmits, and the build is
+>    reproducible so you can verify the bundle.
 > 2. An independent Python implementation of the container format, so a file
 >    encrypted today opens in ten years without this site, this app, or a
 >    browser. Both implementations are compared byte-for-byte in CI.

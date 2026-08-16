@@ -350,7 +350,7 @@ None of the three protects a compromised device. That is the next section.
 
 | Property | Strength of guarantee |
 |---|---|
-| Data never leaves the device | **Strong, with one gap.** Static export, no telemetry, `connect-src 'none'` gated in the build — the page cannot open a connection. The policy ships as a `<meta>` tag, and a `<meta>` policy does not reach Web Workers, so the crypto worker is not covered by it. Nothing in the shipped code makes a request from there, and the reproducible build lets you check that — but for the worker the guarantee rests on the code rather than on the browser. [Detail](docs/HOW-IT-WORKS.md#the-gap-a-meta-tag-csp-does-not-reach-workers). |
+| Data never leaves the device | **Auditable, not structural.** There is no telemetry and no code that transmits anything; the build is reproducible and the manifest signed, so you can confirm that rather than trust it. The CSP raises the cost — `connect-src 'none'` blocks `fetch`, XHR, WebSocket, EventSource and `sendBeacon` — but it does not make transmission impossible: `img-src 'self'` alone lets a URL carry data off the page, and a `<meta>` policy does not reach Web Workers at all. [What the policy does and does not do](docs/HOW-IT-WORKS.md#what-the-csp-does-not-do). |
 | Header cannot be downgraded | **Cryptographic.** The full header is AAD on every AEAD layer. |
 | Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
