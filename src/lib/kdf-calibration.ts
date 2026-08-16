@@ -37,7 +37,7 @@
  * hardware in this room could impersonate.
  */
 
-import { KdfId, type KdfParams } from "./keymaker-crypto";
+import { KdfId, validateKdfParams, type KdfParams } from "./keymaker-crypto";
 
 /** One timed Argon2id run. `parallelism` is not modelled — see `calibrateArgon2`. */
 export interface Argon2Sample {
@@ -200,11 +200,32 @@ export function calibrateArgon2(req: CalibrationRequest): Calibration {
     limitedBy = "memory-ceiling";
   }
 
+  const params: KdfParams = {
+    kdf: KdfId.ARGON2ID,
+    params: { timeCost, memoryKiB, parallelism },
+  };
+
+  // Every result must be a set of parameters the writer will accept, and this
+  // asks the writer rather than restating its bounds.
+  //
+  // The bounds were being restated, and incompletely: `budgetOk` above checks
+  // budgetMs, timeCost and the memory ceiling, and `parallelism` was
+  // destructured from the request and returned untouched. A caller passing 0,
+  // NaN or 4.5 got a Calibration whose params no encrypt would accept — from a
+  // function whose contract is that they always are. `timeCost` was half
+  // checked too: finite and >= 1, with no ceiling and no integer requirement.
+  //
+  // Duplicating the ranges here would just move the drift. Asking the
+  // authoritative validator cannot drift, and it covers fields added later
+  // without this function being touched.
+  try {
+    validateKdfParams(params, "encrypt");
+  } catch {
+    return { params: FALLBACK, fit, predictedMs: NaN, limitedBy: "unusable-measurement" };
+  }
+
   return {
-    params: {
-      kdf: KdfId.ARGON2ID,
-      params: { timeCost, memoryKiB, parallelism },
-    },
+    params,
     fit,
     predictedMs: predictArgon2Ms(fit, timeCost, memoryKiB),
     limitedBy,

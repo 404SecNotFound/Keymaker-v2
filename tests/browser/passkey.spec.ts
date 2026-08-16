@@ -26,7 +26,10 @@ import { visible, useTextMode, STRONG_PASSWORD } from "./helpers";
 /** The config's baseURL is an IP, which WebAuthn will not accept as an RP id. */
 const ORIGIN = "http://localhost:4321";
 
-async function addVirtualAuthenticator(page: Page): Promise<{ cdp: CDPSession; id: string }> {
+async function addVirtualAuthenticator(
+  page: Page,
+  { hasPrf = true }: { hasPrf?: boolean } = {}
+): Promise<{ cdp: CDPSession; id: string }> {
   const cdp = await page.context().newCDPSession(page);
   await cdp.send("WebAuthn.enable");
   const { authenticatorId } = await cdp.send("WebAuthn.addVirtualAuthenticator", {
@@ -39,7 +42,7 @@ async function addVirtualAuthenticator(page: Page): Promise<{ cdp: CDPSession; i
       hasResidentKey: true,
       hasUserVerification: true,
       // The extension this whole section exists for.
-      hasPrf: true,
+      hasPrf,
       isUserVerified: true,
       automaticPresenceSimulation: true,
     },
@@ -58,7 +61,7 @@ async function prepareEncrypt(page: Page, withPasskey: boolean) {
   await visible(page.getByRole("button").filter({ hasText: "PBKDF2" })).click();
 
   if (withPasskey) {
-    const toggle = visible(page.getByRole("switch", { name: /Also unlock with a passkey/i }));
+    const toggle = visible(page.getByRole("switch", { name: /Passkey quick access/i }));
     await expect(
       toggle,
       "the passkey control is missing — probePasskeySupport found no WebAuthn, so nothing below is being tested"
@@ -186,6 +189,46 @@ test.describe("§4.7 passkey slots", () => {
         visible(page.getByText(/no passkey enrolled/i)),
         "a container with no passkey slot should say so"
       ).toBeVisible({ timeout: 30_000 });
+    } finally {
+      await cdp.detach();
+    }
+  });
+
+  test("an authenticator without PRF is refused, and says the passkey can be deleted", async ({
+    page,
+  }) => {
+    // The realistic failure: a key that happily creates a credential and cannot
+    // derive from it. Enrolment must refuse rather than write a slot nothing
+    // can open — and must say the credential exists, because a relying party
+    // can create passkeys and has no API to remove them. Silence leaves a
+    // passkey manager filling with Keymaker entries, none of which open
+    // anything.
+    const { cdp } = await addVirtualAuthenticator(page, { hasPrf: false });
+    try {
+      await prepareEncrypt(page, true);
+      await visible(page.getByPlaceholder("Enter text to encrypt")).fill("should not be written");
+      await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+      await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+
+      // Verbatim, not the generic string. This is what PasskeyError extending
+      // KeymakerError buys: as a plain Error the whole message collapsed to
+      // "Processing failed. Please try again.", which is the wrong answer for
+      // the one case where the user has to go and delete something.
+      await expect(
+        visible(page.getByText(/safe to delete/i)),
+        "the user was not told a passkey was left on their device"
+      ).toBeVisible({ timeout: 60_000 });
+
+      // And nothing was produced. A container written without the passkey slot
+      // would be worse than the error: it would look like success.
+      //
+      // Absence rather than an empty value: the Result field is only rendered
+      // once there is a result, so asserting `toHaveValue("")` fails with
+      // "element(s) not found" even when the behaviour is correct.
+      await expect(
+        page.locator("#output-text"),
+        "a container was written despite enrolment failing"
+      ).toHaveCount(0);
     } finally {
       await cdp.detach();
     }

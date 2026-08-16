@@ -272,6 +272,62 @@ console.log("\nA measurement that does not describe a device is refused:");
   check(wrong === 0, "a failed calibration leaves the user where they started");
 }
 
+// --- the invariant, over hostile requests -------------------------------------
+//
+// The 500-device sweep above varies the *device* and holds timeCost and
+// parallelism at sane values, which is exactly how the hole survived: a review
+// found that `parallelism` was destructured from the request and returned
+// untouched, so a caller passing 0 or NaN got a Calibration whose params no
+// encrypt would accept — from a function whose stated contract is that they
+// always are. `timeCost` was half checked: finite and >= 1, no ceiling, no
+// integer requirement.
+//
+// So this fuzzes the *request* rather than the device, and asserts the contract
+// directly rather than any particular bound. Restating the ranges here would
+// reintroduce the duplication that caused the bug.
+console.log("\nEvery result is writable, whatever the caller asked for:");
+{
+  const good = device(20, 0.0001);
+  const HOSTILE = [
+    0, -1, -0.5, 0.5, 1.5, NaN, Infinity, -Infinity,
+    Number.MAX_SAFE_INTEGER, Number.MIN_SAFE_INTEGER, 1e309, 255, 256, 1_000_000,
+  ];
+
+  let unwritable = 0;
+  let firstBad = "";
+  for (const parallelism of HOSTILE) {
+    for (const timeCost of HOSTILE) {
+      const c = calibrateArgon2({
+        low: good.low, high: good.high, budgetMs: BUDGET, timeCost, parallelism,
+      });
+      try {
+        validateKdfParams(c.params, "encrypt");
+      } catch (e) {
+        unwritable++;
+        if (!firstBad) {
+          firstBad = `timeCost=${timeCost} parallelism=${parallelism} -> ${(e as Error).message}`;
+        }
+      }
+    }
+  }
+  check(unwritable === 0,
+    `${HOSTILE.length * HOSTILE.length} hostile requests all produce writable parameters`,
+    `${unwritable} unwritable; first: ${firstBad}`);
+
+  // And the fallback is the *shipped default*, not a clamped version of what
+  // was asked for: silently repairing a caller's nonsense into something
+  // plausible is how a 0.5-pass Argon2 ends up looking deliberate.
+  const c = calibrateArgon2({
+    low: good.low, high: good.high, budgetMs: BUDGET, timeCost: T, parallelism: 0,
+  });
+  check(
+    c.limitedBy === "unusable-measurement" &&
+      (c.params.kdf === KdfId.ARGON2ID ? c.params.params.parallelism === 4 : false),
+    "an impossible parallelism falls back rather than being quietly repaired",
+    `limitedBy=${c.limitedBy}`
+  );
+}
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {
   console.log("Calibration solver FAILED.");

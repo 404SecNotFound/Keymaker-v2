@@ -851,6 +851,15 @@ credential.
    the container is parsed and the slot found before the key has a question to
    answer — the reverse of every other unlock in this project.
 
+**The passkey is not archival, and §4.7 now says so.** An external review
+pointed at the RP binding and framed it as a naming problem; it is larger than
+that. A WebAuthn credential answers only at the origin it was created on, so a
+passkey slot is the one slot `reference/keym2.py` cannot open — the secret is in
+the authenticator, not the file. That collides with this project's central
+claim, and the response is three-fold: §4.7 states it normatively, `RECOVERY.md`
+tells anyone reading it that a passkey will not help them there, and the control
+is now called **Passkey quick access** rather than protection.
+
 **Known limitation, recorded rather than hidden:** the first passkey slot is the
 one used. Trying several would mean one authenticator tap per slot, most of them
 wrong, with nothing in the container able to explain which was which.
