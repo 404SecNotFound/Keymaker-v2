@@ -16,6 +16,31 @@ updates:
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
 
+      # Playwright 1.62 crashes two of three engines on the CI runner, which
+      # turns this project's main safety net into a red X that means nothing.
+      #
+      # chromium is deterministic: the bundled chrome-headless-shell segfaults
+      # during startup — SIGSEGV in the gpu-process at a fixed fault address,
+      # immediately after "drmGetDevices2() has not found any devices". It
+      # never reaches a test, because the error comes from browser.newContext,
+      # so it gets attributed to whichever spec was next in a deterministic
+      # queue. That is what made a dead browser look like one broken test.
+      # firefox is intermittent: two "Target crashed" failures in one run,
+      # clean in two other runs on the same version.
+      #
+      # --disable-gpu does not fix it — PR #51 confirmed the flag reached the
+      # launch line and the fault address was unchanged. The untried lever is
+      # channel: "chromium", which swaps the headless shell for the full
+      # browser binary; it would do nothing for firefox.
+      #
+      # See PR #48 (Dependabot's bump) and PR #51 (bump plus attempted fix),
+      # both closed 2026-08-16. Nothing in 1.62 is needed here, so the trade is
+      # a stale harness against an unusable one. Revisit at 1.63+.
+      # Patch releases within 1.56 still come through.
+      - dependency-name: "@playwright/test"
+        update-types:
+          ["version-update:semver-major", "version-update:semver-minor"]
+
   # The reference implementation's Python pins. Absent until 2026-08, which is
   # how `cryptography` sat on 41.0.7 with open advisories while
   # reference/requirements.txt claimed "Dependabot proposes upgrades
