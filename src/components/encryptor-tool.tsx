@@ -103,6 +103,50 @@ function loadBip39(): Promise<Bip39Module> {
   return bip39ModulePromise;
 }
 
+/**
+ * The imminent-lock warning, and the control that answers it.
+ *
+ * A component rather than JSX written once, because it has to render in two
+ * places. Radix marks everything outside an open dialog `aria-hidden` and
+ * covers it with an overlay, so while a dialog is up the page's copy of this
+ * banner is neither clickable nor announced — a `role="alert"` inside an
+ * aria-hidden subtree reaches nobody.
+ *
+ * That turned the one screen showing secrets which exist exactly once into the
+ * one screen where the warning could not be acted on. Freshly issued shares are
+ * read slowly onto paper, reading is not activity, and `lastActivityRef` only
+ * moves on pointer and key events — so the five-minute lock fires mid
+ * transcription and the Keep open button is behind the overlay.
+ */
+function LockWarning({
+  secondsLeft,
+  onKeepOpen,
+}: {
+  secondsLeft: number;
+  onKeepOpen: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex items-center justify-between gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[12px]"
+    >
+      <span className="flex min-w-0 items-center gap-1.5 text-yellow-400">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">
+          Locking in <span className="tabular-nums font-medium">{secondsLeft}s</span> — secrets will be cleared
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onKeepOpen}
+        className="shrink-0 cursor-pointer rounded-lg border border-yellow-500/40 px-2.5 py-1 font-medium text-yellow-400 transition-colors hover:bg-yellow-500/15"
+      >
+        Keep open
+      </button>
+    </div>
+  );
+}
+
 // Chunked base64 decode to avoid stack overflow on large buffers.
 //
 // The encoding half of this pair used to live here and is gone: text output is
@@ -1355,6 +1399,20 @@ export function EncryptorTool() {
     setIsDecryptedQrModalOpen(false);
     setIsDecryptedQrRevealed(false);
     setDecryptedQrStatus({ kind: "idle" });
+
+    // KM-R03. Every one of these is password-equivalent and every one of them
+    // was surviving a wipe.
+    //
+    // `shareInput` holds shares an heir has pasted in — §4.6 is explicit that k
+    // of them open the container without the password, so leaving them in a
+    // textarea after a panic wipe defeats the button entirely. `issuedShares`
+    // is worse: those are freshly generated, exist exactly once, and sit in a
+    // modal. `paperVault` holds the container and the shares laid out for
+    // printing.
+    setUsePasskey(false);
+    setShareInput('');
+    setIssuedShares(null);
+    setPaperVault(null);
   }, []);
 
   /**
@@ -1366,7 +1424,18 @@ export function EncryptorTool() {
    * plaintext secret, a decrypted result — so it only runs when that exists.
    */
   const hasSecretsOnScreen =
-    password.length > 0 || textSecret.length > 0 || outputText.length > 0;
+    password.length > 0 ||
+    textSecret.length > 0 ||
+    outputText.length > 0 ||
+    // KM-R03. Share-only decryption is the case this predicate missed: an heir
+    // has no password and may have decrypted a *file*, so all three of the
+    // above can be empty while the textarea holds enough shares to open the
+    // container. The timer was not armed and the Wipe now button was not
+    // rendered — on the one flow where the person at the keyboard is least
+    // likely to be at their own desk.
+    shareInput.length > 0 ||
+    issuedShares !== null ||
+    paperVault !== null;
 
   const keepOpen = useCallback(() => {
     lastActivityRef.current = Date.now();
@@ -1965,8 +2034,30 @@ export function EncryptorTool() {
             const blob = new Blob([resultBuffer]);
             triggerDownload(blob, resultFilename);
         } else {
-            const decoder = new TextDecoder();
-            const decryptedText = decoder.decode(resultBuffer);
+            // KM-R08. Fatal, because the default replaces every malformed byte
+            // with U+FFFD and reports success. A container written by another
+            // conforming implementation may hold arbitrary bytes; decoding
+            // those leniently hands the user irreversibly mangled data under a
+            // green tick, which is the worst failure this app can produce —
+            // the plaintext authenticated, and then we broke it.
+            let decryptedText: string;
+            try {
+              decryptedText = new TextDecoder("utf-8", { fatal: true }).decode(resultBuffer);
+            } catch {
+              // The bytes are verified and in hand. Making the user derive the
+              // key a second time in File mode to get at them would be a
+              // pointless second Argon2id run, so hand them over now and say
+              // plainly what happened.
+              if (isStale()) return;
+              triggerDownload(new Blob([resultBuffer]), "decrypted.bin");
+              toast({
+                title: "Decrypted, but not text",
+                description:
+                  "This container holds bytes that are not valid UTF-8, so there is nothing to show. " +
+                  "It decrypted and authenticated correctly — the contents have been downloaded as decrypted.bin.",
+              });
+              return;
+            }
             setOutputText(decryptedText);
 
             // Detect whether the decrypted text is a valid BIP-39 mnemonic —
@@ -2004,6 +2095,14 @@ export function EncryptorTool() {
             ? `${done} This was a legacy IttyBitz file; consider re-encrypting it in Keymaker format.`
             : done,
         });
+
+        // KM-R03. Shares that have done their job are still password-
+        // equivalent, and an heir who has just recovered a container has no
+        // reason to leave k of them in a textarea. Cleared on success only,
+        // for the same reason the password below is: a failed attempt keeps
+        // what was pasted, because retyping sixteen share strings after a typo
+        // is not a punishment worth inflicting.
+        if (suppliedShares.length > 0) setShareInput('');
 
         // U13. The clear lives here rather than in the `finally`, so a failed
         // attempt keeps what the user typed.
@@ -2357,7 +2456,15 @@ export function EncryptorTool() {
               {currentMode === "decrypt" && (
                 <button
                   type="button"
-                  onClick={() => setUseShares((v) => !v)}
+                  onClick={() =>
+                    setUseShares((v) => {
+                      // KM-R03. Leaving them in state behind a hidden control
+                      // is the worst of both: invisible to the user, and still
+                      // there for the auto-lock to have to think about.
+                      if (v) setShareInput('');
+                      return !v;
+                    })
+                  }
                   aria-pressed={useShares}
                   className="ml-auto rounded-md px-2 py-1 text-[12px] text-accent transition-colors hover:bg-accent/10"
                 >
@@ -3245,24 +3352,7 @@ export function EncryptorTool() {
       )}
 
       {lockSecondsLeft !== null && (
-        <div
-          role="alert"
-          className="flex items-center justify-between gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[12px]"
-        >
-          <span className="flex min-w-0 items-center gap-1.5 text-yellow-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">
-              Locking in <span className="tabular-nums font-medium">{lockSecondsLeft}s</span> — secrets will be cleared
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={keepOpen}
-            className="shrink-0 cursor-pointer rounded-lg border border-yellow-500/40 px-2.5 py-1 font-medium text-yellow-400 transition-colors hover:bg-yellow-500/15"
-          >
-            Keep open
-          </button>
-        </div>
+        <LockWarning secondsLeft={lockSecondsLeft} onKeepOpen={keepOpen} />
       )}
 
       <Button
@@ -3554,6 +3644,21 @@ export function EncryptorTool() {
               window loses them.
             </DialogDescription>
           </DialogHeader>
+
+          {/*
+            The lock warning, again, inside the dialog.
+
+            Not belt and braces: the page's copy is unreachable from here. Radix
+            hides the rest of the document from assistive technology and covers
+            it with an overlay, so on the one screen whose contents cannot be
+            regenerated, the countdown was invisible and the Keep open button
+            could not be clicked. Transcribing shares onto paper is minutes of
+            no pointer or key events, which is exactly what the idle timer
+            measures.
+          */}
+          {lockSecondsLeft !== null && (
+            <LockWarning secondsLeft={lockSecondsLeft} onKeepOpen={keepOpen} />
+          )}
 
           <div className="space-y-2">
             {issuedShares?.shares.map((share, i) => (

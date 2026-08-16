@@ -8,6 +8,20 @@
 // It matters beyond cache freshness: the activate handler decides whether a
 // genuine upgrade occurred by looking for a cache under a *different* name. A
 // version string that never changes makes that check unable to fire.
+/**
+ * Every cache this worker owns starts with this. Ownership has to be a *prefix*
+ * test rather than "not the current name", because CacheStorage is per-origin
+ * and GitHub Pages puts every project site on one origin: deleting everything
+ * that is not the current Keymaker cache deletes the offline caches of every
+ * other app the same user has visited under 404secnotfound.github.io.
+ */
+const CACHE_PREFIX = 'keymaker-';
+// Spelled out rather than built from CACHE_PREFIX, so this stays a single
+// quoted literal on one line: sw-update.spec.ts rewrites it by regex to
+// simulate a release, and a concatenation would not match. The cost is two
+// places holding the same prefix, which sw-cache-isolation.spec.ts checks
+// cannot drift — if they ever did, the worker would stop recognising its own
+// old caches and leak one per release, silently.
 const CACHE_VERSION = 'keymaker-__BUILD_ID__';
 
 // Where this worker is served from, without a trailing slash. On a root
@@ -109,7 +123,10 @@ self.addEventListener('message', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) => {
-      const stale = keys.filter((key) => key !== CACHE_VERSION);
+      // Ours, and not the current one. An exact-inequality test would have
+      // treated a neighbouring app's cache as stale — it is not this version,
+      // so it looked evictable — and taken it out on every activation.
+      const stale = keys.filter((key) => key.startsWith(CACHE_PREFIX) && key !== CACHE_VERSION);
 
       // Evicting here is safe now in a way it was not before: activation can
       // only be reached on a first install (nothing to evict) or because the

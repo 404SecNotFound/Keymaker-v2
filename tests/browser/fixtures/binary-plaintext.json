@@ -1,0 +1,11 @@
+{
+  "note": "Frozen. A KEYM v2 container whose plaintext is deliberately not valid UTF-8, written by the Python reference and not by the app under test. Regenerating it would weaken what it proves — see the header of tests/browser/binary-plaintext.spec.ts.",
+  "plaintextHex": "0080fffe41",
+  "password": "correct-horse-battery-staple-9271!X",
+  "kdf": "pbkdf2",
+  "iterations": 600000,
+  "cipher": "aes-256-gcm",
+  "writtenBy": "reference/keym2.py at 8706ca22dc26cbb7250bf708dcfe8dc5f2b56f71",
+  "generator": "python3 -c 'import keym2; print(keym2.armor(keym2.encrypt(bytes([0,128,255,254,65]), PASSWORD, kdf_id=keym2.KDF_PBKDF2, iterations=keym2.PBKDF2_ITER_POLICY_MIN)))'",
+  "armor": "keym2:S0VZTQIAAAABAAAAAAAAAABMw87u5t5PxZBVkmXx046QFYB-1qmQK6Gv2fvlAjkD\nWAAJJ8AAAAAA0nZk2R4qzuJKVb3a_-oqcHrKkk84KiytRMLGTTtSlhFnTcf3U4Ba\nEttpp59Sc8X7UMBkqKuoHC0jfE_AL9sCMiIO3sfE"
+}
