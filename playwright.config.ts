@@ -41,7 +41,27 @@ export default defineConfig({
   },
 
   projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
+    {
+      name: "chromium",
+      use: {
+        ...devices["Desktop Chrome"],
+        // The runner has no GPU, and the headless shell kept trying anyway.
+        //
+        // Playwright 1.62's bundled chrome-headless-shell segfaults during
+        // startup on the CI runner — SIGSEGV in the gpu-process, immediately
+        // after `drmGetDevices2() has not found any devices`. It never reaches
+        // a test: the error surfaces from `browser.newContext`, and the test it
+        // gets blamed on is only whichever one was next in a deterministic
+        // queue (`fullyParallel: false`), which is why it looked like one
+        // specific spec had broken. 1.56's shell survived the same path.
+        //
+        // Asking for a GPU that is not there was never buying anything here.
+        // Argon2id is WebAssembly and the QR canvases already rasterise in
+        // software — that is what `--enable-unsafe-swiftshader` in Playwright's
+        // own default flags is for.
+        launchOptions: { args: ["--disable-gpu"] },
+      },
+    },
     { name: "firefox", use: { ...devices["Desktop Firefox"] } },
     { name: "webkit", use: { ...devices["Desktop Safari"] } },
   ],
