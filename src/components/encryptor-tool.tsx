@@ -1355,6 +1355,20 @@ export function EncryptorTool() {
     setIsDecryptedQrModalOpen(false);
     setIsDecryptedQrRevealed(false);
     setDecryptedQrStatus({ kind: "idle" });
+
+    // KM-R03. Every one of these is password-equivalent and every one of them
+    // was surviving a wipe.
+    //
+    // `shareInput` holds shares an heir has pasted in — §4.6 is explicit that k
+    // of them open the container without the password, so leaving them in a
+    // textarea after a panic wipe defeats the button entirely. `issuedShares`
+    // is worse: those are freshly generated, exist exactly once, and sit in a
+    // modal. `paperVault` holds the container and the shares laid out for
+    // printing.
+    setUsePasskey(false);
+    setShareInput('');
+    setIssuedShares(null);
+    setPaperVault(null);
   }, []);
 
   /**
@@ -1366,7 +1380,18 @@ export function EncryptorTool() {
    * plaintext secret, a decrypted result — so it only runs when that exists.
    */
   const hasSecretsOnScreen =
-    password.length > 0 || textSecret.length > 0 || outputText.length > 0;
+    password.length > 0 ||
+    textSecret.length > 0 ||
+    outputText.length > 0 ||
+    // KM-R03. Share-only decryption is the case this predicate missed: an heir
+    // has no password and may have decrypted a *file*, so all three of the
+    // above can be empty while the textarea holds enough shares to open the
+    // container. The timer was not armed and the Wipe now button was not
+    // rendered — on the one flow where the person at the keyboard is least
+    // likely to be at their own desk.
+    shareInput.length > 0 ||
+    issuedShares !== null ||
+    paperVault !== null;
 
   const keepOpen = useCallback(() => {
     lastActivityRef.current = Date.now();
@@ -2027,6 +2052,14 @@ export function EncryptorTool() {
             : done,
         });
 
+        // KM-R03. Shares that have done their job are still password-
+        // equivalent, and an heir who has just recovered a container has no
+        // reason to leave k of them in a textarea. Cleared on success only,
+        // for the same reason the password below is: a failed attempt keeps
+        // what was pasted, because retyping sixteen share strings after a typo
+        // is not a punishment worth inflicting.
+        if (suppliedShares.length > 0) setShareInput('');
+
         // U13. The clear lives here rather than in the `finally`, so a failed
         // attempt keeps what the user typed.
         //
@@ -2379,7 +2412,15 @@ export function EncryptorTool() {
               {currentMode === "decrypt" && (
                 <button
                   type="button"
-                  onClick={() => setUseShares((v) => !v)}
+                  onClick={() =>
+                    setUseShares((v) => {
+                      // KM-R03. Leaving them in state behind a hidden control
+                      // is the worst of both: invisible to the user, and still
+                      // there for the auto-lock to have to think about.
+                      if (v) setShareInput('');
+                      return !v;
+                    })
+                  }
                   aria-pressed={useShares}
                   className="ml-auto rounded-md px-2 py-1 text-[12px] text-accent transition-colors hover:bg-accent/10"
                 >
