@@ -7,7 +7,13 @@ disappeared, or you no longer trust the copy in front of you — that is what
 this page is for. Your data is not tied to the app that produced it.
 
 Everything below uses one small Python file and two mainstream libraries. No
-browser, no Node, no npm, no network.
+browser, no Node, no npm.
+
+**One honest caveat about "no network".** The *decryption* needs none — the
+script and your container are enough. Getting the two libraries onto the
+machine is the step that normally reaches a package index, and step 1 says how
+to do it without one. If you want a genuinely offline kit, download the wheels
+now, while you can, and store them beside the backup.
 
 If nothing has gone wrong yet and you are reading to find out how the whole
 thing works, [WALKTHROUGH.md](WALKTHROUGH.md) is the illustrated version — a
@@ -52,9 +58,30 @@ something to point you at.
 pip install cryptography argon2-cffi
 ```
 
-If you are offline, both ship wheels you can download in advance and install
-with `pip install --no-index --find-links <folder> cryptography argon2-cffi`.
-Storing those wheels beside your backup is a reasonable precaution.
+The versions these scripts are tested against are in `requirements.txt`, which
+ships beside them in the recovery kit:
+
+```bash
+pip install -r requirements.txt
+```
+
+Any recent version of either library should work — the container format does
+not depend on them, which the conformance suite checks by opening frozen
+fixtures under whatever version is installed. The pinned versions are simply
+the ones that were actually run.
+
+**Offline.** Both libraries ship wheels you can download in advance:
+
+```bash
+pip download -r requirements.txt -d wheels        # now, while you have a network
+pip install --no-index --find-links wheels -r requirements.txt   # later, when you do not
+```
+
+Storing that `wheels` folder beside your backup is the difference between a
+procedure that needs no network and one that only claims to. The recovery kit
+carries the scripts and the requirements file; it does not carry the wheels,
+because they are platform-specific and would have to be chosen for a machine
+nobody can predict.
 
 ## Step 2 — Find out which version you have
 

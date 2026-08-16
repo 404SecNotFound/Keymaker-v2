@@ -1,8 +1,22 @@
-# Dependencies for the independent KEYM v1 reference implementation.
+# Dependencies for the independent KEYM v1 and v2 reference implementations.
 #
 # Pinned exactly, not floated with >=. A conformance oracle whose own crypto
 # libraries drift between runs cannot distinguish "the implementations
-# disagree" from "the oracle changed underneath us". Dependabot proposes
-# upgrades explicitly; nothing moves implicitly.
-cryptography==41.0.7
+# disagree" from "the oracle changed underneath us". Upgrades are proposed by
+# Dependabot's pip ecosystem and land deliberately; nothing moves implicitly.
+#
+# Upgrading is not a formality here. The gate is that `crosstest.py` and
+# `crosstest2.py` still agree with the TypeScript **byte for byte**, and that
+# the frozen fixtures in scripts/fixtures/keymaker/ still open — which is also
+# the evidence that the container format does not depend on this library.
+#
+# cryptography 41.0.7 was carried until 2026-08 despite 11 pip-audit advisories
+# against it. None appeared to touch the primitives these scripts use, but a
+# recovery oracle sitting on a vulnerable pin is a bad look for the one file
+# meant to outlive the project, and "appeared to" is not a review.
+#
+# 50.0.0 requires Python >= 3.9 (excluding 3.9.0 and 3.9.1), which keeps the
+# "Python 3.10 or newer" promise in docs/RECOVERY.md intact. Check that before
+# bumping again: narrowing the recovery path is a worse trade than a stale pin.
+cryptography==50.0.0
 argon2-cffi==25.1.0

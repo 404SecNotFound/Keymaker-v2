@@ -45,6 +45,22 @@ jobs:
       - name: Install reference dependencies
         run: pip install -r reference/requirements.txt
 
+      # The recovery oracle is the one file meant to outlive this project, and
+      # it sat on cryptography 41.0.7 with eleven open advisories because
+      # nothing was looking. Dependabot now proposes upgrades; this is what
+      # notices when a pin goes bad *between* those proposals.
+      #
+      # Advisory, not blocking. A new advisory against a primitive these
+      # scripts do not touch should not stop a conformance run from reporting
+      # whether the two implementations agree — but it must be visible in the
+      # log rather than discovered by someone else's review.
+      - name: Audit the pinned recovery dependencies
+        continue-on-error: true
+        run: |
+          pip install pip-audit
+          pip-audit -r reference/requirements.txt --strict || \
+            echo "::warning::pip-audit reported advisories against the pinned recovery dependencies — review applicability and either upgrade or record why the pin stands."
+
       - name: Reference self-test (KEYM v1)
         run: python3 reference/keym.py selftest
 

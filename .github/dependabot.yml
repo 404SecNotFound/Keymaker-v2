@@ -16,6 +16,17 @@ updates:
       - dependency-name: typescript
         update-types: ["version-update:semver-major"]
 
+  # The reference implementation's Python pins. Absent until 2026-08, which is
+  # how `cryptography` sat on 41.0.7 with open advisories while
+  # reference/requirements.txt claimed "Dependabot proposes upgrades
+  # explicitly" — a mechanism that was not configured. The comment was true of
+  # npm and Actions and false of the one ecosystem whose job is to outlive this
+  # project.
+  - package-ecosystem: pip
+    directory: /reference
+    schedule:
+      interval: weekly
+
   # Keep the SHA-pinned GitHub Actions current. Dependabot updates both the
   # pinned commit SHA and the trailing version comment.
   - package-ecosystem: github-actions
