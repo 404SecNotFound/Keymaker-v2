@@ -2812,21 +2812,26 @@ export function EncryptorTool() {
                           />
                           <div className="flex items-center gap-1.5">
                             <Label htmlFor="passkey-enabled" className="cursor-pointer text-sm text-foreground">
-                              Also unlock with a passkey
+                              Passkey quick access
                             </Label>
                             <InfoTip label="What does a passkey add?">
                               <p>
-                                A second way in, from a key you tap rather than a
-                                phrase you remember — phishing-proof, and quicker
-                                day to day.
+                                A quicker way in day to day, from a key you tap
+                                rather than a phrase you remember — and one that
+                                cannot be phished.
                               </p>
                               <p className="mt-2">
-                                It is <strong>not stronger</strong> than the
-                                password: the password still opens this container,
-                                so the backup is exactly as strong as the weaker of
-                                the two. That is deliberate. A passkey can be lost,
-                                broken or wiped, and a backup only a lost key opens
-                                is a lost backup.
+                                <strong>Your password is still the backup.</strong>{" "}
+                                A passkey is not stronger — the password opens this
+                                container either way, so it is exactly as strong as
+                                the weaker of the two.
+                              </p>
+                              <p className="mt-2">
+                                And it is <strong>not archival</strong>. A passkey
+                                only answers at this website, so it will not open
+                                anything from a copy of the app, from a different
+                                address, or with the offline recovery script. Every
+                                other way in survives all three. Keep the password.
                               </p>
                             </InfoTip>
                           </div>

@@ -851,6 +851,44 @@ not the authenticator, not that a particular key was involved beyond
 `slot_type = 0x01` itself saying "a passkey opens this". The earlier draft stored
 the credential id in the clear and accepted that disclosure; it no longer has to.
 
+#### A passkey slot is not archival, and the format cannot make it so
+
+> A passkey slot is the **one slot in this format that cannot be opened
+> offline.** It is convenience, never the backup of record.
+
+Every other slot can be opened by `reference/keym2.py` with Python, two
+libraries and no network — that is the promise the rest of this project is
+built to keep. A passkey slot cannot, and not for want of implementation: the
+slot secret comes from an authenticator, and the reference cannot reach one.
+Given the 32-byte PRF output it will open the slot, but obtaining those bytes
+needs a browser, that authenticator, and one more thing that is easy to miss.
+
+**A WebAuthn credential is bound to a relying-party id**, which for a site with
+no explicit `rp.id` is the origin's registrable domain. So a passkey enrolled at
+`404secnotfound.github.io` answers there and nowhere else. Not from a copy of
+the app on another host, not from a self-extracting page opened as `file://`,
+not from a future custom domain, and not from whatever serves this in ten years.
+
+That is a dependency on infrastructure the rest of the format deliberately has
+none of. Losing the origin does not corrupt the container and does not touch any
+other slot — it removes exactly one unlock path, permanently, with no error the
+UI can distinguish from a wrong key (§6).
+
+Three consequences worth stating rather than leaving to be discovered:
+
+1. **The other slot is the backup.** Not a fallback, not a belt-and-braces
+   extra — the actual disaster-recovery mechanism. The rule below is what
+   guarantees one exists.
+2. **`docs/RECOVERY.md` must never route someone to a passkey.** The recovery
+   procedure is for the case where this project is gone, and in that case the
+   passkey slot is gone with it.
+3. **The UI must not present a passkey as protection.** It is quick access to a
+   container that a passphrase or a share set already protects.
+
+None of this is a defect in §4.7. It is what a passkey *is*, and the honest
+response is to say so in the format rather than let the convenience read as
+security.
+
 #### A passkey slot never travels alone
 
 > A writer **MUST NOT** produce a container whose only slot is a passkey slot.

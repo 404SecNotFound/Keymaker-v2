@@ -36,6 +36,14 @@ neither script reads the other's format, and step 2 tells you which one you
 have. Keep both — an old backup needs the old script, and *old backups are the
 ones most likely to need this page.*
 
+**If you enrolled a passkey, it will not help you here.** A passkey is quick
+access, not a backup. It only answers at the website it was created on, so if
+you are reading this page it is already unavailable — and no script can stand in
+for it, because the secret lives in the authenticator rather than in the file.
+Use the password, or the recovery shares. Keymaker refuses to write a container
+that a passkey is the only way into, precisely so that this paragraph always has
+something to point you at.
+
 ---
 
 ## Step 1 — Install the two libraries
