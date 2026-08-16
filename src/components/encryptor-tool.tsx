@@ -1965,8 +1965,30 @@ export function EncryptorTool() {
             const blob = new Blob([resultBuffer]);
             triggerDownload(blob, resultFilename);
         } else {
-            const decoder = new TextDecoder();
-            const decryptedText = decoder.decode(resultBuffer);
+            // KM-R08. Fatal, because the default replaces every malformed byte
+            // with U+FFFD and reports success. A container written by another
+            // conforming implementation may hold arbitrary bytes; decoding
+            // those leniently hands the user irreversibly mangled data under a
+            // green tick, which is the worst failure this app can produce —
+            // the plaintext authenticated, and then we broke it.
+            let decryptedText: string;
+            try {
+              decryptedText = new TextDecoder("utf-8", { fatal: true }).decode(resultBuffer);
+            } catch {
+              // The bytes are verified and in hand. Making the user derive the
+              // key a second time in File mode to get at them would be a
+              // pointless second Argon2id run, so hand them over now and say
+              // plainly what happened.
+              if (isStale()) return;
+              triggerDownload(new Blob([resultBuffer]), "decrypted.bin");
+              toast({
+                title: "Decrypted, but not text",
+                description:
+                  "This container holds bytes that are not valid UTF-8, so there is nothing to show. " +
+                  "It decrypted and authenticated correctly — the contents have been downloaded as decrypted.bin.",
+              });
+              return;
+            }
             setOutputText(decryptedText);
 
             // Detect whether the decrypted text is a valid BIP-39 mnemonic —
