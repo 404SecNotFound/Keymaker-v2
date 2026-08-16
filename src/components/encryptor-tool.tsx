@@ -103,6 +103,50 @@ function loadBip39(): Promise<Bip39Module> {
   return bip39ModulePromise;
 }
 
+/**
+ * The imminent-lock warning, and the control that answers it.
+ *
+ * A component rather than JSX written once, because it has to render in two
+ * places. Radix marks everything outside an open dialog `aria-hidden` and
+ * covers it with an overlay, so while a dialog is up the page's copy of this
+ * banner is neither clickable nor announced — a `role="alert"` inside an
+ * aria-hidden subtree reaches nobody.
+ *
+ * That turned the one screen showing secrets which exist exactly once into the
+ * one screen where the warning could not be acted on. Freshly issued shares are
+ * read slowly onto paper, reading is not activity, and `lastActivityRef` only
+ * moves on pointer and key events — so the five-minute lock fires mid
+ * transcription and the Keep open button is behind the overlay.
+ */
+function LockWarning({
+  secondsLeft,
+  onKeepOpen,
+}: {
+  secondsLeft: number;
+  onKeepOpen: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      className="flex items-center justify-between gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[12px]"
+    >
+      <span className="flex min-w-0 items-center gap-1.5 text-yellow-400">
+        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        <span className="truncate">
+          Locking in <span className="tabular-nums font-medium">{secondsLeft}s</span> — secrets will be cleared
+        </span>
+      </span>
+      <button
+        type="button"
+        onClick={onKeepOpen}
+        className="shrink-0 cursor-pointer rounded-lg border border-yellow-500/40 px-2.5 py-1 font-medium text-yellow-400 transition-colors hover:bg-yellow-500/15"
+      >
+        Keep open
+      </button>
+    </div>
+  );
+}
+
 // Chunked base64 decode to avoid stack overflow on large buffers.
 //
 // The encoding half of this pair used to live here and is gone: text output is
@@ -3308,24 +3352,7 @@ export function EncryptorTool() {
       )}
 
       {lockSecondsLeft !== null && (
-        <div
-          role="alert"
-          className="flex items-center justify-between gap-3 rounded-xl border border-yellow-500/40 bg-yellow-500/10 px-3 py-2 text-[12px]"
-        >
-          <span className="flex min-w-0 items-center gap-1.5 text-yellow-400">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">
-              Locking in <span className="tabular-nums font-medium">{lockSecondsLeft}s</span> — secrets will be cleared
-            </span>
-          </span>
-          <button
-            type="button"
-            onClick={keepOpen}
-            className="shrink-0 cursor-pointer rounded-lg border border-yellow-500/40 px-2.5 py-1 font-medium text-yellow-400 transition-colors hover:bg-yellow-500/15"
-          >
-            Keep open
-          </button>
-        </div>
+        <LockWarning secondsLeft={lockSecondsLeft} onKeepOpen={keepOpen} />
       )}
 
       <Button
@@ -3617,6 +3644,21 @@ export function EncryptorTool() {
               window loses them.
             </DialogDescription>
           </DialogHeader>
+
+          {/*
+            The lock warning, again, inside the dialog.
+
+            Not belt and braces: the page's copy is unreachable from here. Radix
+            hides the rest of the document from assistive technology and covers
+            it with an overlay, so on the one screen whose contents cannot be
+            regenerated, the countdown was invisible and the Keep open button
+            could not be clicked. Transcribing shares onto paper is minutes of
+            no pointer or key events, which is exactly what the idle timer
+            measures.
+          */}
+          {lockSecondsLeft !== null && (
+            <LockWarning secondsLeft={lockSecondsLeft} onKeepOpen={keepOpen} />
+          )}
 
           <div className="space-y-2">
             {issuedShares?.shares.map((share, i) => (
