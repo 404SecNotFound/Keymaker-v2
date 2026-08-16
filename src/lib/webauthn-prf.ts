@@ -33,6 +33,8 @@
  * anything.
  */
 
+import { KeymakerError } from "./keymaker-crypto";
+
 /** §4.7. The PRF extension returns 32 bytes. */
 const PRF_OUTPUT_LEN = 32;
 
@@ -95,13 +97,27 @@ function readPrfOutput(credential: PublicKeyCredential): Uint8Array | null {
   return new Uint8Array(first);
 }
 
-export class PasskeyError extends Error {
+/**
+ * A passkey failure, as a `KeymakerError` so the UI will show it verbatim.
+ *
+ * The inheritance is load-bearing, not tidiness. `isUserFacingError` decides
+ * what may be shown by *type*: a `KeymakerError` describes the file or the call
+ * and is safe to print, while anything else collapses to one generic string so
+ * that wrong-password and corrupt-ciphertext stay indistinguishable (§6).
+ *
+ * A passkey failure is squarely in the first category — it describes the
+ * authenticator or the browser and never the secret — and as a plain `Error`
+ * every message in this file was being replaced with "Processing failed. Please
+ * try again." Which is precisely the wrong answer for the one case where the
+ * user needs to be told to go and delete something.
+ */
+export class PasskeyError extends KeymakerError {
   constructor(
     message: string,
     /** True when the user dismissed the prompt, which is not a failure to report loudly. */
     readonly cancelled: boolean = false
   ) {
-    super(message);
+    super("invalid-input", message);
     this.name = "PasskeyError";
   }
 }
@@ -170,12 +186,35 @@ export async function enrolPasskey(prfSalt: Uint8Array): Promise<Uint8Array> {
     // Said plainly, because the alternative is a passkey that enrols and then
     // cannot open anything — a failure the user would meet years later.
     throw new PasskeyError(
-      "That authenticator created a passkey but cannot derive a key from it (no WebAuthn PRF), so it cannot protect a backup."
+      "That authenticator created a passkey but cannot derive a key from it (no WebAuthn PRF), so it cannot protect a backup. " +
+        "Keymaker cannot remove the passkey it just created; nothing was encrypted with it, so it is safe to delete from your device's passkey manager."
     );
   }
 
   // The assertion, which is where the output actually comes from.
-  return assertPasskeyPrf(prfSalt, "Enrolling the passkey");
+  //
+  // Anything that goes wrong from here leaves a credential on the
+  // authenticator that Keymaker will never use. There is no browser API to
+  // delete one — a relying party can create credentials and cannot remove
+  // them — so the only honest handling is to say so. Silence would leave
+  // someone with a passkey manager slowly filling with Keymaker entries and
+  // no idea which, if any, opens anything.
+  try {
+    return await assertPasskeyPrf(prfSalt, "Enrolling the passkey");
+  } catch (e) {
+    const detail =
+      e instanceof PasskeyError && e.cancelled
+        ? "Enrolling the passkey was cancelled."
+        : e instanceof PasskeyError
+          ? e.message
+          : "Enrolling the passkey failed.";
+    throw new PasskeyError(
+      `${detail} A passkey was created on your device before this failed, and ` +
+        "Keymaker cannot remove it. Nothing was encrypted with it, so it is safe " +
+        "to delete the unused Keymaker passkey from your device's passkey manager.",
+      e instanceof PasskeyError ? e.cancelled : false
+    );
+  }
 }
 
 /**
