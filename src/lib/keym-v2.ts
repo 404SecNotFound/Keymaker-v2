@@ -894,9 +894,17 @@ async function unwrapMasterKey(
     if (slotSecret === null) continue;
 
     const slotKey = await deriveSlotKey(slotSecret, slot.salt, slot.kdf);
-    if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR || slot.slotType === KEYM2_SLOT_TYPE_PASSKEY) {
-      secureErase(slotSecret);
-    }
+    // Unconditional. This was guarded on Shamir-or-passkey, which left the one
+    // case that carries the password unerased: for a passphrase slot
+    // `slotSecretFor` returns a fresh `buildKdfInput` allocation holding the
+    // password bytes and the key-file digest, owned by nobody else, and one
+    // copy was leaked per slot the walk attempted. The encrypt path has always
+    // erased the same buffer — see `encryptKeym2WithExplicitSecrets` — so this
+    // was an inconsistency rather than a decision.
+    //
+    // Safe for every branch: each iteration builds its own, so there is no
+    // shared buffer a later slot could need.
+    secureErase(slotSecret);
     const keys = await wrapKeys(slotKey, container.core.cipher);
     let master: Uint8Array | null;
     try {
@@ -1249,8 +1257,11 @@ export async function decryptKeym2(
   const keys = await payloadKeys(master, parsed.core.cipher);
   secureErase(master);
 
+  // Declared outside the try so the `finally` can reach it: a mid-container
+  // authentication failure still leaves real plaintext in the chunks decoded
+  // before it.
+  const out: Uint8Array[] = [];
   try {
-    const out: Uint8Array[] = [];
     let offset = 0;
     const last = sizes.length - 1;
     for (let i = 0; i < sizes.length; i++) {
@@ -1273,9 +1284,20 @@ export async function decryptKeym2(
       out.push(plain);
     }
     if (offset !== parsed.payload.length) reject();
-    return { data: concat(out), keyFileUsed: slot.keyFileUsed, core: parsed.core, slot };
+    // `concat` copies, so every chunk is now duplicated: the returned buffer
+    // and the originals. Only the caller's copy should survive — on a 100 MB
+    // file the difference is a second complete copy of the plaintext sitting
+    // in memory until the collector happens to reach it.
+    const data = concat(out);
+    for (const chunk of out) secureErase(chunk);
+    out.length = 0;
+    return { data, keyFileUsed: slot.keyFileUsed, core: parsed.core, slot };
   } finally {
     secureErase(keys.chachaKey);
+    // Also on the way out of a failure. A container that authenticates for
+    // nine chunks and fails on the tenth has already produced nine chunks of
+    // real plaintext, and `reject()` used to walk past all of them.
+    for (const chunk of out) secureErase(chunk);
   }
 }
 
