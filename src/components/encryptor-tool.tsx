@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, type ReactNode, useCallback, useEffect } from "react";
+import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, type ReactNode, useCallback, useEffect, useMemo } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
 import { SelfExtractExport } from "@/components/self-extract-export";
@@ -200,6 +200,56 @@ function parseShareLines(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+/**
+ * Bounds on the recovery-share textarea.
+ *
+ * The field took whatever was pasted straight into state, and two render-path
+ * callers re-split and re-trimmed all of it on every keystroke. None of this is
+ * a cryptographic boundary — the parser rejects anything that is not a share —
+ * but "however much you like" is not a size for an input the UI rescans that
+ * often.
+ *
+ * The numbers come from the format, generously. A `KMSHARE1:` line is about 95
+ * characters and the UI issues at most 8 shares, so 16 lines is double any real
+ * share set and 8 KiB is several times the text they occupy. Past that it is a
+ * paste into the wrong box, which is what §7 is for.
+ */
+const MAX_SHARE_INPUT_CHARS = 8 * 1024;
+const MAX_SHARE_LINES = 16;
+const MAX_SHARE_LINE_CHARS = 200;
+
+/**
+ * Why this refuses instead of truncating, same as the U4 gate above it: keeping
+ * the first N characters of someone's share set and silently dropping the rest
+ * produces a reconstruction failure with no stated cause, aimed at the person
+ * least able to diagnose it.
+ */
+function shareInputRejection(next: string): string | null {
+  if (next.length > MAX_SHARE_INPUT_CHARS) {
+    return (
+      `That is ${Math.round(next.length / 1024).toLocaleString()} KB of text. ` +
+      `A share set is a few hundred bytes — this box takes up to ` +
+      `${MAX_SHARE_INPUT_CHARS / 1024} KB. If you meant to paste the encrypted ` +
+      `container, it goes in the box above.`
+    );
+  }
+  const lines = parseShareLines(next);
+  if (lines.length > MAX_SHARE_LINES) {
+    return (
+      `That is ${lines.length} lines. A share set is at most 8 shares, one per ` +
+      `line — this box takes up to ${MAX_SHARE_LINES}.`
+    );
+  }
+  const overlong = lines.find((line) => line.length > MAX_SHARE_LINE_CHARS);
+  if (overlong) {
+    return (
+      `One line is ${overlong.length} characters. A share is about 95, so that ` +
+      `is not one — check for a line that did not wrap where you expected.`
+    );
+  }
+  return null;
 }
 
 // Minimum password policy — deliberately NOT called a strength measurement.
@@ -1086,6 +1136,31 @@ export function EncryptorTool() {
   /** §4.7. Decrypt side: unlock with an enrolled passkey instead of a password. */
   const [usePasskey, setUsePasskey] = useState(false);
   const [shareInput, setShareInput] = useState("");
+  /** Set when a paste was refused, so the field can say why. Mirrors `textInputRejected`. */
+  const [shareInputRejected, setShareInputRejected] = useState<string | null>(null);
+
+  /**
+   * The parse, once per change instead of twice per render.
+   *
+   * `parseShareLines(shareInput)` had three callers, two of them in the render
+   * path — the submit-enabled predicate and the "n shares entered" hint — so
+   * every keystroke re-split and re-trimmed the whole textarea twice over.
+   */
+  const shareLines = useMemo(() => parseShareLines(shareInput), [shareInput]);
+
+  const handleShareInputChange = useCallback((next: string) => {
+    const rejection = shareInputRejection(next);
+    if (rejection) {
+      // The text is not kept, unlike the wrong-box paste in the container
+      // field. There the rejected content is what the user wants to act on;
+      // here it is by definition not a share set, and holding several KB of
+      // it in state is the thing being fixed.
+      setShareInputRejected(rejection);
+      return;
+    }
+    setShareInputRejected(null);
+    setShareInput(next);
+  }, []);
 
   // U25. The toggle can be on while the field is empty — the password is
   // cleared after every operation and the toggle is not — so "revealing" is
@@ -1398,6 +1473,7 @@ export function EncryptorTool() {
     setUsePasskey(false);
     setUseShares(false);
     setShareInput('');
+    setShareInputRejected(null);
     setIssuedShares(null);
     setPaperVault(null);
   }, []);
@@ -1779,7 +1855,7 @@ export function EncryptorTool() {
     // guard predates share sets and would have made the inheritance path
     // unreachable while every control leading to it looked live.
     const suppliedShares =
-      mode === "decrypt" && useShares ? parseShareLines(shareInput) : [];
+      mode === "decrypt" && useShares ? shareLines : [];
     // §4.7 joins §4.6 in the same guard, for the same reason: someone unlocking
     // with a passkey has no password either, and the credential does not exist
     // yet at this point — it is produced by tapping the key further down.
@@ -2224,7 +2300,7 @@ export function EncryptorTool() {
     // this feature exists for permanently unreachable.
     const hasCredential =
       !!password ||
-      (mode === 'decrypt' && useShares && parseShareLines(shareInput).length > 0) ||
+      (mode === 'decrypt' && useShares && shareLines.length > 0) ||
       // §4.7. The credential is a tap that has not happened yet, so the button
       // has to be live before it exists — otherwise the only control leading to
       // a passkey unlock is disabled by the absence of the thing it produces.
@@ -2522,17 +2598,29 @@ export function EncryptorTool() {
                 <Textarea
                   id="share-input"
                   value={shareInput}
-                  onChange={(e) => setShareInput(e.target.value)}
+                  onChange={(e) => handleShareInputChange(e.target.value)}
                   placeholder={"KMSHARE1:...\nKMSHARE1:...\nOne share per line"}
                   rows={4}
                   spellCheck={false}
                   autoCorrect="off"
                   autoCapitalize="off"
+                  aria-describedby={shareInputRejected ? "share-input-size-error" : undefined}
+                  aria-invalid={shareInputRejected ? true : undefined}
                   className="min-h-[96px] rounded-xl border-white/10 bg-white/4 font-mono text-[12px]"
                 />
+                {shareInputRejected && (
+                  <p
+                    id="share-input-size-error"
+                    role="alert"
+                    className="text-[12px] leading-snug text-destructive"
+                  >
+                    {shareInputRejected} Nothing was pasted, so what you already had is
+                    still there.
+                  </p>
+                )}
                 <p className="text-[12px] leading-snug text-muted-foreground" role="status">
                   {(() => {
-                    const n = parseShareLines(shareInput).length;
+                    const n = shareLines.length;
                     if (n === 0) return "Paste the shares, one per line. Comment lines starting with # are ignored.";
                     // Deliberately does not say whether this is enough: the
                     // threshold lives on the shares, not in the container, and
