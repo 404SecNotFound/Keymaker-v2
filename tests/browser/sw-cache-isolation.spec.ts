@@ -17,7 +17,8 @@ import { resolve } from "node:path";
  *
  * It runs against the ordinary suite origin rather than sw-update.spec.ts's
  * private copy, because nothing here needs a simulated release — only an
- * activation, which the first registration provides.
+ * activation ordered after the seeds, which unregistering and reloading
+ * provides without a second worker version.
  */
 
 const SW_SOURCE = resolve(process.cwd(), "out/sw.js");
@@ -58,8 +59,30 @@ test.describe("service-worker cache ownership", () => {
       [FOREIGN, STALE_KEYMAKER]
     );
 
-    // Registration and activation happen on load; reloading guarantees the
-    // worker has been through `activate` at least once with the seeds present.
+    // Both seeds must exist *before* the activation under test, and the
+    // previous version of this test did not guarantee that.
+    //
+    // It seeded after `goto`, then reloaded, on the reasoning that a reload
+    // puts the worker through `activate` again. It does not: `activate` fires
+    // once per worker *version*, and the version registered by the first load
+    // has already had it — quite possibly before the seeds existed. The test
+    // passed because activation happens late enough in practice for the seeds
+    // to land first, which is a race that happened to be winnable, not an
+    // ordering.
+    //
+    // Unregistering forces the next load to install and activate a fresh
+    // worker. That activation cannot precede the seeds, because the worker it
+    // belongs to does not exist yet.
+    expect(
+      await page.evaluate(() => caches.keys()),
+      "the seeds are missing before the activation under test — this would pass vacuously"
+    ).toEqual(expect.arrayContaining([FOREIGN, STALE_KEYMAKER]));
+
+    await page.evaluate(async () => {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      await Promise.all(registrations.map((r) => r.unregister()));
+    });
+
     await page.reload();
     await page.evaluate(() => navigator.serviceWorker.ready);
 
