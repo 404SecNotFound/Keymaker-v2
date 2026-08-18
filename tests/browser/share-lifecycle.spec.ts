@@ -127,3 +127,60 @@ test.describe("recovery shares are treated as secrets", () => {
     ).toHaveValue("");
   });
 });
+
+/**
+ * Review item 5: the share textarea was unbounded.
+ *
+ * It took whatever was pasted straight into state, and two render-path callers
+ * re-split the whole thing on every keystroke. Not a crypto boundary — the
+ * parser rejects anything that is not a share — but an input the UI rescans
+ * that often should have a size, and the realistic way to hit it is pasting
+ * the wrong thing, which §7 says to name rather than swallow.
+ */
+test.describe("the share input has a size", () => {
+  async function openShareBox(page: Page) {
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByRole("button", { name: /^Use recovery shares$/i })).click();
+    return visible(page.getByPlaceholder(/KMSHARE1:/));
+  }
+
+  test("a real share set is still accepted", async ({ page }) => {
+    // The control. Every rejection below is worthless if the gate also refuses
+    // the thing it exists to let through.
+    const box = await openShareBox(page);
+    await box.fill(SHARE_TEXT);
+    await expect(box).toHaveValue(SHARE_TEXT);
+    await expect(visible(page.getByText(/2 shares entered/))).toBeVisible();
+  });
+
+  test("an oversized paste is refused and says so", async ({ page }) => {
+    const box = await openShareBox(page);
+    await box.fill(SHARE_TEXT);
+
+    // Someone pastes the encrypted container into the share box — the wrong-box
+    // paste, with a large artefact.
+    await box.fill("A".repeat(9 * 1024));
+
+    await expect(
+      visible(page.getByText(/this box takes up to 8 KB/i)),
+      "an oversized paste was accepted, or was refused without saying why"
+    ).toBeVisible();
+    await expect(
+      box,
+      "the refused paste replaced what was already there"
+    ).toHaveValue(SHARE_TEXT);
+  });
+
+  test("too many lines is refused", async ({ page }) => {
+    const box = await openShareBox(page);
+    await box.fill(Array.from({ length: 20 }, (_, i) => `KMSHARE1:LINE-${i}`).join("\n"));
+
+    await expect(
+      visible(page.getByText(/takes up to 16/i)),
+      "20 lines were accepted into a box for at most 8 shares"
+    ).toBeVisible();
+    await expect(box, "the refused paste was kept").toHaveValue("");
+  });
+});

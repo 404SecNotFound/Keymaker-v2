@@ -1,7 +1,7 @@
 
 "use client";
 
-import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, type ReactNode, useCallback, useEffect } from "react";
+import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, type ReactNode, useCallback, useEffect, useMemo } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
 import { SelfExtractExport } from "@/components/self-extract-export";
@@ -200,6 +200,56 @@ function parseShareLines(text: string): string[] {
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.length > 0 && !line.startsWith("#"));
+}
+
+/**
+ * Bounds on the recovery-share textarea.
+ *
+ * The field took whatever was pasted straight into state, and two render-path
+ * callers re-split and re-trimmed all of it on every keystroke. None of this is
+ * a cryptographic boundary — the parser rejects anything that is not a share —
+ * but "however much you like" is not a size for an input the UI rescans that
+ * often.
+ *
+ * The numbers come from the format, generously. A `KMSHARE1:` line is about 95
+ * characters and the UI issues at most 8 shares, so 16 lines is double any real
+ * share set and 8 KiB is several times the text they occupy. Past that it is a
+ * paste into the wrong box, which is what §7 is for.
+ */
+const MAX_SHARE_INPUT_CHARS = 8 * 1024;
+const MAX_SHARE_LINES = 16;
+const MAX_SHARE_LINE_CHARS = 200;
+
+/**
+ * Why this refuses instead of truncating, same as the U4 gate above it: keeping
+ * the first N characters of someone's share set and silently dropping the rest
+ * produces a reconstruction failure with no stated cause, aimed at the person
+ * least able to diagnose it.
+ */
+function shareInputRejection(next: string): string | null {
+  if (next.length > MAX_SHARE_INPUT_CHARS) {
+    return (
+      `That is ${Math.round(next.length / 1024).toLocaleString()} KB of text. ` +
+      `A share set is a few hundred bytes — this box takes up to ` +
+      `${MAX_SHARE_INPUT_CHARS / 1024} KB. If you meant to paste the encrypted ` +
+      `container, it goes in the box above.`
+    );
+  }
+  const lines = parseShareLines(next);
+  if (lines.length > MAX_SHARE_LINES) {
+    return (
+      `That is ${lines.length} lines. A share set is at most 8 shares, one per ` +
+      `line — this box takes up to ${MAX_SHARE_LINES}.`
+    );
+  }
+  const overlong = lines.find((line) => line.length > MAX_SHARE_LINE_CHARS);
+  if (overlong) {
+    return (
+      `One line is ${overlong.length} characters. A share is about 95, so that ` +
+      `is not one — check for a line that did not wrap where you expected.`
+    );
+  }
+  return null;
 }
 
 // Minimum password policy — deliberately NOT called a strength measurement.
@@ -1086,6 +1136,31 @@ export function EncryptorTool() {
   /** §4.7. Decrypt side: unlock with an enrolled passkey instead of a password. */
   const [usePasskey, setUsePasskey] = useState(false);
   const [shareInput, setShareInput] = useState("");
+  /** Set when a paste was refused, so the field can say why. Mirrors `textInputRejected`. */
+  const [shareInputRejected, setShareInputRejected] = useState<string | null>(null);
+
+  /**
+   * The parse, once per change instead of twice per render.
+   *
+   * `parseShareLines(shareInput)` had three callers, two of them in the render
+   * path — the submit-enabled predicate and the "n shares entered" hint — so
+   * every keystroke re-split and re-trimmed the whole textarea twice over.
+   */
+  const shareLines = useMemo(() => parseShareLines(shareInput), [shareInput]);
+
+  const handleShareInputChange = useCallback((next: string) => {
+    const rejection = shareInputRejection(next);
+    if (rejection) {
+      // The text is not kept, unlike the wrong-box paste in the container
+      // field. There the rejected content is what the user wants to act on;
+      // here it is by definition not a share set, and holding several KB of
+      // it in state is the thing being fixed.
+      setShareInputRejected(rejection);
+      return;
+    }
+    setShareInputRejected(null);
+    setShareInput(next);
+  }, []);
 
   // U25. The toggle can be on while the field is empty — the password is
   // cleared after every operation and the toggle is not — so "revealing" is
@@ -1334,7 +1409,26 @@ export function EncryptorTool() {
     setGenerated(null);
   }, []);
 
-  const resetState = useCallback(() => {
+  /**
+   * Drop every piece of state that is a secret, or stands in for one.
+   *
+   * One function, because there were two and they disagreed. `resetState` and
+   * the old `wipeSensitiveState` cleared overlapping-but-different sets, and each new
+   * kind of secret had to be remembered in both — which is exactly how the
+   * recovery-share state came to survive a reset while being cleared by a
+   * wipe, and how a selected key file survived both.
+   *
+   * The rule for this list: if holding it would let someone open a container,
+   * or reveal what is in one, it belongs here. That includes the input-mode
+   * toggles — leaving `useShares` on after clearing the shares is harmless,
+   * but leaving it on *without* clearing them is the bug this replaces, and a
+   * single list is the only way to stop that distinction mattering.
+   *
+   * Settings the user chose — cipher, KDF, Argon2id cost — are deliberately
+   * absent. A wipe is not a reset: someone who has just had the tool lock
+   * itself wants their configuration still there when they come back.
+   */
+  const clearSensitiveState = useCallback(() => {
     // Disown any operation still running. A KDF cannot be cancelled from here —
     // that needs the Worker in Phase 2 — but it can be made harmless: once the
     // counter moves, the in-flight operation's completion path goes quiet
@@ -1347,46 +1441,17 @@ export function EncryptorTool() {
     // regardless, burning CPU and battery for a result nobody would receive.
     cancelAllCryptoWork();
     setIsLoading(false);
-    setFile(null);
-    setPassword('');
-    setGenerated(null);
-    setShowPassword(false);
-    setUseKeyFile(false);
-    setKeyFile(null);
-    setTextSecret('');
-    setTextInputRejected(null);
-    setShowTextSecret(false);
-    setOutputText('');
-    setShowDecryptedText(false);
-    setDecryptInfo(null);
-    setInputType('file');
-    setVerifyResult(null);
-    setIsDecryptedQrModalOpen(false);
-    setIsDecryptedQrRevealed(false);
-    setDecryptedQrStatus({ kind: "idle" });
-  }, []);
 
-  /**
-   * Drop everything secret, keeping the user's settings.
-   *
-   * Distinct from `resetState`, which also returns the form to its defaults.
-   * A wipe is not a reset: someone who has just had the tool lock itself, or
-   * pressed the button because a colleague walked over, wants their chosen
-   * cipher and KDF still selected when they come back. What they do not want
-   * is the password, the plaintext, or the file still sitting there.
-   */
-  const wipeSensitiveState = useCallback(() => {
-    // Same disown-and-cancel as resetState: an in-flight derivation must not
-    // land its plaintext in a UI that has just been deliberately emptied.
-    opSeqRef.current++;
-    cancelAllCryptoWork();
-    setIsLoading(false);
+    // Credentials and key material.
     setPassword('');
     setGenerated(null);
     setShowPassword(false);
-    setFile(null);
     setKeyFile(null);
     setUseKeyFile(false);
+
+    // Inputs and outputs. `file` is here because a chosen file is the
+    // plaintext: the auto-lock treated a loaded document as nothing at all.
+    setFile(null);
     setTextSecret('');
     setTextInputRejected(null);
     setShowTextSecret(false);
@@ -1395,25 +1460,35 @@ export function EncryptorTool() {
     setShowDecryptedText(false);
     setDecryptInfo(null);
     setVerifyResult(null);
+
+    // Anything rendering a secret.
     setIsQrModalOpen(false);
     setIsDecryptedQrModalOpen(false);
     setIsDecryptedQrRevealed(false);
     setDecryptedQrStatus({ kind: "idle" });
 
-    // KM-R03. Every one of these is password-equivalent and every one of them
-    // was surviving a wipe.
-    //
-    // `shareInput` holds shares an heir has pasted in — §4.6 is explicit that k
-    // of them open the container without the password, so leaving them in a
-    // textarea after a panic wipe defeats the button entirely. `issuedShares`
-    // is worse: those are freshly generated, exist exactly once, and sit in a
-    // modal. `paperVault` holds the container and the shares laid out for
-    // printing.
+    // §4.6 and §4.7. Each of these is password-equivalent: k shares open the
+    // container with no password at all, and the paper vault holds the
+    // container and the shares laid out together for printing.
     setUsePasskey(false);
+    setUseShares(false);
     setShareInput('');
+    setShareInputRejected(null);
     setIssuedShares(null);
     setPaperVault(null);
   }, []);
+
+  /**
+   * Clear the secrets *and* return the form to its defaults.
+   *
+   * The only thing this adds is the input-type reset, which is a layout
+   * choice rather than a secret — so it is the one line that does not belong
+   * in `clearSensitiveState`.
+   */
+  const resetState = useCallback(() => {
+    clearSensitiveState();
+    setInputType('file');
+  }, [clearSensitiveState]);
 
   /**
    * Is there anything on screen worth locking?
@@ -1435,7 +1510,19 @@ export function EncryptorTool() {
     // likely to be at their own desk.
     shareInput.length > 0 ||
     issuedShares !== null ||
-    paperVault !== null;
+    paperVault !== null ||
+    // A chosen file *is* the secret, and this predicate did not think so. Load
+    // a passport scan into Encrypt, walk away, and no timer was armed and no
+    // Wipe now button was rendered — the two things that exist for exactly
+    // that moment. `keyFile` is the same argument with less ambiguity: it is
+    // half the key material, sitting in a file input.
+    //
+    // Kept in step with `clearSensitiveState` by construction: this predicate
+    // asks "is any of it set", that function sets all of it to empty, and both
+    // lists are the same list. Adding a secret to one without the other is the
+    // bug class that produced every entry above.
+    file !== null ||
+    keyFile !== null;
 
   const keepOpen = useCallback(() => {
     lastActivityRef.current = Date.now();
@@ -1473,7 +1560,7 @@ export function EncryptorTool() {
       const left = Math.ceil((AUTO_LOCK_MS - (Date.now() - lastActivityRef.current)) / 1000);
       if (left <= 0) {
         setLockSecondsLeft(null);
-        wipeSensitiveState();
+        clearSensitiveState();
         toast({
           title: "Locked — secrets cleared",
           description: `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were wiped from memory. Your settings are unchanged.`,
@@ -1487,7 +1574,7 @@ export function EncryptorTool() {
       for (const event of events) window.removeEventListener(event, bump);
       clearInterval(id);
     };
-  }, [hasSecretsOnScreen, wipeSensitiveState, toast]);
+  }, [hasSecretsOnScreen, clearSensitiveState, toast]);
 
   const handleModeChange = useCallback((newMode: string) => {
     setMode(newMode as Mode);
@@ -1768,11 +1855,56 @@ export function EncryptorTool() {
     // guard predates share sets and would have made the inheritance path
     // unreachable while every control leading to it looked live.
     const suppliedShares =
-      mode === "decrypt" && useShares ? parseShareLines(shareInput) : [];
+      mode === "decrypt" && useShares ? shareLines : [];
     // §4.7 joins §4.6 in the same guard, for the same reason: someone unlocking
     // with a passkey has no password either, and the credential does not exist
     // yet at this point — it is produced by tapping the key further down.
     const unlockingWithPasskey = mode === "decrypt" && usePasskey;
+
+    /**
+     * The single exit for a successful operation.
+     *
+     * Every success path has to erase the plaintext buffer and drop the
+     * credentials that opened it, and three paths were doing that three
+     * different amounts. Verify-only zeroed the buffer and left the password
+     * and the pasted shares sitting there. The non-UTF-8 path — added to stop
+     * plaintext being mangled — returned before all of it, so the one branch
+     * whose entire purpose is handling raw plaintext carefully was the branch
+     * that left the plaintext un-zeroed.
+     *
+     * The buffer is a parameter rather than a captured variable so this can be
+     * declared before `resultBuffer` is assigned, and so no path can call it
+     * having forgotten which buffer it meant.
+     */
+    const finishOperation = (
+      buffer: ArrayBuffer,
+      notice: { title: string; description: string }
+    ) => {
+      // Best-effort erase now that the contents have been handed off: Blob
+      // construction copies the bytes, and the decoded string and base64
+      // output are separate allocations. Matters most on decrypt, where this
+      // held the plaintext.
+      new Uint8Array(buffer).fill(0);
+
+      // B1: an operation the user has moved on from announces nothing and
+      // wipes nothing. The erase above is unconditional because the buffer is
+      // ours either way; everything below touches UI the user may have
+      // refilled since.
+      if (isStale()) return;
+      toast(notice);
+
+      // §4.6. Shares that have done their job are still password-equivalent,
+      // and an heir who has just recovered a container has no reason to leave
+      // k of them in a textarea.
+      if (suppliedShares.length > 0) setShareInput('');
+
+      // U13. Success only. A failed attempt keeps what was typed, because
+      // retyping a 24-character password after a typo is the pressure that
+      // pushes people towards shorter ones — and a wrong password is not the
+      // secret anyway. The exposure window stays bounded by the auto-lock and
+      // the panic wipe.
+      setPassword('');
+    };
     if (!mutablePassword && suppliedShares.length === 0 && !unlockingWithPasskey) {
         toast({
           title: mode === "decrypt" && useShares ? "Shares Required" : "Password Required",
@@ -2005,14 +2137,11 @@ export function EncryptorTool() {
           // count is reported because "it opens, and it is the size you
           // expect" catches a class of mistake that a bare tick does not: the
           // right password on the wrong backup.
-          new Uint8Array(resultBuffer).fill(0);
           setVerifyResult({ detail: info, bytes: resultBuffer.byteLength });
-          if (!isStale()) {
-            toast({
-              title: "Verified — the backup opens",
-              description: "The contents were checked and discarded without being shown.",
-            });
-          }
+          finishOperation(resultBuffer, {
+            title: "Verified — the backup opens",
+            description: "The contents were checked and discarded without being shown.",
+          });
           return;
         }
         // Deliberately not a toast of its own. TOAST_LIMIT is 1, so the
@@ -2050,7 +2179,7 @@ export function EncryptorTool() {
               // plainly what happened.
               if (isStale()) return;
               triggerDownload(new Blob([resultBuffer]), "decrypted.bin");
-              toast({
+              finishOperation(resultBuffer, {
                 title: "Decrypted, but not text",
                 description:
                   "This container holds bytes that are not valid UTF-8, so there is nothing to show. " +
@@ -2081,45 +2210,17 @@ export function EncryptorTool() {
         }
       }
 
-      // Best-effort erase of the result buffer now that its contents have
-      // been handed off (Blob construction copies the bytes; the decoded
-      // string and base64 output are separate allocations). Matters most on
-      // decrypt, where this buffer held the plaintext.
-      new Uint8Array(resultBuffer).fill(0);
-
-      if (!isStale()) {
-        const done = `Your ${inputType} has been successfully ${mode === 'encrypt' ? 'encrypted' : 'decrypted'}.`;
-        toast({
-          title: legacyNotice ? "Decrypted — legacy container" : "Success!",
-          description: legacyNotice
-            ? `${done} This was a legacy IttyBitz file; consider re-encrypting it in Keymaker format.`
-            : done,
-        });
-
-        // KM-R03. Shares that have done their job are still password-
-        // equivalent, and an heir who has just recovered a container has no
-        // reason to leave k of them in a textarea. Cleared on success only,
-        // for the same reason the password below is: a failed attempt keeps
-        // what was pasted, because retyping sixteen share strings after a typo
-        // is not a punishment worth inflicting.
-        if (suppliedShares.length > 0) setShareInput('');
-
-        // U13. The clear lives here rather than in the `finally`, so a failed
-        // attempt keeps what the user typed.
-        //
-        // It was in the `finally` because of B1, and that constraint is intact:
-        // the `!isStale()` guard is what stops an abandoned operation wiping a
-        // password typed since, and this is inside the same guard. What changes
-        // is only *when* a live operation clears — on success, not on every
-        // outcome.
-        //
-        // The security argument for clearing after a failure is weaker than it
-        // looks. A wrong password is not the secret, the exposure window is
-        // already bounded by the auto-lock and the panic wipe, and the cost is
-        // real: a single typo means retyping 24+ characters, which is exactly
-        // the pressure that pushes people towards shorter passwords.
-        setPassword('');
-      }
+      // The ordinary success path. Everything it used to do inline — erase the
+      // buffer, announce, drop the shares, drop the password — now lives in
+      // `finishOperation`, which the verify-only and non-text paths call too.
+      // That is the point: three exits, one definition of "cleaned up".
+      const done = `Your ${inputType} has been successfully ${mode === 'encrypt' ? 'encrypted' : 'decrypted'}.`;
+      finishOperation(resultBuffer, {
+        title: legacyNotice ? "Decrypted — legacy container" : "Success!",
+        description: legacyNotice
+          ? `${done} This was a legacy IttyBitz file; consider re-encrypting it in Keymaker format.`
+          : done,
+      });
     } catch (error: unknown) {
         // Which failures may be shown verbatim is decided by the crypto core's
         // error *type*, not by matching its message text here.
@@ -2199,7 +2300,7 @@ export function EncryptorTool() {
     // this feature exists for permanently unreachable.
     const hasCredential =
       !!password ||
-      (mode === 'decrypt' && useShares && parseShareLines(shareInput).length > 0) ||
+      (mode === 'decrypt' && useShares && shareLines.length > 0) ||
       // §4.7. The credential is a tap that has not happened yet, so the button
       // has to be live before it exists — otherwise the only control leading to
       // a passkey unlock is disabled by the absence of the thing it produces.
@@ -2497,17 +2598,29 @@ export function EncryptorTool() {
                 <Textarea
                   id="share-input"
                   value={shareInput}
-                  onChange={(e) => setShareInput(e.target.value)}
+                  onChange={(e) => handleShareInputChange(e.target.value)}
                   placeholder={"KMSHARE1:...\nKMSHARE1:...\nOne share per line"}
                   rows={4}
                   spellCheck={false}
                   autoCorrect="off"
                   autoCapitalize="off"
+                  aria-describedby={shareInputRejected ? "share-input-size-error" : undefined}
+                  aria-invalid={shareInputRejected ? true : undefined}
                   className="min-h-[96px] rounded-xl border-white/10 bg-white/4 font-mono text-[12px]"
                 />
+                {shareInputRejected && (
+                  <p
+                    id="share-input-size-error"
+                    role="alert"
+                    className="text-[12px] leading-snug text-destructive"
+                  >
+                    {shareInputRejected} Nothing was pasted, so what you already had is
+                    still there.
+                  </p>
+                )}
                 <p className="text-[12px] leading-snug text-muted-foreground" role="status">
                   {(() => {
-                    const n = parseShareLines(shareInput).length;
+                    const n = shareLines.length;
                     if (n === 0) return "Paste the shares, one per line. Comment lines starting with # are ignored.";
                     // Deliberately does not say whether this is enough: the
                     // threshold lives on the shares, not in the container, and
@@ -3401,7 +3514,7 @@ export function EncryptorTool() {
         <button
           type="button"
           onClick={() => {
-            wipeSensitiveState();
+            clearSensitiveState();
             toast({
               title: "Wiped",
               description: "Password, inputs and any decrypted output were cleared. Your settings are unchanged.",
