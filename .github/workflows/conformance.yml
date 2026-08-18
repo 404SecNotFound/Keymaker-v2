@@ -45,22 +45,6 @@ jobs:
       - name: Install reference dependencies
         run: pip install -r reference/requirements.txt
 
-      # The recovery oracle is the one file meant to outlive this project, and
-      # it sat on cryptography 41.0.7 with eleven open advisories because
-      # nothing was looking. Dependabot now proposes upgrades; this is what
-      # notices when a pin goes bad *between* those proposals.
-      #
-      # Advisory, not blocking. A new advisory against a primitive these
-      # scripts do not touch should not stop a conformance run from reporting
-      # whether the two implementations agree — but it must be visible in the
-      # log rather than discovered by someone else's review.
-      - name: Audit the pinned recovery dependencies
-        continue-on-error: true
-        run: |
-          pip install pip-audit
-          pip-audit -r reference/requirements.txt --strict || \
-            echo "::warning::pip-audit reported advisories against the pinned recovery dependencies — review applicability and either upgrade or record why the pin stands."
-
       - name: Reference self-test (KEYM v1)
         run: python3 reference/keym.py selftest
 
@@ -92,3 +76,45 @@ jobs:
       # be executable, or it decays silently into a page of stale instructions.
       - name: Recovery procedure works as documented
         run: npm run test:recovery
+
+  # ---------------------------------------------------------------- dependency audit
+  #
+  # Its own job, not a step in `conformance`. The two answer different
+  # questions — "do the implementations still agree" and "is the recovery
+  # oracle's dependency set still clean" — and a red audit should not make the
+  # parity result harder to read, or vice versa.
+  #
+  # Blocking, unlike the advisory version this replaces. That one piped every
+  # failure into `::warning::` behind `continue-on-error`, so a new advisory, a
+  # broken audit, or an outage in the vulnerability service all left the
+  # workflow green. A check that cannot fail is not a check — the recovery
+  # oracle sat on cryptography 41.0.7 with eleven open advisories precisely
+  # because nothing was looking.
+  #
+  # To accept a specific advisory rather than act on it, add
+  # `--ignore-vuln GHSA-xxxx-xxxx-xxxx` below with a comment saying which
+  # primitive it touches and why these two scripts do not reach it. An
+  # exemption with a reason beside it is a decision; a blanket warning is not.
+  audit:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+
+      # --require-hashes, because this step used to be `pip install pip-audit`
+      # — unpinned, resolved at run time, executing whatever PyPI served that
+      # morning inside the pipeline that verifies this project's supply-chain
+      # properties. npm is lockfiled and the Actions are SHA-pinned; this was
+      # the one place still trusting a fresh download.
+      - name: Install the pinned audit toolchain
+        run: pip install --require-hashes -r reference/audit-requirements.txt
+
+      - name: Audit the recovery dependencies
+        run: pip-audit -r reference/requirements.txt --strict
