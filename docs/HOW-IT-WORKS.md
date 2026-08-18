@@ -37,18 +37,20 @@ flowchart TB
     end
 
     net(["Any network"])
-    tab -.->|"blocked by connect-src none"| net
+    tab -.->|"page: connection APIs blocked"| net
 
     style net stroke-dasharray: 5 5
 ```
 
-This is enforced structurally rather than by policy:
+Some of this is enforced by the browser; the rest is a property of the source.
+The difference matters, and the section after the table is about where the line is:
 
 | Mechanism | Effect |
 |---|---|
 | `output: 'export'` | No server runtime exists. The build is static files. |
 | `default-src 'none'` | Nothing loads unless explicitly allowed. |
-| `connect-src 'none'` | `fetch`, XHR, EventSource and WebSocket are blocked outright — including to our own origin. |
+| `connect-src 'none'` | In the page, `fetch`, XHR, EventSource, WebSocket and `sendBeacon` are blocked — including to our own origin. Does not cover resource loads, and is not inherited by workers; see below. |
+| `worker-src 'self'` | Only same-origin worker scripts. A `blob:` or `data:` worker — the way injected script would try to escape the policy — will not start. |
 | No third-party assets | No fonts, analytics, or CDN scripts to phone home. |
 | Per-file script hashes | Inline scripts are pinned by SHA-256; injected ones will not run. |
 
@@ -56,6 +58,67 @@ The build fails closed. `scripts/apply-csp-hashes.mjs` refuses to emit a bundle 
 `script-src` still contains `'unsafe-inline'`, and equally refuses one that has lost
 `'wasm-unsafe-eval'` — because without that token, Argon2id cannot instantiate its
 WebAssembly module and would fail silently at runtime.
+
+### What the CSP does not do
+
+This document used to call zero-egress *structural* — the browser making
+transmission impossible rather than us choosing not to. That was wrong, in two
+separate ways, and both are worth stating plainly because the claim is the
+reason someone would trust this with a seed phrase.
+
+**1. `connect-src` governs connection APIs, not all network traffic.**
+
+`connect-src 'none'` blocks `fetch`, XHR, WebSocket, EventSource and
+`sendBeacon`. It says nothing about loading a *resource*, and a resource URL can
+carry data. The policy still allows `img-src 'self'`, `script-src 'self'` and
+`font-src 'self'`, and does not restrict top-level navigation.
+
+Measured against the production export, Chromium:
+
+```
+fetch("/icon-192.png?exfil=…")                 BLOCKED TypeError
+new Image().src = "/icon-192.png?exfil=…"      request left the browser
+```
+
+The image fails to decode, which is irrelevant — the GET was made, and the
+query string is now in the host's access log. One line of JavaScript, no
+connection API involved.
+
+**2. A `<meta>`-tag policy does not reach workers.**
+
+The policy ships as a `<meta http-equiv>` tag, because a static host cannot send
+response headers. A worker fetched over HTTP takes its policy from its own
+response headers, and a static host sends none, so the worker runs with no CSP
+at all:
+
+```
+page   fetch: BLOCKED TypeError
+worker fetch: ALLOWED 200
+```
+
+Key derivation runs in a worker, so even the directive that does work does not
+cover the code handling your password.
+
+**So what is actually true?**
+
+No CSP available on a static host makes this app structurally incapable of
+transmitting data. What is true is narrower and still worth something:
+
+- **There is no telemetry and no transmitting code.** That is a fact about the
+  source, not about the browser.
+- **You can check it.** The build is reproducible and the manifest is signed, so
+  the bytes you run are the bytes in the repository, and the repository is
+  readable.
+- **The policy still raises the cost.** `connect-src 'none'` removes the
+  convenient channels; `script-src` hashes stop injected inline script from
+  running at all; `worker-src 'self'` stops injected script starting a `blob:`
+  worker. An attacker needs code shipped inside the bundle — a supply-chain
+  compromise — which is exactly what reproducible builds are for.
+
+The honest summary is **auditable, not structural**. A `Content-Security-Policy`
+*header* would close the worker half and is the reason to move to
+header-capable hosting; it would still not close the `img-src` channel, because
+the app genuinely needs to load its own images.
 
 ---
 

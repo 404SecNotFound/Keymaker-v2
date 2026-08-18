@@ -30,9 +30,20 @@ test("the production page ships a strict CSP", async ({ page }) => {
 
   expect(csp, "CSP meta tag must be present in the production build").not.toBe("");
   expect(csp).toContain("default-src 'none'");
-  // The page must not be able to open a connection at all — this is what makes
-  // "nothing leaves your browser" a property of the policy, not of the code.
+  // The *page* must not be able to open a connection at all. Worth being exact
+  // about the scope of this one: the policy is delivered as a <meta> tag, and a
+  // <meta> policy does not reach Web Workers, so it does not constrain the
+  // crypto worker. Measured against the production export, same-origin target:
+  // page fetch BLOCKED, worker fetch ALLOWED 200. See the "gap" section in
+  // docs/HOW-IT-WORKS.md — this assertion covers the document, and the worker's
+  // behaviour rests on the code plus the reproducible build.
   expect(csp).toContain("connect-src 'none'");
+  // Which makes this load-bearing rather than incidental: injected script must
+  // not be able to start a worker of its own to escape the directive above. A
+  // blob: worker is the obvious route, and 'self' is what refuses it. Untested
+  // until the worker gap was measured, at which point it stopped being a
+  // hardening nicety and became the thing bounding the blast radius.
+  expect(csp).toContain("worker-src 'self'");
   expect(csp).toContain("object-src 'none'");
   expect(csp).toContain("base-uri 'none'");
   const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src")) ?? "";
