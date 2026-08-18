@@ -20,8 +20,10 @@ format, with diagrams. For the normative byte-level specification, see
 ## 1. The trust boundary
 
 Everything inside the browser tab is the whole system. There is no server component
-to compromise, no account to breach, and no request that could carry a secret off the
-device.
+to compromise and no account to breach, and nothing in the shipped code sends a
+request anywhere. That last one is a property of the source rather than a thing the
+browser prevents — [what the CSP does not do](#what-the-csp-does-not-do), below, is
+precise about the difference.
 
 ```mermaid
 flowchart TB
