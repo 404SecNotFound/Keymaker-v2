@@ -18,10 +18,11 @@ working offline once loaded. &nbsp;·&nbsp;
 
 Keymaker encrypts confidential documents, personal notes, and seed phrases entirely
 in the browser tab. There is no server, no account, and no upload — the production
-build is a static export that makes no network requests after load. That is a
-property of the code rather than something the browser enforces, and it is meant to
-be checked rather than believed: the build is reproducible and the manifest is
-signed. [The security model](#security-model) is precise about what the Content
+build is a static export that talks to no server. The only requests it makes after
+load are for its own files — the service worker precaches them so the app keeps
+working offline. That is a property of the code rather than something the browser
+enforces, and it is meant to be checked rather than believed: the build is
+reproducible and the manifest is signed. [The security model](#security-model) is precise about what the Content
 Security Policy does and does not add to that.
 
 <p align="center">
