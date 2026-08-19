@@ -65,14 +65,45 @@ jobs:
           node scripts/release-notes.mjs '${{ github.ref_name }}' \
             '${{ github.server_url }}/${{ github.workflow_ref }}' > /dev/null
 
+      # The tag must be annotated, and this is the cheap place to find out.
+      #
+      # A lightweight tag is a ref pointing straight at a commit: no message,
+      # no tagger, no date of its own. The publish job already declines to
+      # invent a changelog from one — %(contents:subject) falls through to the
+      # commit subject, so a release would have announced "Merge pull request
+      # #29" as its notes — but declining quietly meant v2.0.0 shipped
+      # lightweight and nobody found out until a review said so.
+      #
+      # Asked over the API rather than by fetching tags, so the build job keeps
+      # its shallow checkout. `object.type` is "tag" for an annotated tag and
+      # "commit" for a lightweight one.
+      - name: The tag must be annotated
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG='${{ github.ref_name }}'
+          KIND=$(gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" --jq '.object.type')
+          if [ "$KIND" != tag ]; then
+            echo "::error::$TAG is a lightweight tag. A release's changelog is its tag message, and a lightweight tag has none."
+            echo "Re-cut it with a message:  git tag -a -f $TAG -m '...' && git push --force origin $TAG"
+            exit 1
+          fi
+          echo "$TAG is annotated."
+
       - run: npm ci
 
       # The same base path deploy.yml uses. A root build would produce a
       # different manifest, and then the release could not be compared against
       # the live site — which is the one thing it is for.
+      # KEYMAKER_RELEASE_TAG is what tells next.config.js this artifact is the
+      # tagged release rather than a rolling build of main. Nothing else sets
+      # it, so deploy.yml, CI and local builds are all labelled development —
+      # which is what they are.
       - run: npm run build
         env:
           KEYMAKER_BASE_PATH: /Keymaker-v2
+          KEYMAKER_RELEASE_TAG: ${{ github.ref_name }}
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -225,8 +256,31 @@ jobs:
             "assets/out/SHA256SUMS.sigstore"
           )
           if gh release view "$TAG" >/dev/null 2>&1; then
+            # A release object already exists. Two cases look identical from
+            # here and must not be treated the same: a previous run that died
+            # between `create` and the last upload, and someone re-pointing a
+            # published release at different bytes.
+            #
+            # This used to be `--clobber`, which silently did both. A published
+            # release is what the verification story rests on — the whole point
+            # of SHA256SUMS.sigstore is that the bytes cannot change after the
+            # fact — so an asset that already exists is only allowed through if
+            # it is byte-identical to what we are holding.
+            for path in "${ASSETS[@]}"; do
+              name=$(basename "$path")
+              if gh release view "$TAG" --json assets --jq '.assets[].name' | grep -qx "$name"; then
+                gh release download "$TAG" --pattern "$name" --dir /tmp/published --clobber
+                if ! cmp -s "$path" "/tmp/published/$name"; then
+                  echo "::error::$name is already published on $TAG with different bytes."
+                  echo "A published release is immutable by design. Cut a new version rather than replacing this one."
+                  exit 1
+                fi
+                echo "$name already published, identical — leaving it alone."
+              else
+                gh release upload "$TAG" "$path"
+              fi
+            done
             gh release edit "$TAG" --notes-file /tmp/NOTES.md
-            gh release upload "$TAG" --clobber "${ASSETS[@]}"
           else
             gh release create "$TAG" \
               --verify-tag \

@@ -33,6 +33,24 @@ test.describe("version coherence", () => {
     await expect(footer).not.toContainText("unknown");
   });
 
+  test("a build that is not the tagged release says so", async ({ page }) => {
+    // The provenance half of 6.1, and the half that was missing. The deployed
+    // site reported "v2.0.0" while running twenty-odd commits past the v2.0.0
+    // tag, so the number a user quotes in a bug report — or checks a signature
+    // against — named an artifact they were not running.
+    //
+    // Only release.yml sets KEYMAKER_RELEASE_TAG, so every build this suite
+    // ever sees is a development one. That makes the assertion unambiguous
+    // here and is exactly why it is worth pinning: if the marker regressed to
+    // always-absent, nothing else in the suite would notice.
+    await page.goto("/");
+    const footer = visible(page.getByText(/^Keymaker v/));
+    await expect(
+      footer,
+      "a non-release build did not mark itself — the version is claiming to be the tag"
+    ).toContainText(`Keymaker v${pkg.version}-dev`);
+  });
+
   test("the app version and the container format version are stated separately", async ({
     page,
   }) => {
