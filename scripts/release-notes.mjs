@@ -154,8 +154,16 @@ commands come from — they are generated from it, not maintained beside it.
 
 ## What this artifact is
 
-The **same bytes served at the live site**, so you can compare the two and
-satisfy yourself that the deployment matches a tag whose source you can read.
+The site as built from this tag, with the Pages base path, so it is directly
+comparable to a deployment of the same commit.
+
+Not byte-identical to whatever the live site is serving right now, and it would
+be dishonest to imply otherwise: the live site tracks \`main\`, so unless the
+deployment is of this exact tag it is a different commit. The two are also
+labelled differently on purpose — a build from this workflow says
+\`v${version}\`, a rolling deployment says \`v${version}-dev\` — so that a
+version number never names an artifact you are not running. Each is verified
+against its own signing identity; neither is offered as a proxy for the other.
 
 It is built with the Pages base path, so it expects to be served from
 \`/Keymaker-v2/\`. That makes it a verification artifact rather than a drop-in

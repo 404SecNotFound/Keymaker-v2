@@ -61,9 +61,15 @@ jobs:
       # is not `v<package.json version>`, and it proves the notes compose at all
       # before anything gets signed.
       - name: The release notes must compose for this ref
+        # Every value a tag author controls reaches this script through `env`
+        # rather than `${{ }}` interpolation. See the note on the annotated-tag
+        # check above: git permits quotes, semicolons and $( ) in a ref name,
+        # and `${{ }}` is substituted before bash parses the line.
+        env:
+          TAG: ${{ github.ref_name }}
+          IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
         run: |
-          node scripts/release-notes.mjs '${{ github.ref_name }}' \
-            '${{ github.server_url }}/${{ github.workflow_ref }}' > /dev/null
+          node scripts/release-notes.mjs "$TAG" "$IDENTITY" > /dev/null
 
       # The tag must be annotated, and this is the cheap place to find out.
       #
@@ -80,10 +86,17 @@ jobs:
       - name: The tag must be annotated
         env:
           GH_TOKEN: ${{ github.token }}
+          # Through `env`, not interpolated into the script body. A tag name is
+          # attacker-influenced text — git permits quotes, semicolons and $( )
+          # in a ref — and `${{ }}` is substituted before bash parses the line,
+          # so writing TAG='${{ github.ref_name }}' in a `run:` block hands the
+          # tag author a shell in a job that holds a token. GitHub passes `env`
+          # values to the process rather than through the parser.
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          TAG='${{ github.ref_name }}'
-          KIND=$(gh api "repos/${{ github.repository }}/git/ref/tags/$TAG" --jq '.object.type')
+          KIND=$(gh api "repos/$REPO/git/ref/tags/$TAG" --jq '.object.type')
           if [ "$KIND" != tag ]; then
             echo "::error::$TAG is a lightweight tag. A release's changelog is its tag message, and a lightweight tag has none."
             echo "Re-cut it with a message:  git tag -a -f $TAG -m '...' && git push --force origin $TAG"
@@ -157,9 +170,10 @@ jobs:
       # contents, and it travels inside — but a release artifact that changes
       # bytes on a re-run invites a question nobody should have to answer.
       - name: Package
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          TAG='${{ github.ref_name }}'
           cp -r out "keymaker-$TAG"
           tar --sort=name --owner=0 --group=0 --numeric-owner \
               --mtime='UTC 1970-01-01' \
@@ -169,9 +183,10 @@ jobs:
       # a user will actually download. `sha256sum` is not this project's code,
       # which is the property that makes the check worth anything.
       - name: Verify the packaged archive the way the notes tell users to
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          TAG='${{ github.ref_name }}'
           mkdir -p /tmp/unpack && cd /tmp/unpack
           tar -xzf "$GITHUB_WORKSPACE/keymaker-$TAG.tar.gz"
           cd "keymaker-$TAG"
@@ -214,9 +229,11 @@ jobs:
           path: assets
 
       - name: Compose the release notes
+        env:
+          TAG: ${{ github.ref_name }}
+          IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}
         run: |
           set -euo pipefail
-          TAG='${{ github.ref_name }}'
           # An annotated tag's message is the changelog.
           #
           # The objecttype guard is not paranoia: for a *lightweight* tag,
@@ -232,8 +249,7 @@ jobs:
             git tag -l --format='%(contents:subject)%0a%0a%(contents:body)' "$TAG" \
               > /tmp/changelog.txt
           fi
-          node scripts/release-notes.mjs "$TAG" \
-            '${{ github.server_url }}/${{ github.workflow_ref }}' \
+          node scripts/release-notes.mjs "$TAG" "$IDENTITY" \
             /tmp/changelog.txt > /tmp/NOTES.md
           cat /tmp/NOTES.md
 
@@ -247,9 +263,9 @@ jobs:
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          TAG='${{ github.ref_name }}'
           ASSETS=(
             "assets/keymaker-$TAG.tar.gz"
             "assets/out/SHA256SUMS"
