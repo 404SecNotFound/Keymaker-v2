@@ -43,7 +43,10 @@ test.describe("one predicate for what counts as a secret", () => {
       "precondition: an empty form should offer nothing to wipe"
     ).toHaveCount(0);
 
-    await page.setInputFiles('input[type="file"]', {
+    // Targeted by id. `FileSelector` renders `<Input id={`${mode}-file`}
+    // type="file" className="hidden">`, so the id is the only stable handle:
+    // the input carries no label association and is never visible.
+    await page.locator("#encrypt-file").setInputFiles({
       name: "passport-scan.bin",
       mimeType: "application/octet-stream",
       buffer: Buffer.from("pretend this is a scan of something you care about"),
@@ -59,9 +62,18 @@ test.describe("one predicate for what counts as a secret", () => {
     await page.goto("/");
     const advanced = visible(page.getByRole("button", { name: /^Advanced/ }));
     if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
-    await visible(page.getByLabel(/key file/i)).click();
+    // This label belongs to the *switch* — `<Label htmlFor="use-keyfile">Use
+    // key file</Label>` — not to the input. Worth being explicit, because the
+    // obvious repair for the line below is to reuse this locator for
+    // setInputFiles, and it would resolve to the switch and fail.
+    await visible(page.getByLabel(/use key file/i)).click();
 
-    await page.setInputFiles('input[type="file"]:below(:text("Key file"))', {
+    // Was `input[type="file"]:below(:text("Key file"))`, which asks Playwright
+    // where an element sits on screen. Once Advanced is open there are two
+    // file inputs, and the positional filter is the only thing separating
+    // them — so the test depended on layout, and timed out in CI when the
+    // layout resolved differently from local. The id does not move.
+    await page.locator("#encrypt-keyfile").setInputFiles({
       name: "second-factor.key",
       mimeType: "application/octet-stream",
       buffer: Buffer.from("half the key material"),
