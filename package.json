@@ -45,7 +45,7 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@next/bundle-analyzer": "^16.2.10",
+    "@next/bundle-analyzer": "^16.3.1",
     "@playwright/test": "1.56.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.2.0",
@@ -59,7 +59,7 @@
   },
   "overrides": {
     "nanoid": "^3.3.17",
-    "postcss": "^8.5.18",
+    "postcss": "$postcss",
     "sharp": "^0.35.0",
     "ws": "^8.18.3"
   }

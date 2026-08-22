@@ -18,10 +18,11 @@ working offline once loaded. &nbsp;·&nbsp;
 
 Keymaker encrypts confidential documents, personal notes, and seed phrases entirely
 in the browser tab. There is no server, no account, and no upload — the production
-build is a static export that makes no network requests after load. That is a
-property of the code rather than something the browser enforces, and it is meant to
-be checked rather than believed: the build is reproducible and the manifest is
-signed. [The security model](#security-model) is precise about what the Content
+build is a static export that talks to no server. The only requests it makes after
+load are for its own files — the service worker precaches them so the app keeps
+working offline. That is a property of the code rather than something the browser
+enforces, and it is meant to be checked rather than believed: the build is
+reproducible and the manifest is signed. [The security model](#security-model) is precise about what the Content
 Security Policy does and does not add to that.
 
 <p align="center">
@@ -268,7 +269,10 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 - Argon2id (RFC 9106, via hash-wasm) or PBKDF2-HMAC-SHA-256 at 1,000,000 iterations
 - AES-256-GCM, ChaCha20-Poly1305 (RFC 8439), or the two chained with HKDF-derived
   independent subkeys
-- Self-describing KEYM v1 container with the full header authenticated as AAD
+- Self-describing KEYM v2 container. There are two AADs, not one: the payload is
+  authenticated against the 8-byte core header, and each slot's wrap against that
+  header plus its own 48-byte prefix. `slot_count` is deliberately in neither, so a
+  slot table stays editable by someone holding exactly one slot's secret
 - NFC password normalization, so a password typed in a different Unicode form on
   macOS still decrypts elsewhere
 - Optional key file, usable alongside a password; key files can be generated in-app
@@ -283,7 +287,7 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 
 **Files and transport**
 
-- Files and text. Encrypted files use `.keym`; encrypted text is prefixed `KEYM1:` so
+- Files and text. Encrypted files use `.keym`; encrypted text is prefixed `keym2:` so
   blobs are self-identifying
 - Optional filename obscuring, replacing the name with `keymaker-<random>.keym`
 - QR export for encrypted text, and Standard SeedQR export for recovered seeds
@@ -322,7 +326,7 @@ rather than being left in a footnote.
 | | What you trust | What it costs |
 |---|---|---|
 | **Hosted** — [the live site](https://404secnotfound.github.io/Keymaker-v2/) | Whoever serves the bundle, **on every visit** | Nothing. Open a URL |
-| **Downloaded and verified** — a [release](https://github.com/404SecNotFound/Keymaker-v2/releases), checked, then opened from disk | Whoever served it **once**, at a moment you chose and checked | One download, two commands, and re-doing it on upgrade |
+| **Downloaded and verified** — a [release](https://github.com/404SecNotFound/Keymaker-v2/releases), checked, then served locally | Whoever served it **once**, at a moment you chose and checked | One download, three commands, and re-doing it on upgrade |
 | **Built from source** | The toolchain and the source you read | Node, an `npm ci`, and the willingness to read a diff |
 
 **Hosted is the weakest, and it is the default**, because a tool nobody can open
@@ -333,8 +337,27 @@ Verifying today says nothing about tomorrow's visit.
 
 **Downloaded-and-verified is the real upgrade**, and it is why releases exist.
 Fetch the tarball, check `SHA256SUMS` against its Sigstore signature, extract,
-and open `index.html` from disk. From then on the code is a file you control:
-nothing re-fetches it, and an attacker needs your machine rather than the host.
+and serve the folder locally:
+
+```bash
+mkdir -p keymaker-local/Keymaker-v2
+tar -xzf keymaker-<tag>.tar.gz -C keymaker-local/Keymaker-v2
+cd keymaker-local && python3 -m http.server 8000
+# then open http://localhost:8000/Keymaker-v2/
+```
+
+From then on the code is a file you control: nothing re-fetches it, and an
+attacker needs your machine rather than the host.
+
+**Do not open `index.html` directly from disk.** The release is built for the
+path it is served from, so its scripts and stylesheets are referenced
+absolutely — from a `file://` URL those resolve against the filesystem root and
+every one of them 404s. The page still renders, because the HTML shell is
+static, and it renders convincingly: heading, password box, Encrypt button, the
+lot. None of it is wired up, because no JavaScript loaded. It cannot encrypt
+anything, and it does not say so. The nested folder above exists precisely so
+the `/Keymaker-v2/` prefix resolves; serving the extracted folder directly at
+the server root fails the same way.
 [docs/VERIFYING.md](docs/VERIFYING.md) has the commands, and the in-app
 [verify page](https://404secnotfound.github.io/Keymaker-v2/verify.html) prints
 them filled in for the build in front of you.
@@ -378,8 +401,10 @@ a way of not saying anything:
 - **Someone looking at your screen.** Secret fields blur by default and reveal
   toggles exist for that reason, but a shoulder, a webcam and a screen-recorder
   all defeat it.
-- **How long your plaintext is.** The container is not padded, so its length
-  reveals the plaintext's length to within a 1 MiB chunk. If the mere *size* of
+- **How long your plaintext is.** The container is not padded, and the final
+  chunk is not padded either, so its length reveals the plaintext's length
+  *exactly* — overhead is a constant, and one more byte in gives one more byte
+  out. Not "to within a chunk": byte for byte. If the mere *size* of
   what you are protecting is sensitive — which document, which of two possible
   answers — that leaks regardless of the cipher. This is stated in
   [§8 of the format design](docs/FORMAT-V2-DESIGN.md) and a padding scheme is
@@ -399,7 +424,8 @@ Report vulnerabilities via the contact in [SECURITY.md](SECURITY.md).
 
 ## Run it locally
 
-Requires Node.js 20 or newer.
+Requires Node.js 22.22.2 or newer — that is the floor the dependency tree
+imposes, not a preference, and it is the version CI runs.
 
 ```bash
 npm ci                    # reproducible install from the lockfile
@@ -408,7 +434,7 @@ npm run build             # static export to out/, with CSP hash post-processing
 npm run typecheck
 
 npm run test:crypto       # frozen IBTZ core — the legacy decryption contract
-npm run test:keymaker     # KEYM v1 — round-trips, tamper rejection, fixtures
+npm run test:keymaker     # container suite — round-trips, tamper rejection, fixtures
 npm run test:fuzz         # malformed containers against the parser
 npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference

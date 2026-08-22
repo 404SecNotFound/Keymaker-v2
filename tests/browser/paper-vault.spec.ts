@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { visible, useTextMode, STRONG_PASSWORD } from "./helpers";
+import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 
 /**
  * Roadmap 4.2 — the paper vault print kit.
@@ -31,6 +31,25 @@ interface PrintSnapshot {
 async function encryptSomething(page: Page) {
   await page.goto("/");
   await useTextMode(page);
+
+  // PBKDF2, not the Argon2id default, and the reason is cost rather than
+  // coverage. Nothing below asserts anything about key derivation — these tests
+  // are about what reaches the printer: page count, symbols, captions, rules,
+  // and that the sheet is unmounted afterwards. A container is a container, and
+  // §7.1 splitting does not care how its master key was wrapped.
+  //
+  // Left on the default, this file ran five memory-hard derivations per engine,
+  // fifteen across the matrix, and it was the only encrypting spec that had not
+  // opted out — share-lifecycle and shamir-ui both already select pbkdf2 here.
+  // On webkit, with two workers, sharing a runner with crypto.spec's own
+  // Argon2id cases, that was enough to blow the 90s wait on a test that takes
+  // about six seconds: one timeout on an unrelated documentation-only PR, while
+  // its four siblings passed in the same run.
+  //
+  // Argon2id on webkit stays covered by crypto.spec.ts, which is the file whose
+  // job that is, and which exercises it on every engine.
+  await selectCrypto(page, "pbkdf2", "aes");
+
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
   await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
   await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();

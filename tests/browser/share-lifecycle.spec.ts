@@ -184,3 +184,98 @@ test.describe("the share input has a size", () => {
     await expect(box, "the refused paste was kept").toHaveValue("");
   });
 });
+
+/**
+ * The two data-loss paths a code review found after KM-R03 landed.
+ *
+ * KM-R03 brought issued shares into the auto-lock, which was right, and the
+ * follow-up made the countdown reachable from inside their dialog, which was
+ * also right. Neither addressed what the timer then *does*: freshly issued
+ * shares exist exactly once, and destroying them on an idle timer is aimed
+ * precisely at the person transcribing them onto paper — reading produces no
+ * pointer or key events.
+ */
+test.describe("issued shares survive what they must", () => {
+  async function issueShares(page: Page) {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    const advanced = visible(page.getByRole("button", { name: /^Advanced/ }));
+    if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
+    await visible(page.getByLabel("Recovery shares")).click();
+    await visible(page.getByLabel("Shares to print")).fill("3");
+    await visible(page.getByLabel("Needed to open")).fill("2");
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill("inheritance");
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+  }
+
+  test("the idle lock clears the password but not the shares", async ({ page }) => {
+    await page.clock.install();
+    await issueShares(page);
+
+    // Well past the deadline, with no interaction at all — the transcription
+    // case. Before this fix the dialog closed here and the shares were gone.
+    await page.clock.runFor("06:00");
+
+    await expect(
+      page.getByText(/Save these 3 shares now/),
+      "an idle timer destroyed shares that exist exactly once"
+    ).toBeVisible();
+
+    // And the lock still did its job on everything recoverable.
+    await expect(
+      page.getByPlaceholder("Enter a strong password"),
+      "the lock spared the shares but also spared the password"
+    ).toHaveValue("");
+  });
+
+  test("Wipe now still destroys them, because that is a person deciding", async ({ page }) => {
+    // The control on the test above. Sparing them from the timer must not
+    // spare them from the panic button, or the button stops meaning anything.
+    await issueShares(page);
+    await page.keyboard.press("Escape");
+    await expect(page.getByText(/Save these 3 shares now/)).toHaveCount(0);
+
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill("something");
+    await visible(page.getByRole("button", { name: /^Wipe now$/i })).click();
+    await expect(page.getByText(/^Wiped$/).first()).toBeVisible();
+  });
+});
+
+/**
+ * The paper-vault button in the shares dialog read `outputText`, which is only
+ * written on the text branch. Encrypting a *file* with shares — the commonest
+ * route to this dialog — left it empty, so `dearmorKeym2('')` threw inside an
+ * async handler with no catch: no print, no error, nothing.
+ */
+test("the paper vault button never fails silently", async ({ page }) => {
+  await page.goto("/");
+  await selectCrypto(page, "pbkdf2", "aes");
+  const advanced = visible(page.getByRole("button", { name: /^Advanced/ }));
+  if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
+  await visible(page.getByLabel("Recovery shares")).click();
+  await visible(page.getByLabel("Shares to print")).fill("3");
+  await visible(page.getByLabel("Needed to open")).fill("2");
+
+  // File mode, which is where the bug lives.
+  await page.locator("#encrypt-file").setInputFiles({
+    name: "will.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("the estate"),
+  });
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt File$/i })).click();
+  await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+
+  const print = page.getByRole("button", { name: /^Print paper vault$/ });
+  await expect(
+    print,
+    "the button is live on a path where it cannot work, so pressing it does nothing"
+  ).toBeDisabled();
+  await expect(
+    visible(page.getByText(/not here to print/i)),
+    "the button is disabled without saying why"
+  ).toBeVisible();
+});

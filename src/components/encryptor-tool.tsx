@@ -1077,6 +1077,17 @@ export function EncryptorTool() {
   const [shamirCount, setShamirCount] = useState(3);
   const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
   /**
+   * Read by the auto-lock interval, which closes over state from the render
+   * that armed it. The effect depends on `hasSecretsOnScreen` only, so by the
+   * time the interval fires `issuedShares` in its closure may be a tick old —
+   * and this decides which of two toasts the user is told, so it has to be
+   * current rather than nearly current.
+   */
+  const issuedSharesRef = useRef<{ threshold: number; shares: string[] } | null>(null);
+  useEffect(() => {
+    issuedSharesRef.current = issuedShares;
+  }, [issuedShares]);
+  /**
    * 4.2. What the paper vault sheet should render on the next print.
    *
    * Held in state rather than computed inside the print handler because the
@@ -1438,7 +1449,7 @@ export function EncryptorTool() {
    * absent. A wipe is not a reset: someone who has just had the tool lock
    * itself wants their configuration still there when they come back.
    */
-  const clearSensitiveState = useCallback(() => {
+  const clearSensitiveState = useCallback((opts?: { sparingIssuedShares?: boolean }) => {
     // Disown any operation still running. A KDF cannot be cancelled from here —
     // that needs the Worker in Phase 2 — but it can be made harmless: once the
     // counter moves, the in-flight operation's completion path goes quiet
@@ -1484,8 +1495,24 @@ export function EncryptorTool() {
     setUseShares(false);
     setShareInput('');
     setShareInputRejected(null);
-    setIssuedShares(null);
     setPaperVault(null);
+
+    // `issuedShares` is the one thing here that cannot be got back.
+    //
+    // Everything else on this list is recoverable: a password can be retyped, a
+    // file reselected, a container re-downloaded, pasted shares pasted again.
+    // Freshly issued shares exist exactly once — the dialog says so, and the
+    // share secret was dropped inside the worker the moment they were made.
+    // Destroying them does not lock an attacker out of anything either: the
+    // container still has the passphrase slot they were enrolled beside, so the
+    // only thing lost is the inheritance path the user just set up.
+    //
+    // So an *explicit* act may destroy them — Wipe now, a reset, a mode change —
+    // and a *timer* may not. The dialog exists to be read slowly onto paper, and
+    // `lastActivityRef` moves on pointerdown, keydown, wheel and touchstart:
+    // transcription produces none of those. Wiping on a five-minute idle is
+    // therefore aimed precisely at the user who is doing the right thing.
+    if (!opts?.sparingIssuedShares) setIssuedShares(null);
   }, []);
 
   /**
@@ -1570,10 +1597,13 @@ export function EncryptorTool() {
       const left = Math.ceil((AUTO_LOCK_MS - (Date.now() - lastActivityRef.current)) / 1000);
       if (left <= 0) {
         setLockSecondsLeft(null);
-        clearSensitiveState();
+        const sparedShares = issuedSharesRef.current !== null;
+        clearSensitiveState({ sparingIssuedShares: true });
         toast({
           title: "Locked — secrets cleared",
-          description: `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were wiped from memory. Your settings are unchanged.`,
+          description: sparedShares
+            ? `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were wiped from memory. Your recovery shares are still on screen — they cannot be shown again, so only you can dismiss them. Your settings are unchanged.`
+            : `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were wiped from memory. Your settings are unchanged.`,
         });
         return;
       }
@@ -3636,16 +3666,34 @@ export function EncryptorTool() {
             {/*
               U2b. Radix unmounts an inactive tab panel, so switching away from
               Tools destroyed the dice roll log — a tally someone had physically
-              rolled, gone because they glanced at the Encrypt tab.
+              rolled, gone because they glanced at the Encrypt tab. forceMount
+              keeps it mounted, and the count survives.
 
-              forceMount keeps it in the DOM; Radix still applies `hidden` while
-              the tab is unselected, so it stays out of the accessibility tree
-              and the tab order. Only this panel gets it. Encrypt and Decrypt
-              deliberately reset on a mode change, and mounting both permanently
-              would keep two sets of secret-bearing fields alive at once for no
-              benefit.
+              `hidden` has to be supplied here, though, and the reason is worth
+              spelling out because the opposite is the natural assumption.
+              Radix computes `hidden={!present}` with `present = forceMount ||
+              isSelected`, so forceMount does not merely keep the panel mounted
+              — it pins `hidden` to false for the panel's whole life. The
+              inactive Tools panel was therefore rendered, 820px tall, in the
+              document flow directly under the Encrypt button, with five
+              controls a keyboard user could Tab into.
+
+              Passing it explicitly works because Radix spreads the caller's
+              props *after* its own `hidden`, so this wins. Same reason
+              tabIndex={-1} above takes effect over the `tabIndex: 0` Radix
+              sets.
+
+              Only this panel gets forceMount. Encrypt and Decrypt deliberately
+              reset on a mode change, and mounting both permanently would keep
+              two sets of secret-bearing fields alive at once for no benefit.
             */}
-            <TabsContent value="tools" className="mt-0" tabIndex={-1} forceMount>
+            <TabsContent
+              value="tools"
+              className="mt-0"
+              tabIndex={-1}
+              forceMount
+              hidden={mode !== "tools"}
+            >
               <DiceEntropyTool />
             </TabsContent>
           </section>
@@ -3840,21 +3888,52 @@ export function EncryptorTool() {
               type="button"
               variant="ghost"
               size="sm"
+              // Gated on the container being here, the same way the encrypt-side
+              // copy of this button is. `outputText` is only written on the
+              // *text* branch; encrypting a file downloads the container and
+              // leaves it empty. Ungated, this called dearmorKeym2('') — which
+              // fails its prefix check and throws — inside an async handler with
+              // no catch. So on the commonest path to this dialog, encrypting a
+              // file with shares, the button did nothing at all: no print, no
+              // error, no toast. Twice, and then the user closes the dialog to
+              // retry and the shares are gone.
+              disabled={!outputText.startsWith("keym2:")}
               onClick={async () => {
-                if (!issuedShares) return;
-                const { dearmorKeym2 } = await import("@/lib/keym-v2");
-                setPaperVault({
-                  container: dearmorKeym2(outputText),
-                  shares: issuedShares.shares,
-                  threshold: issuedShares.threshold,
-                  printedOn: new Date().toISOString().slice(0, 10),
-                });
+                if (!issuedShares || !outputText.startsWith("keym2:")) return;
+                try {
+                  const { dearmorKeym2 } = await import("@/lib/keym-v2");
+                  setPaperVault({
+                    container: dearmorKeym2(outputText),
+                    shares: issuedShares.shares,
+                    threshold: issuedShares.threshold,
+                    printedOn: new Date().toISOString().slice(0, 10),
+                  });
+                } catch {
+                  // Belt and braces behind the gate above. An unhandled
+                  // rejection here is indistinguishable from a dead button, and
+                  // the one thing this dialog must never be is silent.
+                  toast({
+                    title: "Could not build the paper vault",
+                    description:
+                      "The container could not be read back. Copy the shares from this " +
+                      "window before closing it — they are not shown again.",
+                    variant: "destructive",
+                  });
+                }
               }}
               className="text-muted-foreground hover:text-foreground"
             >
               <Printer className="mr-2 h-3.5 w-3.5" />
               Print paper vault
             </Button>
+            {!outputText.startsWith("keym2:") && (
+              <p className="w-full text-[12px] leading-snug text-muted-foreground">
+                The paper vault prints the container beside the shares, and a file
+                container is downloaded rather than kept on screen — so it is not
+                here to print. Copy these shares now; to print a paper vault
+                instead, encrypt in Text mode.
+              </p>
+            )}
           </div>
         </DialogContent>
       </Dialog>

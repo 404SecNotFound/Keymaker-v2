@@ -34,10 +34,44 @@ async function memoryMiB(page: Page): Promise<number> {
   return Number(await visible(page.getByLabel("Argon2id memory")).inputValue());
 }
 
-/** The button is disabled while measuring, so its return to enabled is the signal. */
+/**
+ * Wait for calibration to have *happened*, not for the button to look idle.
+ *
+ * The previous version waited for `getByRole("button", { name: /Calibrate for
+ * this device/ })` to be enabled, on the reasoning that the button is disabled
+ * while measuring. It is — but it is also renamed:
+ *
+ *     disabled={calibrating || isLoading}
+ *     {calibrating ? "Measuring this device…" : "Calibrate for this device"}
+ *
+ * so during the run that locator matches nothing at all, and the wait could
+ * only ever be satisfied by a render in which calibration was not running.
+ * Either the one after it finished, which is what was intended, or the one
+ * still on screen from before the click, which is not. Measured here, the old
+ * name stays matchable for about 35ms after the click while React flushes, and
+ * inside that window the helper returned with calibration not yet started —
+ * whereupon the caller read a memory slider nothing had moved. A loaded CI
+ * runner flushes later and widens the window, which is why this failed there
+ * and never here.
+ *
+ * (It also explains why the obvious repair does not work: waiting for the
+ * button to be *disabled* first waits on a locator that matches nothing while
+ * it is disabled, and times out every time.)
+ *
+ * So wait on the outcome instead. There is exactly one `[role="status"]` on
+ * the page; it is empty until a run completes and non-empty afterwards, which
+ * is an edge no stale render can be on the wrong side of.
+ */
 async function calibrate(page: Page) {
-  const button = visible(page.getByRole("button", { name: /Calibrate for this device/ }));
-  await button.click();
+  await visible(page.getByRole("button", { name: /Calibrate for this device/ })).click();
+
+  await expect(
+    page.locator('[role="status"]').filter({ hasText: /\S/ }).first(),
+    "calibration finished without saying anything, or never ran"
+  ).toBeVisible({ timeout: 120_000 });
+
+  // And the component is idle again rather than mid-run, so callers that go
+  // straight on to click something else are not racing the next render.
   await expect(
     page.getByRole("button", { name: /Calibrate for this device/ })
   ).toBeEnabled({ timeout: 120_000 });
