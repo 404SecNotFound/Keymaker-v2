@@ -1484,8 +1484,9 @@ bytes they need are in the same file.
   rather than all at once. **The format change is necessary but not sufficient**,
   and claiming otherwise on the strength of the format alone would be the same
   mistake as claiming Argon2id worked because the Node tests passed.
-- **Metadata.** Container length still reveals plaintext length to within a
-  chunk, and v2 adds no padding scheme. Worth considering; deliberately not
+- **Metadata.** Container length reveals plaintext length *exactly*: neither the
+  payload nor the final chunk is padded, so overhead is a constant and container
+  length determines plaintext length byte for byte. v2 adds no padding scheme. Worth considering; deliberately not
   proposed here, because a padding scheme is its own design with its own
   trade-offs and bundling it would make this proposal harder to review.
 
