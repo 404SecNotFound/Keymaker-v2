@@ -42,6 +42,7 @@
 
 import {
   CipherId,
+  describeWeakKdf,
   KdfId,
   KeymakerError,
   loadHashWasm,
@@ -1408,7 +1409,9 @@ export function dearmorKeym2(text: string): Uint8Array {
  * multi-slot container from Phase 4 says so rather than implying its one
  * visible KDF is the whole story.
  */
-export function inspectKeym2(data: Uint8Array): { kdfLabel: string; cipherLabel: string; slots: number } | null {
+export function inspectKeym2(
+  data: Uint8Array
+): { kdfLabel: string; cipherLabel: string; slots: number; weakKdf: string | null } | null {
   try {
     const core = parseKeym2CoreHeader(data);
     const slotCount = data[SLOT_COUNT_OFFSET] as number;
@@ -1445,7 +1448,19 @@ export function inspectKeym2(data: Uint8Array): { kdfLabel: string; cipherLabel:
         : core.cipher === CipherId.CHACHA20_POLY1305
           ? "ChaCha20-Poly1305"
           : "AES-256-GCM + ChaCha20-Poly1305";
-    return { kdfLabel, cipherLabel, slots: slotCount };
+    // Only a passphrase slot has cost parameters to be weak. A Shamir or
+    // passkey slot carries a 32-byte CSPRNG secret through HKDF, where "more
+    // iterations" is not a thing that exists — reporting a floor for those
+    // would be inventing a concern the construction does not have.
+    const weakKdf =
+      slot !== null &&
+      slot.slotType !== KEYM2_SLOT_TYPE_PASSKEY &&
+      slot.slotType !== KEYM2_SLOT_TYPE_SHAMIR &&
+      slot.kdf.kdf !== KEYM2_KDF_HKDF
+        ? describeWeakKdf(slot.kdf)
+        : null;
+
+    return { kdfLabel, cipherLabel, slots: slotCount, weakKdf };
   } catch {
     return null;
   }

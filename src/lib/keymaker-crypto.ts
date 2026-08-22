@@ -307,6 +307,44 @@ export function validateKdfParams(kdf: KdfParams, mode: "encrypt" | "decrypt"): 
   check("Argon2id parallelism", kdf.params.parallelism, a.minParallelism, a.maxParallelism);
 }
 
+/**
+ * Describe why a container's KDF parameters are weaker than anything this
+ * version would write, or null when they are not.
+ *
+ * This reports; it never refuses. `validateKdfParams` deliberately enforces
+ * minimums on encrypt only, because a backup tool that declines to open old
+ * files has failed at the one job it exists for — a container written in 2019
+ * must still open in 2039, on whatever terms it was written. That stays exactly
+ * as it was.
+ *
+ * What was missing is that the user was never told. A v1-era container at a
+ * thousand PBKDF2 iterations opens with no more ceremony than one at a million,
+ * so the weakness is inherited silently and the owner has no reason to consider
+ * re-encrypting. Saying so turns that into a decision they get to make.
+ *
+ * The threshold is the encrypt floor rather than a number invented here, so
+ * "weaker than we would write" means exactly that, and the two cannot drift.
+ */
+export function describeWeakKdf(kdf: KdfParams): string | null {
+  if (kdf.kdf === KdfId.PBKDF2) {
+    const { minIterations } = KDF_LIMITS.pbkdf2;
+    if (kdf.params.iterations >= minIterations) return null;
+    return (
+      `${kdf.params.iterations.toLocaleString("en-US")} PBKDF2 iterations, below the ` +
+      `${minIterations.toLocaleString("en-US")} this version writes`
+    );
+  }
+
+  const a = KDF_LIMITS.argon2id;
+  const below: string[] = [];
+  if (kdf.params.memoryKiB < a.minMemoryKiB) {
+    below.push(`${Math.round(kdf.params.memoryKiB / 1024)} MiB memory`);
+  }
+  if (kdf.params.timeCost < a.minTimeCost) below.push(`time cost ${kdf.params.timeCost}`);
+  if (kdf.params.parallelism < a.minParallelism) below.push(`parallelism ${kdf.params.parallelism}`);
+  return below.length > 0 ? `${below.join(", ")} — below what this version writes` : null;
+}
+
 const textEncoder = new TextEncoder();
 
 /** Best-effort secure erase: zero-fill. Never uses Math.random. */
@@ -876,6 +914,11 @@ export interface KeymInspection {
   kdfLabel: string;
   /** Human-readable cipher description. */
   cipherLabel: string;
+  /**
+   * Why this container's derivation is weaker than one written today, or null.
+   * Informational only — the container still opens either way.
+   */
+  weakKdf: string | null;
 }
 
 /**
@@ -897,7 +940,7 @@ export function inspectKeym(data: Uint8Array): KeymInspection | null {
         : parsed.cipher === CipherId.CHACHA20_POLY1305
           ? "ChaCha20-Poly1305"
           : "AES-256-GCM + ChaCha20-Poly1305";
-    return { kdfLabel, cipherLabel };
+    return { kdfLabel, cipherLabel, weakKdf: describeWeakKdf(parsed.kdf) };
   } catch {
     return null;
   }

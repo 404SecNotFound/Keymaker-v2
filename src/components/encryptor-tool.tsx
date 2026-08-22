@@ -2149,9 +2149,18 @@ export function EncryptorTool() {
           "ibtz-v0": "IttyBitz v0 (legacy)",
         };
         let info = `Format: ${formatLabels[decryptResult.format]}`;
+        // Set when the container was written with derivation parameters weaker
+        // than this version would use. It changes nothing about the decryption
+        // that just succeeded — the file opened, on the terms it was written —
+        // and is appended below purely so the owner knows to consider
+        // re-encrypting rather than inheriting the weakness unaware.
+        let weakKdf: string | null = null;
         if (decryptResult.format === "keym-v1") {
           const inspected = inspectKeym(headerPeek);
-          if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
+          if (inspected) {
+            info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
+            weakKdf = inspected.weakKdf;
+          }
         } else if (decryptResult.format === "keym-v2") {
           const { inspectKeym2 } = await import("@/lib/keym-v2");
           const inspected = inspectKeym2(headerPeek);
@@ -2160,7 +2169,14 @@ export function EncryptorTool() {
             // Only worth saying when it is not the one-slot case every
             // container this version writes has.
             if (inspected.slots > 1) info += ` · ${inspected.slots} slots`;
+            weakKdf = inspected.weakKdf;
           }
+        }
+        if (weakKdf) {
+          info +=
+            ` — Heads up: this backup was made with ${weakKdf}. It opened fine and ` +
+            `its contents are intact. Re-encrypting it here would store the same ` +
+            `secret behind today's stronger settings.`;
         }
         if (decryptResult.keyFileUsed) info += " · key file";
         if (isStale()) return;
