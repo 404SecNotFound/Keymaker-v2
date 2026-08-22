@@ -120,8 +120,10 @@ signature from *anybody*.
 
 ## 2. Rebuild it yourself
 
-The build is reproducible: two clean builds of the same commit produce
-byte-identical output, and CI enforces that on every change.
+The build is reproducible: rebuild the commit a deployment claims to be, and
+you get the same bytes it is serving. CI enforces that on every change, and
+[what it enforces exactly](#what-reproducibility-is-actually-checked-against)
+is written down below rather than left to be assumed.
 
 ```bash
 git clone https://github.com/404SecNotFound/Keymaker-v2
@@ -145,8 +147,33 @@ Next generates a random build id per build, which appears in
 `_next/static/<buildId>/` paths and inside the emitted HTML. That single value
 was the only thing making two builds of one commit differ — every JS and CSS
 chunk already hashed identically. It is now pinned to the commit SHA
-(`next.config.js`), and `npm run verify:reproducible` builds twice and compares
-every file so it cannot quietly regress.
+(`next.config.js`), and CI compares whole builds so it cannot quietly regress.
+
+### What reproducibility is actually checked against
+
+Worth being exact, because "reproducible" is a word that invites a reader to
+assume more than was measured. Two things run on every change:
+
+| Gate | What it varies | What it therefore proves |
+|---|---|---|
+| `npm run verify:reproducible` | Nothing but the clock, the locale and `HOME`, on one runner | The build is a function of its source, not of when it ran. Catches a `Date.now()` in a bundle on the change that introduces it. |
+| `reproducible-elsewhere` (ci.yml) | A different runner per leg, a different checkout path, a different Node major (22 and 24) | A *different machine* building the same commit gets the same bytes — which is the claim this page asks you to act on. |
+
+Both build with `KEYMAKER_BASE_PATH=/Keymaker-v2`, so what is compared is the
+artifact that gets published rather than a root build that never ships.
+
+**Not checked: a different operating system, or a different CPU architecture.**
+Every runner above is x86-64 Linux, and this page will not tell you something
+has been verified when it has not. The caveat is not a formality either: the
+build pulls platform-specific native binaries — SWC, Lightning CSS, esbuild,
+libvips — so a macOS or arm64 machine compiles the bundle with *different
+compiler code*, not merely on a different kernel. Whether it emits identical
+bytes is untested here.
+
+If you rebuild on another platform and the manifests match, that is the
+strongest result available and worth saying so. If they differ, please report
+it rather than assuming it is expected: the difference would tell us which of
+those binaries is not deterministic across targets, which is worth knowing.
 
 If you are building from a source tarball with no git metadata, set the id
 explicitly:

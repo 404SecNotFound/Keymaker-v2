@@ -89,7 +89,8 @@ to cloud storage, mounted like a drive. None of those jobs is Keymaker's.
 delivered fresh on every visit by whoever controls the host. That is not a footnote — it
 is the main reason to prefer a CLI. Keymaker's answer is not to deny it but to make it
 checkable: every deployment ships a signed `SHA256SUMS`, the build is byte-for-byte
-reproducible from a commit you can read, and the app tells you how to check the copy you
+reproducible from a commit you can read — on a different machine, which is the part
+that matters and the part CI checks — and the app tells you how to check the copy you
 were served on its own [verify page](https://404secnotfound.github.io/Keymaker-v2/verify.html).
 That narrows the gap. It does not close it, and [docs/VERIFYING.md](docs/VERIFYING.md)
 says exactly what it leaves open.
@@ -511,10 +512,20 @@ npm run test:fuzz         # malformed containers against the parser
 npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference
 npm run test:recovery     # the documented recovery procedure, end to end
+
+npm run build:base-path   # the export as deploy.yml builds it, under /Keymaker-v2/
+npm run test:base-path    # that export, loaded from the subdirectory it ships in
 ```
 
 `test:browser` needs `npx playwright install` once. `test:conformance` needs
 `pip install -r reference/requirements.txt`.
+
+`build:base-path` and `test:base-path` are a pair and run in that order — both
+builds write to `out/`, so whichever ran last is what gets served. `test:browser`
+covers the root layout (a custom domain, an unpacked release archive, a file on
+disk); `test:base-path` covers the subdirectory GitHub Pages serves from, which
+is a different set of asset URLs and was the one layout never loaded in a
+browser.
 
 `npm run build` produces a fully static `out/` directory. Serve it from any static
 host, or open it from disk on a machine with no network connection.
@@ -568,6 +579,15 @@ the deploy builds with `KEYMAKER_BASE_PATH=/Keymaker-v2`. Without it the exporte
 HTML would request its assets from the root and serve a blank page. The service
 worker derives its own scope from where it is served, so it needs no configuration.
 
+That layout has its own browser job (`npm run test:base-path`), which loads the
+export from the subdirectory and checks that no URL it declares or requests
+escapes the prefix. It exists because the failure is quiet: a missing asset here
+does not produce an error page, it produces a page that renders correctly and
+cannot encrypt — and a `crypto-worker.js` that 404s falls back to running the
+derivation on the main thread without reporting anything at all. The gate reads
+the base path out of `deploy.yml`, so moving the deployment moves the test with
+it instead of leaving it green and pointed at the old path.
+
 To host somewhere else — a custom domain, Netlify, Vercel, an internal server —
 build without `KEYMAKER_BASE_PATH` and upload `out/`. Nothing in the app assumes a
 particular origin.
@@ -580,9 +600,12 @@ You no longer have to take that on trust, though. Every deployment publishes a
 `SHA256SUMS` manifest of the exact bytes it served, signed with Sigstore by the
 deploy workflow's own identity — no long-lived key to leak, and verification
 asks "did *this repository's workflow* sign this", not "do you trust this key".
-And the build is reproducible: two clean builds of a commit produce identical
-output, and CI enforces it, so you can rebuild the commit yourself and compare
-manifests.
+And the build is reproducible: rebuild the commit yourself and the manifest
+matches. CI enforces that on two axes — twice on one runner, and again on
+separate runners with a different checkout path and a different Node major —
+because "the same command twice in the same container" is not the claim you
+need. [What that does and does not cover](docs/VERIFYING.md#what-reproducibility-is-actually-checked-against)
+is stated exactly; a different OS or CPU architecture is not enforced.
 
 Those are two different claims and both matter. The signature says the site is
 the artifact CI produced; the rebuild says that artifact matches the source you

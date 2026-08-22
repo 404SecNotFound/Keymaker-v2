@@ -911,6 +911,15 @@ format without trusting the app or its author.
   the risk is Next.js and React, which move fastest and are the largest surface.
 - **The Python reference stays first-class.** Bit-for-bit conformance on every
   format change, no exceptions. It is the moat.
+- **The deployed layout is tested, not assumed.** `npm run test:base-path`
+  builds the export the way `deploy.yml` builds it and loads it from
+  `/Keymaker-v2/`, because the browser suite serves `out/` at the origin root
+  and that is not what ships. The rule this encodes: a layout nobody loads in a
+  browser is a layout nobody has tested, and here the failure is silent — a
+  missing asset gives a page that renders and cannot encrypt, and a 404 on
+  `crypto-worker.js` gives an app that quietly moves the derivation onto the
+  main thread. The gate reads the base path out of the workflow, so it follows
+  the deployment instead of pinning a literal that can go stale.
 - **`wasm-unsafe-eval` is answered, not open.** The review asks whether it can be
   hardened further; that evaluation is done and written up in `SECURITY.md` as
   U20. Removing the token means either a JavaScript Argon2id or PBKDF2-only, and
@@ -929,7 +938,7 @@ outstanding across every session and each one costs minutes.
 | O1 | **About panel and topics are empty** on a public repo | The one-line description is the entire first impression, and topics are how anyone finds this at all |
 | O2 | **Two stale `claude/*` branches** on the old repo | Force-push was permission-denied |
 | O3 | **The live site has never been opened on a phone** | Several rounds of UI change have shipped; this container is egress-blocked from the deployed site, so it cannot be checked here. It is also 6.5's gate |
-| O5 | **Cut the `v2.0.0` tag** — `git tag -a v2.0.0 && git push origin v2.0.0` | 6.2 built and tested the whole release path but deliberately stops here: a public release cannot be withdrawn, so pushing the tag is a decision rather than a step. Annotated, because the message becomes the "What changed" section |
+| O5 | **`v2.0.0` is tagged on `origin`, but lightweight** — the ref points straight at `3251b1b`, and the annotated tag object carrying the release message exists only locally | 6.2 wanted an *annotated* tag because the message becomes the "What changed" section; a lightweight ref has no message for it to read. Moving a published tag is an owner decision, not a step — it rewrites a ref other people may already have fetched |
 
 ---
 
