@@ -47,10 +47,31 @@ test("the production page ships a strict CSP", async ({ page }) => {
   expect(csp).toContain("object-src 'none'");
   expect(csp).toContain("base-uri 'none'");
   const scriptSrc = csp.split(";").find((d) => d.trim().startsWith("script-src")) ?? "";
-  // script-src is tightened at build time from 'unsafe-inline' to per-file hashes.
-  expect(scriptSrc).not.toContain("'unsafe-inline'");
-  expect(scriptSrc).toMatch(/'sha256-/);
-  // Argon2id cannot instantiate without this, and fails silently if it is gone.
+
+  // script-src is tightened at build time from 'unsafe-inline' to per-file
+  // hashes, and this checks the *whole* directive rather than the one token
+  // that used to go wrong.
+  //
+  // Asserting `not.toContain("'unsafe-inline'")` is a deny-list of length one.
+  // It answers "did we make the specific mistake we made before?", and that
+  // is not the same question as "is this policy tight". `script-src 'self'
+  // 'wasm-unsafe-eval' 'sha256-…' *` satisfies every assertion this block used
+  // to make — no 'unsafe-inline', a hash present, wasm-unsafe-eval present —
+  // while permitting script from anywhere on the web. A bare scheme, a host,
+  // 'unsafe-eval', or 'strict-dynamic' all slip through the same gap, the last
+  // of which reduces the hashes to decoration by delegating trust to whatever
+  // they go on to load.
+  const allowed = new Set(["'self'", "'wasm-unsafe-eval'"]);
+  const isHash = (src: string) => /^'sha(256|384|512)-[A-Za-z0-9+/]+={0,2}'$/.test(src);
+  const sources = scriptSrc.trim().split(/\s+/).slice(1);
+  expect(
+    sources.filter((src) => !allowed.has(src) && !isHash(src)),
+    "script-src carries a source that is neither allow-listed nor a hash"
+  ).toEqual([]);
+
+  // And the two that must be present, rather than merely permitted: without a
+  // hash nothing inline runs, and Argon2id cannot instantiate without wasm.
+  expect(sources.some(isHash), "no inline-script hash in script-src").toBe(true);
   expect(scriptSrc).toContain("'wasm-unsafe-eval'");
 
   // style-src keeps 'unsafe-inline' deliberately: React and Tailwind set

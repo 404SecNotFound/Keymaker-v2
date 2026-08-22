@@ -119,10 +119,34 @@ if (processed === 0) {
   process.exit(1);
 }
 
-// Fail-closed verification: after processing, NO built HTML file may still
-// carry 'unsafe-inline' in a script-src directive. This catches a file the
-// main loop skipped (e.g. a future page whose meta tag didn't match the
-// regex) instead of silently shipping a loose policy for it.
+// Fail-closed verification: after processing, every built HTML file's
+// script-src must consist *only* of sources on the list below.
+//
+// This used to test for the absence of one token, `'unsafe-inline'`, which is
+// a deny-list of length one. It answers "is this the specific mistake we made
+// before?" rather than "is this policy tight?", and the two come apart
+// immediately: `script-src 'self' 'wasm-unsafe-eval' 'sha256-…' *` contains no
+// 'unsafe-inline', passes, and permits loading script from anywhere on the
+// web — which is the whole thing the directive exists to prevent. So would a
+// bare scheme (`https:`), a host, `'unsafe-eval'`, or `'strict-dynamic'`,
+// which makes the accompanying hashes decorative by delegating trust to
+// whatever they load.
+//
+// Allow-listing inverts that. A source this build does not already use fails
+// the build, and adding one is a deliberate edit here with a reason attached,
+// rather than something that arrives unnoticed in a policy string.
+const ALLOWED_SCRIPT_SRC = new Set(["'self'", "'wasm-unsafe-eval'"]);
+const HASH_SOURCE = /^'sha(256|384|512)-[A-Za-z0-9+/]+={0,2}'$/;
+
+/** Sources present in a script-src that are neither allow-listed nor a hash. */
+function unexpectedScriptSources(scriptSrc) {
+  return scriptSrc
+    .trim()
+    .split(/\s+/)
+    .slice(1) // drop the directive name itself
+    .filter((src) => src && !ALLOWED_SCRIPT_SRC.has(src) && !HASH_SOURCE.test(src));
+}
+
 const leaked = [];
 const uncovered = [];
 for (const file of htmlFiles(OUT_DIR)) {
@@ -140,8 +164,9 @@ for (const file of htmlFiles(OUT_DIR)) {
     .replace(/&quot;/gi, '"')
     .replace(/&amp;/gi, '&');
   const scriptSrc = policy.split(';').find((d) => /^\s*script-src\b/.test(d)) || '';
-  if (scriptSrc.includes("'unsafe-inline'")) {
-    leaked.push(file.replace(OUT_DIR + '/', ''));
+  const unexpected = unexpectedScriptSources(scriptSrc);
+  if (unexpected.length > 0) {
+    leaked.push(`${file.replace(OUT_DIR + '/', '')} (${unexpected.join(' ')})`);
   }
 }
 
@@ -155,7 +180,8 @@ if (uncovered.length > 0) {
 
 if (leaked.length > 0) {
   console.error(
-    `csp-hashes: ERROR — script-src still contains 'unsafe-inline' after processing in: ${leaked.join(', ')}. ` +
+    `csp-hashes: ERROR — script-src carries sources that are not allow-listed, in: ${leaked.join(', ')}. ` +
+      `Permitted: ${[...ALLOWED_SCRIPT_SRC].join(' ')} and 'sha256-…' hashes. ` +
       'Refusing to ship a loose CSP.'
   );
   process.exit(1);
@@ -224,5 +250,5 @@ if (connectable.length > 0) {
 
 console.log(
   `csp-hashes: done (${processed} file(s) tightened, ${skipped} skipped, ` +
-    `0 with residual unsafe-inline, 0 missing wasm-unsafe-eval)`
+    `0 with non-allow-listed script-src sources, 0 missing wasm-unsafe-eval)`
 );
