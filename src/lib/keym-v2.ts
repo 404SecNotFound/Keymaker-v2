@@ -893,7 +893,28 @@ async function unwrapMasterKey(
     const slotSecret = await slotSecretFor(slot, secrets);
     if (slotSecret === null) continue;
 
-    const slotKey = await deriveSlotKey(slotSecret, slot.salt, slot.kdf);
+    // §4.4/F6: a slot that cannot be used disqualifies *itself*, never the
+    // walk. Every other per-slot failure here is a `continue`; this one was an
+    // exception that escaped decryptKeym2 entirely.
+    //
+    // §6 bounds memory_kib and parallelism independently, but Argon2id also
+    // requires memory_kib >= 8 * parallelism. A slot declaring mem=1, p=8
+    // passes every §6 check and then throws inside hash-wasm. So does a legal
+    // mem=262144 slot on a device that cannot allocate it. Either way the
+    // throw took the whole container with it: rewriting six bytes of slot 0
+    // made a two-slot container permanently unopenable through the untouched,
+    // valid slot 1 — the exact data-loss outcome the skip rule exists to
+    // prevent, achievable by anyone who can write the file and needing no key.
+    //
+    // Also §6's indistinguishability: the raw "Memory size should be at least
+    // 8 * parallelism." reached decryptData's callers.
+    let slotKey: Uint8Array;
+    try {
+      slotKey = await deriveSlotKey(slotSecret, slot.salt, slot.kdf);
+    } catch {
+      secureErase(slotSecret);
+      continue;
+    }
     // Unconditional. This was guarded on Shamir-or-passkey, which left the one
     // case that carries the password unerased: for a passphrase slot
     // `slotSecretFor` returns a fresh `buildKdfInput` allocation holding the
