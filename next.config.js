@@ -56,6 +56,25 @@ function resolveBuildId() {
 const appVersion = require('./package.json').version;
 
 /**
+ * Whether this build is the tagged release of `appVersion`, or a rolling build
+ * of whatever `main` happens to be.
+ *
+ * The two were indistinguishable, and that is a provenance bug rather than a
+ * cosmetic one: the deployed site reported "v2.0.0" while running twenty-odd
+ * commits past the v2.0.0 tag, so the number a user quotes in a bug report —
+ * or checks a signature against — named an artifact they were not running.
+ *
+ * `KEYMAKER_RELEASE_TAG` is set only by release.yml, to the tag being built.
+ * Anything else — a deploy from main, a local build, CI — is a development
+ * build and now says so. The comparison is against `v${appVersion}` rather
+ * than "is the variable set", so a tag that disagrees with package.json cannot
+ * mint a release label either; release-notes.mjs already refuses that case,
+ * and this is the same rule applied to the artifact.
+ */
+const releaseTag = process.env.KEYMAKER_RELEASE_TAG || '';
+const isTaggedRelease = releaseTag === `v${appVersion}`;
+
+/**
  * The verify page's contents, resolved at build time.
  *
  * Roadmap 6.3. The page tells a visitor which commit the running build claims
@@ -89,6 +108,7 @@ const nextConfig = {
   env: {
     KEYMAKER_BASE_PATH: basePath,
     KEYMAKER_APP_VERSION: appVersion,
+    KEYMAKER_RELEASE_CHANNEL: isTaggedRelease ? 'release' : 'development',
     KEYMAKER_COMMIT: resolveBuildId(),
     KEYMAKER_VERIFY_COSIGN: verifyCommands.cosign,
     KEYMAKER_VERIFY_SHA256SUM: verifyCommands.sums,

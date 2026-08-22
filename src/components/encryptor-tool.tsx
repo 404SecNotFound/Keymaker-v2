@@ -188,6 +188,16 @@ const KEYMAKER_REPO = "https://github.com/404SecNotFound/Keymaker-v2";
 const APP_VERSION = process.env.KEYMAKER_APP_VERSION || "unknown";
 
 /**
+ * Whether this bundle is the tagged release of APP_VERSION or a rolling build.
+ *
+ * The footer said "Keymaker v2.0.0" for both, which made the version a claim
+ * the artifact could not support: the deployed site ran commits past the tag
+ * while naming the tag. The number is the one people quote in bug reports and
+ * check signatures against, so it has to distinguish the two.
+ */
+const IS_RELEASE_BUILD = process.env.KEYMAKER_RELEASE_CHANNEL === "release";
+
+/**
  * §4.6. One share per line, blanks and `#` comments dropped.
  *
  * Comments are stripped because the reference CLI prints share sets with
@@ -3761,6 +3771,16 @@ export function EncryptorTool() {
             */}
             <span>
               Keymaker v{APP_VERSION}
+              {/*
+                Only on a rolling build. A release says nothing extra, because
+                there the version is the whole truth; a development build has
+                to admit it is ahead of the tag it is naming. The verify page
+                carries the commit, which is what turns this from a caveat into
+                something actionable.
+              */}
+              {!IS_RELEASE_BUILD && (
+                <span className="text-muted-foreground/60">-dev</span>
+              )}
               <span className="text-muted-foreground/60"> · writes KEYM v2</span>
             </span>
           </div>
