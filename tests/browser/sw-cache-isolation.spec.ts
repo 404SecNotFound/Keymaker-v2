@@ -46,6 +46,33 @@ test.describe("service-worker cache ownership", () => {
 
     await page.goto("/");
 
+    // Let the worker this load registers finish activating *before* seeding.
+    //
+    // Activation sweeps every cache under the prefix that is not the current
+    // version — which is exactly what STALE_KEYMAKER is built to look like. If
+    // that sweep lands after the seeds do, the stale seed is already gone when
+    // the precondition below looks for it, and the test fails saying its own
+    // setup is broken. The setup is not broken; the ordering was unstated.
+    // Firefox in CI activates late enough relative to `goto` resolving to lose
+    // that race, and did.
+    //
+    // Waiting on `serviceWorker.ready` alone would not fix it: the
+    // registration's `active` slot is filled at the *start* of activation, so
+    // `ready` can resolve while the sweep is still running inside the activate
+    // handler's `waitUntil`. The worker reaches 'activated' only once that
+    // promise settles, so 'activated' is the state that means "the sweep is
+    // over" — and it is the only one that does.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(async () => (await navigator.serviceWorker.ready).active?.state ?? null),
+        {
+          message: "the worker from the first load never finished activating",
+          timeout: 30_000,
+        }
+      )
+      .toBe("activated");
+
     // Seed both: one that belongs to someone else, one that is plainly ours and
     // out of date. The second is the control on the first — if activation
     // spared everything, this test would pass while proving nothing.
@@ -65,14 +92,17 @@ test.describe("service-worker cache ownership", () => {
     // It seeded after `goto`, then reloaded, on the reasoning that a reload
     // puts the worker through `activate` again. It does not: `activate` fires
     // once per worker *version*, and the version registered by the first load
-    // has already had it — quite possibly before the seeds existed. The test
-    // passed because activation happens late enough in practice for the seeds
-    // to land first, which is a race that happened to be winnable, not an
-    // ordering.
+    // has already had it — quite possibly before the seeds existed.
     //
     // Unregistering forces the next load to install and activate a fresh
     // worker. That activation cannot precede the seeds, because the worker it
     // belongs to does not exist yet.
+    //
+    // That fixed the activation under test. It did not fix the *first* load's
+    // activation, which is a second sweep nobody had ordered against the
+    // seeds, and which deleted the stale seed out from under this assertion on
+    // firefox. Hence the wait above. Both orderings have to be stated; only
+    // one of them was.
     expect(
       await page.evaluate(() => caches.keys()),
       "the seeds are missing before the activation under test — this would pass vacuously"
