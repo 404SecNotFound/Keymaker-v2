@@ -143,11 +143,57 @@ check(
 // The signature is verified against the identity the notes publish, in the job
 // that produced it — so a wrong identity fails the release rather than every
 // reader of it.
+//
+// Read as values rather than as one textual shape. Every identity in this
+// workflow now reaches its step through `env:`, so the previous form of this
+// check — which looked for the expression inline, in quotes, inside a `run:`
+// body — was asserting the very thing the shell-injection fix removed, and
+// went red on a workflow that had got safer. What matters is not where the
+// expression sits but that every site is handed the same one.
+const CANONICAL_IDENTITY = '${{ github.server_url }}/${{ github.workflow_ref }}';
+const identities = [...workflow.matchAll(/^\s*[A-Z_]*IDENTITY:\s*(\S.*?)\s*$/gm)].map((m) => m[1]);
+const distinctIdentities = [...new Set(identities)];
 check(
   'release.yml verifies with the same identity it publishes',
-  workflow.includes('KEYMAKER_CERT_IDENTITY: ${{ github.server_url }}/${{ github.workflow_ref }}') &&
-    workflow.includes("'${{ github.server_url }}/${{ github.workflow_ref }}'"),
-  'the verify step and the notes step must be given the same value'
+  identities.length >= 2 && distinctIdentities.length === 1 && distinctIdentities[0] === CANONICAL_IDENTITY,
+  `the verify steps and the notes step must be given the same value; found ${identities.length} site(s): ${
+    distinctIdentities.map((i) => JSON.stringify(i)).join(', ') || 'none'
+  }`
+);
+
+// The other half of the same rule, and the half with teeth. A tag name is
+// attacker-influenced text — git permits quotes, semicolons and $( ) in a ref
+// — and `${{ }}` is substituted into a script *before* bash parses it. So an
+// interpolation anywhere inside a `run:` body hands the tag author a shell in
+// a job that holds a token. Values arrive through `env:` instead, which GitHub
+// passes to the process rather than through the parser.
+//
+// Nothing guarded that, and it is precisely the kind of thing reintroduced by
+// copying the shape of a neighbouring step.
+const interpolatedRunLines = [];
+{
+  const lines = workflow.split('\n');
+  let runIndent = null;
+  for (const [i, line] of lines.entries()) {
+    if (runIndent !== null) {
+      const indent = line.search(/\S/);
+      if (indent === -1) continue; // blank lines stay inside the block
+      if (indent <= runIndent) runIndent = null; // a dedent ends it
+      else if (line.includes('${{')) interpolatedRunLines.push(`line ${i + 1}: ${line.trim()}`);
+    }
+    if (runIndent === null) {
+      const start = line.match(/^(\s*)run:\s*(.*)$/);
+      if (start) {
+        if (/^[|>]/.test(start[2])) runIndent = start[1].length;
+        else if (start[2].includes('${{')) interpolatedRunLines.push(`line ${i + 1}: ${line.trim()}`);
+      }
+    }
+  }
+}
+check(
+  'no tag-controlled value is interpolated into a shell',
+  interpolatedRunLines.length === 0,
+  interpolatedRunLines.join('\n         ')
 );
 
 // ---- 5. Content the roadmap asks for ----
