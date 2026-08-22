@@ -1,29 +1,48 @@
-# KEYM v2 — Design Proposal
+# KEYM v2 — Container Format Specification
 
-**Status: proposal, with two implementations.** Nothing in `src/` *writes* this
-format yet; `decryptData()` can already read it. `reference/keym2.py` implements
-it — written from this document alone, before any TypeScript existed, which is
-the order that makes the *specification* the thing under test. It found five
-gaps; see §11.
+**Status: shipped and frozen.** This is the normative specification of the
+KEYM v2 container, and the application writes it. `encryptContainer()` in
+`src/lib/keymaker-crypto.ts` is the writer every UI path reaches, and it
+dispatches to `encryptKeym2()`; nothing under `src/components`,
+`crypto-worker.ts` or `crypto-client.ts` calls the v1 writer any more. The
+footer says `writes KEYM v2` and `/verify` reports the same. `reference/keym2.py`
+implements this document independently — written from it alone, before any
+TypeScript existed, which is the order that makes the *specification* the thing
+under test. It found five gaps; see §11.
 
-**Amended for multi-slot envelope keys.** The first draft derived the AEAD key
-straight from the KDF output. [ROADMAP.md](ROADMAP.md) §Phase 3 requires
+`encryptData()` still produces v1 and is deliberately kept, for one reason
+given in full at its definition: `reference/crosstest.py` has to be able to
+*construct* v1 containers in order to prove the v1 reader still opens them. It
+is not reachable from the product.
+
+**The file keeps its `-DESIGN` name on purpose.** That path is printed on every
+paper vault (`src/components/paper-vault.tsx`) and inside every self-extracting
+page (§7.2), so vaults already in the world point at it. Renaming the file would
+make a printed recovery document cite something that does not exist, and a
+recovery document that sends its reader to a dead path is the one class of
+change this format is not allowed to make. The name is now historical; the
+contents are normative.
+
+**Amended once, for multi-slot envelope keys.** The first draft derived the AEAD
+key straight from the KDF output. [ROADMAP.md](ROADMAP.md) §Phase 3 required
 otherwise — a random master key per container, wrapped independently by
-passphrase / key-file / passkey-PRF / Shamir slots — and warns that adding it
+passphrase / key-file / passkey-PRF / Shamir slots — and warned that adding it
 later would mean a *second* format migration. The two documents disagreed; this
-one was wrong. The amendment lands now because **nothing has written a v2
-container yet**, so the format is still free to change, and that window closes
-the moment the UI writes one. §3, §4 and §5.3 change substantively. §11.1
-records what the amendment cost, including the part of §3.1's argument it
-destroys.
+one was wrong. The amendment landed while **nothing had yet written a v2
+container**, which was the last moment it could: §3, §4 and §5.3 changed
+substantively, and §11.1 records what that cost, including the part of §3.1's
+argument it destroyed.
 
-It exists to be argued with on paper first, because a wire format is the one
-part of this project that cannot be revised after users have files in it.
+That window is shut. This document existed to be argued with on paper first,
+because a wire format is the one part of this project that cannot be revised
+once users have files in it — and they do now. What is written here is what
+their containers contain. §9 states the freeze; §11 records what the second
+implementation found before it took effect.
 
-[FORMAT.md](FORMAT.md) is the normative specification of KEYM v1 and stays
-that way. **KEYM v1 must remain readable exactly as it is today**, and the
-frozen fixture corpus in `scripts/fixtures/keymaker/` is append-only, so no
-change proposed here may alter how a v1 container is parsed or decrypted.
+[FORMAT.md](FORMAT.md) remains the normative specification of KEYM v1.
+**KEYM v1 must remain readable exactly as it is today**, and the frozen fixture
+corpus in `scripts/fixtures/keymaker/` is append-only, so nothing here changes
+how a v1 container is parsed or decrypted.
 
 ## 1. Why a new version at all
 
@@ -1486,21 +1505,34 @@ bytes they need are in the same file.
   mistake as claiming Argon2id worked because the Node tests passed.
 - **Metadata.** Container length reveals plaintext length *exactly*: neither the
   payload nor the final chunk is padded, so overhead is a constant and container
-  length determines plaintext length byte for byte. v2 adds no padding scheme. Worth considering; deliberately not
-  proposed here, because a padding scheme is its own design with its own
-  trade-offs and bundling it would make this proposal harder to review.
+  length determines plaintext length byte for byte. v2 adds no padding scheme:
+  one is its own design with its own trade-offs, and bundling it would have made
+  this document harder to review at the point where review was the only thing
+  standing between a mistake and a permanent one. That decision is now settled
+  rather than open — the format is frozen (§9), so padding is a v3 question.
+  README.md states the leak plainly rather than leaving it to be discovered.
 
-## 9. Migration
+## 9. Migration — done, and the format is frozen
+
+Written as a plan; kept as a record. Every step below has happened, and step 2
+is the one that closed the document.
 
 1. `decryptData()` dispatches on the version byte. v1 containers keep the
    existing code path, byte for byte. The frozen fixtures guarantee it.
-2. Writing switches to v2 once implemented and reviewed. v1 write support is
-   retired rather than kept as an option — two writable formats means two
-   formats to keep correct, and there is no reason to author new v1 files.
-   **This is the step that freezes the format**, because it is the first moment
-   a user holds a v2 container. Everything in this document is revisable until
-   it happens and none of it is afterwards, which is why the slot amendment had
-   to land before it rather than after.
+2. Writing switched to v2. `encryptContainer()` is the application's writer and
+   it produces v2 only; nothing under `src/components`, `crypto-worker.ts` or
+   `crypto-client.ts` reaches `encryptData()`, the v1 writer, any more — two
+   writable formats would mean two formats to keep correct, and there is no
+   reason to author new v1 files. `encryptData()` is not deleted, for a reason
+   that is about testing rather than about the product: `reference/crosstest.py`
+   has to be able to *construct* v1 containers to prove the v1 reader still
+   opens them, and the frozen corpus was generated the same way. Retiring it
+   outright would remove the v1 reader's strongest test.
+
+   **This was the step that froze the format**, because it was the first moment
+   a user held a v2 container. Everything in this document was revisable until
+   it happened and none of it is afterwards, which is why the slot amendment had
+   to land before it rather than after. It did; §11.1 records what that cost.
 3. `reference/keym2.py` implements v2 **from this document alone**, as
    `reference/keym.py` did for v1. That is the check that the specification is
    complete: the reference is the only thing in the project that tests the prose
