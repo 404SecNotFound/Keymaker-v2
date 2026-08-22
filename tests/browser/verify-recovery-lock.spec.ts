@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
+import { appPath, visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
 
 /**
  * Phase 2.3, 2.4 and 2.6 — three features that share one theme: what happens
@@ -102,13 +102,13 @@ test.describe("recovery kit", () => {
     // Fetched over HTTP rather than read off disk: the question is whether a
     // user can actually get them from the deployment, not whether the build
     // produced them.
-    const py = await page.request.get(`${baseURL}/recovery/keym.py`);
+    const py = await page.request.get(`${baseURL}${appPath("/recovery/keym.py")}`);
     expect(py.status(), "keym.py is not being served").toBe(200);
     const pySource = await py.text();
     expect(pySource, "keym.py is not the reference decryptor").toContain("def decrypt");
     expect(pySource.length).toBeGreaterThan(5_000);
 
-    const md = await page.request.get(`${baseURL}/recovery/RECOVERY.md`);
+    const md = await page.request.get(`${baseURL}${appPath("/recovery/RECOVERY.md")}`);
     expect(md.status(), "RECOVERY.md is not being served").toBe(200);
     expect(await md.text()).toContain("keym.py");
   });

@@ -44,11 +44,27 @@ jobs:
       - name: Install browsers
         run: npx playwright install --with-deps chromium firefox webkit
 
+      # Built and served under the same base path as production.
+      #
+      # deploy.yml ships with KEYMAKER_BASE_PATH=/Keymaker-v2, so every asset
+      # in the deployed HTML is referenced absolutely as `/Keymaker-v2/...`.
+      # This job used to build and serve at the origin root, which meant the
+      # whole suite could be green against a layout no user has ever received
+      # — the same blind spot, one level up, as the dev-server gap this
+      # workflow was created for.
+      #
+      # The local default stays root-relative so `npm run build && npm run
+      # test:browser` needs no environment; CI is where the shipped layout
+      # gets exercised.
       - name: Build the production export
         run: npm run build
+        env:
+          KEYMAKER_BASE_PATH: /Keymaker-v2
 
       - name: Run browser tests
         run: npm run test:browser
+        env:
+          KEYMAKER_BASE_PATH: /Keymaker-v2
 
       # Only runs when the job has already failed, so a missing report is not a
       # cost worth absorbing quietly: `error` turns "nothing to upload" into a

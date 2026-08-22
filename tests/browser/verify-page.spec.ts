@@ -1,6 +1,7 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { appPath } from "./helpers";
 
 /**
  * Roadmap 6.3's gate.
@@ -28,7 +29,7 @@ const ROOT = join(process.cwd());
 const OUT = join(ROOT, "out");
 
 /** The URL the footer and the docs point at. Not `/verify` — see the page. */
-const VERIFY_URL = "/verify.html";
+const VERIFY_URL = appPath("/verify.html");
 
 /** The one fenced bash block in the document containing `needle`. */
 function docBlock(needle: string): string {

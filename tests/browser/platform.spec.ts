@@ -2,6 +2,7 @@ import { readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { test, expect } from "@playwright/test";
 import {
+  appPath,
   encryptText,
   selectCrypto,
   useTextMode,
@@ -233,7 +234,9 @@ test("the service worker caches every shipped chunk on a first visit", async ({
     });
   const shipped = walk(join(outDir, "_next", "static"))
     .filter((f) => /\.(js|css)$/.test(f))
-    .map((f) => f.slice(outDir.length));
+    // Prefixed, because the cached entries are URL pathnames and the
+    // deployment mounts everything under the base path.
+    .map((f) => appPath(f.slice(outDir.length)));
 
   expect(shipped.length, "expected the export to have emitted chunks").toBeGreaterThan(0);
 
