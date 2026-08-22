@@ -23,6 +23,7 @@
 import {
   encryptContainer,
   decryptData,
+  secureErase,
   KeymakerError,
   type KeymakerErrorCode,
   type KeymakerOptions,
@@ -211,6 +212,13 @@ export async function encryptViaWorker(
   const w = (await ready()) ? spawn() : null;
   if (!w) {
     lastRunUsedWorker = false;
+    // encryptContainer zeroes the caller's key-file buffer in its `finally` —
+    // that is its documented contract. Anything enrolled *after* it therefore
+    // needs its own copy, taken before the call. Reading `keyFile` afterwards
+    // yields zeros, the slot key derives from the wrong material, and the
+    // enrolment fails with "Decryption failed." in the middle of an encryption.
+    const keyFileForSlots =
+      keyFile && (shamir || passkey) ? new Uint8Array(keyFile.slice(0)) : null;
     let out = await encryptContainer(data, password, keyFile, options);
     // §4.7, and the same argument the share fallback makes below: a browser
     // where the Worker failed to start must not quietly produce a container
@@ -219,7 +227,7 @@ export async function encryptViaWorker(
       const { addPasskeySlotKeym2 } = await import("./keym-v2");
       const enrolled = await addPasskeySlotKeym2(
         new Uint8Array(out),
-        { password, keyFile: keyFile ? new Uint8Array(keyFile) : null },
+        { password, keyFile: keyFileForSlots },
         passkey.prfOutput,
         passkey.salt
       );
@@ -228,7 +236,10 @@ export async function encryptViaWorker(
         enrolled.byteOffset + enrolled.byteLength
       ) as ArrayBuffer;
     }
-    if (!shamir) return { data: out };
+    if (!shamir) {
+      secureErase(keyFileForSlots);
+      return { data: out };
+    }
     // The no-worker fallback has to do the same work, or enabling shares would
     // silently produce a container with no share slot on a browser where the
     // Worker failed to start — a backup the heirs cannot open, reported as
@@ -236,17 +247,19 @@ export async function encryptViaWorker(
     const { addShamirSlotKeym2 } = await import("./keym-v2");
     const enrolled = await addShamirSlotKeym2(
       new Uint8Array(out),
-      { password, keyFile: keyFile ? new Uint8Array(keyFile) : null },
+      { password, keyFile: keyFileForSlots },
       shamir.threshold,
       shamir.count
     );
-    return {
+    const result = {
       data: enrolled.container.buffer.slice(
         enrolled.container.byteOffset,
         enrolled.container.byteOffset + enrolled.container.byteLength
       ) as ArrayBuffer,
       shares: enrolled.shares,
     };
+    secureErase(keyFileForSlots);
+    return result;
   }
   lastRunUsedWorker = true;
 

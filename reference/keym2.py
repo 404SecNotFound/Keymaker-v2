@@ -867,7 +867,23 @@ def unwrap_master_key_from_slot(core: CoreHeader, record: bytes, slot: Slot,
     §4.3, one slot's attempt. None means "this slot did not open it", which is
     not yet a failure — the caller tries the next one.
     """
-    slot_key = derive_slot_key(slot, kdf_input)
+    # §4.4/F6: a slot that cannot be used disqualifies itself, never the walk.
+    #
+    # Defence in depth here rather than a live bug. This reader's §6 floor on
+    # memory_kib already rejects the case that broke the TypeScript one — a
+    # slot declaring mem=1 with p=8, each inside §6's independent ranges and
+    # together illegal for Argon2id, which raises inside the KDF. There the
+    # exception escaped the whole slot walk, so six rewritten bytes in slot 0
+    # made a container unopenable through an untouched, valid slot 1.
+    #
+    # Worth noting what that divergence means: the two implementations disagree
+    # about whether such a container is readable at all, and the byte-for-byte
+    # crosstest cannot see it, because it compares containers both sides agree
+    # to write rather than hostile ones neither would.
+    try:
+        slot_key = derive_slot_key(slot, kdf_input)
+    except Exception:
+        return None
     aes_key, chacha_key = wrap_keys(core.cipher_id, slot_key)
     try:
         master = _open(core.cipher_id, aes_key, chacha_key, WRAP_NONCE,
