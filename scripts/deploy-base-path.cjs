@@ -20,7 +20,7 @@
  *
  * ## Why CommonJS
  *
- * playwright.base-path.config.ts consumes it through `require`, the way
+ * playwright.config.ts and the CI workflow consume it, the way
  * next.config.js consumes scripts/verifying-doc.cjs. One implementation, two
  * module systems — see that file for the same reasoning at more length.
  */

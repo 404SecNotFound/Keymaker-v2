@@ -56,15 +56,18 @@ jobs:
       # The local default stays root-relative so `npm run build && npm run
       # test:browser` needs no environment; CI is where the shipped layout
       # gets exercised.
+      # The value comes out of deploy.yml, never a literal repeated here. A
+      # copied literal is a gate that keeps testing /Keymaker-v2 after the
+      # deployment has moved: still green, no longer about the artifact.
+      - name: Take the base path from deploy.yml
+        run: |
+          echo "KEYMAKER_BASE_PATH=$(node -p "require('./scripts/deploy-base-path.cjs').deployBasePath()")" >> "$GITHUB_ENV"
+
       - name: Build the production export
         run: npm run build
-        env:
-          KEYMAKER_BASE_PATH: /Keymaker-v2
 
       - name: Run browser tests
         run: npm run test:browser
-        env:
-          KEYMAKER_BASE_PATH: /Keymaker-v2
 
       # Only runs when the job has already failed, so a missing report is not a
       # cost worth absorbing quietly: `error` turns "nothing to upload" into a
@@ -75,57 +78,6 @@ jobs:
         if: failure()
         with:
           name: playwright-report
-          path: playwright-report/
-          retention-days: 7
-          if-no-files-found: error
-
-  # The layout that actually ships.
-  #
-  # The job above serves `out/` at the origin root. deploy.yml does not publish
-  # that: it builds with KEYMAKER_BASE_PATH, and a Pages project site serves the
-  # result from /<repo>/. Every asset URL, the hand-written <link> tags, the
-  # `new Worker()` path and the service worker's registration and precache list
-  # move with it, and none of that had ever been loaded in a browser.
-  #
-  # Its own job, not another project in the job above, for a mechanical reason:
-  # `output: 'export'` always writes to `out/`, so the two layouts overwrite each
-  # other and cannot be served at the same time.
-  #
-  # Chromium only. What this checks is how the *export* resolves URLs, which is a
-  # property of the emitted bytes rather than of an engine — the matrix above is
-  # what covers engine differences.
-  base-path:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: 22
-          cache: npm
-
-      - run: npm ci
-
-      - name: Install browsers
-        run: npx playwright install --with-deps chromium
-
-      # Takes KEYMAKER_BASE_PATH from deploy.yml rather than repeating it, so a
-      # deployment that moves takes this gate with it instead of leaving it green
-      # and pointed at the old path. See scripts/deploy-base-path.cjs.
-      - name: Build the export the way deploy.yml builds it
-        run: npm run build:base-path
-
-      - name: Run the deployed-layout tests
-        run: npm run test:base-path
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        if: failure()
-        with:
-          name: playwright-report-base-path
           path: playwright-report/
           retention-days: 7
           if-no-files-found: error
