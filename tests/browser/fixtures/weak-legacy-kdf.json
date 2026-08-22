@@ -1,0 +1,24 @@
+{
+  "_comment": [
+    "A KEYM v2 container written with PBKDF2 at 1,000 iterations — far below the",
+    "600,000 this version enforces on encryption. It stands in for a backup made",
+    "before that floor existed.",
+    "",
+    "It cannot be produced by the app or by reference/keym2.py: both refuse to",
+    "WRITE below the floor. Both still READ it, which is the point — §6's bounds",
+    "are write-side by design, because a backup tool that declines to open old",
+    "files has failed at the one job it exists for.",
+    "",
+    "Frozen here rather than generated at test time so the fixture cannot drift",
+    "with the writer, and so the suite needs no Python."
+  ],
+  "armor": "keym2:S0VZTQIAAAABAAAAAAAAAAAsR9KHLGALQ1jwNpP2dcGmIDSskFdO4fAXtCwh5qYS\ngwAAA-gAAAAAJopu5aod70PfL-ImJQnGOoamBggNcLnerMwzx4eoOeOGT3o64EdY\nJ8lRGN_LbKPy6AqPG_TDTi-clskuzjRPwlYll4GMzTCPLT9y5GTGGfX4TglwvIUY\nViqfeFDnP_4unlD_RPT8wDhVsPM0",
+  "password": "correct-horse-battery-staple-9271",
+  "plaintext": "an old backup, made before the floor existed",
+  "kdf": "PBKDF2-HMAC-SHA-256",
+  "iterations": 1000,
+  "cipher": "AES-256-GCM",
+  "writtenBy": "reference/keym2.py with check_write_policy() disabled in a throwaway copy",
+  "verifiedBy": "the unmodified reference/keym2.py decrypts it and reports iterations=1000",
+  "generator": "python3 keym2.py encrypt --kdf pbkdf2 --iterations 1000 --cipher aes --armor"
+}
