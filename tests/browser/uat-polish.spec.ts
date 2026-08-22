@@ -363,22 +363,68 @@ test.describe("U2b — the dice log survives a tab switch", () => {
     ).toHaveValue("64");
   });
 
-  test("the mounted-but-hidden panel stays out of the tab order", async ({ page }) => {
+  /**
+   * The price of forceMount, and the two tests that make sure it is not being
+   * paid.
+   *
+   * The previous single test here selected `[role="tabpanel"][hidden]` and
+   * counted focusable descendants. It could not fail. `forceMount` makes Radix
+   * compute `hidden={!present}` with `present = forceMount || isSelected`, so
+   * the Tools panel is never `[hidden]` unless we say so — which means the
+   * selector skipped the only panel forceMount affects and landed on Decrypt,
+   * which Radix unmounts and which therefore contains nothing. Zero focusables
+   * found, assertion satisfied, nothing examined.
+   *
+   * So: select inactive panels, not hidden ones, and ask the two questions
+   * separately, because the bug had two halves and only one of them is about
+   * focus.
+   */
+  test("an inactive panel takes up no space on the page", async ({ page }) => {
     await page.goto("/");
 
-    // forceMount keeps Tools in the DOM at all times, so the thing it must not
-    // cost is what #27 established: no focusable content behind a hidden panel.
-    const reachable = await page.evaluate(() => {
-      const sel = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
-      return Array.from(document.querySelectorAll('[role="tabpanel"][hidden]'))
-        .flatMap((p) => Array.from(p.querySelectorAll(sel)))
-        .filter((el) => !(el as HTMLElement).closest("[inert]")).length;
-    });
+    // The half that was visible to everyone and noticed by nobody: the Tools
+    // panel rendered 566x820 in the document flow, directly under the Encrypt
+    // button, dice calculator and all.
+    const boxes = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('[role="tabpanel"][data-state="inactive"]')).map((p) => {
+        const r = p.getBoundingClientRect();
+        return { id: p.id, w: Math.round(r.width), h: Math.round(r.height) };
+      })
+    );
+
+    expect(boxes.length, "no inactive panel to check — has the tab set changed?").toBeGreaterThan(0);
+    expect(
+      boxes.filter((b) => b.w > 0 || b.h > 0),
+      "an unselected tab panel is being rendered into the page"
+    ).toEqual([]);
+  });
+
+  test("an inactive panel stays out of the tab order", async ({ page }) => {
+    await page.goto("/");
+
+    // Asked by pressing Tab rather than by reading the DOM. A mounted panel's
+    // controls still match every "focusable" selector while `display: none`
+    // makes them unreachable, so counting matches would answer a question
+    // nobody has — whether the elements exist, which they must, because the
+    // dice tally lives in them. What matters is where focus can get to.
+    await page.locator("body").click({ position: { x: 2, y: 2 } });
+
+    const landed: string[] = [];
+    for (let i = 0; i < 60; i++) {
+      await page.keyboard.press("Tab");
+      const inside = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        const panel = el?.closest('[role="tabpanel"][data-state="inactive"]');
+        if (!panel) return null;
+        return `${panel.id} -> ${el!.tagName}${el!.textContent ? ` "${el!.textContent.trim().slice(0, 30)}"` : ""}`;
+      });
+      if (inside) landed.push(inside);
+    }
 
     expect(
-      reachable,
-      "forceMount put a hidden panel's controls back into the tab order"
-    ).toBe(0);
+      [...new Set(landed)],
+      "Tab reached a control inside an unselected tab panel"
+    ).toEqual([]);
   });
 });
 

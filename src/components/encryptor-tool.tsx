@@ -3656,16 +3656,34 @@ export function EncryptorTool() {
             {/*
               U2b. Radix unmounts an inactive tab panel, so switching away from
               Tools destroyed the dice roll log — a tally someone had physically
-              rolled, gone because they glanced at the Encrypt tab.
+              rolled, gone because they glanced at the Encrypt tab. forceMount
+              keeps it mounted, and the count survives.
 
-              forceMount keeps it in the DOM; Radix still applies `hidden` while
-              the tab is unselected, so it stays out of the accessibility tree
-              and the tab order. Only this panel gets it. Encrypt and Decrypt
-              deliberately reset on a mode change, and mounting both permanently
-              would keep two sets of secret-bearing fields alive at once for no
-              benefit.
+              `hidden` has to be supplied here, though, and the reason is worth
+              spelling out because the opposite is the natural assumption.
+              Radix computes `hidden={!present}` with `present = forceMount ||
+              isSelected`, so forceMount does not merely keep the panel mounted
+              — it pins `hidden` to false for the panel's whole life. The
+              inactive Tools panel was therefore rendered, 820px tall, in the
+              document flow directly under the Encrypt button, with five
+              controls a keyboard user could Tab into.
+
+              Passing it explicitly works because Radix spreads the caller's
+              props *after* its own `hidden`, so this wins. Same reason
+              tabIndex={-1} above takes effect over the `tabIndex: 0` Radix
+              sets.
+
+              Only this panel gets forceMount. Encrypt and Decrypt deliberately
+              reset on a mode change, and mounting both permanently would keep
+              two sets of secret-bearing fields alive at once for no benefit.
             */}
-            <TabsContent value="tools" className="mt-0" tabIndex={-1} forceMount>
+            <TabsContent
+              value="tools"
+              className="mt-0"
+              tabIndex={-1}
+              forceMount
+              hidden={mode !== "tools"}
+            >
               <DiceEntropyTool />
             </TabsContent>
           </section>
