@@ -1774,9 +1774,23 @@ export function EncryptorTool() {
   const handleCopy = useCallback((textToCopy: string) => {
     if (!textToCopy) return;
     navigator.clipboard.writeText(textToCopy).then(() => {
+      // Says what it can do, not what the user wants to hear.
+      //
+      // The timer overwrites the *current* clipboard entry, and that is the
+      // whole of what a web page is able to reach. Windows Clipboard History
+      // (Win+V), macOS clipboard managers, Gboard's history and cloud
+      // clipboard sync all keep their own copy, and none of them is
+      // addressable — or even detectable — from JavaScript. The previous
+      // wording promised the secret would be "overwritten in 60 seconds", full
+      // stop, which for anyone with history enabled is a promise the platform
+      // breaks: one Win+V and one scroll recovers a seed phrase from a machine
+      // its owner had been told was clean.
       toast({
         title: "Copied to clipboard",
-        description: `It will be overwritten in ${CLIPBOARD_CLEAR_SECONDS} seconds — including anything you copy in the meantime.`,
+        description:
+          `This entry is overwritten in ${CLIPBOARD_CLEAR_SECONDS} seconds. If your ` +
+          `system keeps clipboard history — Windows Win+V, a clipboard manager, ` +
+          `phone keyboard history — it keeps its own copy, and no website can clear that.`,
       });
       setClipboardDeadline(Date.now() + CLIPBOARD_CLEAR_SECONDS * 1000);
     }).catch(() => {

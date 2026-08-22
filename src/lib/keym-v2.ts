@@ -976,7 +976,33 @@ export async function encryptKeym2(
   crypto.getRandomValues(salt);
   const masterKey = new Uint8Array(MASTER_KEY_LEN);
   crypto.getRandomValues(masterKey);
-  return encryptKeym2WithExplicitSecrets(plaintext, password, keyFile, options, salt, masterKey);
+  try {
+    return await encryptKeym2WithExplicitSecrets(
+      plaintext,
+      password,
+      keyFile,
+      options,
+      salt,
+      masterKey
+    );
+  } finally {
+    // This key opens every chunk in the container, and until now it was the
+    // one secret the write path left behind: addShamirSlotKeym2,
+    // addPasskeySlotKeym2 and decryptKeym2 all erase theirs, and encryption —
+    // the path every container goes through — did not.
+    //
+    // Erased here rather than inside encryptKeym2WithExplicitSecrets because
+    // ownership differs. That function takes the salt and master key from its
+    // caller so conformance tests can pin exact bytes; erasing a buffer it was
+    // lent would be a function destroying an argument it does not own. This
+    // one generated the key two lines up, so it is the one that may destroy
+    // it.
+    //
+    // `await` above is load-bearing: returning the promise directly would run
+    // this `finally` before the encryption it is protecting had finished with
+    // the key.
+    secureErase(masterKey);
+  }
 }
 
 /**

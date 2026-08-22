@@ -381,7 +381,7 @@ None of the three protects a compromised device. That is the next section.
 | Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
 | Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
-| Clipboard is cleared | **Best-effort.** The browser may refuse the write. |
+| Clipboard is cleared | **Best-effort, and only the current entry.** The browser may refuse the write. More importantly, clipboard *history* — Windows Win+V, a clipboard manager, phone keyboard history, cloud clipboard sync — keeps its own copy that no website can reach or even detect. If you copy a seed phrase on a machine with history enabled, treat it as still there. |
 
 ### What this does not protect against
 
