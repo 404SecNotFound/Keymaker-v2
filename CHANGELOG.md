@@ -9,10 +9,30 @@
   ordered sequence, and `npm run test:wordlist` re-derives EFF's own file
   checksum from the shipped array, offline, in CI. Closes the enhancement left
   open under KM-02.
-- **`docs/FORMAT-V2-DESIGN.md`** — the proposed KEYM v2 container. Design only:
-  no code reads or writes it, and KEYM v1 is unchanged and stays readable.
+- **`docs/FORMAT-V2-DESIGN.md`** — the KEYM v2 container, specified before it
+  was built. Written first, implemented twice from the document alone (the
+  TypeScript in `src/lib/keym-v2.ts` and `reference/keym2.py`), and since
+  Phase 3 it is the format the app writes. KEYM v1 is unchanged and stays
+  readable: the version byte dispatches, and the frozen fixtures prove it.
 
 ### Changed
+- **The reproducibility claim now matches what is checked.** The gate built
+  twice on one runner, which answers "is the build a function of its source"
+  and not "does *my* machine reproduce your bytes" — the question a verifier is
+  actually asking. `verify:reproducible` now varies the clock, the locale and
+  `HOME` between its two builds, and a new `reproducible-elsewhere` matrix
+  rebuilds the same commit on separate runners under a different checkout path
+  and a different Node major, comparing manifests. `docs/VERIFYING.md` states
+  what each gate covers, and says plainly that a different OS or CPU
+  architecture is not among it.
+- **The deployed layout is tested.** The browser suite serves `out/` at the
+  origin root; GitHub Pages serves it from `/Keymaker-v2/`, which is a different
+  set of asset URLs and was never loaded in a browser. `npm run test:base-path`
+  builds the export the way `deploy.yml` builds it and checks that no URL the
+  page declares or requests escapes the prefix, that the crypto worker really
+  loads (a 404 there silently moves derivation onto the main thread rather than
+  failing), and that the service worker registers in scope. The base path is
+  read out of the workflow, so the gate follows the deployment.
 - **Service-worker updates now wait for the user.** A new version installs and
   stops; the page offers a reload and only the user's click promotes it.
   Previously `skipWaiting()` plus `clients.claim()` replaced the running
@@ -38,6 +58,14 @@
   evict at any time. Now 17 of 17, with a browser test that counts what the
   worker itself holds.
 - Screenshots in the README showed a password row that no longer exists.
+- **Documentation still called KEYM v2 a proposal.** `docs/FORMAT-V2-DESIGN.md`
+  was titled "Design Proposal" and opened by saying nothing in `src/` writes the
+  format — while the app writes it, the footer says so, and the paper vault
+  prints that document's path as the specification. It is now titled and
+  written as the normative specification it has been since Phase 3, with §9
+  recording that the format is frozen. `docs/FORMAT.md` said the same thing and
+  no longer does. The file keeps its `-DESIGN` name deliberately: printed paper
+  vaults and self-extracting pages already cite that path.
   `scripts/capture-screenshots.mjs` regenerates them from the production
   export, so the next UI change is cheap to reflect.
 
