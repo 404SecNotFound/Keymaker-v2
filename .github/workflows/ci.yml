@@ -108,3 +108,118 @@ jobs:
         run: npm run verify:reproducible
         env:
           KEYMAKER_BASE_PATH: /Keymaker-v2
+
+  # Does a *different machine* reproduce the published bytes?
+  #
+  # The job above builds twice on one runner. That answers "is the build a
+  # function of its source" and catches the `Date.now()` class immediately, but
+  # it is not the question anyone verifying a deployment is asking. They are
+  # asking whether *their* machine produces what was published, and every
+  # variable their machine would change — the OS image, the CPU, the Node
+  # version, the absolute path of the checkout — is held fixed by running both
+  # builds in the same container.
+  #
+  # Each leg here is a separate runner, so "a different machine" is free. The
+  # two things varied on purpose are the ones a verifier is most likely to
+  # differ in:
+  #
+  #  - **the checkout path**, because an absolute path that leaks into a bundle
+  #    or a source map is the classic way a build stops being portable, and it
+  #    is invisible to anyone who only ever builds in one directory;
+  #  - **the Node major**, because README.md tells people 22.22.2 *or newer* is
+  #    supported, and a verifier on a newer major who gets different bytes has
+  #    been told to expect a match.
+  #
+  # Not varied: OS and CPU architecture. Both cost real runner time, and neither
+  # is claimed — docs/VERIFYING.md states the boundary rather than leaving a
+  # reader to assume it is wider than this.
+  #
+  # `fail-fast: false` so a difference is attributed rather than merely
+  # detected: which leg diverged is most of the diagnosis.
+  reproducible-elsewhere:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: node22
+            node: 22
+            dir: keymaker
+          - id: node22-longer-checkout-path
+            node: 22
+            dir: a-checkout-directory-named-nothing-like-the-other-one
+          - id: node24
+            node: 24
+            dir: keymaker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          path: ${{ matrix.dir }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.dir }}/package-lock.json
+
+      - run: npm ci
+        working-directory: ${{ matrix.dir }}
+
+      # The deploy layout, because that is the artifact whose manifest gets
+      # signed and published. The build id is pinned to the commit for the same
+      # reason verify-reproducible.mjs pins it: a PR checkout is a merge commit
+      # that does not exist upstream, and letting each leg resolve it from git
+      # would be comparing git rather than the build.
+      - name: Build
+        run: npm run build
+        working-directory: ${{ matrix.dir }}
+        env:
+          KEYMAKER_BASE_PATH: /Keymaker-v2
+          KEYMAKER_BUILD_ID: ${{ github.sha }}
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sums-${{ matrix.id }}
+          path: ${{ matrix.dir }}/out/SHA256SUMS
+          retention-days: 1
+          if-no-files-found: error
+
+  reproducible-elsewhere-compare:
+    needs: reproducible-elsewhere
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sums-*
+          path: sums
+
+      # SHA256SUMS covers every file in the export, so comparing the manifests
+      # compares the whole artifact — and a difference names the file rather
+      # than just asserting one exists.
+      - name: Every runner produced the same manifest
+        run: |
+          set -u
+          shopt -s nullglob
+          manifests=(sums/*/SHA256SUMS)
+          if [ "${#manifests[@]}" -lt 2 ]; then
+            echo "::error::expected at least 2 manifests to compare, found ${#manifests[@]}."
+            echo "A comparison of one manifest against nothing would pass while proving nothing."
+            exit 1
+          fi
+          reference="${manifests[0]}"
+          echo "comparing ${#manifests[@]} manifests against $reference"
+          status=0
+          for manifest in "${manifests[@]:1}"; do
+            if diff -u "$reference" "$manifest"; then
+              echo "  ok: $manifest"
+            else
+              echo "::error::$manifest differs from $reference — the same commit built to different bytes on a different runner, so the published artifact cannot be reproduced by rebuilding it."
+              status=1
+            fi
+          done
+          exit $status

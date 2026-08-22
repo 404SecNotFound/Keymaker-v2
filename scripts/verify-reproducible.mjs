@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * Build twice and prove the output is identical.
+ * Build twice, under two deliberately different environments, and prove the
+ * output is identical.
  *
  * The signed manifest makes a promise on the project's behalf: check out this
  * commit, rebuild, and you get the same bytes that were deployed. That promise
@@ -14,9 +15,24 @@
  * was the sole reason two builds of the same commit differed. See
  * next.config.js.
  *
- * So this runs the real build twice, into two directories, and compares every
- * file. It is slow — two full builds — and it belongs in CI rather than in the
- * inner loop, which is why it is a separate script rather than part of `build`.
+ * ## What this proves, and what it does not
+ *
+ * Two builds on one runner answer "is the build a function of its source" —
+ * they catch the `Date.now()` class immediately and cheaply. They do **not**
+ * answer the question a verifier actually asks, which is "does *my* machine
+ * produce the bytes you published". Same OS, same CPU, same Node, same paths:
+ * every variable a stranger's machine would change is held fixed.
+ *
+ * So the second build is run under a different clock, a different locale and a
+ * different HOME, which closes the cheapest part of that gap here. The rest —
+ * a different machine, a different checkout path, a different Node major — is
+ * not something a single process can vary honestly, and is enforced instead by
+ * the `reproducible-elsewhere` matrix in .github/workflows/ci.yml, where each
+ * leg is a separate runner. Neither covers a different OS or CPU architecture;
+ * docs/VERIFYING.md says so rather than implying otherwise.
+ *
+ * It is slow — two full builds — and it belongs in CI rather than in the inner
+ * loop, which is why it is a separate script rather than part of `build`.
  */
 import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
@@ -47,25 +63,58 @@ function digestTree(dir) {
   return map;
 }
 
-function build(label) {
-  console.log(`reproducible: building (${label})...`);
+/**
+ * The environment the second build runs under.
+ *
+ * Every one of these is something a stranger's machine would differ in, and
+ * something that has broken reproducibility in other projects: a timezone that
+ * reaches a date formatter, a locale that reaches a sort, a HOME that moves a
+ * tool cache. Kiritimati is UTC+14, the furthest offset there is, so for
+ * fourteen hours out of every twenty-four a date rendered under it falls on a
+ * different calendar day from the same instant rendered under UTC — which is
+ * what makes it a better probe than an offset that only shifts the hour.
+ *
+ * `LC_ALL: 'C'` rather than a named language, because a locale that is not
+ * installed is silently ignored — the variable is set, nothing changes, and the
+ * run reports success having varied nothing. `C` is guaranteed to exist.
+ */
+function alternateEnvironment() {
+  return {
+    TZ: 'Pacific/Kiritimati',
+    LC_ALL: 'C',
+    LANG: 'C',
+    HOME: mkdtempSync(join(tmpdir(), 'keymaker-repro-home-')),
+  };
+}
+
+function build(label, overrides = {}) {
+  const varied = Object.keys(overrides);
+  console.log(
+    `reproducible: building (${label})${varied.length ? ` with ${varied.join(', ')} changed` : ''}...`
+  );
   rmSync(OUT, { recursive: true, force: true });
   rmSync(join(ROOT, '.next'), { recursive: true, force: true });
   execFileSync('npm', ['run', 'build'], {
     cwd: ROOT,
     stdio: ['ignore', 'ignore', 'inherit'],
-    // Pin the build id explicitly. In CI the checkout may be a detached HEAD or
-    // a merge commit that does not exist upstream, and letting the two runs
-    // resolve it independently would be testing git rather than the build.
-    env: { ...process.env, KEYMAKER_BUILD_ID: process.env.KEYMAKER_BUILD_ID || 'reproducibility-check' },
+    env: {
+      ...process.env,
+      // Pin the build id explicitly. In CI the checkout may be a detached HEAD
+      // or a merge commit that does not exist upstream, and letting the two
+      // runs resolve it independently would be testing git rather than the
+      // build.
+      KEYMAKER_BUILD_ID: process.env.KEYMAKER_BUILD_ID || 'reproducibility-check',
+      ...overrides,
+    },
   });
   const snapshot = mkdtempSync(join(tmpdir(), `keymaker-repro-${label}-`));
   cpSync(OUT, snapshot, { recursive: true });
   return snapshot;
 }
 
+const alternate = alternateEnvironment();
 const first = build('1 of 2');
-const second = build('2 of 2');
+const second = build('2 of 2', alternate);
 
 try {
   const a = digestTree(first);
@@ -91,8 +140,14 @@ try {
     process.exit(1);
   }
 
-  console.log(`\nreproducible: OK — ${a.size} files identical across two clean builds.`);
+  console.log(
+    `\nreproducible: OK — ${a.size} files identical across two clean builds, the second ` +
+      `under TZ=${alternate.TZ}, LC_ALL=${alternate.LC_ALL} and a different HOME.\n` +
+      'This is same-machine determinism. Whether a *different* machine reproduces these\n' +
+      'bytes is the reproducible-elsewhere matrix in ci.yml, not this script.'
+  );
 } finally {
   rmSync(first, { recursive: true, force: true });
   rmSync(second, { recursive: true, force: true });
+  rmSync(alternate.HOME, { recursive: true, force: true });
 }
