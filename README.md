@@ -377,7 +377,7 @@ None of the three protects a compromised device. That is the next section.
 | Property | Strength of guarantee |
 |---|---|
 | Data never leaves the device | **Auditable, not structural.** There is no telemetry and no code that transmits anything; the build is reproducible and the manifest signed, so you can confirm that rather than trust it. The CSP raises the cost — `connect-src 'none'` blocks `fetch`, XHR, WebSocket, EventSource and `sendBeacon` — but it does not make transmission impossible: `img-src 'self'` alone lets a URL carry data off the page, and a `<meta>` policy does not reach Web Workers at all. [What the policy does and does not do](docs/HOW-IT-WORKS.md#what-the-csp-does-not-do). |
-| Header cannot be downgraded | **Cryptographic.** The full header is AAD on every AEAD layer. |
+| Header cannot be downgraded | **Cryptographic, with one stated exception.** Every AEAD layer authenticates the header: the payload against the 8-byte core header, each slot's wrap against that plus its own 48-byte prefix. `slot_count` is deliberately in neither, so that a slot table stays editable by someone holding exactly one slot's secret — see [§5.3](docs/FORMAT-V2-DESIGN.md). Everything else is covered. |
 | Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
 | Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
@@ -417,6 +417,78 @@ a way of not saying anything:
 For the highest-value secrets, run a
 [verified download](#three-ways-to-run-this-and-what-each-one-costs) offline, on
 a machine that never rejoins a network.
+
+### Quantum computers
+
+The short version: **a quantum computer does not give an attacker a way into a
+Keymaker container that they do not already have.** The long version is worth
+writing down, because "post-quantum" is now a marketing word and the honest
+answer here is unusually simple.
+
+**There is no public-key cryptography in a container.** Not weakened, not
+hybrid — absent. The whole path is:
+
+| Step | Primitive |
+|---|---|
+| Passphrase → key | Argon2id, or PBKDF2-HMAC-SHA-256 |
+| Slot secret → key | HKDF-SHA-256 |
+| Key wrapping, payload | AES-256-GCM, ChaCha20-Poly1305, or both chained |
+
+No RSA, no elliptic curves, no Diffie-Hellman, no key exchange, no signature.
+There is nothing in the file whose security rests on factoring or discrete
+logarithms, which is the entire class of thing Shor's algorithm breaks. This is
+enforced, not merely true today: `tests/browser/no-asymmetric-crypto.spec.ts`
+fails the build if any of those primitives appears in the container path.
+
+**Harvest-now-decrypt-later does not apply.** That attack works by recording a
+public-key key-exchange today and breaking it once a quantum computer exists,
+which retroactively reveals the session key. There is no key exchange here to
+record. A container recorded today yields the same thing in 2050 that it yields
+now: ciphertext under a key derived from a passphrase.
+
+**Grover's algorithm is the one that does apply, and it is survivable.** It
+gives at most a square-root speedup on brute-force search, which halves an
+effective key length. AES-256 and ChaCha20-Poly1305 therefore retain roughly
+128-bit strength — comfortably sufficient, and the reason NSA's CNSA 2.0 asks
+for AES-256 rather than a new cipher. Nothing in the symmetric layer needs to
+change.
+
+Where Grover does bite is your passphrase, because that is the actual key: a
+square-root speedup on guessing halves its effective entropy. That is not a new
+weakness so much as the existing one, restated — a weak passphrase was always
+the way in, and it stays the way in. It is why the app enforces a floor, ships
+a [CSPRNG passphrase generator](#two-ways-to-get-a-password-you-can-trust) and a
+[dice calculator](#dice-entropy-calculator), and why Argon2id is the default:
+a memory-hard derivation raises the cost of each guess, quantum or not. Running
+Argon2id in superposition over 64 MiB of state is far harder than the bare
+square-root figure suggests, so treat the halving as a conservative bound.
+
+**SHA-256, not SHA-384.** CNSA 2.0 specifies SHA-384, and this uses SHA-256 in
+HKDF and PBKDF2. The relevant property here is pseudorandomness of a 256-bit
+output, not collision resistance of the hash, so the binding constraint remains
+the 256-bit key rather than the digest. Stated because someone arriving from
+CNSA 2.0 will look for it.
+
+**Quantum key distribution is irrelevant here, and that is not a dodge.** QKD
+secures a key exchanged between two endpoints over a dedicated link. Keymaker
+has no peer, no session and no channel — `connect-src 'none'`, a static export,
+and a file you carry away yourself. There is nothing for QKD to secure.
+
+**What would change this.** If Keymaker ever gains encrypt-to-a-public-key
+recipients — an age-style "encrypt this for someone else's key" — that *would*
+introduce an asymmetric layer, and it would need to be hybrid
+(X25519 + ML-KEM) from the first release, because it is exactly the
+harvest-now-decrypt-later shape that does not exist today. No such feature is
+planned here; this is written down so the condition is on record rather than
+rediscovered later.
+
+One thing genuinely is quantum-vulnerable, and it is not the container:
+**release signatures**. Sigstore signs `SHA256SUMS` with ECDSA. A quantum
+computer could forge such a signature — but only going forward, against builds
+not yet published; it cannot retroactively change what a signature you already
+checked was signed over. Signature migration carries no harvest-now risk, which
+is why the industry treats it as less urgent than key exchange, and why it is
+noted here rather than acted on.
 
 Report vulnerabilities via the contact in [SECURITY.md](SECURITY.md).
 
