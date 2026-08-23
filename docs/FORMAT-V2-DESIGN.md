@@ -347,6 +347,59 @@ it entirely would work too, but a fixed shape means one code path rather than
 two, and the "no key file" case is then explicitly encoded rather than implied
 by absence.
 
+#### 4.1.1 `NFC_UTF8`, and two vectors for a third implementation
+
+`NFC_UTF8(password)` is Unicode Normalization Form C, then UTF-8. Not a
+detail: the same password reaches this function spelled differently through no
+fault of the person typing it. macOS hands out NFD from its filesystem, most
+Linux and Windows input methods produce NFC, and a phone keyboard and a
+password manager can disagree about the same accented character. A backup set
+on one machine has to open on another.
+
+NFC is four distinct mechanisms, and an implementation can get some and miss
+others. A composer built from the Latin-1 precomposed table handles the first
+and fails the rest:
+
+| mechanism | example |
+|---|---|
+| canonical composition | `e` + U+0301 → U+00E9 |
+| canonical **ordering** | `q` U+0307 U+0323 → `q` U+0323 U+0307 (combining class, not input order) |
+| Hangul composition | U+1100 U+1161 U+11A8 → U+AC01 (algorithmic, not table-driven) |
+| singleton mapping | U+212B ANGSTROM SIGN → U+00C5 |
+
+All four are exercised across the language boundary by
+`reference/crosstest2.py`, which asserts that a container written from the
+decomposed spelling is byte-identical to one written from the composed
+spelling.
+
+A third implementation can check itself without running any of that. With
+password `"cafe\u0301 u\u0308"` — that is `cafe`, COMBINING ACUTE, space, `u`,
+COMBINING DIAERESIS — and **no key file**:
+
+```
+kdf_input = 000000156b65796d616b65722e76322e6b64662d696e707574
+            00000008636166c3a920c3bc
+            00000000
+```
+
+The middle field is 8 bytes, not 10: `caf` `é`(2) ` ` `ü`(2). An
+implementation that skipped normalization produces a 10-byte field there and a
+different key from what its user would call the same password.
+
+**The empty key file is not the absent key file.** With password `"pw"` and a
+present, zero-length key file, the third field is `LP(SHA-256("keymaker.v2.keyfile"))`
+— 32 bytes — where the absent case is `LP("")`:
+
+```
+present but empty : ...00000002707700000020527d3a283a4235b357fe4952a4478aa0015cb8f475523f1f2bf8d637ae7faa97
+absent            : ...00000002707700000000
+```
+
+Both are legitimate inputs and they must not be conflated. "The key file I
+picked is zero bytes" happens — a truncated copy, a sync that created the entry
+before its contents — and it opens a different container from no key file at
+all. `slot_flags` bit 0 is set in the first case and clear in the second.
+
 ### 4.2 Key files are hashed first
 
 `keyfile_digest` is 32 bytes regardless of the key file's size. This is the

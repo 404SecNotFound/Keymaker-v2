@@ -87,12 +87,22 @@ const keyfileHex = flag("keyfile");
 const inFile = flag("in")!;
 const outFile = flag("out")!;
 
-const keyFile = keyfileHex
-  ? (() => {
-      const b = Buffer.from(keyfileHex, "hex");
-      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
-    })()
-  : null;
+// `undefined` and `""` are different answers, and the truthiness test that used
+// to be here collapsed them. §4.1 encodes "no key file" as LP("") and a
+// present-but-empty one as LP(sha256(b"")) — 32 bytes — precisely so the two
+// cannot collide, and this harness could not express the second case at all.
+// So the one property §4.1 goes out of its way to provide was the one property
+// crosstest2 structurally could not check.
+//
+// `--keyfile` absent  -> null, no key file.
+// `--keyfile ""`      -> a present key file that happens to be zero bytes.
+const keyFile =
+  keyfileHex === undefined
+    ? null
+    : (() => {
+        const b = Buffer.from(keyfileHex, "hex");
+        return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
+      })();
 
 // `prfsalt` is the one command with no container: it derives 32 bytes from a
 // slot salt and prints them. Everything else reads its input here.

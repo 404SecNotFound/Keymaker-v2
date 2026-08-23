@@ -278,7 +278,9 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
   edit made *without* any secret is detected and reported. v1 and v2 containers
   still open, unchanged
 - NFC password normalization, so a password typed in a different Unicode form on
-  macOS still decrypts elsewhere
+  macOS still decrypts elsewhere — pinned across both implementations by
+  conformance vectors covering all four of NFC's mechanisms, and published in
+  [§4.1.1](docs/FORMAT-V2-DESIGN.md) so a third implementation can check itself
 - Optional key file, usable alongside a password; key files can be generated in-app
   from `crypto.getRandomValues`
 - Rejection-sampled generators with no modulo bias: a 32-character random
