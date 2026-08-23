@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { readFileSync } from "node:fs";
-import { visible } from "./helpers";
+import { visible, appPath } from "./helpers";
 
 /**
  * Roadmap 6.1 — the app version is stated once and read everywhere.
@@ -60,12 +60,35 @@ test.describe("version coherence", () => {
     // Conflating them is the confusion 6.1 exists to prevent, and it would be
     // invisible in a test that only checked the app version was present.
     const footer = visible(page.getByText(/^Keymaker v/));
-    await expect(footer).toContainText("writes KEYM v2");
+
+    // Not pinned to a number. The footer renders `KEYM2_VERSION`, so pinning a
+    // literal here would only re-record whatever the app happens to write —
+    // which is how the previous version of this assertion sat green while the
+    // footer said v2 and the app wrote v3. What is worth pinning is the shape:
+    // two versions, stated separately, one of them the container format's.
+    const written = (await footer.textContent())?.match(/writes KEYM v(\d+)/);
+    expect(
+      written,
+      "the footer no longer names the container format it writes, so someone " +
+        "whose file will not open cannot tell which number is which"
+    ).not.toBeNull();
     expect(
       pkg.version.startsWith("2."),
       `app version is ${pkg.version}; if it ever diverges from the format major, ` +
         `that is fine — but the footer must keep saying both, which is what the ` +
         `assertion above pins`
     ).toBe(true);
+
+    // The claim on /verify is a literal, because importing the constant there
+    // would pull the crypto core into the one route that should stay small.
+    // This is what keeps it honest: the page that cannot derive the number is
+    // checked against the page that does.
+    await page.goto(appPath("/verify.html"));
+    await expect(
+      page.getByTestId("verify-format"),
+      "the verify page and the footer disagree about which container format " +
+        "this build writes, which is the drift that let the footer say v2 for " +
+        "as long as it did"
+    ).toHaveText(`KEYM v${written?.[1]}`);
   });
 });

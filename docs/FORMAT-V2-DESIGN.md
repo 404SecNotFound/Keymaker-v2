@@ -4,8 +4,10 @@
 KEYM v2 container, and the application writes it. `encryptContainer()` in
 `src/lib/keymaker-crypto.ts` is the writer every UI path reaches, and it
 dispatches to `encryptKeym2()`; nothing under `src/components`,
-`crypto-worker.ts` or `crypto-client.ts` calls the v1 writer any more. The
-footer says `writes KEYM v2` and `/verify` reports the same. `reference/keym2.py`
+`crypto-worker.ts` or `crypto-client.ts` calls the v1 writer any more. The footer and `/verify` both name the format the build writes, which is
+now **v3** — see [FORMAT-V3-DESIGN.md](FORMAT-V3-DESIGN.md). Everything below
+still describes v2, and v3 is written as a delta on it, so this document
+remains the base both implementations are read against. `reference/keym2.py`
 implements this document independently — written from it alone, before any
 TypeScript existed, which is the order that makes the *specification* the thing
 under test. It found five gaps; see §11.
