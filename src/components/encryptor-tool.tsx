@@ -5,7 +5,7 @@ import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, typ
 import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
 import { SelfExtractExport } from "@/components/self-extract-export";
-import { armorKeym2 } from "@/lib/keym-v2";
+import { armorKeym2, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart } from "@/lib/keym-v2-paper";
 import {
@@ -3958,7 +3958,15 @@ export function EncryptorTool() {
               {!IS_RELEASE_BUILD && (
                 <span className="text-muted-foreground/60">-dev</span>
               )}
-              <span className="text-muted-foreground/60"> · writes KEYM v2</span>
+              {/* Read from the constant, not typed out. This said "writes KEYM
+                  v2" for as long as the app had been writing v3 — a footer
+                  whose whole purpose is to tell someone which format they are
+                  holding, telling them the wrong one. A literal here is a
+                  claim that has to be remembered; a constant is one that
+                  cannot go stale. */}
+              <span className="text-muted-foreground/60">
+                {` · writes KEYM v${KEYM2_VERSION}`}
+              </span>
             </span>
           </div>
         </div>

@@ -113,7 +113,14 @@ export default function VerifyBuild() {
         </div>
         <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-baseline sm:gap-4">
           <dt className="w-40 shrink-0 text-[13px] text-muted-foreground">Container format</dt>
-          <dd className="font-mono text-[13px]">KEYM v2</dd>
+          {/* Written out rather than read from KEYM2_VERSION, and the test is
+              why that is safe. Importing the constant would pull the whole
+              crypto core into this route's bundle, and this is the one page
+              whose job is to be small enough to read. version.spec.ts asserts
+              this string against the footer's, which *is* derived from the
+              constant — so the two cannot drift, which is exactly how this one
+              came to say v2 while the app wrote v3. */}
+          <dd className="font-mono text-[13px]" data-testid="verify-format">KEYM v3</dd>
         </div>
         <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-baseline sm:gap-4">
           <dt className="w-40 shrink-0 text-[13px] text-muted-foreground">Source commit</dt>

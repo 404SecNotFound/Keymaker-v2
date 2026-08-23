@@ -605,7 +605,10 @@ version string maintained in two places drifts, and the one place it must not
 drift is the line a user quotes in a bug report.
 
 **Shipped.** `next.config.js` injects `KEYMAKER_APP_VERSION` from `package.json`;
-the footer reads `Keymaker v2.0.0 · writes KEYM v2`. The fallback is the literal
+the footer reads `Keymaker v2.0.0 · writes KEYM v3`, with the format half read
+from `KEYM2_VERSION` rather than typed out — it said `v2` for as long as the
+app had been writing v3, which is the same drift this item exists to stop,
+one field over. The fallback is the literal
 `unknown` rather than a plausible number, so a broken injection looks broken.
 Version went to 2.0.0 — the app no longer *writes* KEYM v1, which is breaking
 for anything consuming its output; existing v1 containers still decrypt.
