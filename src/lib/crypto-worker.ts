@@ -284,5 +284,19 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       message: error instanceof Error ? error.message : "Processing failed. Please try again.",
     };
     ctx.postMessage(response);
+  } finally {
+    // A PRF output is a 32-byte secret that unwraps a slot on its own — the
+    // same asset class as the master key, and worth as much to anyone who
+    // finds it in a heap snapshot. Unlike the plaintext it is
+    // structured-cloned into this realm rather than transferred, because the
+    // page still needs its own copy; that makes this copy the worker's, and
+    // this the only code that can destroy it.
+    //
+    // In the `finally` rather than after each use because the branches above
+    // return from several places and the `catch` turns a throw into a
+    // response — a trailing call would be skipped on most exits, including
+    // every failed unlock, which is the case an attacker gets to repeat.
+    if (req.op === "encrypt") secureErase(req.passkey?.prfOutput);
+    if (req.op === "decrypt") secureErase(req.prfOutput);
   }
 });

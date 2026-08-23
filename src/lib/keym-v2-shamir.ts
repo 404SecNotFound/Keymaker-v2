@@ -24,7 +24,7 @@
  * the attack in both directions.
  */
 
-import { KeymakerError } from "./keymaker-crypto";
+import { KeymakerError, secureErase } from "./keymaker-crypto";
 
 /** §4.6, the share record: set id, threshold, index, value, checksum. */
 export const SHARE_SET_ID_LEN = 4;
@@ -399,20 +399,31 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
   if (texts.length === 0) reject();
   const shares = await Promise.all(texts.map((t) => decodeShare(t)));
 
-  const thresholds = new Set(shares.map((s) => s.threshold));
-  if (thresholds.size !== 1) reject();
-  const k = shares[0]?.threshold as number;
+  // Everything from here is inside the `finally`, because a decoded share value
+  // is key material of the same class as the secret it reconstructs — k of them
+  // *are* the secret — and every exit from this function is a `reject()` from
+  // one of the set-level rules below. The caller erases what this returns; the
+  // inputs it was built from are this function's to clean up, and nobody else
+  // holds a reference to them. `shamirCombine` allocates its own output, so
+  // erasing the parts afterwards cannot reach it.
+  try {
+    const thresholds = new Set(shares.map((s) => s.threshold));
+    if (thresholds.size !== 1) reject();
+    const k = shares[0]?.threshold as number;
 
-  const first = shares[0] as Share;
-  if (shares.some((s) => !bytesEqual(s.setId, first.setId))) reject();
-  if (expectedSetId !== undefined && !bytesEqual(first.setId, expectedSetId)) reject();
+    const first = shares[0] as Share;
+    if (shares.some((s) => !bytesEqual(s.setId, first.setId))) reject();
+    if (expectedSetId !== undefined && !bytesEqual(first.setId, expectedSetId)) reject();
 
-  const indices = shares.map((s) => s.index);
-  if (new Set(indices).size !== indices.length) reject();
-  if (shares.length < k) reject();
+    const indices = shares.map((s) => s.index);
+    if (new Set(indices).size !== indices.length) reject();
+    if (shares.length < k) reject();
 
-  const chosen = [...shares].sort((a, b) => a.index - b.index).slice(0, k);
-  return shamirCombine(chosen.map((s) => ({ index: s.index, value: s.value })));
+    const chosen = [...shares].sort((a, b) => a.index - b.index).slice(0, k);
+    return shamirCombine(chosen.map((s) => ({ index: s.index, value: s.value })));
+  } finally {
+    for (const share of shares) secureErase(share.value);
+  }
 }
 
 /** §7 as amended by §4.6 — a share is not a container, and must not be read as one. */
