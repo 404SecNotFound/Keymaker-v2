@@ -1312,9 +1312,19 @@ export async function encryptKeym2WithExplicitSecrets(
     throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
   }
 
+  // `finally`, not a trailing call: `kdfInput` holds the NFC password bytes and
+  // the key-file digest, and `deriveSlotKey` throws on reachable input — an
+  // Argon2id slot at §6's memory ceiling on a device that cannot allocate it,
+  // which the *decrypt* walk was specifically hardened against. On that path
+  // the buffer survived the throw. The unlock walk has always used `catch`
+  // here; the write paths were the inconsistency.
   const kdfInput = await buildKdfInput(password, keyFile);
-  const slotKey = await deriveSlotKey(kdfInput, salt, options.kdf);
-  secureErase(kdfInput);
+  let slotKey: Uint8Array;
+  try {
+    slotKey = await deriveSlotKey(kdfInput, salt, options.kdf);
+  } finally {
+    secureErase(kdfInput);
+  }
 
   let record: Uint8Array;
   try {
@@ -1400,9 +1410,14 @@ export async function addShamirSlotKeym2(
     throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
   }
 
+  // `finally` for the same reason as the passphrase writer above.
   const slotSecret = buildShamirInput(shareSecret);
-  const slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
-  secureErase(slotSecret);
+  let slotKey: Uint8Array;
+  try {
+    slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
+  } finally {
+    secureErase(slotSecret);
+  }
 
   let record: Uint8Array;
   // v3 §5.3. Recomputed here, inside the try, because `master` is erased on the
@@ -1523,9 +1538,14 @@ export async function addPasskeySlotKeym2(
     throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
   }
 
+  // `finally` for the same reason as the passphrase writer above.
   const slotSecret = buildPasskeyInput(prfOutput);
-  const slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
-  secureErase(slotSecret);
+  let slotKey: Uint8Array;
+  try {
+    slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
+  } finally {
+    secureErase(slotSecret);
+  }
 
   let record: Uint8Array;
   // v3 §5.3, as in addShamirSlotKeym2: re-seal the table before `master` goes.

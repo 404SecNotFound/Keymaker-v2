@@ -211,6 +211,31 @@ export async function encryptViaWorker(
   shamir?: { threshold: number; count: number },
   passkey?: { prfOutput: Uint8Array; salt: Uint8Array }
 ): Promise<EncryptOutcome> {
+  try {
+    return await encryptViaWorkerInner(data, password, keyFile, options, shamir, passkey);
+  } finally {
+    // §4.7. The page's own copy of the PRF output, which the worker's copy
+    // (structured-cloned, not transferred) does not cover. Both halves have to
+    // erase or neither is erased: this is a 32-byte secret that unwraps a slot
+    // by itself, and it outlives the operation in whichever heap keeps it.
+    //
+    // Owned here rather than by `addPasskeySlotKeym2`, on the same reasoning
+    // that put the master key's erase in the generator and not in
+    // `encryptKeym2WithExplicitSecrets`: the conformance surface is called
+    // repeatedly with the same fixture and must not consume its argument. The
+    // boundary the secret entered by is the boundary that cleans it up.
+    secureErase(passkey?.prfOutput);
+  }
+}
+
+async function encryptViaWorkerInner(
+  data: ArrayBuffer,
+  password: string,
+  keyFile: ArrayBuffer | null,
+  options: KeymakerOptions,
+  shamir?: { threshold: number; count: number },
+  passkey?: { prfOutput: Uint8Array; salt: Uint8Array }
+): Promise<EncryptOutcome> {
   const w = (await ready()) ? spawn() : null;
   if (!w) {
     lastRunUsedWorker = false;
@@ -325,28 +350,36 @@ export async function decryptViaWorker(
   shares?: string[],
   prfOutput?: Uint8Array
 ): Promise<DecryptOutcome> {
-  const w = (await ready()) ? spawn() : null;
-  if (!w) {
-    lastRunUsedWorker = false;
-    return decryptData(data, password, keyFile, shares, prfOutput);
+  // The unlock counterpart of the erase in `encryptViaWorker`, and the one
+  // that matters more: a failed unlock throws out of here, and failed unlocks
+  // are what someone repeats. Without the `finally` every attempt left another
+  // copy behind.
+  try {
+    const w = (await ready()) ? spawn() : null;
+    if (!w) {
+      lastRunUsedWorker = false;
+      return await decryptData(data, password, keyFile, shares, prfOutput);
+    }
+    lastRunUsedWorker = true;
+
+    const id = nextId++;
+    const transfer: Transferable[] = [data];
+    if (keyFile) transfer.push(keyFile);
+
+    const res = await post<Extract<CryptoResponse, { op: "decrypt"; ok: true }>>(
+      w,
+      { id, op: "decrypt", data, password, keyFile, shares, prfOutput },
+      transfer
+    );
+    return {
+      data: res.data,
+      format: res.format,
+      keyFileUsed: res.keyFileUsed,
+      slotTableAuthentic: res.slotTableAuthentic,
+    };
+  } finally {
+    secureErase(prfOutput);
   }
-  lastRunUsedWorker = true;
-
-  const id = nextId++;
-  const transfer: Transferable[] = [data];
-  if (keyFile) transfer.push(keyFile);
-
-  const res = await post<Extract<CryptoResponse, { op: "decrypt"; ok: true }>>(
-    w,
-    { id, op: "decrypt", data, password, keyFile, shares, prfOutput },
-    transfer
-  );
-  return {
-    data: res.data,
-    format: res.format,
-    keyFileUsed: res.keyFileUsed,
-    slotTableAuthentic: res.slotTableAuthentic,
-  };
 }
 
 /**

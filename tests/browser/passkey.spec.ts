@@ -145,6 +145,81 @@ test.describe("§4.7 passkey slots", () => {
     }
   });
 
+  test("the same passkey opens the same container twice in a row", async ({ page }) => {
+    // The regression guard for erasing the PRF output at the crypto boundary.
+    //
+    // A PRF output is a 32-byte secret that unwraps a slot on its own, so both
+    // the page's copy and the worker's are now zeroed when the operation ends.
+    // Zeroing is not observable from a test — the repo says so where it first
+    // came up, in sensitive-state.spec.ts — but zeroing the wrong buffer, or
+    // one the next operation still needs, is: the unlock reads zeros and
+    // fails, or reads a detached buffer and throws. One unlock cannot tell,
+    // because the first runs before any erase has happened. A second can.
+    const { cdp } = await addVirtualAuthenticator(page);
+    try {
+      await prepareEncrypt(page, true);
+      const container = await encryptAndRead(page, "twice is the test");
+
+      await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+      await useTextMode(page);
+      await visible(page.getByPlaceholder("Enter text to decrypt")).fill(container);
+
+      // A toggle, not a command: after the first unlock it still reads
+      // "Use a password instead", and clicking it again would turn the passkey
+      // path off. Driven to a state for the same reason the Recovery shares
+      // switch is.
+      const passkeyToggle = page.getByRole("button", { name: /^Use a passkey$/i });
+      await visible(passkeyToggle).click();
+
+      for (const attempt of ["first", "second"]) {
+        // Both unlocks produce the same plaintext, so `toHaveValue` alone would
+        // be satisfied on the second attempt by the first attempt's output
+        // still sitting in the box — a broken second unlock would pass. The app
+        // empties the box when an operation starts, so seeing it empty is proof
+        // the work actually re-ran.
+        //
+        // Armed before the click and polled on every frame, because that empty
+        // window is short: these tests use PBKDF2 at test cost, and the whole
+        // round trip is a few hundred milliseconds. Anything sampled after the
+        // click can miss it, which is how the first version of this test failed
+        // in the file and passed on its own.
+        await page.evaluate(() => {
+          const w = window as unknown as { __clearedOnce?: boolean };
+          w.__clearedOnce = false;
+          const tick = () => {
+            // Absent counts as empty: the Result field is only rendered once
+            // there is a result, so before the first unlock there is no
+            // element — and no stale value to mistake for a fresh one either.
+            const box = document.querySelector("#output-text") as HTMLTextAreaElement | null;
+            if (box === null || box.value === "") {
+              w.__clearedOnce = true;
+              return;
+            }
+            requestAnimationFrame(tick);
+          };
+          requestAnimationFrame(tick);
+        });
+
+        await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+
+        await expect(
+          page.locator("#output-text"),
+          `the ${attempt} unlock with the enrolled passkey did not return the plaintext`
+        ).toHaveValue("twice is the test", { timeout: 90_000 });
+
+        expect(
+          await page.evaluate(
+            () => (window as unknown as { __clearedOnce?: boolean }).__clearedOnce === true
+          ),
+          `the ${attempt} unlock never cleared the output box, so this assertion was ` +
+            `reading the previous attempt's result rather than a fresh one`
+        ).toBe(true);
+      }
+    } finally {
+      await cdp.detach();
+    }
+  });
+
   test("the password still opens a container that has a passkey", async ({ page }) => {
     // §4.7's whole premise: the passkey is the convenient path, never the only
     // one. If enrolling cost the owner the way in they already had, the feature
