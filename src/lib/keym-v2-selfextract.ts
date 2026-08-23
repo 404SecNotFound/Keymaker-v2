@@ -176,6 +176,48 @@ export function looksLikeSelfExtract(text: string): boolean {
  * Single quotes and string concatenation throughout, so the whole thing embeds
  * in a template literal without escaping. Escaped source is source nobody reads.
  */
+/**
+ * The policy the exported page carries.
+ *
+ * This file is the artifact with the highest trust requirement in the project
+ * and, until now, the only one that shipped no CSP at all: a single HTML file
+ * an heir opens from `file://`, years from now, on a machine nobody vetted,
+ * to recover a seed phrase. The app's own pages have had `default-src 'none'`
+ * for a long time; the page that outlives the app had nothing.
+ *
+ * `connect-src 'none'` is the directive that earns its place. The decryptor
+ * holds a plaintext seed phrase in a DOM it did not author defensively, and
+ * this is what stops anything on that page — injected through the container,
+ * through a mangled paste, through a future edit — from opening a socket and
+ * sending it somewhere. `default-src 'none'` covers the rest by refusing every
+ * fetch this page has no reason to make.
+ *
+ * The script is pinned by hash rather than 'unsafe-inline' because the page
+ * has exactly one script and we generate it, so there is no reason to allow a
+ * second. SELF_EXTRACT_SCRIPT_SHA256 must equal the sha256 of DECRYPTOR_JS
+ * exactly; a stale value means the browser refuses the only script on the page
+ * and the heir gets a document that renders and cannot decrypt. That is the
+ * worst failure this project has, so it is guarded twice: the browser test
+ * that opens the page and decrypts a real container fails outright, and
+ * `the exported page pins its own script by hash` recomputes the digest and
+ * says so in words.
+ *
+ * style-src keeps 'unsafe-inline' for the one <style> block, for the same
+ * reason the app does: hashing a stylesheet buys nothing when no untrusted
+ * style can reach the document.
+ */
+const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-UCLhT5T6jPD3FKnwVVpIIl4EzbBIKYSeCPzOL+2C+hw=";
+
+const SELF_EXTRACT_CSP = [
+  "default-src 'none'",
+  `script-src '${SELF_EXTRACT_SCRIPT_SHA256}'`,
+  "style-src 'unsafe-inline'",
+  "connect-src 'none'",
+  "img-src 'none'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
 const DECRYPTOR_JS = `
 'use strict';
 // KEYM v2, the WebCrypto-only subset (FORMAT-V2-DESIGN.md 7.2).
@@ -409,6 +451,7 @@ export function buildSelfExtractingPage(options: SelfExtractOptions): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="${SELF_EXTRACT_CSP}">
 <title>Encrypted backup — Keymaker</title>
 <style>
   :root { color-scheme: light dark; }
