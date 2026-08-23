@@ -645,7 +645,7 @@ async function main() {
   console.log("\nKEYM v3 slot-table authentication (§5):");
   {
     const {
-      encryptKeym2, decryptKeym2, addPasskeySlotKeym2, keym2SlotLen,
+      encryptKeym2, decryptKeym2, addPasskeySlotKeym2, addShamirSlotKeym2, keym2SlotLen,
       KEYM2_VERSION_V2, KEYM2_VERSION_V3,
     } = await import("../src/lib/keym-v2.ts");
 
@@ -808,6 +808,48 @@ async function main() {
         afterFlip !== null && dec.decode(afterFlip.data) === V3_PT &&
           afterFlip.slotTableAuthentic === false,
         `${label} — a single flipped byte in another slot is reported`
+      );
+
+      // §5.3 step 2. Every check above proves the strip is *detected*; these
+      // prove the detection survives the owner continuing to use the app.
+      //
+      // The owner is the one person who can still open a container whose heir
+      // slot was removed, because their slot is the one left. So the owner is
+      // the one whose next enrolment recomputes the MAC over the attacker's
+      // table and signs it with the real key — after which every reader is
+      // told the table is authentic, correctly. Re-sealing without verifying
+      // does not miss the evidence, it destroys it.
+      await rejects(
+        `${label} — enrolling a passkey on a stripped table is refused (§5.3)`,
+        () => addPasskeySlotKeym2(stripped, { password: V3_PW },
+          crypto.getRandomValues(new Uint8Array(32)),
+          crypto.getRandomValues(new Uint8Array(32)))
+      );
+      await rejects(
+        `${label} — enrolling a share set on a stripped table is refused (§5.3)`,
+        () => addShamirSlotKeym2(stripped, { password: V3_PW }, 2, 3)
+      );
+
+      // The refusal is affordable precisely because §5.2 still holds: the
+      // container was not touched, and it still opens. A reader refusing costs
+      // the plaintext; a writer refusing costs one edit, and there is another
+      // way to make it.
+      const afterRefusal = await mustOpen(`${label} after a refused edit`, () =>
+        decryptKeym2(stripped, V3_PW, null)
+      );
+      check(
+        afterRefusal !== null && dec.decode(afterRefusal.data) === V3_PT,
+        `${label} — a refused edit leaves the backup readable`
+      );
+
+      // Not a general block on enrolment: an intact table still takes one.
+      const three = await addShamirSlotKeym2(two, { password: V3_PW }, 2, 3);
+      const afterEnrol = await mustOpen(`${label} enrolled`, () =>
+        decryptKeym2(three.container, V3_PW, null)
+      );
+      check(
+        afterEnrol !== null && afterEnrol.slotTableAuthentic === true,
+        `${label} — enrolling on an intact table still works and re-seals it`
       );
     }
 
