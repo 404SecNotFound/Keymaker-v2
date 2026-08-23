@@ -179,6 +179,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import errno
 import hashlib
 import hmac
 import math
@@ -722,6 +723,62 @@ def _attemptable(record: bytes) -> Optional[Slot]:
         return parse_slot(record)
     except KeymError:
         return None
+
+
+def check_writable_params(slot: Slot) -> None:
+    """
+    §6's range, from a writer's point of view. Unconditional.
+
+    `build_passphrase_slot` already round-trips its prefix through `parse_slot`,
+    which catches every violation here — but catches it as §6's deliberately
+    generic "decryption failed", because that is the right answer to give
+    *someone else's* file. Given back to the person who just typed
+    `--iterations 20000000` it is simply wrong: nothing was decrypted, nothing
+    failed to decrypt, and the one fact they need — which number is out of
+    range, and what the range is — is the fact §6 exists to withhold. §6 governs
+    readers holding a container they were handed. This is a writer being handed
+    a number.
+
+    Separate from `check_write_policy` because the two are different kinds of
+    rule and only one is skippable. This is the format: a slot outside it is one
+    no conforming reader will open, so no caller may opt out. That is policy: a
+    floor this project chose, which the conformance harness legitimately writes
+    below in order to keep test vectors cheap.
+
+    Argon2id's own `memory_kib >= 8 * parallelism` is checked here too. It is
+    not a §6 rule and cannot be — it constrains a pair of fields §6 bounds
+    independently — but it is the same class of mistake, and unchecked it left
+    the writer to hash-wasm's `HashingError: Memory cost is too small`, an
+    exception from a dependency escaping through this module's public API.
+    """
+    if slot.kdf_id == KDF_PBKDF2:
+        if not (PBKDF2_ITER_MIN <= slot.iterations <= PBKDF2_ITER_MAX):
+            raise UsageError(
+                f"iterations={slot.iterations} is outside §6's range for PBKDF2 "
+                f"({PBKDF2_ITER_MIN}–{PBKDF2_ITER_MAX}); a container written "
+                f"with it would not open anywhere"
+            )
+    elif slot.kdf_id == KDF_ARGON2ID:
+        if not (ARGON2_TIME_MIN <= slot.time_cost <= ARGON2_TIME_MAX):
+            raise UsageError(
+                f"time_cost={slot.time_cost} is outside §6's range for Argon2id "
+                f"({ARGON2_TIME_MIN}–{ARGON2_TIME_MAX})"
+            )
+        if not (ARGON2_MEM_MIN <= slot.memory_kib <= ARGON2_MEM_MAX):
+            raise UsageError(
+                f"memory_kib={slot.memory_kib} is outside §6's range for Argon2id "
+                f"({ARGON2_MEM_MIN}–{ARGON2_MEM_MAX})"
+            )
+        if not (ARGON2_PAR_MIN <= slot.parallelism <= ARGON2_PAR_MAX):
+            raise UsageError(
+                f"parallelism={slot.parallelism} is outside §6's range for "
+                f"Argon2id ({ARGON2_PAR_MIN}–{ARGON2_PAR_MAX})"
+            )
+        if slot.memory_kib < 8 * slot.parallelism:
+            raise UsageError(
+                f"Argon2id needs memory_kib >= 8 × parallelism; "
+                f"{slot.memory_kib} < 8 × {slot.parallelism}"
+            )
 
 
 def check_write_policy(slot: Slot) -> None:
@@ -1622,6 +1679,7 @@ def build_passphrase_slot(
         memory_kib=memory_kib,
         parallelism=parallelism,
     )
+    check_writable_params(draft)
     if enforce_write_policy:
         check_write_policy(draft)
 
@@ -4031,7 +4089,33 @@ def open_private(path: str):
     bits — the write still goes ahead: failing to narrow permissions is not a
     reason to refuse someone their own plaintext.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # O_NOFOLLOW where the platform has it. Without it a symlink planted at
+    # `--out` is followed, and the fchmod below then narrows the *target's*
+    # mode to 0600 — which limits who can read the plaintext to whoever planted
+    # the link, and writes it wherever they chose. The shared machine this
+    # function exists for is the machine where that is worth doing.
+    #
+    # O_EXCL is deliberately not added with it. Refusing to overwrite would
+    # strand the ordinary case of re-running a command after a typo, and this
+    # is a recovery tool: an heir who cannot re-run `decrypt --out seed.txt`
+    # because the first attempt left an empty file is worse off than one whose
+    # file gets rewritten.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as e:
+        # ELOOP here means O_NOFOLLOW did its job, and the generic strerror for
+        # it ("Too many levels of symbolic links") describes a completely
+        # different problem. Everything else — a missing directory, no write
+        # permission, a read-only filesystem — is an ordinary mistake that was
+        # answering with a traceback.
+        if e.errno == errno.ELOOP:
+            raise UsageError(
+                f"refusing to write {path}: it is a symbolic link. Writing "
+                f"through it would put the output somewhere chosen by whoever "
+                f"created the link. Remove it, or pick another path."
+            ) from None
+        raise UsageError(f"cannot write {path}: {e.strerror}") from None
     if hasattr(os, "fchmod"):
         try:
             os.fchmod(fd, 0o600)
@@ -4148,12 +4232,21 @@ def main(argv: Optional[list[str]] = None) -> int:
             p.add_argument("--salt", help="32-byte hex slot salt (conformance testing only)")
             p.add_argument("--master-key",
                            help="32-byte hex master key (conformance testing only)")
-            # v3 §6 says writers SHOULD emit v3; this one does not yet, and the
-            # flag is why. See the comment at VERSION: until the TypeScript core
-            # writes v3 too, defaulting to it would silence the byte-for-byte
-            # conformance job rather than strengthen anything.
-            p.add_argument("--v3", action="store_true",
-                           help="write a KEYM v3 container (authenticated slot table)")
+            # v3 §6: writers SHOULD emit v3, and everything else here now does
+            # — the library default is VERSION_V3 and so is the app's. This
+            # parser was the last thing still opting *in*, which had the CLI
+            # quietly writing the one format §1.1's strip attack works on,
+            # while the browser tool beside it wrote the one that detects it.
+            # A reference implementation that is the least safe way to make a
+            # container is not a reference for anything.
+            #
+            # --v2 replaces --v3 rather than joining it. Two flags for one
+            # choice is one flag too many, and the direction that needs to be
+            # explicit is the one that gives something up.
+            p.add_argument("--v2", action="store_true",
+                           help="write a KEYM v2 container instead of v3 "
+                                "(older readers only; the slot table is then "
+                                "unauthenticated — see docs/FORMAT-V3-DESIGN.md §1.1)")
             p.add_argument("--container-id",
                            help="16-byte hex container id, v3 only "
                                 "(conformance testing only)")
@@ -4266,12 +4359,41 @@ def main(argv: Optional[list[str]] = None) -> int:
             return 1
         return 0
 
-    data = open(args.infile, "rb").read() if args.infile else sys.stdin.buffer.read()
+    # `join --part … --part …` is a complete command line that needs no input
+    # stream: every part is already on it. Reading stdin unconditionally made
+    # that command hang until interrupted, which at a terminal looks like the
+    # tool having crashed rather than like it waiting. The condition mirrors
+    # the one in the join branch below, which is where `data` stops being read.
+    #
+    # The open() is guarded because a mistyped path is the most ordinary thing
+    # a person does, and an unguarded one answered with a FileNotFoundError
+    # traceback. To an heir following RECOVERY.md, a Python traceback is
+    # indistinguishable from "the backup is destroyed".
+    if args.cmd == "join" and args.parts and not args.infile:
+        data = b""
+    elif args.infile:
+        try:
+            with open(args.infile, "rb") as fh:
+                data = fh.read()
+        except OSError as e:
+            print(f"error: cannot read {args.infile}: {e.strerror}", file=sys.stderr)
+            return 1
+    else:
+        data = sys.stdin.buffer.read()
 
     if args.cmd == "inspect":
-        if detect(data) == "keym2-armor":
-            data = dearmor(data.decode())
-        print(_inspect(data))
+        # `inspect` is the command someone reaches for when they are *unsure*
+        # what a file is, so being handed something that is not a container is
+        # its normal case, not an exceptional one. It answered with a KeymError
+        # traceback.
+        try:
+            if detect(data) == "keym2-armor":
+                data = dearmor(data.decode())
+            print(_inspect(data))
+        except (KeymError, UsageError, ValueError):
+            print(f"error: {args.infile or 'stdin'} is not a KEYM container",
+                  file=sys.stderr)
+            return 1
         return 0
 
     # §7.1, before the key-file lookup: neither of these takes a credential.
@@ -4412,8 +4534,14 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.cmd == "decrypt":
         shares = list(args.shares or [])
         if args.shares_from:
-            shares += [ln.strip() for ln in open(args.shares_from, encoding="utf-8")
-                       if ln.strip() and not ln.lstrip().startswith("#")]
+            try:
+                with open(args.shares_from, encoding="utf-8") as fh:
+                    shares += [ln.strip() for ln in fh
+                               if ln.strip() and not ln.lstrip().startswith("#")]
+            except OSError as e:
+                print(f"error: cannot read {args.shares_from}: {e.strerror}",
+                      file=sys.stderr)
+                return 1
         if args.prf_output:
             try:
                 prf_output = bytes.fromhex(args.prf_output)
@@ -4422,10 +4550,21 @@ def main(argv: Optional[list[str]] = None) -> int:
                 return 1
 
     try:
-        # With enough shares in hand the password prompt would be a dead end —
+        # With enough shares in hand the password *prompt* would be a dead end —
         # an heir does not have one. Skipping it is the difference between this
         # script being usable for inheritance and merely supporting it.
-        password = (None if (shares or prf_output)
+        #
+        # Skipping the prompt is not the same as discarding a password, and this
+        # used to do both: `--password P --share …` set password to None, so the
+        # slot walk never tried the passphrase slot and a *correct* password came
+        # back as "decryption failed". The person most likely to pass both is
+        # someone holding a password and a handful of shares they are not sure
+        # about — and the answer they got was that the backup does not open.
+        #
+        # A password and a share set are not alternatives to choose between.
+        # §4.4's walk tries every slot against every secret it holds, so
+        # supplying both is exactly how you find out which one still works.
+        password = (args.password if (shares or prf_output)
                     else resolve_password(args.password,
                                           confirm=(args.cmd == "encrypt")))
     except UsageError as e:
@@ -4446,7 +4585,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 parallelism=args.parallelism,
                 salt=bytes.fromhex(args.salt) if args.salt else None,
                 master_key=bytes.fromhex(args.master_key) if args.master_key else None,
-                version=VERSION_V3 if args.v3 else VERSION_V2,
+                version=VERSION_V2 if args.v2 else VERSION,
                 container_id=(bytes.fromhex(args.container_id)
                               if args.container_id else None),
             )
@@ -4488,4 +4627,42 @@ def main(argv: Optional[list[str]] = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # The guard belongs here and not inside `main`, so that importing this
+    # module still raises: `crosstest2.py` and the selftest need the exception,
+    # and a library that swallows its own errors is worse than a CLI that
+    # prints them.
+    #
+    # UsageError and KeymError are this module's two answers to "that did not
+    # work" and both carry a message written to be read. OSError reaches here
+    # from a path nothing anticipated.
+    #
+    # The last clause is the one that matters for who uses this. A traceback in
+    # front of someone opening a dead relative's backup reads as "the file is
+    # destroyed", and they may act on that — so an unexpected failure says what
+    # is actually known about their file, and says how to get the details that
+    # would let it be fixed. It exits 2 rather than 1 to stay distinguishable
+    # from an ordinary refusal.
+    try:
+        sys.exit(main())
+    except (UsageError, KeymError) as _e:
+        print(f"error: {_e}", file=sys.stderr)
+        sys.exit(1)
+    except KeyboardInterrupt:
+        print("\ninterrupted", file=sys.stderr)
+        sys.exit(130)
+    except OSError as _e:
+        print(f"error: {_e.strerror or _e}", file=sys.stderr)
+        sys.exit(1)
+    except Exception:
+        if os.environ.get("KEYM2_TRACEBACK"):
+            raise
+        print(
+            "error: this build hit an internal error it does not have a message "
+            "for.\n"
+            "Your container has not been damaged: every command here reads its "
+            "input and writes somewhere else.\n"
+            "Re-run the same command with KEYM2_TRACEBACK=1 to get the details "
+            "worth reporting.",
+            file=sys.stderr,
+        )
+        sys.exit(2)

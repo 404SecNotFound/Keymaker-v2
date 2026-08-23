@@ -39,6 +39,8 @@ from __future__ import annotations
 
 import base64
 import re
+import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -301,6 +303,17 @@ def main() -> int:
         for version in (1, 2):
             r = cli(version, ["inspect", "--in", str(junk)])
             check(r.returncode != 0, f"v{version} non-container rejected by inspect")
+            # A traceback also exits non-zero, which is how the traceback got
+            # past this check for as long as it did. What an heir needs is a
+            # sentence; what they got was forty lines of Python ending in
+            # `KeymError: decryption failed`, which reads as "the file is gone".
+            check(
+                "Traceback (most recent call last)" not in r.stderr,
+                f"v{version} says so in a sentence rather than a traceback",
+                r.stderr.strip()[-160:],
+            )
+
+        error_paths(tmp)
 
     walkthrough()
 
@@ -310,6 +323,143 @@ def main() -> int:
         return 1
     print("Verified: docs/RECOVERY.md and docs/WALKTHROUGH.md work as written.")
     return 0
+
+
+# ----------------------------------------------------------------------------
+# The ways a person gets it wrong
+# ----------------------------------------------------------------------------
+#
+# Everything above checks that the documented procedure works. This checks what
+# happens when it does not — which for a recovery tool is not a lesser concern.
+# The person running these scripts is, by construction, someone whose usual way
+# in has failed: they are guessing at paths, pasting shares they are unsure of,
+# and reading every line of output for a verdict on whether the money is gone.
+#
+# A traceback is that verdict, wrongly delivered. So is "decryption failed" on a
+# container that opens fine.
+
+
+def error_paths(tmp: Path) -> None:
+    print("\n# Getting it wrong: what the tools say when the input is bad\n")
+
+    # A complete command line that needs no input stream. `join` read stdin
+    # before looking at what it had been given, so this waited forever at a
+    # terminal — indistinguishable from a hang, on the one tool whose job is to
+    # reassure. Run with stdin held open and never closed, which is what a
+    # terminal is; a closed stdin would make the old code pass.
+    reader, writer = os.pipe()
+    try:
+        r = subprocess.run(
+            [sys.executable, str(SCRIPTS[2]), "join", "--part", "KMPART1:1/1:AAAA"],
+            stdin=reader, capture_output=True, text=True, cwd=ROOT, timeout=20,
+        )
+        check(True, "join --part returns without reading stdin", r.stderr.strip()[:120])
+    except subprocess.TimeoutExpired:
+        check(False, "join --part returns without reading stdin",
+              "still waiting on stdin after 20s")
+    finally:
+        os.close(reader)
+        os.close(writer)
+
+    # A mistyped path is the most ordinary mistake there is.
+    for version in (1, 2):
+        r = cli(version, ["inspect", "--in", str(tmp / "no-such-file.keym")])
+        check(r.returncode != 0 and "Traceback" not in r.stderr,
+              f"v{version} names a missing input file plainly", r.stderr.strip()[-160:])
+
+    # A writer parameter outside §6's range is a writer's mistake, and saying
+    # "decryption failed" during an encrypt names neither the operation that
+    # failed nor the number that caused it.
+    pt = tmp / "range-pt.txt"
+    pt.write_bytes(SECRET)
+    r = cli(2, ["encrypt", "--kdf", "pbkdf2", "--iterations", "20000000",
+                "--in", str(pt), "--out", str(tmp / "never.keym")],
+            stdin="a strong test password\n" * 2)
+    check(r.returncode != 0 and "decryption failed" not in r.stderr
+          and "iterations" in r.stderr,
+          "an out-of-range iteration count is reported as what it is",
+          r.stderr.strip()[-160:])
+
+    # The one with a wrong answer rather than an ugly one. Someone holding a
+    # password *and* some shares they are unsure about passes both, hoping one
+    # works. The password was silently discarded, so a container that opens
+    # perfectly well came back as "decryption failed".
+    src = tmp / "both-pt.txt"
+    src.write_bytes(SECRET)
+    both = tmp / "both.keym"
+    r = cli(2, ["encrypt", "--kdf", "pbkdf2", "--iterations", "600000",
+                "--in", str(src), "--out", str(both)],
+            stdin="a strong test password\n" * 2)
+    check(r.returncode == 0 and both.exists(),
+          "wrote a container for the password-plus-shares case",
+          r.stderr.strip()[-160:])
+    if both.exists():
+        out = tmp / "both-out.txt"
+        r = cli(2, ["decrypt", "--in", str(both), "--out", str(out),
+                    "--password", "a strong test password",
+                    "--share", "KMSHARE1:NOTAREALSHARE"])
+        check(r.returncode == 0 and out.exists() and out.read_bytes() == SECRET,
+              "a correct password still opens it when useless shares are given too",
+              r.stderr.strip()[-160:])
+
+    # O_NOFOLLOW. Writing through a planted symlink puts the plaintext where
+    # whoever planted it chose; the 0600 that follows only narrows the target.
+    if hasattr(os, "O_NOFOLLOW"):
+        sym_pt, target, link = tmp / "sym-pt.txt", tmp / "target.txt", tmp / "link.txt"
+        sym_pt.write_bytes(SECRET)
+        target.write_text("")
+        os.symlink(target, link)
+        r = cli(2, ["encrypt", "--kdf", "pbkdf2", "--iterations", "600000",
+                    "--in", str(sym_pt), "--out", str(link)],
+                stdin="a strong test password\n" * 2)
+        check(r.returncode != 0 and target.read_text() == ""
+              and "Traceback" not in r.stderr,
+              "a symlink at --out is refused, and said so in a sentence",
+              r.stderr.strip()[-160:])
+
+    # The CLI's own default. `VERSION` has said v3 since the app started
+    # writing it, but this parser opted *in* with --v3, so the reference
+    # implementation was the least safe way to make a container: it wrote the
+    # one format §1.1's strip attack works on, beside a browser tool writing
+    # the one that detects it.
+    v3out = tmp / "cli-default.keym"
+    dpt = tmp / "cli-default-pt.txt"
+    dpt.write_bytes(SECRET)
+    r = cli(2, ["encrypt", "--kdf", "pbkdf2", "--iterations", "600000",
+                "--in", str(dpt), "--out", str(v3out)],
+            stdin="a strong test password\n" * 2)
+    check(r.returncode == 0 and v3out.exists() and v3out.read_bytes()[4] == 3,
+          "the reference CLI writes v3 by default, like everything else",
+          r.stderr.strip()[-160:])
+    v2out = tmp / "cli-v2.keym"
+    r = cli(2, ["encrypt", "--kdf", "pbkdf2", "--iterations", "600000", "--v2",
+                "--in", str(dpt), "--out", str(v2out)],
+            stdin="a strong test password\n" * 2)
+    check(r.returncode == 0 and v2out.exists() and v2out.read_bytes()[4] == 2,
+          "--v2 is still there for an older reader that needs it",
+          r.stderr.strip()[-160:])
+
+    # Both references write owner-only. keym.py is the one an heir with a *v1*
+    # backup runs, so it is if anything the more important of the two, and it
+    # was the one still writing 0644.
+    for version in (1, 2):
+        src, enc, dec = tmp / f"p{version}.txt", tmp / f"c{version}.keym", tmp / f"d{version}.txt"
+        src.write_bytes(SECRET)
+        cmd = ["encrypt", "--kdf", "pbkdf2", "--iterations", "600000",
+               "--in", str(src), "--out", str(enc)]
+        r = cli(version, cmd, stdin="a strong test password\n" * 2)
+        if r.returncode != 0:
+            check(False, f"v{version} wrote a container for the mode check",
+                  r.stderr.strip()[-160:])
+            continue
+        r = cli(version, ["decrypt", "--in", str(enc), "--out", str(dec)],
+                stdin="a strong test password\n")
+        check(r.returncode == 0 and dec.exists() and dec.read_bytes() == SECRET,
+              f"v{version} round-trips through --out", r.stderr.strip()[-160:])
+        if dec.exists():
+            mode = stat.S_IMODE(dec.stat().st_mode)
+            check(mode == 0o600,
+                  f"v{version} writes the plaintext owner-only, not {oct(mode)}")
 
 
 # ----------------------------------------------------------------------------
