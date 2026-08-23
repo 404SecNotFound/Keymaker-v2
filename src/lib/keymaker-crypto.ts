@@ -85,7 +85,7 @@ export const DEFAULT_ARGON2ID: Argon2idParams = {
   parallelism: 4,
 };
 
-export type DetectedFormat = "keym-v1" | "keym-v2" | "ibtz-v1" | "ibtz-v0";
+export type DetectedFormat = "keym-v1" | "keym-v2" | "keym-v3" | "ibtz-v1" | "ibtz-v0";
 
 const SALT_LEN_PBKDF2 = 16;
 const SALT_LEN_ARGON2ID = 32;
@@ -920,7 +920,14 @@ export function detectFormat(data: Uint8Array): DetectedFormat {
     // "keym-v1" so that parseKeym reports it as an unsupported version rather
     // than the blob falling through to the headerless legacy path and burning
     // a million PBKDF2 iterations before saying so.
-    return data[4] === 2 ? "keym-v2" : "keym-v1";
+    // v3 §6: "a v3 reader MUST open v1, v2 and v3". A version this classifier
+    // does not name is a version `decryptData` cannot route, and v3 spent one
+    // release being refused as "a newer KEYM version" for exactly that reason —
+    // the container parser had learned 0x03 and the dispatcher in front of it
+    // had not. Naming it here is what connects the two.
+    if (data[4] === 2) return "keym-v2";
+    if (data[4] === 3) return "keym-v3";
+    return "keym-v1";
   }
   if (data.length >= 5 && magicPrefixLen(data, IBTZ_MAGIC) === IBTZ_MAGIC.length) {
     return "ibtz-v1";
@@ -982,6 +989,18 @@ export interface DecryptResult {
   format: DetectedFormat;
   /** True when the KEYM header's key-file flag was set (UX hint only). */
   keyFileUsed: boolean;
+  /**
+   * v3 §5.2. Whether the slot table authenticates: true, false, or **null for
+   * any container that carries no `slot_table_mac`** — v1, v2 and both legacy
+   * formats — about which nothing is claimed.
+   *
+   * Carried all the way out to the caller rather than consumed inside the
+   * crypto core, because §5.2's requirement is that the reader *report* the
+   * mismatch, and a verdict that stops here is not reported to anyone. `false`
+   * does not mean the data is suspect: the payload authenticated before this
+   * value was produced. What changed is the container's recovery options.
+   */
+  slotTableAuthentic: boolean | null;
 }
 
 /**
@@ -1103,7 +1122,7 @@ export async function decryptData(
   const fullData = new Uint8Array(encryptedBuffer);
   const format = detectFormat(fullData);
 
-  if (format === "keym-v2") {
+  if (format === "keym-v2" || format === "keym-v3") {
     // Dynamically imported so keymaker-crypto.ts does not depend on keym-v2.ts
     // at module-evaluation time — the dependency runs one way, which is what
     // keeps the v1 path structurally unable to be changed by v2 work. It also
@@ -1125,6 +1144,7 @@ export async function decryptData(
         ) as ArrayBuffer,
         format,
         keyFileUsed: result.keyFileUsed,
+        slotTableAuthentic: result.slotTableAuthentic,
       };
     } finally {
       // Same contract as every other path here: the caller's key file buffer
@@ -1139,7 +1159,7 @@ export async function decryptData(
       password,
       keyFileBuffer
     );
-    return { data, format, keyFileUsed: keyFileBuffer !== null };
+    return { data, format, keyFileUsed: keyFileBuffer !== null, slotTableAuthentic: null };
   }
 
   let parsed: ParsedKeym | null = null;
@@ -1186,7 +1206,12 @@ export async function decryptData(
       plain instanceof Uint8Array
         ? (plain.buffer.slice(plain.byteOffset, plain.byteOffset + plain.byteLength) as ArrayBuffer)
         : plain;
-    return { data: out, format, keyFileUsed: (parsed.flags & 0x01) !== 0 };
+    return {
+      data: out,
+      format,
+      keyFileUsed: (parsed.flags & 0x01) !== 0,
+      slotTableAuthentic: null,
+    };
   } catch (error) {
     // Structural and configuration failures pass through with their real
     // message; everything else collapses to the one generic string. This used

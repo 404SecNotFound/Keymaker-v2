@@ -188,23 +188,51 @@ def main() -> int:
         # corpus to v1 because the v1 reference cannot read a v2 container. The
         # v2 vectors would otherwise be written by the generator and checked by
         # nothing but the TypeScript that produced them.
-        print("\nFrozen v2 fixtures decrypted by the Python reference:")
+        print("\nFrozen v2 and v3 fixtures decrypted by the Python reference:")
         corpus = ROOT / "scripts" / "fixtures" / "keymaker"
         meta = json.loads((corpus / "fixtures.json").read_text())
         fx_pw, fx_kf = meta["password"], bytes.fromhex(meta["keyFileHex"])
         v2_fixtures = [f for f in meta["fixtures"] if f.get("version") == 2]
-        for f in v2_fixtures:
+        v3_fixtures = [f for f in meta["fixtures"] if f.get("version") == 3]
+        for f in v2_fixtures + v3_fixtures:
             blob = (corpus / f["file"]).read_bytes()
             # §7.2. A page is a container wearing an HTML document; unwrap it and
             # it takes exactly the same checks as every other frozen vector.
             if f.get("selfextract"):
                 blob = keym2.extract_selfextract(blob)
             try:
-                got = keym2.decrypt(blob, fx_pw,
-                                    keyfile_bytes=fx_kf if f["keyFile"] else None)
-                check(f["name"], got.decode() == f["plaintext"])
+                # decrypt_report rather than decrypt, because for a v3 vector the
+                # verdict is half of what the fixture promises. §5.2 makes the
+                # two inseparable: a stripped container that opens is only
+                # correct if the reader also says the table changed, and one that
+                # says so but refuses to open is worse than v2.
+                got = keym2.decrypt_report(blob, fx_pw,
+                                           keyfile_bytes=fx_kf if f["keyFile"] else None)
+                check(f["name"], got.plaintext.decode() == f["plaintext"])
+                # `slotTableAuthentic` is recorded only on v3 entries, which are
+                # the only containers carrying a slot_table_mac. Absent means the
+                # format makes no claim, and `None` is the answer the reference
+                # must give — not False, which would call every v2 vector here
+                # tampered with.
+                expected_verdict = f.get("slotTableAuthentic")
+                check(f"{f['name']}: slot table reported as "
+                      f"{'not claimed' if expected_verdict is None else expected_verdict}",
+                      got.slot_table_authentic is expected_verdict)
             except keym2.KeymError as e:
                 check(f["name"], False, str(e))
+
+            # v3 §1.1. The credential that was cut out of this container's
+            # table. Both implementations have to agree that it no longer opens
+            # the file — the lock-out is the damage the MAC exists to announce,
+            # and a reference that still let this key in would mean the strip
+            # had not actually removed anything.
+            if "strippedPasskey" in f:
+                gone = bytes.fromhex(f["strippedPasskey"]["prfOutputHex"])
+                try:
+                    keym2.decrypt(blob, prf_output=gone)
+                    check(f"{f['name']}: the stripped heir's passkey is refused", False)
+                except keym2.KeymError:
+                    check(f"{f['name']}: the stripped heir's passkey is refused", True)
 
             # §4.6. The share strings in the corpus were written by the
             # TypeScript. Nothing else in this project checks that the *other*
@@ -246,17 +274,22 @@ def main() -> int:
                 except keym2.KeymError:
                     check(f"{f['name']}: k-1 js-written shares still refused", True)
 
-        shamir_fixtures = [f for f in v2_fixtures if "shamir" in f]
-        passkey_fixtures = [f for f in v2_fixtures if "passkey" in f]
+        modern = v2_fixtures + v3_fixtures
+        shamir_fixtures = [f for f in modern if "shamir" in f]
+        passkey_fixtures = [f for f in modern if "passkey" in f]
+        stripped_fixtures = [f for f in modern if "strippedPasskey" in f]
         # Counted rather than assumed, because the corpus is append-only and a
         # fixture that silently stopped being listed would otherwise just stop
         # being tested. Update deliberately when the corpus grows.
-        check("v2 corpus has all thirteen vectors: three share sets, three passkeys, one page",
-              len(v2_fixtures) == 13 and len(shamir_fixtures) == 3
-              and len(passkey_fixtures) == 3
-              and len([f for f in v2_fixtures if f.get("selfextract")]) == 1,
-              f"found {len(v2_fixtures)} v2, {len(shamir_fixtures)} shamir, "
-              f"{len(passkey_fixtures)} passkey")
+        check("v2+v3 corpus has all twenty-six vectors: six share sets, six "
+              "passkeys, one page, one stripped table",
+              len(v2_fixtures) == 13 and len(v3_fixtures) == 13
+              and len(shamir_fixtures) == 6 and len(passkey_fixtures) == 6
+              and len([f for f in v2_fixtures if f.get("selfextract")]) == 1
+              and len(stripped_fixtures) == 1,
+              f"found {len(v2_fixtures)} v2, {len(v3_fixtures)} v3, "
+              f"{len(shamir_fixtures)} shamir, {len(passkey_fixtures)} passkey, "
+              f"{len(stripped_fixtures)} stripped")
 
         # ---------------------------------------------------------------
         # 1. Byte equality — the check that catches a writer disagreement

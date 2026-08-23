@@ -939,6 +939,13 @@ export function EncryptorTool() {
   const [obscureFilename, setObscureFilename] = useState(false);
   // Post-decrypt info line: which container format/params were detected.
   const [decryptInfo, setDecryptInfo] = useState<string | null>(null);
+  /**
+   * v3 §5.2. True when the container opened but its slot table did not
+   * authenticate. Separate state rather than a clause on `decryptInfo` because
+   * the two say different kinds of thing: that line describes the file, this
+   * one reports that part of it has changed since it was written.
+   */
+  const [slotTableWarning, setSlotTableWarning] = useState(false);
   const [showDecryptedText, setShowDecryptedText] = useState(false);
   const [useKeyFile, setUseKeyFile] = useState(false);
   const [keyFile, setKeyFile] = useState<File | null>(null);
@@ -1510,6 +1517,7 @@ export function EncryptorTool() {
     setOutputText('');
     setShowDecryptedText(false);
     setDecryptInfo(null);
+    setSlotTableWarning(false);
     setVerifyResult(null);
 
     // Anything rendering a secret.
@@ -1671,6 +1679,7 @@ export function EncryptorTool() {
       setOutputText('');
       setShowDecryptedText(false);
       setDecryptInfo(null);
+      setSlotTableWarning(false);
       setIsDecryptedQrModalOpen(false);
       setIsDecryptedQrRevealed(false);
       setDecryptedQrStatus({ kind: "idle" });
@@ -2031,6 +2040,7 @@ export function EncryptorTool() {
     setOutputText('');
     setShowDecryptedText(false);
     setDecryptInfo(null);
+    setSlotTableWarning(false);
     setVerifyResult(null);
     setDecryptedQrStatus({ kind: "idle" });
 
@@ -2227,6 +2237,7 @@ export function EncryptorTool() {
         const formatLabels: Record<DetectedFormat, string> = {
           "keym-v1": "KEYM v1",
           "keym-v2": "KEYM v2",
+          "keym-v3": "KEYM v3",
           "ibtz-v1": "IttyBitz v1 (legacy)",
           "ibtz-v0": "IttyBitz v0 (legacy)",
         };
@@ -2243,7 +2254,12 @@ export function EncryptorTool() {
             info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
             weakKdf = inspected.weakKdf;
           }
-        } else if (decryptResult.format === "keym-v2") {
+        } else if (
+          decryptResult.format === "keym-v2" ||
+          decryptResult.format === "keym-v3"
+        ) {
+          // One inspector for both: every field it reads sits at a
+          // version-dependent offset it already resolves from the header.
           const { inspectKeym2 } = await import("@/lib/keym-v2");
           const inspected = inspectKeym2(headerPeek);
           if (inspected) {
@@ -2263,6 +2279,13 @@ export function EncryptorTool() {
         if (decryptResult.keyFileUsed) info += " · key file";
         if (isStale()) return;
         setDecryptInfo(info);
+        // v3 §5.2. `false` only ever arrives after a slot has already opened
+        // and the payload has already authenticated, so this reports on the
+        // container's *recovery options*, never on the data. It deliberately
+        // does not say which slot changed: the MAC covers the table as a whole
+        // and the sealed table is not recoverable from the tampered one, so
+        // "something changed" is the whole of what is known.
+        setSlotTableWarning(decryptResult.slotTableAuthentic === false);
 
         if (verifying) {
           // Reaching this line *is* the result: decryptViaWorker throws unless
@@ -3349,6 +3372,35 @@ export function EncryptorTool() {
           {decryptInfo}
         </p>
       ) : null}
+
+      {/* v3 §5.2. The container opened and the plaintext above is genuine —
+          the payload authenticates on its own and did so before this rendered.
+          What this reports is that the *slot table* has changed since the
+          backup was written, which is a change to who can still open the file
+          rather than to what is in it. Refusing to show the plaintext would
+          have turned detectable tampering into a lost backup, which is the
+          worse outcome; saying nothing would have wasted the detection. So:
+          both. */}
+      {slotTableWarning && currentMode === 'decrypt' && (
+        <div
+          role="alert"
+          className="mt-2 animate-in fade-in-50 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
+          data-testid="slot-table-warning"
+        >
+          <p className="flex items-start gap-2 font-semibold">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            This backup&apos;s list of unlock methods has changed since it was created.
+          </p>
+          <p className="mt-1.5 leading-snug">
+            Your data is intact — the contents are authenticated separately and
+            verified before anything was shown. What changed is the set of ways
+            back in: an unlock method may have been added or removed. It is not
+            possible to say which one, only that the list is no longer the one
+            sealed with the file. If you did not change it yourself, treat this
+            copy as untrusted and recover from another one.
+          </p>
+        </div>
+      )}
 
       {outputText && (
         <div className="animate-in fade-in-50 space-y-2">

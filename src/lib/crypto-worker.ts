@@ -114,6 +114,13 @@ export type CryptoResponse =
       data: ArrayBuffer;
       format: DetectedFormat;
       keyFileUsed: boolean;
+      /**
+       * v3 §5.2. Crosses the worker boundary because the report is owed to the
+       * person doing the recovery, and they are on the other side of it. A
+       * boolean and a null both survive structured clone unchanged, so unlike
+       * the error path below this needs no reconstruction.
+       */
+      slotTableAuthentic: boolean | null;
     }
   /**
    * Errors cross the boundary as plain data.
@@ -266,6 +273,7 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       data: result.data,
       format: result.format,
       keyFileUsed: result.keyFileUsed,
+      slotTableAuthentic: result.slotTableAuthentic,
     };
     ctx.postMessage(response, [result.data]);
   } catch (error) {

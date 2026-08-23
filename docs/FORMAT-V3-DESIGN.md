@@ -308,6 +308,8 @@ ff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea5
 55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e
 ```
 
-Freezing this as a fixture alongside v2's, and wiring it into the conformance
-job, is phase 4 — it needs the second implementation to be worth running
-against.
+Both implementations are held to these bytes by `reference/crosstest2.py`, and
+the frozen corpus under `scripts/fixtures/keymaker/` carries thirteen v3 vectors
+alongside v2's — including one whose slot table was stripped, which §5.2 requires
+to open and to be reported. `scripts/keymaker-generate-fixtures.mts` writes them
+and skips any that already exist, so the corpus only ever grows.

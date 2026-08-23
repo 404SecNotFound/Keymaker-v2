@@ -36,6 +36,8 @@ export interface DecryptOutcome {
   data: ArrayBuffer;
   format: DetectedFormat;
   keyFileUsed: boolean;
+  /** v3 §5.2. Null for every format that carries no `slot_table_mac`. */
+  slotTableAuthentic: boolean | null;
 }
 
 interface Pending {
@@ -339,7 +341,12 @@ export async function decryptViaWorker(
     { id, op: "decrypt", data, password, keyFile, shares, prfOutput },
     transfer
   );
-  return { data: res.data, format: res.format, keyFileUsed: res.keyFileUsed };
+  return {
+    data: res.data,
+    format: res.format,
+    keyFileUsed: res.keyFileUsed,
+    slotTableAuthentic: res.slotTableAuthentic,
+  };
 }
 
 /**

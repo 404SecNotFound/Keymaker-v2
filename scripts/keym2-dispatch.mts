@@ -30,6 +30,7 @@ import {
   armorKeym2,
   dearmorKeym2,
   encryptKeym2,
+  KEYM2_VERSION_V3,
   isKeym2Binary,
   keym2SlotLen,
   keym2UnlockCost,
@@ -84,8 +85,21 @@ const v2 = await encryptKeym2(enc.encode("v2 payload"), PASSWORD, null, {
   cipher: CipherId.AES_256_GCM,
 });
 
+const v3 = await encryptKeym2(
+  enc.encode("v3 payload"),
+  PASSWORD,
+  null,
+  { kdf: FAST, cipher: CipherId.AES_256_GCM },
+  KEYM2_VERSION_V3
+);
+
 check(detectFormat(v1) === "keym-v1", "a v1 container is detected as v1");
 check(detectFormat(v2) === "keym-v2", "a v2 container is detected as v2");
+// v3 §6, and the reason this classifier had to learn a third name. While it
+// answered "keym-v1" for byte 3, `decryptData` sent a container the v2 parser
+// understood perfectly to the v1 path, which rejected it as "a newer KEYM
+// version" — a reader refusing a format it had already implemented.
+check(detectFormat(v3) === "keym-v3", "a v3 container is detected as v3");
 check(!isKeym2Binary(v1), "isKeym2Binary rejects v1");
 check(isKeym2Binary(v2), "isKeym2Binary accepts v2");
 
@@ -103,6 +117,19 @@ check(openedV1.format === "keym-v1", "decryptData reports v1");
 const openedV2 = await decryptData(toArrayBuffer(v2), PASSWORD, null);
 check(dec.decode(openedV2.data) === "v2 payload", "decryptData opens v2 through the dispatch");
 check(openedV2.format === "keym-v2", "decryptData reports v2");
+
+const openedV3 = await decryptData(toArrayBuffer(v3), PASSWORD, null);
+check(dec.decode(openedV3.data) === "v3 payload", "decryptData opens v3 through the dispatch");
+check(openedV3.format === "keym-v3", "decryptData reports v3");
+
+// v3 §5.2 travels with the plaintext or it is not a report. Two containers that
+// have never been touched, and the verdict distinguishes "sealed and intact"
+// from "carries no seal at all" rather than collapsing both to a passing
+// boolean — a `null` read as falsy would accuse every v1 and v2 backup of
+// tampering, and a `null` read as truthy would clear a stripped v3 one.
+check(openedV3.slotTableAuthentic === true, "decryptData reports a v3 slot table as authentic");
+check(openedV2.slotTableAuthentic === null, "decryptData claims nothing about a v2 slot table");
+check(openedV1.slotTableAuthentic === null, "decryptData claims nothing about a v1 slot table");
 
 // --- the key-file flag survives the dispatch --------------------------------
 const keyFile = new Uint8Array(64).fill(7);

@@ -338,12 +338,19 @@ async function main() {
       // default lives here rather than in the JSON so the six v1 entries could
       // stay byte-identical when v2 was added — see the generator's note.
       const version = fx.version ?? 1;
-      const expected = version === 2 ? "keym-v2" : "keym-v1";
+      const expected = version === 3 ? "keym-v3" : version === 2 ? "keym-v2" : "keym-v1";
       try {
         const res = await decryptData(ab, meta.password, keyFile);
         check(
           res.format === expected && dec.decode(res.data) === fx.plaintext,
           `v${version} ${fx.name} (${fx.kdf} / ${fx.cipher}${fx.keyFile ? " / +keyfile" : ""})`
+        );
+        const expectedVerdict =
+          version === 3 ? (fx.slotTableAuthentic as boolean) : null;
+        check(
+          res.slotTableAuthentic === expectedVerdict,
+          `v${version} ${fx.name} — slot table reported as ` +
+            `${expectedVerdict === null ? "not claimed" : expectedVerdict}`
         );
       } catch (err) {
         check(false, `${fx.name} — threw: ${(err as Error).message}`);
@@ -361,7 +368,7 @@ async function main() {
           const viaShares = await decryptKeym2(new Uint8Array(blob), "", null, all.slice(-k));
           check(
             dec.decode(viaShares.data) === fx.plaintext,
-            `v2 ${fx.name} — the last ${k} of ${all.length} shares still open it`
+            `v${version} ${fx.name} — the last ${k} of ${all.length} shares still open it`
           );
         } catch (err) {
           check(false, `${fx.name} shares — threw: ${(err as Error).message}`);
@@ -372,7 +379,7 @@ async function main() {
         } catch {
           refused = true;
         }
-        check(refused, `v2 ${fx.name} — ${k - 1} shares still do not`);
+        check(refused, `v${version} ${fx.name} — ${k - 1} shares still do not`);
       }
 
       // §4.7. Same promise in the other shape: the recorded PRF output is the
@@ -386,7 +393,7 @@ async function main() {
           const viaPrf = await decryptKeym2(new Uint8Array(blob), "", null, undefined, prf);
           check(
             dec.decode(viaPrf.data) === fx.plaintext,
-            `v2 ${fx.name} — the recorded PRF output still opens it`
+            `v${version} ${fx.name} — the recorded PRF output still opens it`
           );
         } catch (err) {
           check(false, `${fx.name} passkey — threw: ${(err as Error).message}`);
@@ -397,7 +404,28 @@ async function main() {
         } catch {
           prfRefused = true;
         }
-        check(prfRefused, `v2 ${fx.name} — a wrong PRF output does not`);
+        check(prfRefused, `v${version} ${fx.name} — a wrong PRF output does not`);
+      }
+
+      // v3 §1.1, frozen. The heir enrolled on this container had their slot cut
+      // out of the table; the PRF output below is the credential that used to
+      // open it. Both halves of the attack are asserted, because either one
+      // alone reads as something milder than it is: that the heir is now locked
+      // out is the *harm*, and that the reader still says the table changed is
+      // the only reason anyone finds out.
+      if (fx.strippedPasskey) {
+        const { decryptKeym2 } = await import("../src/lib/keym-v2.ts");
+        const prf = Uint8Array.from(Buffer.from(fx.strippedPasskey.prfOutputHex, "hex"));
+        let strippedHeirRefused = false;
+        try {
+          await decryptKeym2(new Uint8Array(blob), "", null, undefined, prf);
+        } catch {
+          strippedHeirRefused = true;
+        }
+        check(
+          strippedHeirRefused,
+          `v${version} ${fx.name} — the stripped heir's passkey no longer opens it`
+        );
       }
     }
     // Asserting the format as well as the plaintext is what makes these
@@ -406,16 +434,18 @@ async function main() {
     // and the plaintext alone would not notice.
     const v1Count = meta.fixtures.filter((f: any) => (f.version ?? 1) === 1).length;
     const v2Count = meta.fixtures.filter((f: any) => f.version === 2).length;
+    const v3Count = meta.fixtures.filter((f: any) => f.version === 3).length;
     const shamirCount = meta.fixtures.filter((f: any) => f.shamir).length;
     const passkeyCount = meta.fixtures.filter((f: any) => f.passkey).length;
     const pageCount = meta.fixtures.filter((f: any) => f.selfextract).length;
+    const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
     check(
-      fixtureCount === 19 && v1Count === 6 && v2Count === 13 &&
-        shamirCount === 3 && passkeyCount === 3 && pageCount === 1,
-      `corpus covers both versions and all three ciphers per slot type ` +
-        `(${v1Count} v1 + ${v2Count} v2, of which ${shamirCount} share sets, ` +
-        `${passkeyCount} passkey slots and ${pageCount} self-extracting page ` +
-        `= ${fixtureCount}/19)`
+      fixtureCount === 32 && v1Count === 6 && v2Count === 13 && v3Count === 13 &&
+        shamirCount === 6 && passkeyCount === 6 && pageCount === 1 && strippedCount === 1,
+      `corpus covers all three versions and all three ciphers per slot type ` +
+        `(${v1Count} v1 + ${v2Count} v2 + ${v3Count} v3, of which ${shamirCount} share ` +
+        `sets, ${passkeyCount} passkey slots, ${pageCount} self-extracting page and ` +
+        `${strippedCount} stripped slot table = ${fixtureCount}/32)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);
@@ -594,6 +624,207 @@ async function main() {
     check(dec.decode(res.data) === PLAINTEXT, "legacy IBTZ + key file survives the retry");
   } catch (err) {
     check(false, `legacy IBTZ + key file survives the retry — threw: ${(err as Error).message}`);
+  }
+
+  // ---- 6. v3 slot-table authentication (docs/FORMAT-V3-DESIGN.md §5) ----
+  //
+  // The attack the whole revision exists for. §1.1 measured three ways to edit
+  // a container with no key material at all, and only one of them did damage:
+  // cutting a slot out of the table locks an enrolled heir out permanently,
+  // while the owner opens the file exactly as before and nothing about it looks
+  // wrong. Reordering was inert and transplanting was refused; stripping was
+  // real, silent, and unrecoverable.
+  //
+  // §5.2 fixes the *detection*, not the file, and is deliberately not a
+  // refusal: a reader that finds a bad MAC MUST still return the plaintext,
+  // because refusing would convert tampering someone could have noticed into a
+  // backup that is simply gone. Both halves are asserted at every case below —
+  // either one on its own describes something milder than what happened. A
+  // refusal that returns nothing is not this format's behaviour, and a
+  // plaintext handed back in silence is just v2.
+  console.log("\nKEYM v3 slot-table authentication (§5):");
+  {
+    const { encryptKeym2, decryptKeym2, addPasskeySlotKeym2, keym2SlotLen, KEYM2_VERSION_V3 } =
+      await import("../src/lib/keym-v2.ts");
+
+    // §3's layout, written out rather than imported — the same reason the
+    // fixture generator writes it out. A tamper built from the implementation's
+    // own idea of where the table starts would move with the implementation and
+    // stop being the attack.
+    const SLOT_COUNT_AT = 24;
+    const TABLE_AT = 57;
+
+    const V3_PT = "an heir needs this";
+    const V3_PW = "owner passphrase — test only";
+
+    /** The table with one slot cut out and `slot_count` decremented. */
+    const withoutSlot = (c: Uint8Array, drop: number, width: number): Uint8Array => {
+      const count = c[SLOT_COUNT_AT] as number;
+      const head = c.slice(0, TABLE_AT);
+      head[SLOT_COUNT_AT] = count - 1;
+      const kept: number[] = [];
+      for (let i = 0; i < count; i++) {
+        if (i === drop) continue;
+        kept.push(...c.subarray(TABLE_AT + i * width, TABLE_AT + (i + 1) * width));
+      }
+      // `slot_table_mac` at offset 25 is carried through untouched, because
+      // that is precisely what the attacker cannot recompute: it is keyed from
+      // the master key (§5.1), and holding no slot secret means holding no way
+      // to re-seal the table (§5.3).
+      return new Uint8Array([...head, ...kept, ...c.subarray(TABLE_AT + count * width)]);
+    };
+
+    /** The same two slots, in the other order. */
+    const swapFirstTwo = (c: Uint8Array, width: number): Uint8Array => {
+      const out = Uint8Array.from(c);
+      const a = c.subarray(TABLE_AT, TABLE_AT + width);
+      const b = c.subarray(TABLE_AT + width, TABLE_AT + 2 * width);
+      out.set(b, TABLE_AT);
+      out.set(a, TABLE_AT + width);
+      return out;
+    };
+
+    /**
+     * A decrypt that §5.2 requires to *succeed*, with the throw turned into a
+     * named failure instead of an exception.
+     *
+     * CLAUDE.md's rule about unguarded calls, and this is the section it was
+     * written for. The mistake every check below exists to catch — a reader
+     * that refuses a container whose MAC does not match — makes `decryptKeym2`
+     * *throw*. Left unguarded that ends the run in a traceback three checks
+     * early, and a negative control that kills the process is indistinguishable
+     * from one that never fired. Verified: with §5.2 rewritten as a refusal
+     * this prints the two §5.2 lines as FAIL rather than a stack trace.
+     */
+    const mustOpen = async (
+      label: string,
+      run: () => Promise<{ data: Uint8Array; slotTableAuthentic: boolean | null }>
+    ): Promise<{ data: Uint8Array; slotTableAuthentic: boolean | null } | null> => {
+      try {
+        return await run();
+      } catch (err) {
+        check(false, `${label} — threw instead of opening: ${(err as Error).message}`);
+        return null;
+      }
+    };
+
+    const CIPHERS: Array<[CipherId, string]> = [
+      [CipherId.AES_256_GCM, "aes-256-gcm"],
+      [CipherId.CHACHA20_POLY1305, "chacha20-poly1305"],
+      [CipherId.CHAINED, "chained"],
+    ];
+
+    for (const [cipher, label] of CIPHERS) {
+      // Every cipher, because `slot_len` follows the tag overhead: a strip that
+      // cut the right number of bytes for AES would cut the wrong number for a
+      // chained container, and an off-by-one there is indistinguishable from a
+      // working detection unless all three are exercised.
+      const width = keym2SlotLen(cipher);
+      const base = await encryptKeym2(
+        enc.encode(V3_PT),
+        V3_PW,
+        null,
+        { kdf: PBKDF2_FAST, cipher },
+        KEYM2_VERSION_V3
+      );
+      const prf = crypto.getRandomValues(new Uint8Array(32));
+      const salt = crypto.getRandomValues(new Uint8Array(32));
+      // §5.3. Enrolling re-seals the table, so this two-slot container is also
+      // the check that a re-sealed MAC verifies at all — if it did not, every
+      // `false` below would be right for the wrong reason.
+      const two = await addPasskeySlotKeym2(base, { password: V3_PW }, prf, salt);
+
+      const intact = await mustOpen(`${label} untouched`, () => decryptKeym2(two, V3_PW, null));
+      check(
+        intact !== null && dec.decode(intact.data) === V3_PT &&
+          intact.slotTableAuthentic === true,
+        `${label} — an enrolled, untouched v3 table authenticates`
+      );
+      const heir = await mustOpen(`${label} heir`, () =>
+        decryptKeym2(two, "", null, undefined, prf)
+      );
+      check(
+        heir !== null && dec.decode(heir.data) === V3_PT && heir.slotTableAuthentic === true,
+        `${label} — and the enrolled heir opens it`
+      );
+
+      // §1.1, exactly: the heir's slot cut out, count decremented, MAC left as
+      // written. No secret needed, and before v3 no trace.
+      const stripped = withoutSlot(two, 1, width);
+      const afterStrip = await mustOpen(`${label} stripped`, () =>
+        decryptKeym2(stripped, V3_PW, null)
+      );
+      check(
+        afterStrip !== null && dec.decode(afterStrip.data) === V3_PT,
+        `${label} — a stripped container still returns the plaintext (§5.2)`
+      );
+      check(
+        afterStrip?.slotTableAuthentic === false,
+        `${label} — ...and reports that the table is not authentic (§5.2)`
+      );
+      await rejects(`${label} — the stripped heir is locked out for good`, () =>
+        decryptKeym2(stripped, "", null, undefined, prf)
+      );
+
+      // The mirror image. Detection that only worked on the last slot would
+      // pass every check above and still miss half the attack.
+      const ownerGone = withoutSlot(two, 0, width);
+      const afterOwnerGone = await mustOpen(`${label} slot 0 stripped`, () =>
+        decryptKeym2(ownerGone, "", null, undefined, prf)
+      );
+      check(
+        afterOwnerGone !== null && dec.decode(afterOwnerGone.data) === V3_PT &&
+          afterOwnerGone.slotTableAuthentic === false,
+        `${label} — stripping slot 0 is caught too, and the heir still opens it`
+      );
+
+      // §5.1: "every byte of the table, in order", which pins slot order as a
+      // side effect. Reordering is inert as an attack — the unwrap walk tries
+      // every slot — and that is what makes it worth asserting: the MAC has to
+      // notice a change that changes nothing. A construction that hashed the
+      // records as a set rather than a sequence would sail past this.
+      const swapped = swapFirstTwo(two, width);
+      const afterSwap = await mustOpen(`${label} reordered`, () =>
+        decryptKeym2(swapped, V3_PW, null)
+      );
+      check(
+        afterSwap !== null && dec.decode(afterSwap.data) === V3_PT &&
+          afterSwap.slotTableAuthentic === false,
+        `${label} — reordered slots still open, and are still reported`
+      );
+
+      // Tampering that is not a strip at all: one byte inside the heir's
+      // record. The owner's slot is untouched and opens the container as
+      // usual, so nothing about the length, the count or the unwrap can see
+      // this. Only the MAC can.
+      const flipped = Uint8Array.from(two);
+      flipped[TABLE_AT + width] = (flipped[TABLE_AT + width] as number) ^ 0x01;
+      const afterFlip = await mustOpen(`${label} flipped byte`, () =>
+        decryptKeym2(flipped, V3_PW, null)
+      );
+      check(
+        afterFlip !== null && dec.decode(afterFlip.data) === V3_PT &&
+          afterFlip.slotTableAuthentic === false,
+        `${label} — a single flipped byte in another slot is reported`
+      );
+    }
+
+    // §5.2's third value, and the one a boolean cannot express. A v2 container
+    // carries no `slot_table_mac`, so nothing is claimed about its table — and
+    // a reader that collapsed "no claim" into `false` would accuse every backup
+    // written before this revision of having been tampered with.
+    const v2Container = await encryptKeym2(enc.encode(V3_PT), V3_PW, null, {
+      kdf: PBKDF2_FAST,
+      cipher: CipherId.AES_256_GCM,
+    });
+    const v2Read = await mustOpen("v2 container", () =>
+      decryptKeym2(v2Container, V3_PW, null)
+    );
+    check(
+      v2Read !== null && dec.decode(v2Read.data) === V3_PT &&
+        v2Read.slotTableAuthentic === null,
+      "a v2 container claims nothing about its slot table, rather than claiming it is bad"
+    );
   }
 
   // ---- Summary ----
