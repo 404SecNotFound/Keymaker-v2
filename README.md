@@ -303,9 +303,14 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
   need days later
 - Updates never install themselves over a live page. A new version waits and
   asks; you choose when to reload, because a page may be mid-derivation holding
-  key material
+  key material. The worker also checks *which* page is asking: a GitHub Pages
+  project site shares its origin with every other project the same account
+  publishes, and only a client under this registration's own scope can promote
+  a waiting version
 - Secret input and decrypted output blurred by default
-- Clipboard auto-clear after 60 seconds (best-effort)
+- Clipboard auto-clear after 60 seconds — best-effort, and only the entry
+  Keymaker wrote. Clipboard *history* (Win+V, a clipboard manager, phone
+  keyboard history, cloud sync) keeps a copy no web page can reach or detect
 - No accounts, no analytics, no fonts or assets from third-party origins
 
 ---
