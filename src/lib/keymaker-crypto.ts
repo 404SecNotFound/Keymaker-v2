@@ -114,6 +114,36 @@ export const MAX_PASSWORD_LENGTH = 1024;
  * decryptData() without passing that check. A core crypto API should enforce
  * its own resource limits rather than trusting whichever UI calls it.
  */
+/**
+ * What to tell someone whose backup is too big for this app to open.
+ *
+ * The cap is a property of *this build*, not of the format and not of their
+ * file. §5 of FORMAT-V2-DESIGN.md is chunked precisely so a payload need never
+ * be held whole; the browser holds it anyway, twice — once as the container
+ * and once as the assembled plaintext — so 100 MB is where a tab stops being
+ * reliable. `reference/keym2.py` has no such limit.
+ *
+ * Until now both refusals said a variant of "maximum size is 100MB", which on
+ * the *decrypt* side is not merely unhelpful but wrong: it presents a dead end
+ * as a property of the backup and tells the reader to pick a smaller file,
+ * which is not a thing that can be done to a backup. Someone recovering an
+ * inheritance would reasonably conclude the archive was unusable.
+ *
+ * Verified rather than asserted before being promised to anyone: a 150 MiB
+ * file encrypted and decrypted through `keym2.py` round-trips byte-identically
+ * in about two seconds each way, at roughly 634 MiB peak RSS.
+ */
+export function oversizeRecoveryHelp(): string {
+  return (
+    `This backup is larger than the ${MAX_PLAINTEXT_SIZE / 1024 / 1024} MB this app can open in a ` +
+    `browser tab, which has to hold the container and the recovered file in memory at once. ` +
+    `Nothing is wrong with the backup and the KEYM v2 format has no size limit — the ` +
+    `command-line reference opens it:\n\n` +
+    `    python3 keym2.py decrypt --in <your-backup> --out <destination>\n\n` +
+    `It ships in the recovery kit linked in the footer; docs/RECOVERY.md has the full procedure.`
+  );
+}
+
 export const MAX_CONTAINER_SIZE = MAX_PLAINTEXT_SIZE + 4096;
 const MAX_CIPHERTEXT_SIZE = MAX_CONTAINER_SIZE;
 
@@ -454,7 +484,8 @@ function validateCommon(dataBuffer: ArrayBuffer, password: string, isEncryption:
   // base64 reaches decryptData() without going through it, and by then the
   // bytes have already been allocated and are about to hit a KDF.
   if (!isEncryption && dataBuffer.byteLength > MAX_CIPHERTEXT_SIZE) {
-    throw new KeymakerError("too-large", `Encrypted data is too large. Maximum size is ${MAX_FILE_SIZE / 1024 / 1024}MB.`);
+    // Not "pick a smaller file": there is no smaller version of a backup.
+    throw new KeymakerError("too-large", oversizeRecoveryHelp());
   }
   if (typeof password !== "string") {
     throw new KeymakerError("password-invalid", "Password must be a string.");

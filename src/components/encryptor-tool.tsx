@@ -51,6 +51,7 @@ import {
   warmCryptoDependencies,
   MAX_PLAINTEXT_SIZE,
   MAX_CONTAINER_SIZE,
+  oversizeRecoveryHelp,
   MAX_BASE64_INPUT_CHARS,
   MAX_TEXT_PLAINTEXT_BYTES,
   MAX_TEXT_ARMOR_CHARS,
@@ -1686,7 +1687,10 @@ export function EncryptorTool() {
   const handleFileChange = useCallback((
     e: ChangeEvent<HTMLInputElement> | DragEvent<HTMLDivElement>,
     setter: (file: File | null) => void,
-    maxBytes: number = MAX_PLAINTEXT_SIZE
+    maxBytes: number = MAX_PLAINTEXT_SIZE,
+    /** What the file is, when it is refused for being too big. A key file or a
+     *  plaintext can be swapped for a smaller one; a container cannot. */
+    oversized: "plaintext" | "container" = "plaintext"
   ) => {
     let selectedFile: File | null = null;
     if ('dataTransfer' in e) { // DragEvent
@@ -1716,9 +1720,16 @@ export function EncryptorTool() {
     }
     
     if (selectedFile.size > maxBytes) {
+      // "Pick a smaller file" is right for a file you are about to encrypt and
+      // wrong for one you are trying to open: a backup has no smaller version,
+      // and the reference decryptor has no size limit. Same rejection, two
+      // completely different next steps.
       toast({
-        title: "File Too Large",
-        description: `Please select a file smaller than ${Math.floor(maxBytes / 1024 / 1024)}MB.`,
+        title: oversized === "container" ? "Too large for this app" : "File Too Large",
+        description:
+          oversized === "container"
+            ? oversizeRecoveryHelp()
+            : `Please select a file smaller than ${Math.floor(maxBytes / 1024 / 1024)}MB.`,
         variant: "destructive",
       });
       setter(null);
@@ -2117,10 +2128,7 @@ export function EncryptorTool() {
               // Typed, so a size limit is reported as a size limit. As a plain
               // Error this fell through the catch below and told the user their
               // password might be wrong — about a paste they could see was huge.
-              throw new KeymakerError(
-                "too-large",
-                `Encrypted text is too large. Maximum is ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)}MB of original data.`
-              );
+              throw new KeymakerError("too-large", oversizeRecoveryHelp());
             }
 
             let bytes: Uint8Array;
@@ -2528,7 +2536,8 @@ export function EncryptorTool() {
                 setFile,
                 // Decrypting accepts the container, which is larger than the
                 // plaintext it holds by header + salt + nonces + tags.
-                currentMode === 'decrypt' ? MAX_CONTAINER_SIZE : MAX_PLAINTEXT_SIZE
+                currentMode === 'decrypt' ? MAX_CONTAINER_SIZE : MAX_PLAINTEXT_SIZE,
+                currentMode === 'decrypt' ? 'container' : 'plaintext'
               )
             }
             onClear={() => setFile(null)}
