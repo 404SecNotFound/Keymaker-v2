@@ -259,6 +259,55 @@ secret — MUST NOT write a slot table at all. There is no partial edit.
 
 ## 8. Test vectors
 
-To be filled in by the reference implementation (phase 2), in the same form as
-v2's: a fixed `container_id`, salt and master key, producing a container that
-both implementations must reproduce byte for byte.
+Produced by `reference/keym2.py` (phase 2). The TypeScript core must reproduce
+this container **byte for byte** from the same inputs; that is the check that
+catches a header-layout or MAC-construction disagreement, and round-tripping is
+not a substitute for it — two writers can decode each other's output happily
+while disagreeing about how to write it.
+
+Test-only credentials. Never use any of these values for real data: a pinned
+salt and a pinned master key reuse every (key, nonce) pair in the container.
+
+**Inputs**
+
+| field | value |
+|---|---|
+| password | `correct horse battery staple — test only` (UTF-8, NFC) |
+| plaintext | `Keymaker fixture - KEYM v3 / argon2id / aes-256-gcm` (51 bytes, ASCII) |
+| `cipher_id` | `0x00` (AES-256-GCM) |
+| KDF | Argon2id, `t=3`, `m=65536` KiB, `p=4` |
+| slot salt | `00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff` |
+| master key | `404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f` |
+| `container_id` | `0123456789abcdef0123456789abcdef` |
+| slots | one, `slot_type = 0x00` |
+
+**Intermediates** — worth checking on their own, because a container that
+differs only in its last 32 bytes has a MAC bug and a container that differs
+earlier has a header bug, and the two are diagnosed differently.
+
+```
+core_header    4b45594d030000000123456789abcdef0123456789abcdef
+K_table        351351be1b09b978ae98feede32b49f98af1acd365aeda6943178985395e7cf6
+slot_table_mac 5ff0c0fb11b44058abe6be48b590178d0752bc88f0f3954de69c98a68007c418
+```
+
+`core_header` reads as `KEYM` ‖ `03` ‖ `00` (AES) ‖ `00` (flags) ‖ `00`
+(reserved) ‖ the 16-byte `container_id`, which is §3's layout with nothing
+elided.
+
+**Container** — 220 bytes: 24 core header, 1 `slot_count`, 32 MAC, 96 slot
+(48 prefix + 32 wrapped key + 16 tag), 67 payload (51 plaintext + 16 tag).
+
+```
+4b45594d030000000123456789abcdef0123456789abcdef015ff0c0fb11b440
+58abe6be48b590178d0752bc88f0f3954de69c98a68007c41800010000000000
+0000112233445566778899aabbccddeeff00112233445566778899aabbccddee
+ff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea5
+8ebba4ecc919f86d5c86811a5e72ed5e5b7f66708362672c51f8cb0a5cf3cd81
+3330ece0b1f8961f08f3750ad2414b298413cc7e6e30ae646ca833cfd9c4d76d
+55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e
+```
+
+Freezing this as a fixture alongside v2's, and wiring it into the conformance
+job, is phase 4 — it needs the second implementation to be worth running
+against.

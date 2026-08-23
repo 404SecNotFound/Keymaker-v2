@@ -14,6 +14,36 @@
   TypeScript in `src/lib/keym-v2.ts` and `reference/keym2.py`), and since
   Phase 3 it is the format the app writes. KEYM v1 is unchanged and stays
   readable: the version byte dispatches, and the frozen fixtures prove it.
+- **`docs/FORMAT-V3-DESIGN.md`** — KEYM v3, specified as a delta on v2, and
+  implemented in `reference/keym2.py` behind an opt-in. v3 authenticates the
+  slot table as a whole, which v2 does not: a v2 table is authenticated
+  slot-by-slot, so anyone who can write the file can **delete a slot** and the
+  container still opens normally for everyone else. The owner sees their data
+  and has no way to notice that an heir's recovery path is gone. That attack was
+  reproduced before anything was designed; the other two tried — reordering and
+  transplanting a slot — turned out to be inert, and the document says so rather
+  than claiming defeated attacks.
+
+  The fix is a `slot_table_mac`: HMAC-SHA-256 under
+  `HKDF(master_key, "keymaker.v3.slot-table")` over the core header, the slot
+  count and every slot record, plus a 16-byte `container_id` that makes each
+  container's AAD unique. Recomputing it needs only the master key, which
+  unwrapping any one slot already yields — so a table stays editable by someone
+  holding one secret, which is the property `keym-v2.ts` protects at
+  `WRAP_NONCE` and which any v3 design had to keep.
+
+  On a mismatch the reader **still returns the plaintext** and reports that the
+  table is not authentic. Refusing would turn detectable tampering into a lost
+  backup, which is the worse outcome; the payload is independently authenticated
+  and is not what changed. This is the one exception to the generic-error rule,
+  and it leaks nothing — the check runs only after a secret has already opened a
+  slot.
+
+  Python writes v2 by default and v3 on request (`--v3`). Until the TypeScript
+  core writes v3 too, defaulting to it would leave the byte-for-byte conformance
+  job with nothing to compare against, which would weaken the one test that
+  proves the two implementations agree.
+
 
 ### Changed
 - **The reproducibility claim now matches what is checked.** The gate built
