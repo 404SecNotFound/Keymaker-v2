@@ -942,6 +942,8 @@ export function EncryptorTool() {
   const [useKeyFile, setUseKeyFile] = useState(false);
   const [keyFile, setKeyFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  /** Set before the derivation starts when this container will be slow. */
+  const [unlockCostNotice, setUnlockCostNotice] = useState<string | null>(null);
   const [isCryptoAvailable, setIsCryptoAvailable] = useState(true);
   const [isQrModalOpen, setIsQrModalOpen] = useState(false);
 
@@ -1449,6 +1451,33 @@ export function EncryptorTool() {
    * absent. A wipe is not a reset: someone who has just had the tool lock
    * itself wants their configuration still there when they come back.
    */
+  /**
+   * Stop the running derivation, keeping everything the user typed.
+   *
+   * `clearSensitiveState` already terminates the worker, but it also wipes the
+   * password, the key file and the chosen container — correct for an auto-lock
+   * and wrong for "this is taking too long". Someone who stops a slow unlock
+   * wants to not-wait, not to start over.
+   *
+   * Until now the only way to halt a derivation was to switch input type,
+   * which terminates the worker as a side effect of disowning the operation.
+   * That works and nobody would ever find it. A container can ask for minutes
+   * of work — measured at 315 s for eight PBKDF2 slots at the §6 ceiling — so
+   * the way out has to be a button.
+   */
+  const cancelOperation = useCallback(() => {
+    // Same two steps clearSensitiveState uses: move the counter so the
+    // in-flight completion path goes quiet, then actually kill the worker.
+    opSeqRef.current++;
+    cancelAllCryptoWork();
+    setIsLoading(false);
+    setUnlockCostNotice(null);
+    toast({
+      title: "Stopped",
+      description: "The unlock was cancelled. Your password and file are still here.",
+    });
+  }, [toast]);
+
   const clearSensitiveState = useCallback((opts?: { sparingIssuedShares?: boolean }) => {
     // Disown any operation still running. A KDF cannot be cancelled from here —
     // that needs the Worker in Phase 2 — but it can be made harmless: once the
@@ -1890,6 +1919,12 @@ export function EncryptorTool() {
     const opId = ++opSeqRef.current;
     const isStale = () => opSeqRef.current !== opId;
 
+    // This operation has not been priced yet. Without the reset, a previous
+    // slow container's notice would still be in state, and the render gate is
+    // only `isLoading` — so the next unlock, however cheap, would display the
+    // last one's warning while it ran.
+    setUnlockCostNotice(null);
+
     let mutablePassword = password;
     // Set when a legacy IttyBitz container is opened, so the completion toast
     // can mention it (see below).
@@ -2107,8 +2142,33 @@ export function EncryptorTool() {
         // Copy the header before the call. The buffer is transferred to the
         // worker, which detaches it here — reading it afterwards would yield
         // zero bytes and the format readback below would silently go blank.
-        // 128 bytes covers the largest KEYM v1 header (71) with room to spare.
-        const headerPeek = new Uint8Array(inputBuffer.slice(0, Math.min(128, inputBuffer.byteLength)));
+        //
+        // 1 KiB, not the 128 bytes this used to take. 128 covered the largest
+        // KEYM v1 header (71) with room to spare, but a v2 slot table is
+        // 9 + slot_count x 96 bytes and reaches 777 at the eight slots §6
+        // allows. Pricing the unlock below needs all of them, and a peek that
+        // stopped short would silently price only the slots it happened to
+        // see — reporting a cheap unlock for the expensive container this is
+        // for.
+        const headerPeek = new Uint8Array(inputBuffer.slice(0, Math.min(1024, inputBuffer.byteLength)));
+
+        // Say so before the wait, not after it.
+        //
+        // Everything below this line is the unlock: the worker call, the KDF
+        // for every slot a password could match, and only then a result. A
+        // container can honestly ask for minutes of that, and until now the
+        // app gave no sign until it was over. This is the one moment the cost
+        // is knowable — it is declared in the header — and not yet spent.
+        // No format check: keym2UnlockCost parses a v2 core header and returns
+        // null for anything else, so a v1 container or a stray blob is simply
+        // priced at nothing. Checking `decryptResult.format` here would be
+        // reading a variable the worker has not produced yet — the whole point
+        // is that this runs first.
+        {
+          const { keym2UnlockCost, describeUnlockCost } = await import("@/lib/keym-v2");
+          const notice = describeUnlockCost(keym2UnlockCost(headerPeek));
+          if (notice && !isStale()) setUnlockCostNotice(notice);
+        }
 
         // §4.7. A passkey unlock reads before it asks. The PRF salt derives
         // from the slot's own salt, so the container has to be parsed, the
@@ -3538,6 +3598,19 @@ export function EncryptorTool() {
         <LockWarning secondsLeft={lockSecondsLeft} onKeepOpen={keepOpen} />
       )}
 
+      {/* Shown while the derivation runs, with the way out beside it. A notice
+          that explains a long wait but offers no way to end it is only half an
+          answer. */}
+      {isLoading && unlockCostNotice && (
+        <div
+          role="status"
+          className="mt-2 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
+          data-testid="unlock-cost-notice"
+        >
+          {unlockCostNotice}
+        </div>
+      )}
+
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}
@@ -3558,6 +3631,19 @@ export function EncryptorTool() {
             ? `Verify ${inputType === 'file' ? 'File' : 'Text'}`
             : `Decrypt ${inputType === 'file' ? 'File' : 'Text'}`}
       </Button>
+
+      {/* Only while something is running. Terminating the worker is a real
+          stop, not a disowning — see cancelOperation. */}
+      {isLoading && (
+        <Button
+          variant="ghost"
+          onClick={cancelOperation}
+          data-testid="cancel-operation"
+          className="mt-1 h-auto w-full py-2 text-[13px] text-muted-foreground hover:text-foreground"
+        >
+          Stop
+        </Button>
+      )}
 
       {/*
         U15. `role="status"` rather than an alert: it is the explanation for a

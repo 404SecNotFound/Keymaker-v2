@@ -163,3 +163,78 @@ test("encryption still works when the worker script cannot load", async ({ page 
   const container = await encryptText(page, "fallback path still encrypts", STRONG_PASSWORD);
   expect(container.startsWith("keym2:")).toBe(true);
 });
+
+/**
+ * The way out of a long derivation, and the notice that says one is coming.
+ *
+ * Until now the only way to halt a running KDF was to switch input type, which
+ * terminates the worker as a side effect of disowning the operation. That
+ * works and is undiscoverable. A container can honestly ask for minutes —
+ * measured at 315 s for eight PBKDF2 slots at the §6 ceiling — so there has to
+ * be a button, and it has to actually stop the work rather than merely hide
+ * the spinner.
+ */
+test("a running derivation can be stopped, and the inputs survive", async ({ page }) => {
+  // Watch the worker itself. Without this the test passes against a "cancel"
+  // that only calls setIsLoading(false): the spinner goes, the button comes
+  // back, and the derivation grinds on in a worker nobody is listening to —
+  // which is the pre-worker behaviour this button exists to end.
+  const closed: string[] = [];
+  page.on("worker", (w) => w.on("close", () => closed.push(w.url())));
+
+  await page.goto("/");
+  await useTextMode(page);
+  await maxOutArgon2id(page);
+  await page.waitForTimeout(1_500);
+
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill("secret");
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  const running = startOperation(page, /^Encrypt Text$/i);
+  await confirmInFlight(page);
+
+  const stop = visible(page.getByTestId("cancel-operation"));
+  await expect(stop, "no way to stop a derivation that can take minutes").toBeVisible();
+
+  // Baseline taken here, not at zero. The app spawns a warm-up worker on mount
+  // and that one closes on its own, so "at least one worker has ever closed"
+  // is already true before the click — an assertion on the total passed
+  // against a cancel with cancelAllCryptoWork() deleted. What has to be shown
+  // is a close caused *by this click*.
+  const closedBefore = closed.length;
+  await stop.click();
+
+  // Stopped, not merely hidden: the spinner is gone and the primary button is
+  // usable again rather than waiting out a derivation nobody will receive.
+  await expect(page.locator(".animate-spin")).toHaveCount(0, { timeout: 10_000 });
+  await expect(visible(page.getByRole("button", { name: /^Encrypt Text$/i }))).toBeEnabled();
+
+  // The derivation is actually dead, not merely disowned.
+  await expect
+    .poll(() => closed.length, {
+      message: "no worker closed when Stop was pressed — the derivation is still running",
+      timeout: 10_000,
+    })
+    .toBeGreaterThan(closedBefore);
+
+  // And the point of a dedicated cancel rather than reusing the auto-lock's
+  // wipe: someone who stops a slow unlock wants to not-wait, not to start
+  // over. clearSensitiveState would have emptied both of these.
+  await expect(
+    visible(page.getByPlaceholder("Enter text to encrypt")),
+    "stopping threw away the text the user had entered"
+  ).toHaveValue("secret");
+  await expect(
+    visible(page.getByPlaceholder("Enter a strong password")),
+    "stopping threw away the password the user had typed"
+  ).toHaveValue(STRONG_PASSWORD);
+
+  await running;
+});
+
+test("the Stop button is absent when nothing is running", async ({ page }) => {
+  // The control on the test above: if Stop were always rendered, finding it
+  // mid-derivation would prove nothing about the busy state.
+  await page.goto("/");
+  await useTextMode(page);
+  await expect(page.getByTestId("cancel-operation")).toHaveCount(0);
+});

@@ -1278,6 +1278,39 @@ being something a user will sit through. It is a constant of the format for the
 same reason the chunk size is one: a number an attacker cannot choose is worth
 more than a number that can be tuned.
 
+### 6.1 What that aggregate actually costs
+
+The paragraph above puts the slot cap where "a failed unlock stops being
+something a user will sit through". Measured, on a developer laptop, that is:
+
+| slots | KDF at the §6 ceiling | pre-auth cost |
+|---|---|---|
+| 8 | Argon2id, 256 MiB, t=10, p=8 | ~41 s |
+| 8 | PBKDF2, 10,000,000 iterations | ~315 s |
+
+PBKDF2 is the worse case, by about seven times, which is not the direction the
+table above suggests — it is the legacy option, so it is easy to assume it is
+also the cheap one to abuse.
+
+Two facts bound the damage. Only **passphrase** slots have cost parameters:
+§6's slot_type/slot_kdf_id pairing requires Shamir and passkey slots to declare
+HKDF, so an heir unlocking with shares or a passkey cannot be made to pay at
+all. And neither implementation can *write* a second passphrase slot —
+`add-shares` and `add-passkey` are the only slot-adders in `keym2.py`, and
+`addShamirSlotKeym2` / `addPasskeySlotKeym2` in the TypeScript — so a container
+carrying several is already anomalous.
+
+**A conforming reader MUST NOT refuse a container for its aggregate cost.** It
+is legal, another implementation will open it, and any limit low enough to
+catch a hostile file is low enough to strand a backup someone is relying on.
+Losing a seed phrase is a worse outcome than waiting five minutes for one.
+
+What a reader SHOULD do is say so before spending the time. The cost is
+declared in the header and computable with no secret at all, so an interactive
+reader can price the unlock, state how much longer than usual it will take, and
+offer a way out. The web app does this in `keym2UnlockCost`, and its Stop
+control terminates the derivation rather than merely ignoring its result.
+
 ## 7. Text armor
 
 v1 armors a container for copy-paste as `KEYM1:<base64>`. The first four ASCII

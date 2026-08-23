@@ -1440,6 +1440,155 @@ export function dearmorKeym2(text: string): Uint8Array {
  * multi-slot container from Phase 4 says so rather than implying its one
  * visible KDF is the whole story.
  */
+/**
+ * What a *password* attempt on this container will cost, read from the header
+ * alone and before any secret is supplied.
+ *
+ * ## Why this exists
+ *
+ * `unwrapMasterKey` walks the slot table and derives a key for every slot a
+ * supplied secret could match, stopping at the first that unwraps. With the
+ * right password in slot 0 that is one derivation. With the wrong password —
+ * or the right one in the last slot — it is all of them, and every one of them
+ * happens before anything has been authenticated.
+ *
+ * §6 bounds each slot and `KEYM2_MAX_SLOTS` bounds the count, so the total is
+ * bounded rather than open-ended. It is just bounded high. Measured on a
+ * developer laptop, eight passphrase slots at the ceiling cost **41 s** with
+ * Argon2id and **315 s** with PBKDF2 — the PBKDF2 case being the worse one,
+ * and the one an external review that quoted "~30 s" had not reached.
+ *
+ * Nothing here refuses such a container. It cannot: the format permits it,
+ * `reference/keym2.py` opens it, and a limit low enough to catch the hostile
+ * case would also strand a conforming backup that the app itself could have
+ * written. Refusing would trade a slow unlock for a lost one. So the app
+ * *discloses* instead, and the user decides whether to wait.
+ *
+ * ## Only passphrase slots are counted, and that is not an approximation
+ *
+ * §6 pairs slot types with KDFs and `parseKeym2Slot` enforces it before any
+ * derivation: a Shamir or passkey slot must declare HKDF, which takes no cost
+ * parameters at all. So a hostile container cannot make an heir's share-based
+ * or passkey unlock expensive — the only slots with a cost to inflate are the
+ * ones a *password* reaches.
+ *
+ * That is also why a container carrying more than one passphrase slot is
+ * already unusual: neither this app nor `keym2.py` can write a second one.
+ * `addShamirSlotKeym2` and `addPasskeySlotKeym2` are the only slot-adders in
+ * either implementation.
+ *
+ * ## The unit is declared work, not predicted time
+ *
+ * `multipleOfNormal` compares the parameters in the header against this
+ * build's default (Argon2id, 64 MiB, t=3), treating Argon2id cost as
+ * `memory x time_cost` and PBKDF2 as iterations scaled to match.
+ *
+ * It is deliberately **not** a seconds estimate. Argon2id's running time is
+ * not linear through the origin — there is a fixed per-call overhead, which is
+ * exactly why `kdf-calibration.ts` fits two points and an intercept — and
+ * `parallelism` is not modelled at all. Measured, the linear ratio
+ * over-estimates the Argon2id ceiling by about 2.3x. A number presented as
+ * seconds and wrong by that much is worse than no number; a multiple, labelled
+ * as a multiple, is honest and is what the decision actually needs.
+ *
+ * Returns null for anything that is not a readable v2 container, and never
+ * throws: it is called on whatever the user pasted.
+ */
+export interface Keym2UnlockCost {
+  /** Slots a password attempt would derive against. */
+  passphraseSlots: number;
+  /** Slots using HKDF — Shamir and passkey. Free, and listed for context. */
+  hkdfSlots: number;
+  /** Total declared work over the passphrase slots, as a multiple of one
+   *  default unlock. 1 for an ordinary single-slot container. */
+  multipleOfNormal: number;
+}
+
+/** One default unlock: Argon2id at 64 MiB, t=3. The denominator of the ratio. */
+const NORMAL_ARGON2_UNITS = 64 * 1024 * 3;
+
+/**
+ * PBKDF2 iterations worth one default Argon2id unlock.
+ *
+ * Measured rather than assumed: PBKDF2 at 1,000,000 iterations took 4369 ms
+ * against 874 ms for Argon2id at (64 MiB, t=3, p=4) on the same machine, so
+ * one default unlock is about 200,000 iterations. Only the order of magnitude
+ * matters — this decides whether the UI says "about 3x" or "about 40x", and
+ * both readings lead the user to the same decision.
+ */
+const PBKDF2_ITERS_PER_NORMAL_UNIT = 200_000;
+
+export function keym2UnlockCost(data: Uint8Array): Keym2UnlockCost | null {
+  try {
+    const core = parseKeym2CoreHeader(data);
+    const slotCount = data[SLOT_COUNT_OFFSET] as number;
+    if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) return null;
+
+    const width = keym2SlotLen(core.cipher);
+    if (data.length < SLOT_TABLE_OFFSET + slotCount * width) return null;
+
+    let passphraseSlots = 0;
+    let hkdfSlots = 0;
+    let units = 0;
+    for (let i = 0; i < slotCount; i++) {
+      const at = SLOT_TABLE_OFFSET + i * width;
+      const slot = parseKeym2Slot(data.subarray(at, at + width));
+      // §4.4: a slot that will not parse is skipped by the walk, so it costs
+      // nothing and must not be counted here either.
+      if (slot === null) continue;
+      if (slot.kdf.kdf === KEYM2_KDF_HKDF) {
+        hkdfSlots++;
+        continue;
+      }
+      passphraseSlots++;
+      units +=
+        slot.kdf.kdf === KdfId.PBKDF2
+          ? slot.kdf.params.iterations / PBKDF2_ITERS_PER_NORMAL_UNIT
+          : (slot.kdf.params.memoryKiB * slot.kdf.params.timeCost) / NORMAL_ARGON2_UNITS;
+    }
+
+    return {
+      passphraseSlots,
+      hkdfSlots,
+      multipleOfNormal: Math.round(units * 10) / 10,
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A sentence for the decrypt panel, or null when there is nothing worth
+ * saying.
+ *
+ * Silent below the threshold on purpose. A notice that appears on every
+ * ordinary unlock is one nobody reads by the time it matters, and the
+ * container this exists for is not ordinary.
+ */
+export function describeUnlockCost(cost: Keym2UnlockCost | null): string | null {
+  if (cost === null) return null;
+  if (cost.multipleOfNormal < UNLOCK_COST_NOTICE_THRESHOLD) return null;
+  const slots =
+    cost.passphraseSlots > 1
+      ? `${cost.passphraseSlots} password slots, each tried in turn,`
+      : "settings well above this build's defaults,";
+  return (
+    `This backup declares ${slots} so unlocking it will take roughly ` +
+    `${Math.round(cost.multipleOfNormal)}x as long as usual — and that cost is paid ` +
+    `on every attempt, including a wrong password. Nothing is wrong with the file; ` +
+    `it is what the container asks for. You can cancel while it runs.`
+  );
+}
+
+/**
+ * Where "slow" starts. 4x a default unlock is comfortably above anything the
+ * app writes at its own ceiling for a single slot (Argon2id at 256 MiB t=10 is
+ * 13.3 units by this measure, but that is one deliberate choice by the person
+ * who made the backup, not a surprise) and well below the multi-slot shapes
+ * this is for.
+ */
+export const UNLOCK_COST_NOTICE_THRESHOLD = 4;
+
 export function inspectKeym2(
   data: Uint8Array
 ): { kdfLabel: string; cipherLabel: string; slots: number; weakKdf: string | null } | null {
