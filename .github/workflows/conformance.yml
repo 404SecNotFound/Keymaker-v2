@@ -72,7 +72,8 @@ jobs:
       # for a plaintext that is an exact multiple of the chunk size, and both
       # decode correctly — so two writers could disagree, round-trip perfectly
       # in both directions, and still produce incompatible files.
-      - name: Bidirectional conformance (KEYM v2, byte-for-byte)
+      - name: Bidirectional conformance (KEYM v2 and v3, byte-for-byte)
+
         run: npm run test:conformance2
 
       - name: Bidirectional conformance

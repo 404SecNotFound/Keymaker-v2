@@ -44,6 +44,18 @@
   job with nothing to compare against, which would weaken the one test that
   proves the two implementations agree.
 
+  **The TypeScript core now writes and reads v3 as well**, and the two
+  implementations are held to the same bytes: `crosstest2.py` compares v3
+  containers across all six KDF and cipher combinations, both sides reproduce
+  the vector published in §8 of the design document, and an enrolment performed
+  by the TypeScript is byte-identical to the same enrolment performed by the
+  reference — which is what actually pins the MAC, since the two decode each
+  other's containers happily even when they disagree about how to write one.
+  The §5.2 verdict is cross-checked too: the reference writes a container, strips
+  a slot out of it, and the TypeScript must reach the same three-state answer.
+  Both still write v2 by default; the switch is phase 4, with the fixtures.
+
+
 
 ### Changed
 - **The reproducibility claim now matches what is checked.** The gate built

@@ -72,6 +72,24 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     results.append((name, ok, detail))
 
 
+def check_call(name: str, fn, expected) -> None:
+    """
+    check(), for an assertion that has to *call the reference* to evaluate.
+
+    A KeymError becomes a failed check rather than a crash. The reason is the
+    one bridge() gives for raising BridgeError instead of CalledProcessError,
+    and it generalises: results are printed only at the end of the run, so an
+    exception anywhere in the middle prints nothing at all. A malformed
+    container produced by a regression would abort the suite and show zero
+    failing checks — indistinguishable, at a glance, from a clean run.
+    """
+    try:
+        check(name, fn() == expected)
+    except keym2.KeymError as e:
+        check(name, False, f"the reference refused: {e}")
+
+
+
 BRIDGE = HERE / "bridge.mjs"
 
 
@@ -869,8 +887,228 @@ def main() -> int:
             except (keym2.KeymError, ValueError) as e:
                 check(f"{f['name']}: the frozen page still opens", False, str(e))
 
+        # ---------------------------------------------------------------
+        # KEYM v3 (docs/FORMAT-V3-DESIGN.md)
+        # ---------------------------------------------------------------
+        #
+        # Byte equality first, for the same reason §5.1 needed it in v2: the two
+        # implementations decode each other's containers happily even when they
+        # disagree about how to write one. A v3 container adds two things a
+        # round-trip cannot pin — where container_id sits in the widened core
+        # header, and what exactly the MAC covers — and both are invisible to
+        # anything except comparing bytes.
+        print("\nKEYM v3 byte equality (pinned salt, master key and container_id):")
+        CONTAINER_ID = bytes.fromhex("0123456789abcdef0123456789abcdef")
+        for kdf in ("pbkdf2", "argon2id"):
+            for cipher in ("aes", "chacha", "chained"):
+                label = f"v3: {kdf} + {cipher}"
+                plaintext = b"v3 conformance payload \xf0\x9f\x97\x9d " * 40
+
+                src = tmp / "pt3.bin"
+                src.write_bytes(plaintext)
+                js_out = tmp / "js3.keym2"
+                # Caught, not allowed to propagate. A bridge that refuses to
+                # write is a disagreement like any other, and letting it escape
+                # aborts the run with no FAIL lines at all — which reads as
+                # "nothing noticed" when in fact nothing got to look.
+                try:
+                    bridge("encrypt2", "--password", PASSWORD, "--in", str(src),
+                           "--out", str(js_out), "--cipher", cipher, "--salt", SALT.hex(),
+                           "--master-key", MASTER_KEY.hex(),
+                           "--container-id", CONTAINER_ID.hex(), *kdf_flags(kdf))
+                except BridgeError as e:
+                    check(label, False, f"js refused to write: {e}")
+                    continue
+
+
+                py_bytes = keym2.encrypt(
+                    plaintext, PASSWORD,
+                    kdf_id=keym2.KDF_ARGON2ID if kdf == "argon2id" else keym2.KDF_PBKDF2,
+                    cipher_id=CIPHER_IDS[cipher], iterations=PBKDF2_ITERS,
+                    salt=SALT, master_key=MASTER_KEY, container_id=CONTAINER_ID,
+                    version=keym2.VERSION_V3, enforce_write_policy=False, **ARGON2)
+                js_bytes = js_out.read_bytes()
+
+                if py_bytes == js_bytes:
+                    check(label, True)
+                else:
+                    n = min(len(py_bytes), len(js_bytes))
+                    at = next((i for i in range(n) if py_bytes[i] != js_bytes[i]), n)
+                    if at < keym2.CORE_HEADER_LEN_V3:
+                        where = "core header" if at < 8 else f"container_id+{at - 8}"
+                    elif at < keym2.SLOT_TABLE_MAC_OFFSET_V3:
+                        where = "slot_count"
+                    elif at < keym2.SLOT_TABLE_OFFSET_V3:
+                        where = f"slot_table_mac+{at - keym2.SLOT_TABLE_MAC_OFFSET_V3}"
+                    elif at < keym2.SLOT_TABLE_OFFSET_V3 + keym2.slot_len(CIPHER_IDS[cipher]):
+                        where = f"slot+{at - keym2.SLOT_TABLE_OFFSET_V3}"
+                    else:
+                        where = f"payload+{at - keym2.SLOT_TABLE_OFFSET_V3 - keym2.slot_len(CIPHER_IDS[cipher])}"
+                    check(label, False,
+                          f"first difference at byte {at} ({where}); "
+                          f"py {len(py_bytes)}B, js {len(js_bytes)}B")
+
+        # The §8 vector, pinned in both directions. The document publishes these
+        # bytes as what a second implementation must reproduce, so the document
+        # is what both are held to here rather than each other.
+        print("\nKEYM v3 published test vector (docs/FORMAT-V3-DESIGN.md §8):")
+        VEC_PW = "correct horse battery staple — test only"
+        VEC_PT = b"Keymaker fixture - KEYM v3 / argon2id / aes-256-gcm"
+        VEC_SALT = bytes.fromhex(
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+        VEC_MK = bytes.fromhex(
+            "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f")
+        VEC_CID = bytes.fromhex("0123456789abcdef0123456789abcdef")
+        VEC_HEX = (
+            "4b45594d030000000123456789abcdef0123456789abcdef015ff0c0fb11b440"
+            "58abe6be48b590178d0752bc88f0f3954de69c98a68007c41800010000000000"
+            "0000112233445566778899aabbccddeeff00112233445566778899aabbccddee"
+            "ff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea5"
+            "8ebba4ecc919f86d5c86811a5e72ed5e5b7f66708362672c51f8cb0a5cf3cd81"
+            "3330ece0b1f8961f08f3750ad2414b298413cc7e6e30ae646ca833cfd9c4d76d"
+            "55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e")
+        vec_src = tmp / "vec.bin"
+        vec_src.write_bytes(VEC_PT)
+        vec_js = tmp / "vec.keym2"
+        try:
+            bridge("encrypt2", "--password", VEC_PW, "--in", str(vec_src),
+                   "--out", str(vec_js), "--cipher", "aes", "--salt", VEC_SALT.hex(),
+                   "--master-key", VEC_MK.hex(), "--container-id", VEC_CID.hex(),
+                   "--kdf", "argon2id", "--time", "3", "--mem", "65536", "--par", "4")
+            check("the TypeScript reproduces the §8 vector",
+                  vec_js.read_bytes().hex() == VEC_HEX)
+        except BridgeError as e:
+            check("the TypeScript reproduces the §8 vector", False, f"js refused: {e}")
+
+        py_vec = keym2.encrypt(VEC_PT, VEC_PW, salt=VEC_SALT, master_key=VEC_MK,
+                               container_id=VEC_CID, version=keym2.VERSION_V3)
+        check("the reference reproduces the §8 vector", py_vec.hex() == VEC_HEX)
+
+        # ---------------------------------------------------------------
+        # v3 §5.2 — the report each implementation makes about the table
+        # ---------------------------------------------------------------
+        #
+        # The attack the format revision exists for, driven across the boundary:
+        # the reference writes and strips, the TypeScript reads and must reach
+        # the same verdict. A disagreement here is worse than a byte mismatch —
+        # it would mean one implementation tells an heir their recovery options
+        # are intact when the other can see they are not.
+        print("\nKEYM v3 slot-table verdicts (reference writes, TypeScript reads):")
+        v3_pw, v3_heir = PASSWORD, PASSWORD2
+        fast3 = dict(iterations=PBKDF2_ITERS, kdf_id=keym2.KDF_PBKDF2,
+                     enforce_write_policy=False)
+        v3_one = keym2.encrypt(b"an heir needs this", v3_pw,
+                               version=keym2.VERSION_V3, **fast3)
+        v3_two = keym2.add_slot(v3_one, v3_pw, v3_heir,
+                                kdf_id=keym2.KDF_PBKDF2, iterations=PBKDF2_ITERS,
+                                enforce_write_policy=False)
+        v3_core, v3_recs, v3_pay = keym2.parse_container(v3_two)
+        _head = bytearray(v3_two[:keym2.slot_table_offset(v3_core.version)])
+        _head[keym2.slot_count_offset(v3_core.version)] = 1
+        v3_stripped = bytes(_head) + v3_recs[0] + v3_pay
+        v3_revoked = keym2.remove_slot(v3_two, 1, unlock_password=v3_pw)
+        v2_plain = keym2.encrypt(b"an heir needs this", v3_pw, **fast3)
+
+        for name, blob, want in (
+            ("a fresh v3 container", v3_one, "authentic"),
+            ("a v3 container with an enrolled second slot", v3_two, "authentic"),
+            ("a v3 container whose slot was revoked with a secret", v3_revoked, "authentic"),
+
+            ("a v3 container with a slot stripped", v3_stripped, "not-authentic"),
+            ("a v2 container, which has no MAC to check", v2_plain, "absent"),
+        ):
+            blob_path = tmp / "verdict.keym2"
+            blob_path.write_bytes(blob)
+            out_path = tmp / "verdict.out"
+            try:
+                said = bridge_stdout("decrypt2", "--password", v3_pw,
+                                     "--in", str(blob_path), "--out", str(out_path))
+            except BridgeError as e:
+                check(f"{name}: TypeScript reports {want}", False, str(e))
+                continue
+            check(f"{name}: TypeScript reports {want}",
+                  said.strip() == f"slot-table: {want}", said.strip())
+            # §5.2 is two requirements, and the second is the one an
+            # implementation is most likely to get wrong by being cautious.
+            check(f"{name}: the plaintext comes back regardless",
+                  out_path.read_bytes() == b"an heir needs this")
+            check_call(f"{name}: the reference agrees with the TypeScript",
+                       lambda b=blob: {True: "authentic", False: "not-authentic",
+                                       None: "absent"}[
+                           keym2.decrypt_report(b, v3_pw).slot_table_authentic],
+                       want)
+
+
+        # ---------------------------------------------------------------
+        # v3 §5.3 — enrolment re-seals the table, on both sides
+        # ---------------------------------------------------------------
+        #
+        # The TypeScript's enrolment path recomputes slot_table_mac, and until
+        # here nothing exercised it: every v3 container above was written and
+        # mutated by the reference. Byte equality on the enrolled container
+        # covers the MAC and the new slot together, and the verdict check
+        # afterwards is what would catch a MAC that is merely *self*-consistent.
+        print("\nKEYM v3 enrolment (both implementations add a slot to the same container):")
+        SH3_SALT = bytes(range(64, 96))
+        SH3_SECRET = bytes(range(96, 128))
+        SH3_COEFFS = bytes(range(128, 160))
+        K3, N3 = 2, 3
+
+        v3_base = keym2.encrypt(b"v3 enrolment base", PASSWORD,
+                                salt=SALT, master_key=MASTER_KEY,
+                                container_id=CONTAINER_ID, version=keym2.VERSION_V3,
+                                **fast3)
+        v3_base_path = tmp / "v3-base.keym2"
+        v3_base_path.write_bytes(v3_base)
+
+        py_v3_enrolled, py_v3_shares = keym2.add_shamir_slot(
+            v3_base, PASSWORD, K3, N3,
+            salt=SH3_SALT, share_secret=SH3_SECRET, coefficients=SH3_COEFFS)
+
+        js_v3_path = tmp / "v3-enrolled-js.keym2"
+        js_v3_shares_path = tmp / "v3-enrolled-js.txt"
+        try:
+            bridge("addshares", "--password", PASSWORD, "--in", str(v3_base_path),
+                   "--out", str(js_v3_path), "--shares-out", str(js_v3_shares_path),
+                   "--threshold", str(K3), "--shares", str(N3),
+                   "--salt", SH3_SALT.hex(), "--share-secret", SH3_SECRET.hex(),
+                   "--share-coefficients", SH3_COEFFS.hex())
+        except BridgeError as e:
+            check("the enrolled v3 container is byte-identical", False,
+                  f"js refused to enrol: {e}")
+            js_v3_enrolled = None
+        else:
+            js_v3_enrolled = js_v3_path.read_bytes()
+
+
+        if js_v3_enrolled is not None:
+            check("the enrolled v3 container is byte-identical",
+                  py_v3_enrolled == js_v3_enrolled,
+                  f"py={len(py_v3_enrolled)}B js={len(js_v3_enrolled)}B")
+            check("enrolling on v3 kept container_id unchanged",
+                  js_v3_enrolled[8:24] == CONTAINER_ID)
+            check("enrolling on v3 did not re-encrypt the payload",
+                  js_v3_enrolled[keym2.SLOT_TABLE_OFFSET_V3 + 2 * keym2.slot_len(keym2.CIPHER_AES):]
+                  == v3_base[keym2.SLOT_TABLE_OFFSET_V3 + keym2.slot_len(keym2.CIPHER_AES):])
+            # A MAC the TypeScript merely agrees with itself about would pass byte
+            # equality only if the reference computed the same bytes — which is the
+            # point — but this asserts the reference will also *accept* it.
+            check_call("the reference accepts the TypeScript's recomputed MAC",
+                       lambda: keym2.decrypt_report(
+                           js_v3_enrolled, PASSWORD).slot_table_authentic,
+                       True)
+
+            js_v3_shares = [ln for ln in js_v3_shares_path.read_text().split("\n") if ln.strip()]
+            check("the v3 share set is byte-identical", py_v3_shares == js_v3_shares)
+            check_call("the enrolled v3 container opens with the shares",
+                       lambda: keym2.decrypt(js_v3_enrolled, shares=js_v3_shares[:K3]),
+                       b"v3 enrolment base")
+
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+
 
     failed = [(n, d) for n, ok, d in results if not ok]
     for name, ok, detail in results:
@@ -878,9 +1116,11 @@ def main() -> int:
     print()
     print(f"{len(results) - len(failed)} passed, {len(failed)} failed")
     if failed:
-        print("KEYM v2 conformance FAILED — the implementations disagree.")
+        print("KEYM v2/v3 conformance FAILED — the implementations disagree.")
         return 1
-    print("Conformance passed: independent implementations agree on KEYM v2, byte for byte.")
+    print("Conformance passed: independent implementations agree on KEYM v2 and v3, "
+          "byte for byte.")
+
     return 0
 
 
