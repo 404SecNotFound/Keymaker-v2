@@ -29,6 +29,10 @@ import {
   dearmorKeym2,
   encryptKeym2,
   isKeym2Binary,
+  keym2SlotLen,
+  keym2UnlockCost,
+  describeUnlockCost,
+  UNLOCK_COST_NOTICE_THRESHOLD,
 } from "../src/lib/keym-v2.ts";
 
 if (!globalThis.crypto) {
@@ -216,6 +220,110 @@ check(
   Buffer.compare(Buffer.from(bodyA), Buffer.from(probeA)) !== 0,
   "the sliced window equals the plaintext, so it is not ciphertext and the XOR test proves nothing"
 );
+
+// --- what a password attempt will cost, priced before it is spent ----------
+//
+// `unwrapMasterKey` derives once per slot a supplied secret could match, and
+// stops at the first that unwraps. The right password in slot 0 costs one
+// derivation; a wrong one costs all of them, before anything is authenticated.
+//
+// §6 bounds each slot and KEYM2_MAX_SLOTS bounds the count, so the total is
+// bounded — just high. Measured on a developer laptop: eight passphrase slots
+// at the ceiling cost 41 s with Argon2id and 315 s with PBKDF2. The app cannot
+// refuse such a container without stranding a conforming one, so it prices it
+// and says so.
+
+const SLOT_COUNT_OFFSET = 8;
+const SLOT_TABLE_OFFSET = 9;
+
+/** One real container, then its slot record repeated `n` times. */
+function withRepeatedSlots(container: Uint8Array, n: number): Uint8Array {
+  const width = keym2SlotLen(CipherId.AES_256_GCM);
+  const record = container.subarray(SLOT_TABLE_OFFSET, SLOT_TABLE_OFFSET + width);
+  const payload = container.subarray(SLOT_TABLE_OFFSET + width);
+  const out = new Uint8Array(SLOT_TABLE_OFFSET + n * width + payload.length);
+  out.set(container.subarray(0, SLOT_TABLE_OFFSET), 0);
+  out[SLOT_COUNT_OFFSET] = n;
+  for (let i = 0; i < n; i++) out.set(record, SLOT_TABLE_OFFSET + i * width);
+  out.set(payload, SLOT_TABLE_OFFSET + n * width);
+  return out;
+}
+
+const oneSlotAes = await encryptKeym2(new TextEncoder().encode("cost model"), PASSWORD, null, {
+  kdf: FAST,
+  cipher: CipherId.AES_256_GCM,
+});
+
+const costOne = keym2UnlockCost(oneSlotAes);
+check(costOne !== null, "a real container can be priced");
+check(costOne?.passphraseSlots === 1, "an ordinary container declares one passphrase slot");
+check(costOne?.hkdfSlots === 0, "an ordinary container declares no HKDF slots");
+// PBKDF2 at 600k is 3 normal units by the model's scale (200k per unit), which
+// is below the notice threshold — a default container must stay silent.
+check(
+  describeUnlockCost(costOne) === null,
+  "an ordinary container produces no notice",
+  `multipleOfNormal=${costOne?.multipleOfNormal}`
+);
+
+const eightSlots = keym2UnlockCost(withRepeatedSlots(oneSlotAes, 8));
+check(eightSlots?.passphraseSlots === 8, "eight repeated slots are all counted");
+check(
+  (eightSlots?.multipleOfNormal ?? 0) >= UNLOCK_COST_NOTICE_THRESHOLD,
+  "eight slots cross the notice threshold",
+  `multipleOfNormal=${eightSlots?.multipleOfNormal}`
+);
+const eightNotice = describeUnlockCost(eightSlots);
+check(eightNotice !== null, "eight slots produce a notice");
+check(
+  (eightNotice ?? "").includes("8 password slots"),
+  "the notice names how many slots will be tried",
+  eightNotice ?? ""
+);
+// The cost is per attempt, and saying so is the point: a user who mistypes
+// pays it again. A notice that implied a one-off wait would understate it.
+check(
+  /every attempt/i.test(eightNotice ?? ""),
+  "the notice says the cost is paid on every attempt"
+);
+
+// Cost scales with the slot count rather than being a flag.
+const fourSlots = keym2UnlockCost(withRepeatedSlots(oneSlotAes, 4));
+check(
+  Math.abs((eightSlots?.multipleOfNormal ?? 0) - 2 * (fourSlots?.multipleOfNormal ?? 0)) < 0.2,
+  "doubling the slots doubles the priced work",
+  `4 slots=${fourSlots?.multipleOfNormal}, 8 slots=${eightSlots?.multipleOfNormal}`
+);
+
+// §6 pairs Shamir and passkey slots with HKDF, which has no cost parameters,
+// and parseKeym2Slot enforces the pairing before any derivation. So an heir
+// unlocking with shares cannot be made to pay: only passphrase slots count.
+const withShares = await (async () => {
+  const { addShamirSlotKeym2 } = await import("../src/lib/keym-v2.ts");
+  const set = await addShamirSlotKeym2(oneSlotAes, { password: PASSWORD, keyFile: null }, 2, 3);
+  return set.container;
+})();
+const shareCost = keym2UnlockCost(withShares);
+check(shareCost?.hkdfSlots === 1, "the Shamir slot is counted as HKDF");
+check(
+  shareCost?.passphraseSlots === 1,
+  "adding a Shamir slot does not add a passphrase slot to the price"
+);
+check(
+  shareCost?.multipleOfNormal === costOne?.multipleOfNormal,
+  "an HKDF slot costs nothing",
+  `before=${costOne?.multipleOfNormal} after=${shareCost?.multipleOfNormal}`
+);
+
+// Total, not the parser: garbage must price at null rather than throw, because
+// this runs on whatever the user pasted.
+check(keym2UnlockCost(new Uint8Array(0)) === null, "an empty buffer prices as null");
+check(keym2UnlockCost(new Uint8Array(64)) === null, "a zero buffer prices as null");
+check(
+  keym2UnlockCost(new TextEncoder().encode("not a container at all")) === null,
+  "arbitrary text prices as null"
+);
+check(describeUnlockCost(null) === null, "a null cost produces no notice");
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {

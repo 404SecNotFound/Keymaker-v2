@@ -308,6 +308,9 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
   publishes, and only a client under this registration's own scope can promote
   a waiting version
 - Secret input and decrypted output blurred by default
+- A running derivation can be stopped. Slow unlocks are announced before they
+  start, priced from the container's own header, so a file that asks for
+  minutes of work says so instead of looking frozen
 - Clipboard auto-clear after 60 seconds — best-effort, and only the entry
   Keymaker wrote. Clipboard *history* (Win+V, a clipboard manager, phone
   keyboard history, cloud sync) keeps a copy no web page can reach or detect
@@ -387,6 +390,7 @@ None of the three protects a compromised device. That is the next section.
 | Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
 | Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
+| A hostile container cannot burn your CPU unannounced | **Disclosed, not refused.** Unlocking derives a key for every password slot in turn, before anything is authenticated. §6 bounds each slot and caps the count at 8, so the total is bounded — but high: measured at 41 s for eight Argon2id slots at the ceiling and 315 s for eight PBKDF2 ones. The app cannot refuse such a file without also stranding a conforming backup, so it prices the header before starting, says how much longer than usual it will take, and gives you a **Stop** button that terminates the derivation and keeps what you typed. |
 | Recovered plaintext on disk | **Enforced for `--outfile`, and only there.** `reference/keym2.py` writes decrypted output at `0600` and narrows an existing file to match, so a recovery on a shared machine is not readable by other accounts. Redirecting stdout instead hands file creation to the shell, which uses your umask — usually world-readable. |
 | Clipboard is cleared | **Best-effort, and only the current entry.** The browser may refuse the write. More importantly, clipboard *history* — Windows Win+V, a clipboard manager, phone keyboard history, cloud clipboard sync — keeps its own copy that no website can reach or even detect. If you copy a seed phrase on a machine with history enabled, treat it as still there. |
 
