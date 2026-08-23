@@ -6,7 +6,8 @@ import {
   selectCrypto,
   useTextMode,
   STRONG_PASSWORD,
-} from "../browser/helpers";
+  BASE_PATH,
+} from "./helpers";
 
 /**
  * The app, loaded from the subdirectory it is actually deployed to.
@@ -38,11 +39,18 @@ import {
 
 const OUT = join(process.cwd(), "out");
 
-/** Origin and base path of the export under test, from the config's baseURL. */
+/**
+ * Origin and base path of the export under test.
+ *
+ * The origin comes from the config's baseURL; the base path comes from
+ * KEYMAKER_BASE_PATH, which is what both the build and the static server were
+ * given. Reading it from the environment rather than from a dedicated config
+ * is what lets the *whole* browser suite run against this layout instead of
+ * only the file you are reading — see playwright.config.ts.
+ */
 function deployment(baseURL: string | undefined): { origin: string; basePath: string } {
-  if (!baseURL) throw new Error("base-path suite requires a baseURL; see playwright.base-path.config.ts");
-  const url = new URL(baseURL);
-  return { origin: url.origin, basePath: url.pathname.replace(/\/$/, "") };
+  if (!baseURL) throw new Error("base-path suite requires a baseURL; see playwright.config.ts");
+  return { origin: new URL(baseURL).origin, basePath: BASE_PATH };
 }
 
 /**
@@ -57,13 +65,23 @@ function deployment(baseURL: string | undefined): { origin: string; basePath: st
  * A hard failure with the command to fix it, never a skip. A skipped gate is
  * how the CSP/Argon2id bug shipped.
  */
+// A root run has no base path to check, so these skip — visibly, in the
+// report. The hard failure below is reserved for the case that actually hides
+// a bug: a base-path run against a root build, which would 404 everything and
+// could be "fixed" by serving the root layout, turning the file green while
+// testing nothing.
+test.skip(
+  () => BASE_PATH === "",
+  "no KEYMAKER_BASE_PATH: this run serves the root layout, so there is no base path to verify"
+);
+
 test.beforeAll(() => {
   const indexHtml = (() => {
     try {
       return readFileSync(join(OUT, "index.html"), "utf8");
     } catch {
       throw new Error(
-        `base-path suite: no export found at ${OUT}. Run \`npm run build:base-path\` first.`
+        `base-path suite: no export found at ${OUT}. Build with KEYMAKER_BASE_PATH set first.`
       );
     }
   })();
@@ -77,7 +95,7 @@ test.beforeAll(() => {
     indexHtml.includes(`"${basePath}/_next/`),
     `base-path suite: the export in out/ does not reference ${basePath}/_next/, so it was ` +
       `built without KEYMAKER_BASE_PATH. This suite would then be testing the root layout ` +
-      `under a base-path server. Run \`npm run build:base-path\`.`
+      `under a base-path server. Rebuild with KEYMAKER_BASE_PATH set.`
   ).toBe(true);
 });
 
@@ -118,7 +136,7 @@ test("no request escapes the base path, and every one of them resolves", async (
     if (r.status() >= 400) notOk.push(`${r.status()} ${r.url()}`);
   });
 
-  await page.goto("./");
+  await page.goto(`${basePath}/`);
 
   // Every tab, because each mounts a different panel and lazily pulls its own
   // chunks — a prefix that is right on the Encrypt panel and wrong on Tools is
@@ -177,7 +195,7 @@ test("every URL the document declares is under the base path and resolves", asyn
 }) => {
   const { origin, basePath } = deployment(baseURL);
 
-  await page.goto("./");
+  await page.goto(`${basePath}/`);
 
   const declared = await page.evaluate(() => {
     const attrs: Array<[string, string]> = [
@@ -238,7 +256,7 @@ test("the crypto worker is loaded from under the base path", async ({ page, base
   const workers: string[] = [];
   page.on("worker", (w) => workers.push(w.url()));
 
-  await page.goto("./");
+  await page.goto(`${basePath}/`);
   await runEncryption(page);
 
   expect(
@@ -246,7 +264,18 @@ test("the crypto worker is loaded from under the base path", async ({ page, base
     "no worker was created — the derivation ran in-thread, which is what a 404 on " +
       "crypto-worker.js looks like from the outside"
   ).not.toEqual([]);
-  expect(workers).toContain(`${origin}${basePath}/crypto-worker.js`);
+  // Resolved against the origin before comparing, because the engines disagree
+  // on the form and not on the fact. Chromium and WebKit report the worker's
+  // script as an absolute URL; firefox reports it as a path
+  // ("/Keymaker-v2/crypto-worker.js"). Asserting the absolute string passed on
+  // two engines and failed on the third while all three were loading exactly
+  // the right file — a test failing on spelling rather than on the property.
+  const resolved = workers.map((u) => new URL(u, origin).href);
+  expect(
+    resolved,
+    `the worker was created but not from under ${basePath} — a 404 there falls back ` +
+      "to in-thread derivation without reporting anything"
+  ).toContain(`${origin}${basePath}/crypto-worker.js`);
 });
 
 /**
@@ -265,7 +294,7 @@ test("the service worker registers under the base path and controls the page", a
 }) => {
   const { origin, basePath } = deployment(baseURL);
 
-  await page.goto("./");
+  await page.goto(`${basePath}/`);
   // Wrapped, because the bare timeout this raises names nothing. A registration
   // outside the page's own scope — `register('/sw.js')` from a page under
   // /Keymaker-v2/ — is rejected by the browser, and layout.tsx catches that
@@ -334,7 +363,7 @@ test("the base-path build's inline scripts satisfy its own CSP", async ({ page }
     });
   });
 
-  await page.goto("./");
+  await page.goto(`${BASE_PATH}/`);
   await page.waitForLoadState("load");
   // The service worker registration runs on `load`; give it and anything else
   // deferred a moment to be refused before counting.

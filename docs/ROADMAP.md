@@ -911,7 +911,7 @@ format without trusting the app or its author.
   the risk is Next.js and React, which move fastest and are the largest surface.
 - **The Python reference stays first-class.** Bit-for-bit conformance on every
   format change, no exceptions. It is the moat.
-- **The deployed layout is tested, not assumed.** `npm run test:base-path`
+- **The deployed layout is tested, not assumed.** the base-path browser run
   builds the export the way `deploy.yml` builds it and loads it from
   `/Keymaker-v2/`, because the browser suite serves `out/` at the origin root
   and that is not what ships. The rule this encodes: a layout nobody loads in a

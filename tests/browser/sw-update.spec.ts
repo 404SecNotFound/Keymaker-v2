@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { appPath, BASE_PATH } from "./helpers";
 
 /**
  * Service-worker update semantics.
@@ -41,14 +42,14 @@ async function startOwnOrigin(): Promise<{ dir: string; server: ChildProcess }> 
   const dir = mkdtempSync(join(tmpdir(), "keymaker-sw-"));
   cpSync(BUILD_DIR, dir, { recursive: true });
 
-  const server = spawn("node", [resolve(process.cwd(), "scripts/static-server.mjs"), dir, String(PORT)], {
+  const server = spawn("node", [resolve(process.cwd(), "scripts/static-server.mjs"), dir, String(PORT), BASE_PATH], {
     stdio: "ignore",
   });
 
   const deadline = Date.now() + 30_000;
   for (;;) {
     try {
-      const res = await fetch(`${ORIGIN}/sw.js`);
+      const res = await fetch(`${ORIGIN}${appPath("/sw.js")}`);
       if (res.ok) break;
     } catch {
       // not listening yet
@@ -119,7 +120,7 @@ test.describe("service worker updates wait for the user", () => {
     const page = await context.newPage();
 
     try {
-      await page.goto(`${ORIGIN}/`);
+      await page.goto(`${ORIGIN}${appPath("/")}`);
       await expect.poll(() => swState(page)).toMatchObject({ controlled: true, active: "activated" });
 
       const oldCache = readFileSync(join(dir, "sw.js"), "utf8").match(CACHE_VERSION_RE)![1]!;

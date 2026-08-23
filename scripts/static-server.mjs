@@ -51,6 +51,21 @@ const server = createServer((req, res) => {
       res.writeHead(301, { Location: `${BASE}/` }).end();
       return;
     }
+    // The root redirects into the base path so the browser suite's 91
+    // `goto("/")` calls reach the app without being rewritten.
+    //
+    // This is a harness convenience and not a production behaviour: GitHub
+    // Pages serves nothing at the origin root and would return its own 404.
+    // It is safe because it is not the thing under test. What the base-path
+    // run exists to check is that the *assets* resolve — the built HTML
+    // references them absolutely, as `/Keymaker-v2/_next/...`, and only a
+    // server that mounts the app there can prove those URLs are right. The
+    // entry redirect changes where the document is fetched from; it does not
+    // touch a single asset URL inside it.
+    if (pathname === '/') {
+      res.writeHead(302, { Location: `${BASE}/` }).end();
+      return;
+    }
     if (!pathname.startsWith(`${BASE}/`)) {
       res.writeHead(404).end('Not found');
       return;

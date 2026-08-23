@@ -513,19 +513,26 @@ npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference
 npm run test:recovery     # the documented recovery procedure, end to end
 
-npm run build:base-path   # the export as deploy.yml builds it, under /Keymaker-v2/
-npm run test:base-path    # that export, loaded from the subdirectory it ships in
+```
+
+The browser suite runs against whichever layout it was built for. CI builds and
+serves it the way `deploy.yml` does, under `/Keymaker-v2/`; locally it defaults
+to the root so no environment is needed. To reproduce the deployed layout:
+
+```bash
+KEYMAKER_BASE_PATH=/Keymaker-v2 npm run build
+KEYMAKER_BASE_PATH=/Keymaker-v2 npm run test:browser
 ```
 
 `test:browser` needs `npx playwright install` once. `test:conformance` needs
 `pip install -r reference/requirements.txt`.
 
-`build:base-path` and `test:base-path` are a pair and run in that order — both
-builds write to `out/`, so whichever ran last is what gets served. `test:browser`
-covers the root layout (a custom domain, an unpacked release archive, a file on
-disk); `test:base-path` covers the subdirectory GitHub Pages serves from, which
-is a different set of asset URLs and was the one layout never loaded in a
-browser.
+Both must be set together: `output: 'export'` always writes to `out/`, so
+whichever build ran last is what gets served, and a base-path run against a root
+build fails loudly rather than testing the wrong thing. The root layout is what
+a custom domain, an unpacked release archive or a file on disk gives you; the
+base path is the subdirectory GitHub Pages actually serves from, a different set
+of asset URLs, and until recently the one layout never loaded in a browser.
 
 `npm run build` produces a fully static `out/` directory. Serve it from any static
 host, or open it from disk on a machine with no network connection.
@@ -579,9 +586,8 @@ the deploy builds with `KEYMAKER_BASE_PATH=/Keymaker-v2`. Without it the exporte
 HTML would request its assets from the root and serve a blank page. The service
 worker derives its own scope from where it is served, so it needs no configuration.
 
-That layout has its own browser job (`npm run test:base-path`), which loads the
-export from the subdirectory and checks that no URL it declares or requests
-escapes the prefix. It exists because the failure is quiet: a missing asset here
+The browser job builds and serves that layout, and `tests/browser/base-path.spec.ts`
+checks that no URL the export declares or requests escapes the prefix. It exists because the failure is quiet: a missing asset here
 does not produce an error page, it produces a page that renders correctly and
 cannot encrypt — and a `crypto-worker.js` that 404s falls back to running the
 derivation on the main thread without reporting anything at all. The gate reads

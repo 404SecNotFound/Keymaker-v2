@@ -12,6 +12,25 @@ import { defineConfig, devices } from "@playwright/test";
  * `npm run build` must have run first; `webServer` then serves `out/` exactly
  * as a static host would.
  */
+/**
+ * When set, the suite runs against a build served under a base path — the
+ * layout that actually ships.
+ *
+ * `deploy.yml` builds production with `KEYMAKER_BASE_PATH: /Keymaker-v2`, so
+ * every asset in the shipped HTML is referenced absolutely as
+ * `/Keymaker-v2/_next/...`. Served from the origin root, as this suite did
+ * until now, those URLs are never exercised: the tests passed against a layout
+ * no user receives. PR #68 found the cost of that blind spot — release assets
+ * 404 from a `file://` URL, producing a page that renders convincingly and
+ * cannot encrypt anything.
+ *
+ * Build with the same variable and the run covers the real thing:
+ *
+ *   KEYMAKER_BASE_PATH=/Keymaker-v2 npm run build
+ *   KEYMAKER_BASE_PATH=/Keymaker-v2 npm run test:browser
+ */
+const BASE_PATH = (process.env.KEYMAKER_BASE_PATH ?? "").replace(/\/$/, "");
+
 export default defineConfig({
   testDir: "./tests/browser",
   // Crypto is CPU-bound; too many parallel workers just contend for cores and
@@ -52,7 +71,7 @@ export default defineConfig({
     // package at test time, inside the very pipeline that verifies the build's
     // security properties. Nothing shipped to users, but a regression suite
     // that fetches unpinned code at runtime is not reproducible.
-    command: "node scripts/static-server.mjs out 4321",
+    command: `node scripts/static-server.mjs out 4321 ${BASE_PATH}`.trimEnd(),
     url: "http://127.0.0.1:4321",
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,

@@ -5,7 +5,6 @@
   "scripts": {
     "dev": "node scripts/build-crypto-worker.mjs && next dev -p 9002",
     "build": "node scripts/build-crypto-worker.mjs && node scripts/build-recovery-kit.mjs && next build && node scripts/apply-csp-hashes.mjs && node scripts/apply-build-id.mjs && node scripts/build-manifest.mjs",
-    "build:base-path": "node scripts/build-base-path.mjs",
     "typecheck": "tsc --noEmit",
     "test:crypto": "node scripts/crypto-regression.mts",
     "test:keymaker": "node scripts/keymaker-test.mjs",
@@ -13,7 +12,6 @@
     "test:calibration": "node scripts/keymaker-test.mjs calibration",
     "test:fuzz": "node scripts/keymaker-test.mjs fuzz",
     "test:browser": "playwright test",
-    "test:base-path": "playwright test --config=playwright.base-path.config.ts",
     "test:conformance": "python3 reference/crosstest.py",
     "test:keym2": "python3 reference/keym2.py selftest",
     "test:conformance2": "python3 reference/crosstest2.py",

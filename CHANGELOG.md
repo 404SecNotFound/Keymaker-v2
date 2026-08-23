@@ -27,7 +27,7 @@
   architecture is not among it.
 - **The deployed layout is tested.** The browser suite serves `out/` at the
   origin root; GitHub Pages serves it from `/Keymaker-v2/`, which is a different
-  set of asset URLs and was never loaded in a browser. `npm run test:base-path`
+  set of asset URLs and was never loaded in a browser. the base-path browser run
   builds the export the way `deploy.yml` builds it and checks that no URL the
   page declares or requests escapes the prefix, that the crypto worker really
   loads (a 404 there silently moves derivation onto the main thread rather than

@@ -9,6 +9,22 @@ import type { Page, Locator } from "@playwright/test";
  */
 export const visible = (locator: Locator): Locator => locator.locator("visible=true").first();
 
+/**
+ * The base path this run's build was made for, "" when served from the origin
+ * root.
+ *
+ * Production ships under `/Keymaker-v2` (deploy.yml), so any test that names
+ * an absolute path — `/verify.html`, `/recovery/keym.py`, a precached chunk —
+ * is naming something the deployment does not serve unless it is prefixed.
+ * Eight tests did exactly that and had therefore only ever been valid against
+ * a layout no user receives.
+ */
+export const BASE_PATH = (process.env.KEYMAKER_BASE_PATH ?? "").replace(/\/$/, "");
+
+/** An app-absolute path, prefixed for however this run is being served. */
+export const appPath = (path: string): string =>
+  `${BASE_PATH}${path.startsWith("/") ? path : `/${path}`}`;
+
 export type Kdf = "pbkdf2" | "argon2id";
 export type Cipher = "aes" | "chacha" | "chained";
 
