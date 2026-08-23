@@ -38,6 +38,8 @@ export interface DecryptOutcome {
   keyFileUsed: boolean;
   /** v3 §5.2. Null for every format that carries no `slot_table_mac`. */
   slotTableAuthentic: boolean | null;
+  /** The weak-KDF advisory for the slot that actually opened it, or null. */
+  weakKdf: string | null;
 }
 
 interface Pending {
@@ -376,6 +378,7 @@ export async function decryptViaWorker(
       format: res.format,
       keyFileUsed: res.keyFileUsed,
       slotTableAuthentic: res.slotTableAuthentic,
+      weakKdf: res.weakKdf,
     };
   } finally {
     secureErase(prfOutput);

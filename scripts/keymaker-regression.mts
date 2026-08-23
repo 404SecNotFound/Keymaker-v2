@@ -878,6 +878,175 @@ async function main() {
     );
   }
 
+  // ---- 7. The unlock walk finishes what it started ----
+  //
+  // §4.4 says a slot that cannot be used disqualifies itself, never the walk.
+  // That was implemented for slots that fail to *unwrap*. A slot that unwraps
+  // to the wrong master key is the case it missed, and the case an attacker
+  // can arrange on a v2 container:
+  //
+  //   Take any container whose password you know — your own will do, if the
+  //   victim's password is one you also know, or one you set for them. Splice
+  //   its slot in *ahead* of theirs and bump slot_count. Their password now
+  //   opens your slot first, yields your master key, and the payload fails to
+  //   authenticate. A walk that committed to the first unwrap rejects there,
+  //   with the victim's own valid slot untouched at index 1.
+  //
+  // No confidentiality loss — the attacker learns nothing and the payload never
+  // opens for them. Availability only, which for a backup is the whole product.
+  //
+  // v3 closes the way in: container_id is in the slot AAD, so a foreign slot no
+  // longer unwraps at all. v2 has no such binding and stays readable forever,
+  // which is why this is tested against v2.
+  console.log("\nThe unlock walk resumes when a slot yields the wrong key:");
+  {
+    const {
+      encryptKeym2WithExplicitSecrets, decryptKeym2, keym2SlotLen, KEYM2_VERSION_V2,
+    } = await import("../src/lib/keym-v2.ts");
+
+    // v2's offsets, written out for the same reason §3's are above.
+    const V2_COUNT_AT = 8;
+    const V2_TABLE_AT = 9;
+
+    const PW = "the victim's password, which the attacker also knows";
+    const MINE = "attacker's own container";
+    const THEIRS = "the life savings";
+    const opts = {
+      kdf: { kdf: KdfId.PBKDF2, params: { iterations: 600_000 } },
+      cipher: CipherId.AES_256_GCM,
+    } as const;
+    const width = keym2SlotLen(CipherId.AES_256_GCM);
+
+    /** `mustOpen` from the §5 block above, which is scoped to it. */
+    const opens = async (label: string, run: () => Promise<{ data: Uint8Array }>) => {
+      try {
+        return await run();
+      } catch (e) {
+        check(false, `${label} did not open: ${(e as Error).message}`);
+        return null;
+      }
+    };
+
+    // Same salt in both, so the two slots derive the same slot key and the
+    // spliced one genuinely verifies. Different master keys, so it unwraps to
+    // the wrong one — which is the whole point. Explicit secrets because this
+    // attack needs the salts to collide, and a random salt would make the test
+    // pass by never reproducing the bug.
+    const salt = new Uint8Array(32).fill(0x9e);
+    const attacker = await encryptKeym2WithExplicitSecrets(
+      enc.encode(MINE), PW, null, opts, salt, new Uint8Array(32).fill(0x01), KEYM2_VERSION_V2
+    );
+    const victim = await encryptKeym2WithExplicitSecrets(
+      enc.encode(THEIRS), PW, null, opts, salt, new Uint8Array(32).fill(0x02), KEYM2_VERSION_V2
+    );
+
+    const shadowed = new Uint8Array(victim.length + width);
+    shadowed.set(victim.subarray(0, V2_TABLE_AT), 0);
+    shadowed[V2_COUNT_AT] = 2;
+    shadowed.set(attacker.subarray(V2_TABLE_AT, V2_TABLE_AT + width), V2_TABLE_AT);
+    shadowed.set(victim.subarray(V2_TABLE_AT), V2_TABLE_AT + width);
+
+    // The attack has to actually be built before the fix can be said to survive
+    // it. If the spliced slot did not unwrap, the walk would skip it for the
+    // reason it always did and this would prove nothing.
+    const attackerOpens = await opens("the spliced slot's own container", () =>
+      decryptKeym2(attacker, PW, null)
+    );
+    check(
+      attackerOpens !== null && dec.decode(attackerOpens.data) === MINE,
+      "setup — the spliced slot is a real slot that really opens its own container"
+    );
+
+    const opened = await opens("shadowed container", () => decryptKeym2(shadowed, PW, null));
+    check(
+      opened !== null && dec.decode(opened.data) === THEIRS,
+      "a slot spliced ahead of the owner's does not brick the container"
+    );
+    const shadowedFull = await decryptKeym2(shadowed, PW, null);
+    check(
+      shadowedFull.slot !== undefined && shadowedFull.keyFileUsed === false,
+      "...and the slot reported is the one that actually opened it"
+    );
+
+    // The other direction, so the check above cannot be satisfied by a walk
+    // that ignores the payload and returns whatever it finds: a container whose
+    // every slot is foreign must still fail, and fail the same generic way.
+    const allForeign = new Uint8Array(victim.length);
+    allForeign.set(victim.subarray(0, V2_TABLE_AT), 0);
+    allForeign.set(attacker.subarray(V2_TABLE_AT, V2_TABLE_AT + width), V2_TABLE_AT);
+    allForeign.set(victim.subarray(V2_TABLE_AT + width), V2_TABLE_AT + width);
+    await rejects(
+      "a container with no slot that opens its payload is still refused",
+      () => decryptKeym2(allForeign, PW, null)
+    );
+  }
+
+  // ---- 8. The advisory describes the slot that opened ----
+  //
+  // §6's floor is write-side, so a container from before it still opens and now
+  // says it is old. Which slot that notice is *about* was never decided: the UI
+  // read slot 0, because when this was written every container had exactly one.
+  //
+  // With a share set enrolled it has two, and they no longer agree. An heir
+  // unlocking with paper shares — an HKDF slot with no cost parameters, and
+  // nothing weak about it — was told the backup was made with 1,000 PBKDF2
+  // iterations, which describes a slot they do not hold and cannot use. And
+  // since slot order is not fixed, anyone who can write the file chooses which
+  // slot the owner is told about.
+  //
+  // The reader has always known which slot answered. It just did not say.
+  console.log("\nThe weak-KDF advisory names the slot that opened, not slot 0:");
+  {
+    const { dearmorKeym2, addShamirSlotKeym2 } = await import("../src/lib/keym-v2.ts");
+    const { decryptData } = await import("../src/lib/keymaker-crypto.ts");
+    const weak = JSON.parse(
+      readFileSync(join(HERE, "..", "tests", "browser", "fixtures", "weak-legacy-kdf.json"), "utf8")
+    ) as { armor: string; password: string; plaintext: string; iterations: number };
+    // `describeWeakKdf` formats with a thousands separator, so the bare number
+    // never appears in the string it produces.
+    const ITERS = weak.iterations.toLocaleString("en-US");
+
+    const oneSlot = dearmorKeym2(weak.armor);
+    const buf = (u: Uint8Array): ArrayBuffer =>
+      u.buffer.slice(u.byteOffset, u.byteOffset + u.byteLength) as ArrayBuffer;
+
+    // The single-slot case, unchanged: the only slot there is, is the one that
+    // opened, so the advisory was already right and must stay right.
+    const alone = await decryptData(buf(oneSlot), weak.password, null);
+    check(
+      dec.decode(new Uint8Array(alone.data)) === weak.plaintext,
+      "the pre-floor fixture still opens"
+    );
+    check(
+      alone.weakKdf !== null && alone.weakKdf.includes(ITERS),
+      `a one-slot weak container still reports its parameters (got ${alone.weakKdf})`
+    );
+
+    // Enrol a share set. Nothing about slot 0 changes; the container simply now
+    // has a second way in whose KDF is HKDF, which §6 pins for Shamir slots and
+    // which has no cost parameters to be weak.
+    const { container: twoSlot, shares } = await addShamirSlotKeym2(
+      oneSlot, { password: weak.password, keyFile: null }, 2, 3
+    );
+
+    const byPassword = await decryptData(buf(twoSlot), weak.password, null);
+    check(
+      byPassword.weakKdf !== null && byPassword.weakKdf.includes(ITERS),
+      `unlocking the weak slot still reports it (got ${byPassword.weakKdf})`
+    );
+
+    const byShares = await decryptData(buf(twoSlot), "", null, shares.slice(0, 2));
+    check(
+      dec.decode(new Uint8Array(byShares.data)) === weak.plaintext,
+      "the heir's shares open the same container"
+    );
+    check(
+      byShares.weakKdf === null,
+      `unlocking with shares reported "${byShares.weakKdf}" — that is slot 0's ` +
+        `weakness, described to someone holding a slot that has no cost parameters at all`
+    );
+  }
+
   // ---- Summary ----
   console.log(`\n${passed} passed, ${failures} failed`);
   if (failures > 0) {
