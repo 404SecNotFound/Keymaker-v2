@@ -15,11 +15,50 @@ import { visible, useTextMode, selectCrypto } from "./helpers";
 const PASSWORD = "correct-horse-battery-staple-9271!X";
 const SECRET = "abandon ability able about above absent absorb abstract 🔑";
 
-/** Turn on shares in Advanced and set the k-of-n. */
+/**
+ * Turn on shares in Advanced and set the k-of-n.
+ *
+ * Both toggles are driven to a *state* and then confirmed, rather than clicked
+ * once and assumed. The previous version read `aria-expanded`, clicked, and
+ * moved straight on to filling a field — which hung for the full 120 s test
+ * timeout in CI:
+ *
+ *     locator.fill: waiting for getByLabel('Shares to print')
+ *
+ * "Recovery shares" is a Radix `Switch`, and the fields below it are behind
+ * `{shamirEnabled && …}`, so they do not exist until it flips. A click that
+ * lands before the handler is attached is swallowed, the switch stays off, and
+ * the wait is for an element that is never going to be rendered. Nothing in
+ * the old helper could tell that apart from a slow page, so it waited out the
+ * clock and reported a timeout on `fill` — the symptom, two steps from the
+ * cause.
+ *
+ * Asserting the state after each click costs one expect and turns that into an
+ * immediate, named failure.
+ */
 async function enableShares(page: import("@playwright/test").Page, k: number, n: number) {
   const advanced = visible(page.getByRole("button", { name: /^Advanced/ }));
   if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
-  await visible(page.getByLabel("Recovery shares")).click();
+  await expect(advanced, "the Advanced panel did not open").toHaveAttribute(
+    "aria-expanded",
+    "true"
+  );
+
+  const sharesSwitch = visible(page.getByRole("switch", { name: "Recovery shares" }));
+  // Retried, not clicked once. A single click that gets swallowed leaves the
+  // switch off forever, and asserting afterwards only reports that faster — it
+  // does not make the run pass. The guard re-reads `aria-checked` before every
+  // attempt, so a click that *did* land is never undone by a retry.
+  await expect(
+    async () => {
+      if ((await sharesSwitch.getAttribute("aria-checked")) !== "true") {
+        await sharesSwitch.click();
+      }
+      await expect(sharesSwitch).toHaveAttribute("aria-checked", "true", { timeout: 1_000 });
+    },
+    "the Recovery shares switch never turned on, so its fields were never rendered"
+  ).toPass({ timeout: 20_000 });
+
   await visible(page.getByLabel("Shares to print")).fill(String(n));
   await visible(page.getByLabel("Needed to open")).fill(String(k));
 }
