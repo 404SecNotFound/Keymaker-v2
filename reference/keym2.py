@@ -3816,6 +3816,34 @@ def _selftest() -> int:
         v3msg = b"the heir needs this in twenty years \xf0\x9f\x97\x9d" * 4
         v3one = encrypt(v3msg, pw, version=VERSION_V3, **fast)
 
+        # --- §4.1.1, the vectors the spec publishes ---
+        #
+        # A documented vector that nothing executes goes stale, and this one is
+        # aimed at implementers who will never run this file — so it has to be
+        # right without them being able to tell that it is. Pinned here so the
+        # hex in FORMAT-V2-DESIGN.md cannot drift away from the code.
+        nfd_pw = "cafe" + chr(0x301) + " u" + chr(0x308)
+        check("§4.1.1's NFD spelling really is decomposed",
+              nfd_pw != unicodedata.normalize("NFC", nfd_pw))
+        check("§4.1.1's published kdf_input vector reproduces",
+              build_kdf_input(nfd_pw, None).hex()
+              == "000000156b65796d616b65722e76322e6b64662d696e707574"
+                 "00000008636166c3a920c3bc"
+                 "00000000")
+        check("...and normalizing is what makes the middle field 8 bytes, not 10",
+              len(unicodedata.normalize("NFC", nfd_pw).encode()) == 8
+              and len(nfd_pw.encode()) == 10)
+        CTX_HEX = "000000156b65796d616b65722e76322e6b64662d696e707574"  # LP(ctx)
+        PW_HEX = "0000000270 77".replace(" ", "")                       # LP("pw")
+        check("§4.1.1's present-but-empty key file vector reproduces",
+              build_kdf_input("pw", b"").hex()
+              == CTX_HEX + PW_HEX + "00000020"
+                 + "527d3a283a4235b357fe4952a4478aa0015cb8f475523f1f2bf8d637ae7faa97")
+        check("§4.1.1's absent key file vector reproduces",
+              build_kdf_input("pw", None).hex() == CTX_HEX + PW_HEX + "00000000")
+        check("§4.1.1: the two key-file cases are different inputs",
+              build_kdf_input("pw", b"") != build_kdf_input("pw", None))
+
         # --- §3, header geometry ---
         check("a v3 container declares version 3", v3one[4] == VERSION_V3)
         check("the v3 core header is 24 bytes",

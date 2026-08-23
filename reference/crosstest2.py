@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -404,6 +405,200 @@ def main() -> int:
                           == plaintext)
                 except keym2.KeymError as e:
                     check(f"js->py {kdf}/{cipher}", False, f"python refused: {e}")
+
+        # ---------------------------------------------------------------
+        # 3b. Unicode normalization (§4.1)
+        # ---------------------------------------------------------------
+        #
+        # `build_kdf_input` normalizes to NFC in both implementations, and until
+        # now nothing here exercised it: every password in this file is ASCII,
+        # and for ASCII the NFC and NFD forms are the same string. The step that
+        # matters most for the promise "open this in twenty years with an
+        # implementation nobody has written yet" was the one step never
+        # compared across the boundary.
+        #
+        # It matters because the two spellings arrive from different places
+        # through no fault of the user. macOS hands out NFD from its
+        # filesystem; most Linux and Windows input methods produce NFC; an iOS
+        # keyboard and a password manager can disagree about the same typed
+        # character. Someone who sets a password with an accent in it on one
+        # machine and types the identical password on another must get in.
+        #
+        # Four cases, because NFC is four mechanisms and an implementation can
+        # get some and miss others. A hand-rolled composer that only handles
+        # the Latin-1 precomposed table passes the first and fails the rest.
+        def _refuses(fn) -> bool:
+            try:
+                fn()
+            except keym2.KeymError:
+                return True
+            return False
+
+        NFC_CASES = [
+            # Canonical composition: base + combining acute -> precomposed.
+            ("composition", "cafe\u0301 u\u0308", "caf\u00e9 \u00fc"),
+            # Canonical *ordering*: two combining marks supplied in the wrong
+            # class order. Composition alone does not fix this; reordering does.
+            ("reordering", "q\u0307\u0323w", "q\u0323\u0307w"),
+            # Hangul composition, which is algorithmic rather than table-driven.
+            ("hangul", "\u1100\u1161\u11a8pw", "\uac01pw"),
+            # A singleton mapping: ANGSTROM SIGN -> LATIN CAPITAL A WITH RING.
+            ("singleton", "\u212bngstr\u00f6m", "\u00c5ngstr\u00f6m"),
+        ]
+        print("\nUnicode normalization (§4.1 — NFC, across the boundary):")
+        nfc_salt = bytes(range(32))
+        for label, decomposed, composed in NFC_CASES:
+            # Precondition. Without it a case where the two spellings are the
+            # same string proves nothing, and a source file that got normalized
+            # by an editor on the way in would make every check below vacuous
+            # while still passing.
+            check(f"{label}: the two spellings are actually different strings",
+                  decomposed != composed,
+                  f"both are {decomposed!a}")
+            check(f"{label}: Python agrees on the NFC form",
+                  unicodedata.normalize("NFC", decomposed) == composed,
+                  f"got {unicodedata.normalize('NFC', decomposed)!a}")
+
+            # The conformance claim: same pinned salt and master key, one side
+            # given the decomposed spelling and the other the composed one, and
+            # the containers must be byte-identical. Anything less than equal
+            # bytes means the two derived different keys from what a user would
+            # call the same password.
+            src = tmp / "nfc-pt.bin"
+            src.write_bytes(b"normalization vector")
+            js_out = tmp / "nfc-js.keym2"
+            bridge("encrypt2", "--password", decomposed, "--in", str(src),
+                   "--out", str(js_out), "--cipher", "aes", "--salt", nfc_salt.hex(),
+                   "--master-key", MASTER_KEY.hex(), *kdf_flags("pbkdf2"))
+            py_bytes = keym2.encrypt(
+                b"normalization vector", composed,
+                kdf_id=keym2.KDF_PBKDF2, cipher_id=keym2.CIPHER_AES,
+                iterations=PBKDF2_ITERS, salt=nfc_salt, master_key=MASTER_KEY,
+                version=keym2.VERSION_V2,
+            )
+            check(f"{label}: js(NFD) and py(NFC) are byte-identical",
+                  js_out.read_bytes() == py_bytes,
+                  f"js={len(js_out.read_bytes())} py={len(py_bytes)}")
+
+            # And both directions open, which is the property a person
+            # experiences: set it on one machine, type it on another.
+            try:
+                check(f"{label}: python opens the js container with the other spelling",
+                      keym2.decrypt(js_out.read_bytes(), composed) == b"normalization vector")
+            except keym2.KeymError as e:
+                check(f"{label}: python opens the js container with the other spelling",
+                      False, f"python refused: {e}")
+
+            py_blob = tmp / "nfc-py.keym2"
+            py_blob.write_bytes(py_bytes)
+            got = tmp / "nfc-got.bin"
+            try:
+                bridge("decrypt2", "--password", decomposed, "--in", str(py_blob),
+                       "--out", str(got))
+                check(f"{label}: js opens the python container with the other spelling",
+                      got.read_bytes() == b"normalization vector")
+            except BridgeError as e:
+                check(f"{label}: js opens the python container with the other spelling",
+                      False, f"js refused: {e}")
+
+        # The control on all of the above. If normalization were implemented as
+        # "strip anything non-ASCII" — which passes every check so far — this
+        # fails: two passwords that are not normalization variants of each other
+        # must still be different passwords.
+        confusable = tmp / "nfc-confusable.keym2"
+        confusable.write_bytes(keym2.encrypt(
+            b"normalization vector", "caf\u00e9",
+            kdf_id=keym2.KDF_PBKDF2, cipher_id=keym2.CIPHER_AES,
+            iterations=PBKDF2_ITERS, salt=nfc_salt, master_key=MASTER_KEY,
+            version=keym2.VERSION_V2,
+        ))
+        for other in ("cafe", "caf", "caf\u00e8"):
+            check(f"a password that is not a normalization variant is still refused ({other!a})",
+                  _refuses(lambda: keym2.decrypt(confusable.read_bytes(), other)))
+
+        # ---------------------------------------------------------------
+        # 3c. The empty key file (§4.1)
+        # ---------------------------------------------------------------
+        #
+        # §4.1 encodes "no key file" as LP(b"") and a present-but-empty one as
+        # LP(sha256(b"")) — 32 bytes — specifically so the two cannot collide.
+        # Both implementations say so in a comment. Neither had been asked.
+        #
+        # It could not be asked: `bridge.mts` tested `keyfileHex ? … : null`,
+        # and "" is falsy, so an empty key file arrived on the TypeScript side
+        # as no key file at all. The one property §4.1 goes out of its way to
+        # provide was the one property this harness was structurally unable to
+        # check. That is fixed above; this is the check it was blocking.
+        #
+        # Not a hypothetical input, either. A key file is a file someone
+        # chooses, and "the file I picked is zero bytes" happens — a truncated
+        # copy, a sync that created the entry before the contents, a
+        # placeholder someone meant to fill in. It must not silently become
+        # "no key file", because the container it opens is a different one.
+        print("\nThe empty key file (§4.1 — present-but-empty is not absent):")
+        ek_salt = bytes(range(31, -1, -1))
+        ek_pt = b"empty key file vector"
+
+        def py_ek(keyfile):
+            return keym2.encrypt(
+                ek_pt, PASSWORD, kdf_id=keym2.KDF_PBKDF2,
+                cipher_id=keym2.CIPHER_AES, keyfile_bytes=keyfile,
+                iterations=PBKDF2_ITERS, salt=ek_salt, master_key=MASTER_KEY,
+                version=keym2.VERSION_V2,
+            )
+
+        py_none, py_empty = py_ek(None), py_ek(b"")
+        check("python: an empty key file is not the same container as no key file",
+              py_none != py_empty)
+        check("python: only the empty-key-file container sets the key-file flag",
+              keym2.parse_slot(
+                  py_empty[keym2.SLOT_TABLE_OFFSET:
+                           keym2.SLOT_TABLE_OFFSET + keym2.slot_len(keym2.CIPHER_AES)]
+              ).keyfile_used
+              and not keym2.parse_slot(
+                  py_none[keym2.SLOT_TABLE_OFFSET:
+                          keym2.SLOT_TABLE_OFFSET + keym2.slot_len(keym2.CIPHER_AES)]
+              ).keyfile_used)
+
+        src = tmp / "ek-pt.bin"
+        src.write_bytes(ek_pt)
+        for label, extra, expected in (
+            ("no key file", [], py_none),
+            ("an empty key file", ["--keyfile", ""], py_empty),
+        ):
+            js_out = tmp / "ek-js.keym2"
+            bridge("encrypt2", "--password", PASSWORD, "--in", str(src),
+                   "--out", str(js_out), "--cipher", "aes", "--salt", ek_salt.hex(),
+                   "--master-key", MASTER_KEY.hex(), *kdf_flags("pbkdf2"), *extra)
+            check(f"js and py agree byte for byte on {label}",
+                  js_out.read_bytes() == expected,
+                  f"js={len(js_out.read_bytes())} py={len(expected)}")
+
+        # And the property that makes the distinction worth having: the two are
+        # not interchangeable at unlock time, in either implementation.
+        check("python refuses the empty-key-file container when given no key file",
+              _refuses(lambda: keym2.decrypt(py_empty, PASSWORD)))
+        check("python refuses the no-key-file container when given an empty key file",
+              _refuses(lambda: keym2.decrypt(py_none, PASSWORD, keyfile_bytes=b"")))
+
+        blob = tmp / "ek-py.keym2"
+        blob.write_bytes(py_empty)
+        got = tmp / "ek-got.bin"
+        try:
+            bridge("decrypt2", "--password", PASSWORD, "--keyfile", "",
+                   "--in", str(blob), "--out", str(got))
+            check("js opens the empty-key-file container with an empty key file",
+                  got.read_bytes() == ek_pt)
+        except BridgeError as e:
+            check("js opens the empty-key-file container with an empty key file",
+                  False, f"js refused: {e}")
+        js_refused = False
+        try:
+            bridge("decrypt2", "--password", PASSWORD, "--in", str(blob),
+                   "--out", str(tmp / "ek-nope.bin"))
+        except BridgeError:
+            js_refused = True
+        check("js refuses that same container when given no key file", js_refused)
 
         # ---------------------------------------------------------------
         # 4. Rejection agrees across implementations
