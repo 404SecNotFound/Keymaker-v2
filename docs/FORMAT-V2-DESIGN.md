@@ -1565,6 +1565,16 @@ bytes they need are in the same file.
   rather than open — the format is frozen (§9), so padding is a v3 question.
   README.md states the leak plainly rather than leaving it to be discovered.
 
+- **The slot table is authenticated slot-by-slot, not as a whole.** §5.3 keeps
+  `slot_count` out of every AAD so a table stays editable by someone holding one
+  secret, and the cost of that is a table nothing covers: an attacker who can
+  write the file can delete a slot, and the container still opens for everyone
+  else. Reproduced — the owner sees nothing wrong while an enrolled heir is
+  locked out permanently. [FORMAT-V3-DESIGN.md](FORMAT-V3-DESIGN.md) closes it
+  with a master-key-derived MAC over the whole table, which keeps §5.3's
+  editability property intact. v2 containers stay strippable; the fix is a new
+  version, not a patch to this one.
+
 ## 9. Migration — done, and the format is frozen
 
 Written as a plan; kept as a record. Every step below has happened, and step 2
