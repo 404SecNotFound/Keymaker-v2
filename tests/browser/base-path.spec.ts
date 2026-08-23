@@ -264,7 +264,18 @@ test("the crypto worker is loaded from under the base path", async ({ page, base
     "no worker was created — the derivation ran in-thread, which is what a 404 on " +
       "crypto-worker.js looks like from the outside"
   ).not.toEqual([]);
-  expect(workers).toContain(`${origin}${basePath}/crypto-worker.js`);
+  // Resolved against the origin before comparing, because the engines disagree
+  // on the form and not on the fact. Chromium and WebKit report the worker's
+  // script as an absolute URL; firefox reports it as a path
+  // ("/Keymaker-v2/crypto-worker.js"). Asserting the absolute string passed on
+  // two engines and failed on the third while all three were loading exactly
+  // the right file — a test failing on spelling rather than on the property.
+  const resolved = workers.map((u) => new URL(u, origin).href);
+  expect(
+    resolved,
+    `the worker was created but not from under ${basePath} — a 404 there falls back ` +
+      "to in-thread derivation without reporting anything"
+  ).toContain(`${origin}${basePath}/crypto-worker.js`);
 });
 
 /**
