@@ -69,7 +69,9 @@ test("the self-describing header is read back on decrypt", async ({ page }) => {
   // The container states its own parameters, and the UI surfaces them.
   const body = await page.evaluate(() => document.body.innerText);
   expect(body).toContain("Argon2id");
-  expect(body).toMatch(/Format:\s*KEYM v2/);
+  // The app writes v3 now; §6 keeps v1 and v2 readable, and the frozen corpus
+  // plus slot-table-warning.spec.ts cover those on the read side.
+  expect(body).toMatch(/Format:\s*KEYM v3/);
 
   // 6.1. The format is named after the format. Labelling a container
   // "Keymaker v2" collides with the application's own version, and leaves a

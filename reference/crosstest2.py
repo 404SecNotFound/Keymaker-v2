@@ -156,6 +156,17 @@ def payload_offset(cipher: str, slots: int = 1) -> int:
 
 def py_encrypt(plaintext: bytes, kdf: str, cipher: str, keyfile: bytes | None,
                salt: bytes, master_key: bytes = MASTER_KEY) -> bytes:
+    """
+    A **v2** container, pinned rather than defaulted.
+
+    Both implementations write v3 by default now, and the v2 section below is
+    still worth running: v2 containers exist, and the two implementations have
+    to keep agreeing about them byte for byte for as long as anyone holds one.
+    `bridge.mts` selects v2 whenever no --container-id is given, so this side
+    says v2 out loud to match. Left on the default the two would be compared
+    across versions and every case would fail at byte 4 — which looks like a
+    header disagreement and is really just both sides writing what was asked.
+    """
     return keym2.encrypt(
         plaintext,
         PASSWORD,
@@ -165,6 +176,7 @@ def py_encrypt(plaintext: bytes, kdf: str, cipher: str, keyfile: bytes | None,
         iterations=PBKDF2_ITERS,
         salt=salt,
         master_key=master_key,
+        version=keym2.VERSION_V2,
         **ARGON2,
     )
 
@@ -1040,7 +1052,8 @@ def main() -> int:
         _head[keym2.slot_count_offset(v3_core.version)] = 1
         v3_stripped = bytes(_head) + v3_recs[0] + v3_pay
         v3_revoked = keym2.remove_slot(v3_two, 1, unlock_password=v3_pw)
-        v2_plain = keym2.encrypt(b"an heir needs this", v3_pw, **fast3)
+        v2_plain = keym2.encrypt(b"an heir needs this", v3_pw,
+                                 version=keym2.VERSION_V2, **fast3)
 
         for name, blob, want in (
             ("a fresh v3 container", v3_one, "authentic"),

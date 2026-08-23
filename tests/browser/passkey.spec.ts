@@ -82,9 +82,17 @@ async function slotTypes(page: Page, armor: string): Promise<number[]> {
     const b64 = text.slice("keym2:".length).replace(/\s+/g, "").replace(/-/g, "+").replace(/_/g, "/");
     const bin = atob(b64 + "=".repeat((4 - (b64.length % 4)) % 4));
     const bytes = Uint8Array.from(bin, (c) => c.charCodeAt(0));
-    const count = bytes[8]!;
-    // §4.4: the table starts at byte 9, and an AES slot is 96 bytes.
-    return Array.from({ length: count }, (_, i) => bytes[9 + i * 96]!);
+    // The table's position follows the version byte: v2 puts slot_count at 8
+    // and the table at 9; v3 §3 widens the core header to 24 for container_id
+    // and inserts a 32-byte slot_table_mac, so the table starts at 57. Read at
+    // v2's offsets a v3 container yields a slot count taken from container_id —
+    // a random byte — and a list of slot types read out of the header.
+    const v3 = bytes[4] === 3;
+    const countAt = v3 ? 24 : 8;
+    const table = v3 ? 57 : 9;
+    const count = bytes[countAt]!;
+    // §4.4: an AES slot is 96 bytes in both versions.
+    return Array.from({ length: count }, (_, i) => bytes[table + i * 96]!);
   }, armor);
 }
 

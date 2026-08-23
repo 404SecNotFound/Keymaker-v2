@@ -24,6 +24,8 @@ import {
   armorKeym2,
   dearmorKeym2,
   keym2SlotLen,
+  keym2SlotCountOffset,
+  keym2SlotTableOffset,
   parseKeym2CoreHeader,
   parseKeym2Slot,
 } from "@/lib/keym-v2";
@@ -43,8 +45,13 @@ export const KEYM2_SELFEXTRACT_END = "<!--KEYM2-END-->";
 /** §7. Explicitly ASCII: two readers disagreeing about U+00A0 is a backup that opens for one of them. */
 const ASCII_WHITESPACE = /[ \t\n\r\v\f]/g;
 
-const SLOT_TABLE_OFFSET = 9;
-const SLOT_COUNT_INDEX = 8;
+// The table's position depends on the container's version, and reading it at a
+// fixed 9 is how this file came to answer "the password slot uses Argon2id" for
+// a v3 container written with PBKDF2: offset 8 in v3 is the first byte of
+// container_id, so the slot count was a random number and the walk stepped
+// through the middle of the header. Taken from keym-v2.ts now rather than
+// restated, because a second copy of a layout constant is a second thing to
+// forget.
 
 /**
  * §7.2. Why a WebCrypto-only reader could not open this container.
@@ -74,13 +81,14 @@ export function webcryptoProfileViolations(container: Uint8Array): string[] {
     );
   }
 
-  const slotCount = container[SLOT_COUNT_INDEX] as number;
+  const slotCount = container[keym2SlotCountOffset(core.version)] as number;
+  const table = keym2SlotTableOffset(core.version);
   const width = keym2SlotLen(core.cipher);
   let usable = false;
   let keyFileOnly = false;
 
   for (let j = 0; j < slotCount; j++) {
-    const start = SLOT_TABLE_OFFSET + j * width;
+    const start = table + j * width;
     const record = container.subarray(start, start + width);
     if (record.length < width) break;
     // §4.4's skip rule: a slot this reader cannot parse is not evidence about
@@ -206,7 +214,7 @@ export function looksLikeSelfExtract(text: string): boolean {
  * reason the app does: hashing a stylesheet buys nothing when no untrusted
  * style can reach the document.
  */
-const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-UCLhT5T6jPD3FKnwVVpIIl4EzbBIKYSeCPzOL+2C+hw=";
+const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-9HitD62CnjU7w9Lg87XIXNvyspR1eoO2VNjtAksD998=";
 
 const SELF_EXTRACT_CSP = [
   "default-src 'none'",
@@ -223,7 +231,14 @@ const DECRYPTOR_JS = `
 // KEYM v2, the WebCrypto-only subset (FORMAT-V2-DESIGN.md 7.2).
 // AES-256-GCM + PBKDF2-HMAC-SHA-256 only: no WebAssembly, no network, no deps.
 
-var CHUNK = 1048576, TAG = 16, SLOT_LEN = 96, SLOT_TABLE = 9;
+var CHUNK = 1048576, TAG = 16, SLOT_LEN = 96;
+// v2 puts slot_count at 8 and the table at 9. v3 widens the core header to 24
+// for container_id and puts a 32-byte slot_table_mac between them, so the table
+// starts at 57. Both are read here because a page written today has to keep
+// opening after the app has moved on, and a page written before v3 has to keep
+// opening now.
+var V2 = { core: 8, count: 8, table: 9 };
+var V3 = { core: 24, count: 24, mac: 25, table: 57 };
 
 function bytes(s) { return new TextEncoder().encode(s); }
 
@@ -295,26 +310,49 @@ async function slotKeyFor(password, salt, iterations) {
   return new Uint8Array(bits);
 }
 
+// v3 section 5.1. HKDF-SHA-256(master_key, salt = "", info) then HMAC-SHA-256
+// over the core header, the slot count and every slot record in order. Both
+// primitives are in Web Crypto, so this stays a page with no wasm and no deps.
+async function slotTableAuthentic(container, geom, slotCount, masterKey) {
+  var prk = await crypto.subtle.importKey('raw', masterKey, 'HKDF', false, ['deriveBits']);
+  var raw = await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: bytes('keymaker.v3.slot-table') },
+    prk, 256);
+  var key = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  var msg = cat([container.subarray(0, geom.core), new Uint8Array([slotCount]),
+                 container.subarray(geom.table, geom.table + slotCount * SLOT_LEN)]);
+  var want = new Uint8Array(await crypto.subtle.sign('HMAC', key, msg));
+  var got = container.subarray(geom.mac, geom.mac + 32);
+  var diff = 0;
+  for (var i = 0; i < 32; i++) diff |= want[i] ^ got[i];
+  return diff === 0;
+}
+
 async function decrypt(container, password) {
-  if (container.length < 9) throw new Error('too short');
+  if (container.length < 5) throw new Error('too short');
   if (container[0] !== 0x4B || container[1] !== 0x45 ||
       container[2] !== 0x59 || container[3] !== 0x4D) throw new Error('not a KEYM container');
-  if (container[4] !== 2) throw new Error('not KEYM v2');
+  // v3 section 6: a reader that understands v3 must still open v2. This page
+  // ships inside the backup it opens, so it is the one reader that can never be
+  // updated afterwards -- it has to know every version it might be handed.
+  if (container[4] !== 2 && container[4] !== 3) throw new Error('not KEYM v2 or v3');
+  var geom = container[4] === 3 ? V3 : V2;
+  if (container.length < geom.table) throw new Error('too short');
   if (container[5] !== 0) throw new Error('this backup is not AES-256-GCM');
   if (container[6] !== 0 || container[7] !== 0) throw new Error('reserved header field set');
 
-  var slotCount = container[8];
+  var slotCount = container[geom.count];
   if (slotCount < 1 || slotCount > 8) throw new Error('bad slot count');
-  var payloadOffset = SLOT_TABLE + slotCount * SLOT_LEN;
+  var payloadOffset = geom.table + slotCount * SLOT_LEN;
   if (container.length < payloadOffset + TAG) throw new Error('too short');
 
-  var core = container.subarray(0, 8);           // section 5.3, payload_aad
+  var core = container.subarray(0, geom.core);   // section 5.3, payload_aad
   var wrapNonce = new Uint8Array(12);
   wrapNonce[11] = 0xFF;                          // section 4.3
 
   var masterKey = null;
   for (var j = 0; j < slotCount && !masterKey; j++) {
-    var rec = container.subarray(SLOT_TABLE + j * SLOT_LEN, SLOT_TABLE + (j + 1) * SLOT_LEN);
+    var rec = container.subarray(geom.table + j * SLOT_LEN, geom.table + (j + 1) * SLOT_LEN);
     // section 4.4: skip what this reader cannot attempt, never reject the
     // container for it. A share slot or an Argon2id slot sitting beside a
     // usable passphrase slot must not make the file unopenable here.
@@ -343,6 +381,14 @@ async function decrypt(container, password) {
   // section 4.4: report failure only once the slot table is exhausted.
   if (!masterKey) throw new Error('WRONG');
 
+  // v3 section 5.2, and note what it is not: this does not decide whether to
+  // continue. The plaintext is returned either way, because refusing would turn
+  // a detectable edit into a lost backup. It is checked here only so the page
+  // can say so, and only after a slot has already opened -- which is what makes
+  // it leak nothing to someone who cannot open the file at all.
+  var authentic = geom.mac === undefined ? null
+    : await slotTableAuthentic(container, geom, slotCount, masterKey);
+
   var payload = container.subarray(payloadOffset);
   var sizes = chunkLayout(payload.length);
   var parts = [], at = 0;
@@ -356,7 +402,7 @@ async function decrypt(container, password) {
     at += take;
   }
   if (at !== payload.length) throw new Error('bad payload');
-  return cat(parts);
+  return { data: cat(parts), slotTableAuthentic: authentic };
 }
 
 // --- the page ---------------------------------------------------------------
@@ -370,6 +416,7 @@ var pwEl = document.getElementById('pw');
 var statusEl = document.getElementById('status');
 var resultEl = document.getElementById('result');
 var outEl = document.getElementById('out');
+var tableEl = document.getElementById('table');
 var saveEl = document.getElementById('save');
 var goEl = document.getElementById('go');
 
@@ -386,13 +433,15 @@ formEl.addEventListener('submit', async function (e) {
     return;
   }
   resultEl.hidden = true;
+  tableEl.hidden = true;
   goEl.disabled = true;
   say('Working. This takes a few seconds by design.');
   // Yield once so the browser paints the line above before PBKDF2 blocks it.
   await new Promise(function (r) { setTimeout(r, 30); });
   try {
     var container = dearmor(document.getElementById('keym2-container').textContent);
-    var plain = await decrypt(container, pwEl.value);
+    var opened = await decrypt(container, pwEl.value);
+    var plain = opened.data;
     var text = null;
     try {
       text = new TextDecoder('utf-8', { fatal: true }).decode(plain);
@@ -403,6 +452,12 @@ formEl.addEventListener('submit', async function (e) {
     resultEl.hidden = false;
     outEl.hidden = (text === null);
     if (text !== null) outEl.value = text;
+    // v3 section 5.2. The plaintext is above and it is genuine; what this says
+    // is that the *slot table* is not the one sealed with the file, which means
+    // someone has added or removed a way in since it was written. Deliberately
+    // not phrased as a failure, and deliberately not guessing which slot: the
+    // MAC covers the table whole and cannot say.
+    tableEl.hidden = (opened.slotTableAuthentic !== false);
     var blob = new Blob([plain], { type: 'application/octet-stream' });
     saveEl.href = URL.createObjectURL(blob);
     saveEl.download = 'recovered.bin';
@@ -470,6 +525,10 @@ export function buildSelfExtractingPage(options: SelfExtractOptions): string {
   button[disabled] { opacity: .55; cursor: progress; }
   .busy { opacity: .75; } .bad { color: #c92a2a; font-weight: 600; }
   @media (prefers-color-scheme: dark) { .bad { color: #ff8787; } }
+  .warn { border: 1px solid #b8860b; background: #fff8e1; color: #6b4e00;
+    padding: .6rem .75rem; border-radius: .4rem; margin: 0 0 .75rem; }
+  @media (prefers-color-scheme: dark) {
+    .warn { border-color: #b8860b; background: #2a2410; color: #ffd77a; } }
   textarea { width: 100%; min-height: 12rem; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
     padding: .6rem; border-radius: .4rem; border: 1px solid #8a8a99; background: canvas; color: canvastext; }
   a.save { display: inline-block; margin-top: .6rem; }
@@ -494,6 +553,12 @@ disconnect from the network first if you like, and it will behave identically.</
 <p id="status" aria-live="polite"></p>
 
 <div id="result" hidden>
+  <p id="table" class="warn" role="alert" hidden><strong>This backup&#39;s list of unlock
+  methods has changed since it was created.</strong> Your data is intact — it is
+  authenticated separately and was verified before anything was shown. What changed is
+  the set of ways back in: an unlock method may have been added or removed. It is not
+  possible to say which one. If you did not change it yourself, treat this copy as
+  untrusted and recover from another one.</p>
   <textarea id="out" readonly spellcheck="false"></textarea>
   <a class="save" id="save" href="#" download="recovered.bin">Save the recovered file</a>
 </div>

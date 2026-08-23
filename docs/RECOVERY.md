@@ -108,10 +108,10 @@ test — you do not need a hex editor.
 
 ## Step 3 — Read what the container says about itself
 
-For a **v2** container:
+For a **v3** container — what the app writes today:
 
 ```
-KEYM v2
+KEYM v3
   cipher      AES-256-GCM
   slots       1
   slot 0       type 0x00 (passphrase)

@@ -270,10 +270,13 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 - Argon2id (RFC 9106, via hash-wasm) or PBKDF2-HMAC-SHA-256 at 1,000,000 iterations
 - AES-256-GCM, ChaCha20-Poly1305 (RFC 8439), or the two chained with HKDF-derived
   independent subkeys
-- Self-describing KEYM v2 container. There are two AADs, not one: the payload is
-  authenticated against the 8-byte core header, and each slot's wrap against that
+- Self-describing KEYM v3 container. There are two AADs, not one: the payload is
+  authenticated against the 24-byte core header, and each slot's wrap against that
   header plus its own 48-byte prefix. `slot_count` is deliberately in neither, so a
-  slot table stays editable by someone holding exactly one slot's secret
+  slot table stays editable by someone holding exactly one slot's secret — and a
+  `slot_table_mac` keyed from the master key covers the table as a whole, so an
+  edit made *without* any secret is detected and reported. v1 and v2 containers
+  still open, unchanged
 - NFC password normalization, so a password typed in a different Unicode form on
   macOS still decrypts elsewhere
 - Optional key file, usable alongside a password; key files can be generated in-app
@@ -592,10 +595,11 @@ warning, because an argument sits in your shell history and was visible in the
 process list to every other account on the machine while the KDF ran. Prefer
 the interactive prompt, or `--shares-from` with a file only you can read.
 
-**Two scripts, because there are two container versions.** The app writes
-**KEYM v2** and `keym2.py` reads it. Backups made before that are **v1** and
-need `keym.py`; neither script reads the other's format, and the one that
-refuses is telling you which you have.
+**Two scripts, because there are two container generations.** The app writes
+**KEYM v3**, and `keym2.py` reads v3 and v2 alike — one command, whichever year
+your backup is from. Backups older than that are **v1** and need `keym.py`;
+neither script reads the other's format, and the one that refuses is telling you
+which you have.
 [docs/RECOVERY.md](docs/RECOVERY.md) is the printable procedure, and
 [docs/WALKTHROUGH.md](docs/WALKTHROUGH.md) walks the whole path with pictures.
 
@@ -665,8 +669,8 @@ every KDF and cipher combination, and takes a few minutes.
 |---|---|
 | [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) | Architecture and data flow, with diagrams |
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
-| [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Normative KEYM v2 specification — the format the app writes today |
-| [`docs/FORMAT-V3-DESIGN.md`](docs/FORMAT-V3-DESIGN.md) | KEYM v3 design — authenticating the slot table. Not yet written by the app |
+| [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Normative KEYM v2 specification — still read, no longer written |
+| [`docs/FORMAT-V3-DESIGN.md`](docs/FORMAT-V3-DESIGN.md) | Normative KEYM v3 specification, a delta on v2 — the format the app writes today |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased plan: what ships next, and what was cut |
 | [`docs/VERIFYING.md`](docs/VERIFYING.md) | Checking that the site you loaded is the code you read |
 | [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md) | A backup end to end, illustrated — first encryption through to recovery |

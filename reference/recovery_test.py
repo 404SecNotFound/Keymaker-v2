@@ -45,7 +45,14 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRIPTS = {1: ROOT / "reference" / "keym.py", 2: ROOT / "reference" / "keym2.py"}
+# Keyed by container version, not by script: v2 and v3 are both keym2.py, which
+# is the point of §6's dispatch — an heir runs one command whatever year the
+# backup is from, and the script works out the rest.
+SCRIPTS = {
+    1: ROOT / "reference" / "keym.py",
+    2: ROOT / "reference" / "keym2.py",
+    3: ROOT / "reference" / "keym2.py",
+}
 BRIDGE = ROOT / "reference" / "bridge.mjs"
 
 PASSWORD = "a real user password — with ünicode 2031"
@@ -82,16 +89,24 @@ def js_encrypt(version: int, plaintext: bytes, kdf: str, cipher: str,
     """
     Produce a container with the *shipping* implementation, not the reference.
 
-    v2 goes through `encryptapp`, which is `encryptContainer` — the function the
-    worker and the UI actually call, with real random secrets. The conformance
-    entry point with pinned salt and master key would be the wrong thing to
-    recover from: the promise this page makes is about containers the app wrote.
+    v2 and v3 go through `encryptapp`, which is `encryptContainer` — the
+    function the worker and the UI actually call, with real random secrets. The
+    conformance entry point with pinned salt and master key would be the wrong
+    thing to recover from: the promise this page makes is about containers the
+    app wrote.
+
+    The version is passed explicitly rather than taken from the app's default.
+    An heir following this document may hold a backup from any year, so the
+    document has to be executed against every version the app has ever written,
+    not only the one it writes today.
     """
     src, dst = tmp / "pt.bin", tmp / f"v{version}-{kdf}-{cipher}{tag}.keym"
     src.write_bytes(plaintext)
     cmd = "encrypt" if version == 1 else "encryptapp"
     args = [cmd, "--password", PASSWORD, "--kdf", kdf, "--cipher", cipher,
             "--in", str(src), "--out", str(dst)]
+    if version != 1:
+        args += ["--version", str(version)]
     args += ["--iterations", "600000"] if kdf == "pbkdf2" else ["--time", "2", "--mem", "16384", "--par", "2"]
     if keyfile:
         args += ["--keyfile", keyfile.hex()]
@@ -132,6 +147,12 @@ def main() -> int:
             (1, "pbkdf2", "aes", KEYFILE),
             (2, "argon2id", "chained", None),
             (2, "pbkdf2", "aes", KEYFILE),
+            # v3 is what the app writes now, so it is what most heirs will be
+            # holding. Added rather than substituted: v2 backups do not stop
+            # existing because the default moved, and the document is for
+            # whoever is stuck, whenever they got stuck.
+            (3, "argon2id", "chained", None),
+            (3, "pbkdf2", "aes", KEYFILE),
         ):
             container = js_encrypt(version, SECRET, kdf, cipher, kf, tmp)
             r = cli(version, ["inspect", "--in", str(container)])

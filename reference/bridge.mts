@@ -54,6 +54,7 @@ import {
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
 import {
+  encryptKeym2,
   encryptKeym2WithExplicitSecrets,
   decryptKeym2,
   KEYM2_VERSION_V2,
@@ -168,11 +169,29 @@ try {
           }
         : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
 
-    const out = await encryptContainer(inputBuf, password, keyFile, {
-      kdf,
-      cipher: CIPHERS[flag("cipher") ?? "aes"]!,
-    });
-    writeFileSync(outFile, Buffer.from(out));
+    // `--version` exists for one caller: recovery_test.py, which has to be able
+    // to produce an app-written container of a version the app no longer writes
+    // by default. An heir opening a v2 backup is following the same document as
+    // one opening a v3 backup, so the document has to be executed against both.
+    // Omitted, this is exactly `encryptContainer` — what the worker and the UI
+    // call, with real random secrets.
+    const appVersion = flag("version");
+    const out =
+      appVersion === undefined
+        ? await encryptContainer(inputBuf, password, keyFile, {
+            kdf,
+            cipher: CIPHERS[flag("cipher") ?? "aes"]!,
+          })
+        : (
+            await encryptKeym2(
+              new Uint8Array(inputBuf),
+              password,
+              keyFile ? new Uint8Array(keyFile) : null,
+              { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
+              Number(appVersion)
+            )
+          ).buffer;
+    writeFileSync(outFile, Buffer.from(out as ArrayBuffer));
   } else if (cmd === "addshares") {
     // §4.6. Every random input pinned, for the same reason encrypt2 pins the
     // salt and master key: the two implementations decode each other's shares
