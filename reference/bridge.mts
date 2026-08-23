@@ -56,6 +56,9 @@ import {
 import {
   encryptKeym2WithExplicitSecrets,
   decryptKeym2,
+  KEYM2_VERSION_V2,
+  KEYM2_VERSION_V3,
+
   addShamirSlotKeym2,
   addPasskeySlotKeym2,
   derivePrfSalt,
@@ -136,15 +139,22 @@ try {
           }
         : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
 
+    // v3 §3. Both pinned by the caller, because byte equality is the point:
+    // a container_id drawn here would differ between the two implementations
+    // and every comparison would fail for a reason that is not a disagreement.
+    const containerId = flag("container-id");
     const out = await encryptKeym2WithExplicitSecrets(
       new Uint8Array(inputBuf),
       password,
       keyFile ? new Uint8Array(keyFile) : null,
       { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
       Uint8Array.from(Buffer.from(flag("salt")!, "hex")),
-      Uint8Array.from(Buffer.from(flag("master-key")!, "hex"))
+      Uint8Array.from(Buffer.from(flag("master-key")!, "hex")),
+      containerId === undefined ? KEYM2_VERSION_V2 : KEYM2_VERSION_V3,
+      containerId === undefined ? new Uint8Array(0) : Uint8Array.from(Buffer.from(containerId, "hex"))
     );
     writeFileSync(outFile, Buffer.from(out));
+
   } else if (cmd === "encryptapp") {
     const kdf: KdfParams =
       flag("kdf") === "argon2id"
@@ -258,6 +268,15 @@ try {
       prfFlag ? Uint8Array.from(Buffer.from(prfFlag, "hex")) : undefined
     );
     writeFileSync(outFile, Buffer.from(out.data));
+    // v3 §5.2's report, on stdout so the cross-test can assert it. Three
+    // states, printed as three distinct words: "absent" is a v2 container with
+    // no MAC to check, and is deliberately not spelled the same as "authentic".
+    console.log(
+      `slot-table: ${
+        out.slotTableAuthentic === null ? "absent" : out.slotTableAuthentic ? "authentic" : "not-authentic"
+      }`
+    );
+
   } else {
     throw new Error(`unknown command: ${cmd}`);
   }

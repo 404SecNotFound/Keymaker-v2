@@ -61,12 +61,59 @@ import {
 // Constants (§3, §4.4, §5.1, §7)
 // ---------------------------------------------------------------------------
 
-export const KEYM2_VERSION = 0x02;
+export const KEYM2_VERSION_V2 = 0x02;
+export const KEYM2_VERSION_V3 = 0x03;
 
-/** §3, bytes [0, 8). The payload AAD. */
+/**
+ * The version this implementation *writes* by default.
+ *
+ * v3 §6 says writers SHOULD emit v3. This one does not yet, and the reason is
+ * the same one `reference/keym2.py` gives: the app's containers are what the
+ * frozen fixtures and the byte-equality cross-test are built from, and moving
+ * the default before v3 has fixtures of its own would retire that coverage
+ * rather than extend it. Phase 4 flips this.
+ */
+export const KEYM2_VERSION = KEYM2_VERSION_V2;
+
+/** §3, bytes [0, 8) in v2. The payload AAD. */
 export const KEYM2_CORE_HEADER_LEN = 8;
-const SLOT_COUNT_OFFSET = 8;
 const SLOT_TABLE_OFFSET = 9;
+
+
+/**
+ * v3 §3. The core header grows by a 16-byte `container_id`, and
+ * `slot_table_mac` sits between `slot_count` and the table — at a fixed offset,
+ * so a reader reaches it without first trusting `slot_count`.
+ */
+const CONTAINER_ID_LEN = 16;
+const SLOT_TABLE_MAC_LEN = 32;
+const CORE_HEADER_LEN_V3 = 24;
+const SLOT_COUNT_OFFSET_V3 = 24;
+const SLOT_TABLE_MAC_OFFSET_V3 = 25;
+const SLOT_TABLE_OFFSET_V3 = 57;
+
+/**
+ * Version-dependent header geometry. Functions rather than lookup tables so an
+ * unknown version is a loud failure at the point of use: a reader that has
+ * passed `parseKeym2CoreHeader` cannot reach these with a bad version, but a
+ * writer assembling a header by hand can, and should hear about it.
+ */
+function coreHeaderLen(version: number): number {
+  if (version === KEYM2_VERSION_V2) return KEYM2_CORE_HEADER_LEN;
+  if (version === KEYM2_VERSION_V3) return CORE_HEADER_LEN_V3;
+  reject();
+}
+
+function slotCountOffset(version: number): number {
+  return coreHeaderLen(version);
+}
+
+function slotTableOffset(version: number): number {
+  if (version === KEYM2_VERSION_V2) return SLOT_TABLE_OFFSET;
+  if (version === KEYM2_VERSION_V3) return SLOT_TABLE_OFFSET_V3;
+  reject();
+}
+
 
 /** §4.4, bytes [0, 48) of a slot — the half its own wrap authenticates. */
 const SLOT_PREFIX_LEN = 48;
@@ -171,6 +218,19 @@ const CTX_PASSKEY_INPUT = textEncoder.encode("keymaker.v2.passkey-input");
 // two HKDF calls already take different IKMs, 32 bytes against 65.
 const INFO_PRF_SALT = textEncoder.encode("keymaker.v2.prf-salt");
 
+/**
+ * v3 §5.1. The info string for the slot-table MAC key. It carries "v3" where
+ * every string above carries "v2", which is the whole of the domain separation
+ * required: `K_table` cannot collide with a payload key, a slot key or a PRF
+ * salt, because no v2 derivation is ever handed this info string.
+ */
+const INFO_SLOT_TABLE = textEncoder.encode("keymaker.v3.slot-table");
+
+/** A v2 container's absent `container_id`, named so the intent reads. */
+const EMPTY = new Uint8Array(0);
+
+
+
 const MAGIC = new Uint8Array([0x4b, 0x45, 0x59, 0x4d]); // "KEYM"
 
 /**
@@ -233,7 +293,17 @@ export interface Keym2CoreHeader {
   flags: number;
   /** Tag bytes per AEAD invocation: 16, or 32 for chained (§5.1). */
   tagOverhead: number;
+  /** 0x02 or 0x03. v3 §3 widens the header; everything else is v2's. */
+  version: number;
+  /**
+   * v3 §4. Empty for v2, where the field does not exist. **Not a secret** — it
+   * appears in the clear in every copy of the backup, and two copies of the
+   * same backup share it. Its only job is to make the slot AAD and the payload
+   * AAD differ between containers that would otherwise be byte-identical.
+   */
+  containerId: Uint8Array;
 }
+
 
 export interface Keym2Slot {
   slotType: number;
@@ -244,15 +314,28 @@ export interface Keym2Slot {
   keyFileUsed: boolean;
 }
 
-function packCoreHeader(cipher: CipherId, flags: number): Uint8Array {
-  const header = new Uint8Array(KEYM2_CORE_HEADER_LEN);
+function packCoreHeader(
+  cipher: CipherId,
+  flags: number,
+  version: number = KEYM2_VERSION_V2,
+  containerId: Uint8Array = EMPTY
+): Uint8Array {
+  if (version === KEYM2_VERSION_V3 && containerId.length !== CONTAINER_ID_LEN) {
+    throw new KeymakerError("invalid-input", "KEYM v3 requires a 16-byte container id.");
+  }
+  if (version === KEYM2_VERSION_V2 && containerId.length !== 0) {
+    throw new KeymakerError("invalid-input", "KEYM v2 containers have no container id.");
+  }
+  const header = new Uint8Array(coreHeaderLen(version));
   header.set(MAGIC, 0);
-  header[4] = KEYM2_VERSION;
+  header[4] = version;
   header[5] = cipher;
   header[6] = flags;
   // byte 7 stays zero — §3 reserved
+  if (version === KEYM2_VERSION_V3) header.set(containerId, 8);
   return header;
 }
+
 
 function packSlotPrefix(
   kdf: Keym2KdfParams,
@@ -291,12 +374,20 @@ function packSlotPrefix(
  * allocated on the strength of something the container claims about itself.
  */
 export function parseKeym2CoreHeader(data: Uint8Array): Keym2CoreHeader {
-  if (data.length < SLOT_TABLE_OFFSET) reject();
+  // Enough bytes to read the version before dispatching on it. Five is the
+  // magic plus the version byte, and it is all this first check can assume:
+  // how much more is required depends on the answer.
+  if (data.length < 5) reject();
 
   for (let i = 0; i < MAGIC.length; i++) {
     if (data[i] !== MAGIC[i]) reject();
   }
-  if (data[4] !== KEYM2_VERSION) reject();
+  const version = data[4] as number;
+  // v3 §6: a v3 reader MUST open v1, v2 and v3. v1 has its own module; here the
+  // bound is v2 or v3, and anything else is an unknown version.
+  if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) reject();
+  if (data.length < slotTableOffset(version)) reject();
+
 
   const cipher = data[5] as CipherId;
   const flags = data[6] as number;
@@ -311,8 +402,15 @@ export function parseKeym2CoreHeader(data: Uint8Array): Keym2CoreHeader {
   if (flags & CORE_FLAGS_RESERVED_MASK) reject();
   if (data[7] !== 0) reject(); // §3 reserved
 
-  return { cipher, flags, tagOverhead: tagOverheadFor(cipher) };
+  return {
+    cipher,
+    flags,
+    tagOverhead: tagOverheadFor(cipher),
+    version,
+    containerId: version === KEYM2_VERSION_V3 ? data.slice(8, 8 + CONTAINER_ID_LEN) : EMPTY,
+  };
 }
+
 
 interface Keym2Container {
   core: Keym2CoreHeader;
@@ -320,7 +418,10 @@ interface Keym2Container {
   /** Raw fixed-width slot records, unparsed — see `parseKeym2Slot`. */
   records: Uint8Array[];
   payload: Uint8Array;
+  /** v3 §3, the stored `slot_table_mac`; null for a v2 container. */
+  slotTableMac: Uint8Array | null;
 }
+
 
 /**
  * Split a container into core header, raw slot records and payload.
@@ -334,11 +435,12 @@ interface Keym2Container {
 function parseKeym2Container(data: Uint8Array): Keym2Container {
   const core = parseKeym2CoreHeader(data);
 
-  const slotCount = data[SLOT_COUNT_OFFSET] as number;
+  const slotCount = data[slotCountOffset(core.version)] as number;
   if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) reject();
 
   const width = keym2SlotLen(core.cipher);
-  const payloadOffset = SLOT_TABLE_OFFSET + slotCount * width;
+  const table = slotTableOffset(core.version);
+  const payloadOffset = table + slotCount * width;
 
   // §6: shorter than payload_offset plus the minimum payload for one chunk.
   // The smallest chunk is zero plaintext bytes and its tag(s).
@@ -346,15 +448,22 @@ function parseKeym2Container(data: Uint8Array): Keym2Container {
 
   const records: Uint8Array[] = [];
   for (let i = 0; i < slotCount; i++) {
-    records.push(data.subarray(SLOT_TABLE_OFFSET + i * width, SLOT_TABLE_OFFSET + (i + 1) * width));
+    records.push(data.subarray(table + i * width, table + (i + 1) * width));
   }
   return {
     core,
-    coreBytes: data.subarray(0, KEYM2_CORE_HEADER_LEN),
+    coreBytes: data.subarray(0, coreHeaderLen(core.version)),
     records,
     payload: data.subarray(payloadOffset),
+    // Read at a fixed offset, deliberately without consulting `slot_count` —
+    // that is why v3 §3 puts the MAC *before* the table rather than after it.
+    slotTableMac:
+      core.version === KEYM2_VERSION_V3
+        ? data.subarray(SLOT_TABLE_MAC_OFFSET_V3, SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN)
+        : null,
   };
 }
+
 
 /**
  * §4.4 and §6, for one slot. Returns null when this slot cannot be attempted.
@@ -455,6 +564,86 @@ export function parseKeym2Slot(record: Uint8Array): Keym2Slot | null {
 function slotAad(coreBytes: Uint8Array, record: Uint8Array): Uint8Array {
   return concat([coreBytes, record.subarray(0, SLOT_PREFIX_LEN)]);
 }
+
+// ---------------------------------------------------------------------------
+// Slot table authentication (v3 §5)
+// ---------------------------------------------------------------------------
+//
+// What v3 adds, and the only thing it adds. A v2 slot table is authenticated
+// slot-by-slot and never as a whole, so an attacker who can write the file can
+// delete a slot and the container still opens for everyone else — silently, and
+// permanently for whoever was enrolled in the deleted slot.
+//
+// The fix survives the constraint stated at WRAP_NONCE — a slot table has to be
+// mutable by someone holding one secret — because recomputing this MAC needs
+// the master key, and unwrapping any one slot yields the master key.
+
+/** v3 §5.1. `HKDF-SHA-256(ikm = master_key, salt = "", info = "keymaker.v3.slot-table")`. */
+async function slotTableKey(master: Uint8Array): Promise<Uint8Array> {
+  const hkdfKey = await crypto.subtle.importKey("raw", master as BufferSource, "HKDF", false, ["deriveBits"]);
+  // The empty salt is written out rather than omitted, matching the reference:
+  // RFC 5869 substitutes HashLen zeros for an absent salt and HMAC zero-pads a
+  // short key to the block size, so an empty salt and a 32-zero-byte salt give
+  // the same PRK. Saying so beats making a second implementer derive it.
+  const bits = await crypto.subtle.deriveBits(
+    { name: "HKDF", hash: "SHA-256", salt: EMPTY as BufferSource, info: INFO_SLOT_TABLE as BufferSource },
+    hkdfKey,
+    SLOT_TABLE_MAC_LEN * 8
+  );
+  return new Uint8Array(bits);
+}
+
+/**
+ * v3 §5.1. `HMAC-SHA-256` over `core_header ‖ slot_count ‖ every slot record`.
+ *
+ * Whole records, not just prefixes. The wrapped key and its tag are already
+ * authenticated by the slot itself, so covering them adds no cryptographic
+ * strength — it adds simplicity. "Every byte of the table, in order" has no
+ * edge cases, and it pins slot order as a side effect.
+ */
+async function computeSlotTableMac(
+  coreBytes: Uint8Array,
+  records: Uint8Array[],
+  master: Uint8Array
+): Promise<Uint8Array> {
+  const tableKey = await slotTableKey(master);
+  try {
+    const key = await crypto.subtle.importKey(
+      "raw",
+      tableKey as BufferSource,
+      { name: "HMAC", hash: "SHA-256" },
+      false,
+      ["sign"]
+    );
+    const msg = concat([coreBytes, new Uint8Array([records.length]), ...records]);
+    return new Uint8Array(await crypto.subtle.sign("HMAC", key, msg as BufferSource));
+  } finally {
+    secureErase(tableKey);
+  }
+}
+
+/**
+ * v3 §5.2. True/false for a v3 container, **null for a v2 one** — which has no
+ * MAC to check, and about which nothing is therefore claimed.
+ *
+ * Three states rather than a bool on purpose. Collapsing null into true would
+ * have every v2 container assert an assurance the format cannot give: v2's
+ * table is strippable and the strip is undetectable.
+ */
+async function verifySlotTable(parsed: Keym2Container, master: Uint8Array): Promise<boolean | null> {
+  if (parsed.slotTableMac === null) return null;
+  const expected = await computeSlotTableMac(parsed.coreBytes, parsed.records, master);
+  // Constant-time. Not because a timing signal here is worth much — reaching
+  // this point requires having already unwrapped a slot — but because a MAC
+  // comparison written the other way gets copied somewhere it does matter.
+  let diff = expected.length ^ parsed.slotTableMac.length;
+  for (let i = 0; i < expected.length && i < parsed.slotTableMac.length; i++) {
+    diff |= (expected[i] as number) ^ (parsed.slotTableMac[i] as number);
+  }
+  secureErase(expected);
+  return diff === 0;
+}
+
 
 // ---------------------------------------------------------------------------
 // Key derivation (§4)
@@ -975,12 +1164,17 @@ export async function encryptKeym2(
   plaintext: Uint8Array,
   password: string,
   keyFile: Uint8Array | null,
-  options: Keym2Options
+  options: Keym2Options,
+  version: number = KEYM2_VERSION
 ): Promise<Uint8Array> {
   const salt = new Uint8Array(SALT_LEN);
   crypto.getRandomValues(salt);
   const masterKey = new Uint8Array(MASTER_KEY_LEN);
   crypto.getRandomValues(masterKey);
+  // v3 §4. Drawn once, here, and never changed for the life of the file — not
+  // on enrolment, not on revocation. Not a secret, so it is not erased.
+  const containerId = version === KEYM2_VERSION_V3 ? new Uint8Array(CONTAINER_ID_LEN) : EMPTY;
+  if (version === KEYM2_VERSION_V3) crypto.getRandomValues(containerId);
   try {
     return await encryptKeym2WithExplicitSecrets(
       plaintext,
@@ -988,8 +1182,11 @@ export async function encryptKeym2(
       keyFile,
       options,
       salt,
-      masterKey
+      masterKey,
+      version,
+      containerId
     );
+
   } finally {
     // This key opens every chunk in the container, and until now it was the
     // one secret the write path left behind: addShamirSlotKeym2,
@@ -1030,9 +1227,12 @@ export async function encryptKeym2WithExplicitSecrets(
   keyFile: Uint8Array | null,
   options: Keym2Options,
   salt: Uint8Array,
-  masterKey: Uint8Array
+  masterKey: Uint8Array,
+  version: number = KEYM2_VERSION,
+  containerId: Uint8Array = EMPTY
 ): Promise<Uint8Array> {
   if (!password) {
+
     throw new KeymakerError("credential-required", "A password is required for encryption.");
   }
   if (salt.length !== SALT_LEN) {
@@ -1043,13 +1243,22 @@ export async function encryptKeym2WithExplicitSecrets(
   }
   validateKdfParams(options.kdf, "encrypt");
 
-  const coreBytes = packCoreHeader(options.cipher, 0);
+  if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) {
+    throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
+  }
+  const coreBytes = packCoreHeader(options.cipher, 0, version, containerId);
   const prefix = packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt);
 
   // Round-trip both through the reader's own validators. A writer that can emit
   // a container its own parser rejects is a bug worth catching here rather than
   // in someone's backup.
-  parseKeym2CoreHeader(concat([coreBytes, new Uint8Array([1])]));
+  //
+  // The filler after the core header has to reach the version's slot-table
+  // offset, not v2's: a v3 header followed by one byte is shorter than
+  // `parseKeym2CoreHeader` requires, and would fail this self-check for a
+  // reason that has nothing to do with the header being wrong.
+  parseKeym2CoreHeader(concat([coreBytes, new Uint8Array(slotTableOffset(version) - coreBytes.length)]));
+
   if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + tagOverheadFor(options.cipher))])) === null) {
     throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
   }
@@ -1071,7 +1280,13 @@ export async function encryptKeym2WithExplicitSecrets(
   const keys = await payloadKeys(masterKey, options.cipher);
   try {
     const count = chunkCount(plaintext.length);
-    const parts: Uint8Array[] = [coreBytes, new Uint8Array([1]), record];
+    // v3 §3 puts the MAC between slot_count and the table. It is computed over
+    // the finished record, so the table has to exist before the head does.
+    const head: Uint8Array[] = [coreBytes, new Uint8Array([1])];
+    if (version === KEYM2_VERSION_V3) {
+      head.push(await computeSlotTableMac(coreBytes, [record], masterKey));
+    }
+    const parts: Uint8Array[] = [...head, record];
     for (let i = 0; i < count; i++) {
       const chunk = plaintext.subarray(i * KEYM2_CHUNK_SIZE, (i + 1) * KEYM2_CHUNK_SIZE);
       parts.push(await seal(options.cipher, keys, nonceFor(i, i === count - 1), chunk, coreBytes));
@@ -1081,6 +1296,7 @@ export async function encryptKeym2WithExplicitSecrets(
     secureErase(keys.chachaKey);
   }
 }
+
 
 export interface Keym2ShareSet {
   container: Uint8Array;
@@ -1138,14 +1354,22 @@ export async function addShamirSlotKeym2(
   secureErase(slotSecret);
 
   let record: Uint8Array;
+  // v3 §5.3. Recomputed here, inside the try, because `master` is erased on the
+  // way out of it and the MAC is the last thing that needs it. Enrolment
+  // re-seals the table; it does not touch any other slot or the payload.
+  let tableMac: Uint8Array | null = null;
   try {
     record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
+    if (parsed.core.version === KEYM2_VERSION_V3) {
+      tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
+    }
   } finally {
     secureErase(slotKey);
     secureErase(master);
   }
 
   const setId = await shareSetId(salt);
+
   const shares: string[] = [];
   for (const part of shamirSplit(shareSecret, threshold, count, explicit?.coefficients)) {
     shares.push(await encodeShare({ setId, threshold, index: part.index, value: part.value }));
@@ -1154,8 +1378,15 @@ export async function addShamirSlotKeym2(
 
   const records = [...parsed.records, record];
   return {
-    container: concat([parsed.coreBytes, new Uint8Array([records.length]), ...records, parsed.payload]),
+    container: concat([
+      parsed.coreBytes,
+      new Uint8Array([records.length]),
+      ...(tableMac ? [tableMac] : []),
+      ...records,
+      parsed.payload,
+    ]),
     shares,
+
   };
 }
 
@@ -1244,14 +1475,20 @@ export async function addPasskeySlotKeym2(
   secureErase(slotSecret);
 
   let record: Uint8Array;
+  // v3 §5.3, as in addShamirSlotKeym2: re-seal the table before `master` goes.
+  let tableMac: Uint8Array | null = null;
   try {
     record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
+    if (parsed.core.version === KEYM2_VERSION_V3) {
+      tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
+    }
   } finally {
     secureErase(slotKey);
     secureErase(master);
   }
 
   const records = [...parsed.records, record];
+
   // §4.7's one normative rule that is not about bytes. Asked of the result
   // rather than the input, so slot ordering cannot walk around it.
   if (passkeyOnly(records)) {
@@ -1260,8 +1497,15 @@ export async function addPasskeySlotKeym2(
       "A container cannot have a passkey as its only unlock path: a passkey is hardware, and a container only a lost key opens is lost data."
     );
   }
-  return concat([parsed.coreBytes, new Uint8Array([records.length]), ...records, parsed.payload]);
+  return concat([
+    parsed.coreBytes,
+    new Uint8Array([records.length]),
+    ...(tableMac ? [tableMac] : []),
+    ...records,
+    parsed.payload,
+  ]);
 }
+
 
 export interface Keym2DecryptResult {
   data: Uint8Array;
@@ -1269,7 +1513,24 @@ export interface Keym2DecryptResult {
   core: Keym2CoreHeader;
   /** Which slot opened it. Zero for every container this version writes. */
   slot: Keym2Slot;
+  /**
+   * v3 §5.2. Whether the slot table authenticates: true, false, or **null for
+   * a v2 container**, which has no MAC and about which nothing is claimed.
+   *
+   * A false here does **not** mean the data is suspect. The payload is
+   * independently authenticated and has already verified by the time this is
+   * returned; what changed is the container's *recovery options*. §5.2 requires
+   * the plaintext to be returned anyway — refusing would convert detectable
+   * tampering into a lost backup, which is the more severe outcome.
+   *
+   * It cannot say *which* slot changed. The MAC covers the table as a whole and
+   * the sealed table is not recoverable from the tampered one, so "the slot
+   * table has changed since this backup was created" is the whole of what is
+   * known.
+   */
+  slotTableAuthentic: boolean | null;
 }
+
 
 /**
  * Decrypt a KEYM v2 container.
@@ -1307,8 +1568,15 @@ export async function decryptKeym2(
     prfOutput,
   });
 
+  // Verified before the master key is erased, and before any plaintext is
+  // returned — but *after* a slot has already opened, which is what makes this
+  // exception to §6's generic-error rule leak nothing: an attacker who cannot
+  // open the container never reaches it, so there is no oracle.
+  const slotTableAuthentic = await verifySlotTable(parsed, master);
+
   const keys = await payloadKeys(master, parsed.core.cipher);
   secureErase(master);
+
 
   // Declared outside the try so the `finally` can reach it: a mid-container
   // authentication failure still leaves real plaintext in the chunks decoded
@@ -1344,7 +1612,8 @@ export async function decryptKeym2(
     const data = concat(out);
     for (const chunk of out) secureErase(chunk);
     out.length = 0;
-    return { data, keyFileUsed: slot.keyFileUsed, core: parsed.core, slot };
+    return { data, keyFileUsed: slot.keyFileUsed, core: parsed.core, slot, slotTableAuthentic };
+
   } finally {
     secureErase(keys.chachaKey);
     // Also on the way out of a failure. A container that authenticates for
@@ -1521,17 +1790,23 @@ const PBKDF2_ITERS_PER_NORMAL_UNIT = 200_000;
 export function keym2UnlockCost(data: Uint8Array): Keym2UnlockCost | null {
   try {
     const core = parseKeym2CoreHeader(data);
-    const slotCount = data[SLOT_COUNT_OFFSET] as number;
+    // Version-dependent, not the v2 constant. Reading slot_count from offset 8
+    // in a v3 container reads the first byte of container_id — a random value,
+    // so a v3 container would be priced from a random slot count or, more
+    // often, silently refuse to be priced at all.
+    const table = slotTableOffset(core.version);
+    const slotCount = data[slotCountOffset(core.version)] as number;
     if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) return null;
 
     const width = keym2SlotLen(core.cipher);
-    if (data.length < SLOT_TABLE_OFFSET + slotCount * width) return null;
+    if (data.length < table + slotCount * width) return null;
 
     let passphraseSlots = 0;
     let hkdfSlots = 0;
     let units = 0;
     for (let i = 0; i < slotCount; i++) {
-      const at = SLOT_TABLE_OFFSET + i * width;
+      const at = table + i * width;
+
       const slot = parseKeym2Slot(data.subarray(at, at + width));
       // §4.4: a slot that will not parse is skipped by the walk, so it costs
       // nothing and must not be counted here either.
@@ -1594,12 +1869,14 @@ export function inspectKeym2(
 ): { kdfLabel: string; cipherLabel: string; slots: number; weakKdf: string | null } | null {
   try {
     const core = parseKeym2CoreHeader(data);
-    const slotCount = data[SLOT_COUNT_OFFSET] as number;
+    const table = slotTableOffset(core.version);
+    const slotCount = data[slotCountOffset(core.version)] as number;
     if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) return null;
 
     const width = keym2SlotLen(core.cipher);
-    if (data.length < SLOT_TABLE_OFFSET + width) return null;
-    const slot = parseKeym2Slot(data.subarray(SLOT_TABLE_OFFSET, SLOT_TABLE_OFFSET + width));
+    if (data.length < table + width) return null;
+    const slot = parseKeym2Slot(data.subarray(table, table + width));
+
 
     const kdfLabel =
       slot === null
