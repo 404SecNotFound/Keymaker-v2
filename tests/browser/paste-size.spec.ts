@@ -81,10 +81,20 @@ test.describe("oversized paste", () => {
 
     const worst = await worstBlockDuring(page, () => paste(page, 1024 * KIB));
 
-    // Before the gate this measured ~12 400 ms. The threshold is deliberately
-    // far below that and far above a normal frame, so it fails loudly on a
-    // regression without flaking on a slow runner.
-    expect(worst, "the main thread was blocked by the paste").toBeLessThan(2000);
+    // Before the gate this measured ~12 400 ms; with it, ~400 ms. The threshold
+    // sits between the two, nearer the broken end, so a regression that
+    // reinstates the block fails by 2.5x rather than by a hair.
+    //
+    // It was 2000 ms and flaked once on webkit at 2239 ms. That was not the
+    // gate slipping — what `worstBlockDuring` samples is the worst gap between
+    // `requestAnimationFrame` callbacks, which measures "this tab did not paint
+    // for N ms" and cannot tell our code blocking the thread apart from a CI
+    // box running three browser engines declining to schedule us. A 2 s
+    // scheduling stall there is ordinary. 5000 ms is above that noise and still
+    // 60% below the un-gated measurement, so the test keeps the power it was
+    // written for and stops reporting the runner's load as a product
+    // regression.
+    expect(worst, "the main thread was blocked by the paste").toBeLessThan(5000);
 
     // Refused, not truncated. Silently keeping a prefix of someone's secret and
     // encrypting that is worse than refusing: it succeeds and loses data.

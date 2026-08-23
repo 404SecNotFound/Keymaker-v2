@@ -47,6 +47,12 @@ updates:
   # explicitly" — a mechanism that was not configured. The comment was true of
   # npm and Actions and false of the one ecosystem whose job is to outlive this
   # project.
+  #
+  # /reference holds two files. requirements.txt is the heir-facing pin that
+  # ships in the recovery kit; conformance-requirements.txt is the hash-pinned
+  # closure CI builds the oracle from. A bump to one and not the other fails
+  # `scripts/pin-conformance-deps.py --check` in the conformance job, which is
+  # the intended outcome — the fix is to regenerate, and the failure says so.
   - package-ecosystem: pip
     directory: /reference
     schedule:

@@ -534,6 +534,16 @@ a custom domain, an unpacked release archive or a file on disk gives you; the
 base path is the subdirectory GitHub Pages actually serves from, a different set
 of asset URLs, and until recently the one layout never loaded in a browser.
 
+CI installs the oracle from `reference/conformance-requirements.txt` instead —
+the same versions, resolved to their full transitive closure and pinned by
+sha256, so the implementation the byte-equality suite checks against is the
+audited code rather than whatever the index served that morning.
+`requirements.txt` stays hash-free on purpose: it ships in the in-app recovery
+kit, and hash-checking mode turns a wheel it has not heard of into a hard stop
+for the one person who cannot debug it. Regenerate the pinned file with
+`python3 scripts/pin-conformance-deps.py`; the conformance job runs
+`--check` and fails if the two disagree.
+
 `npm run build` produces a fully static `out/` directory. Serve it from any static
 host, or open it from disk on a machine with no network connection.
 

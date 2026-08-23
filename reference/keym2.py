@@ -1891,7 +1891,21 @@ def dearmor(text: str) -> bytes:
     # the two had quietly diverged here.
     body = b"".join(raw[len(ARMOR_PREFIX):].split())
     try:
-        return base64.urlsafe_b64decode(body + b"=" * (-len(body) % 4))
+        # `validate=True`, because the default silently *discards* every
+        # character outside the alphabet before decoding. `keym2:AAAA!!!!BBBB`
+        # came back as six bytes here and threw `Invalid character` in the
+        # browser — the oracle was laxer than the implementation it exists to
+        # check, which is the one direction a reference must never diverge in.
+        #
+        # `altchars` rather than `urlsafe_b64decode` so the accepted set is
+        # exactly the TypeScript's. `fromBase64Url` maps `-_` onto `+/` and
+        # hands the result to `atob`, so both alphabets decode there; altchars
+        # translates first and validates after, which admits the same union and
+        # rejects the same rest. Verified byte-for-byte against the browser on
+        # `AAAA++++BBBB`, `abc-_123` and `AAAA//AA` (accepted, identical bytes)
+        # and on `AAAA!!!!BBBB` and `AA*A` (both rejected).
+        return base64.b64decode(body + b"=" * (-len(body) % 4),
+                                altchars=b"-_", validate=True)
     except Exception:
         raise _reject() from None
 
@@ -3113,6 +3127,98 @@ def _selftest() -> int:
                                  fixed_prf, salt=fixed_salt))
           == slot_len(CIPHER_AES))
 
+    # --- the CLI's handling of secrets on disk and in argv -------------------
+    #
+    # Placed above the summary deliberately. An earlier test in this project was
+    # appended below `process.exit(1)`, printed FAIL and exited 0 — unreachable
+    # code that read as a passing suite.
+
+    # Armor decoding must be exactly as strict as the browser's. Python's
+    # default b64 decoder *discards* characters outside the alphabet, so
+    # `keym2:AAAA!!!!BBBB` used to come back as six bytes here while
+    # `dearmorKeym2` threw. A reference that accepts more than the
+    # implementation it checks cannot detect the implementation being too lax.
+    #
+    # Every rejection probe below is chosen so the *lax* decoder accepts it. `keym2:AA*A`
+    # was the first attempt and proved nothing: discarding the `*` leaves three
+    # characters, so the old decoder rejected it too — on length, never on
+    # validation. A negative control caught that; the cases below leave a
+    # legal-length body behind after the junk is discarded, which is the only
+    # shape that separates the two decoders.
+    rejects("armor with characters outside the alphabet",
+            lambda: dearmor("keym2:AAAA!!!!BBBB"))
+    rejects("armor with interleaved junk that leaves a legal length",
+            lambda: dearmor("keym2:AA!!AA!!"))
+    rejects("armor with junk before the body", lambda: dearmor("keym2:$$$$AAAA"))
+    # The stricter decoder must not break the promise RECOVERY.md makes: a
+    # backup stored in a notes app or printed comes back line-wrapped, and
+    # those newlines are stripped before validation rather than rejected by it.
+    check("line-wrapped armor still decodes",
+          dearmor("keym2:AAAA\n++++\nBBBB") == bytes.fromhex("000000fbefbe041041"))
+    # The other half: everything the browser accepts must still decode, and to
+    # the same bytes. `atob` is reached through a `-_` → `+/` rewrite, so both
+    # alphabets are legal there and must be legal here.
+    check("armor accepts the urlsafe alphabet",
+          dearmor("keym2:abc-_123") == bytes.fromhex("69b73eff5db7"))
+    check("armor accepts the standard alphabet, as the browser does",
+          dearmor("keym2:AAAA++++BBBB") == bytes.fromhex("000000fbefbe041041"))
+    check("armor accepts a standard-alphabet slash, as the browser does",
+          dearmor("keym2:AAAA//AA") == bytes.fromhex("000000fff000"))
+
+    # `--outfile` must not leave a secret world-readable. The decrypt path
+    # writes the plaintext through this helper, so on a shared machine the mode
+    # is the only thing between an heir's seed phrase and every other account.
+    import stat as _stat
+    import tempfile as _tempfile
+
+    with _tempfile.TemporaryDirectory() as _d:
+        _fresh = os.path.join(_d, "fresh.txt")
+        with open_private(_fresh) as _fh:
+            _fh.write(b"seed phrase")
+        _mode = _stat.S_IMODE(os.stat(_fresh).st_mode)
+        check("a new --outfile is not readable by group or other",
+              _mode & 0o077 == 0)
+        check("a new --outfile is still readable by its owner", _mode & 0o400 != 0)
+        check("open_private actually wrote the bytes",
+              open(_fresh, "rb").read() == b"seed phrase")
+
+        # O_CREAT's mode is ignored when the path already exists, so without the
+        # fchmod this case keeps whatever bits were there. Decrypting twice to
+        # the same filename is the ordinary way to hit it.
+        _existing = os.path.join(_d, "existing.txt")
+        open(_existing, "wb").write(b"old")
+        os.chmod(_existing, 0o644)
+        check("the 0644 precondition really was set",
+              _stat.S_IMODE(os.stat(_existing).st_mode) == 0o644)
+        with open_private(_existing) as _fh:
+            _fh.write(b"new plaintext")
+        check("an existing world-readable --outfile is narrowed, not left alone",
+              _stat.S_IMODE(os.stat(_existing).st_mode) & 0o077 == 0)
+
+    # Key material passed as an argument is in the shell history and was in the
+    # process list. --password has said so since keym.py; a share and a PRF
+    # output open the container just as directly and said nothing.
+    import io as _io
+    import contextlib as _contextlib
+
+    def _warns_for(**kw) -> str:
+        fields = {"shares": None, "prf_output": None}
+        fields.update(kw)
+        ns = argparse.Namespace(**fields)
+        buf = _io.StringIO()
+        with _contextlib.redirect_stderr(buf):
+            warn_argv_secrets(ns)
+        return buf.getvalue()
+
+    check("--share on the command line warns", "--share" in _warns_for(shares=["KMSHARE1:x"]))
+    check("--prf-output on the command line warns",
+          "--prf-output" in _warns_for(prf_output="ab12"))
+    check("the share warning points at the file-based alternative",
+          "--shares-from" in _warns_for(shares=["KMSHARE1:x"]))
+    # No secret, no warning — otherwise the warning is noise and gets ignored
+    # on the run where it matters.
+    check("no warning when neither was passed", _warns_for() == "")
+
     failed = [name for name, ok in checks if not ok]
     for name, ok in checks:
         print(f"  {'ok  ' if ok else 'FAIL'} {name}")
@@ -3122,6 +3228,69 @@ def _selftest() -> int:
         return 1
     print(f"All {len(checks)} checks passed.")
     return 0
+
+
+def open_private(path: str):
+    """
+    Open `path` for writing, readable only by its owner.
+
+    `open(path, "wb")` creates at 0666 & ~umask, which on a stock Linux or
+    macOS account is 0644 — world-readable. On the decrypt path that file is
+    the plaintext, so an heir following RECOVERY.md on a shared machine writes
+    a seed phrase every other account can read, and nothing tells them.
+
+    Applied to every `--outfile` write, not only the plaintext one. A container
+    is not secret, so this is stricter than it needs to be there; one rule with
+    no exceptions is the version that survives the next subcommand being added,
+    where a conditional is the thing someone forgets. Widening afterwards is
+    one `chmod`, and it is the user's call to make.
+
+    O_CREAT's mode is ignored when the file already exists, so an existing 0644
+    `seed.txt` would otherwise keep its bits. `fchmod` on the descriptor just
+    opened covers that without the race a path-based `chmod` would have. Where
+    it is unavailable or refused — Windows, a FIFO, a filesystem with no mode
+    bits — the write still goes ahead: failing to narrow permissions is not a
+    reason to refuse someone their own plaintext.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    if hasattr(os, "fchmod"):
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
+    return os.fdopen(fd, "wb")
+
+
+def warn_argv_secrets(args: argparse.Namespace) -> None:
+    """
+    Say so when key material arrived as a command-line argument.
+
+    `--password` has warned about this since keym.py and the reason is
+    unchanged for the other two: an argument is written to the shell's history
+    file and is visible in `ps` to every other account on the machine for as
+    long as the process runs. What differs is only how directly the argument
+    opens the container. A Shamir share is one of the k pieces that
+    reconstruct the master key, and a PRF output unwraps a passkey slot on its
+    own — neither is a hint about a secret, both are the secret.
+
+    `--shares-from` is the way out for shares, so the warning names it. There
+    is no file-based equivalent for `--prf-output`: it comes from an
+    authenticator, one invocation at a time.
+    """
+    if getattr(args, "shares", None):
+        print(
+            "warning: --share was read from the command line, so it is now in "
+            "your shell history and was visible in the process list. A share is "
+            "key material. Prefer --shares-from with a file only you can read.",
+            file=sys.stderr,
+        )
+    if getattr(args, "prf_output", None):
+        print(
+            "warning: --prf-output was read from the command line, so it is now "
+            "in your shell history and was visible in the process list. It "
+            "unwraps a passkey slot on its own.",
+            file=sys.stderr,
+        )
 
 
 def resolve_password(supplied: Optional[str], confirm: bool = False) -> str:
@@ -3290,6 +3459,10 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     args = ap.parse_args(argv)
 
+    # Before any work, so the warning is on screen while the KDF runs rather
+    # than after the secret has already been used.
+    warn_argv_secrets(args)
+
     if args.cmd == "selftest":
         return _selftest()
 
@@ -3324,7 +3497,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         text = "".join(f"# part {i} of {len(parts)}\n{p}\n"
                        for i, p in enumerate(parts, 1))
         if args.outfile:
-            open(args.outfile, "w", encoding="utf-8").write(text)
+            with open_private(args.outfile) as fh:
+                fh.write(text.encode("utf-8"))
         else:
             sys.stdout.write(text)
         return 0
@@ -3342,11 +3516,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.armor:
             out_text = armor(container) + "\n"
             if args.outfile:
-                open(args.outfile, "w", encoding="utf-8").write(out_text)
+                with open_private(args.outfile) as fh:
+                    fh.write(out_text.encode("utf-8"))
             else:
                 sys.stdout.write(out_text)
         elif args.outfile:
-            open(args.outfile, "wb").write(container)
+            with open_private(args.outfile) as fh:
+                fh.write(container)
         else:
             sys.stdout.buffer.write(container)
         return 0
@@ -3361,11 +3537,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         if args.armor:
             out_text = armor(container) + "\n"
             if args.outfile:
-                open(args.outfile, "w", encoding="utf-8").write(out_text)
+                with open_private(args.outfile) as fh:
+                    fh.write(out_text.encode("utf-8"))
             else:
                 sys.stdout.write(out_text)
         elif args.outfile:
-            open(args.outfile, "wb").write(container)
+            with open_private(args.outfile) as fh:
+                fh.write(container)
         else:
             sys.stdout.buffer.write(container)
         return 0
@@ -3379,7 +3557,8 @@ def main(argv: Optional[list[str]] = None) -> int:
             print(f"error: {e}", file=sys.stderr)
             return 1
         if args.outfile:
-            open(args.outfile, "w", encoding="utf-8").write(text)
+            with open_private(args.outfile) as fh:
+                fh.write(text.encode("utf-8"))
         else:
             sys.stdout.write(text)
         return 0
@@ -3402,7 +3581,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         except (KeymError, UsageError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        open(args.outfile, "wb").write(container)
+        with open_private(args.outfile) as fh:
+            fh.write(container)
         # To stdout, so the shares can be piped or redirected, and never into
         # the container file. They are printed exactly once: the share secret is
         # gone by the time this returns, and nothing can reissue them.
@@ -3430,7 +3610,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         except (KeymError, UsageError) as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
-        open(args.outfile, "wb").write(container)
+        with open_private(args.outfile) as fh:
+            fh.write(container)
         print("# A passkey slot was added. The container still opens with the "
               "password it already had —", file=sys.stderr)
         print("# §4.7 requires that, because a passkey is hardware and hardware "
@@ -3495,7 +3676,9 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 1
 
     if args.outfile:
-        open(args.outfile, "wb").write(out)
+        # 0600. On the decrypt branch `out` is the plaintext.
+        with open_private(args.outfile) as fh:
+            fh.write(out)
     else:
         sys.stdout.buffer.write(out)
     return 0
