@@ -21,6 +21,7 @@ const ENTRY_BY_MODE = {
   generate: "keymaker-generate-fixtures.mts",
   fuzz: "keymaker-fuzz.mts",
   fuzz2: "keym2-fuzz.mts",
+  fuzz3: "keym3-fuzz.mts",
   regression: "keymaker-regression.mts",
   "keym2-dispatch": "keym2-dispatch.mts",
   calibration: "kdf-calibration-test.mts",

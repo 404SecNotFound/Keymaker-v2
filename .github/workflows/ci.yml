@@ -88,6 +88,18 @@ jobs:
       - name: KEYM v2 fuzzing
         run: npm run test:fuzz2
 
+      # v3 is what the app writes, and the job above cannot reach it: that
+      # harness is pinned to v2 on purpose, with v2's offsets mirrored rather
+      # than imported, so pointing it at a v3 container makes it read the
+      # header as a slot table. This one carries v3's offsets and asserts the
+      # property the revision exists for — every byte of the covered region
+      # mutated, and any container that still opens must report the table as
+      # not authentic.
+      #
+      # ~2 min, same reasoning as above for why it is a step and not a job.
+      - name: KEYM v3 slot-table fuzzing
+        run: npm run test:fuzz3
+
       - name: Production build (static export + CSP hashes)
         run: npm run build
 
