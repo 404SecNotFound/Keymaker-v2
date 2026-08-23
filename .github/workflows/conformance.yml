@@ -42,8 +42,15 @@ jobs:
 
       - run: npm ci
 
+      # The oracle is built from hash-pinned bytes, not from whatever PyPI
+      # serves this morning. requirements.txt stays hash-free because it ships
+      # to heirs in the recovery kit, where hash-checking mode turns an
+      # unfamiliar wheel into a hard stop; see the header of the pinned file.
+      - name: The two dependency files must name the same versions
+        run: python3 scripts/pin-conformance-deps.py --check
+
       - name: Install reference dependencies
-        run: pip install -r reference/requirements.txt
+        run: pip install --require-hashes -r reference/conformance-requirements.txt
 
       - name: Reference self-test (KEYM v1)
         run: python3 reference/keym.py selftest

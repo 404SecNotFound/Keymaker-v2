@@ -303,9 +303,14 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
   need days later
 - Updates never install themselves over a live page. A new version waits and
   asks; you choose when to reload, because a page may be mid-derivation holding
-  key material
+  key material. The worker also checks *which* page is asking: a GitHub Pages
+  project site shares its origin with every other project the same account
+  publishes, and only a client under this registration's own scope can promote
+  a waiting version
 - Secret input and decrypted output blurred by default
-- Clipboard auto-clear after 60 seconds (best-effort)
+- Clipboard auto-clear after 60 seconds — best-effort, and only the entry
+  Keymaker wrote. Clipboard *history* (Win+V, a clipboard manager, phone
+  keyboard history, cloud sync) keeps a copy no web page can reach or detect
 - No accounts, no analytics, no fonts or assets from third-party origins
 
 ---
@@ -382,6 +387,7 @@ None of the three protects a compromised device. That is the next section.
 | Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
 | Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
+| Recovered plaintext on disk | **Enforced for `--outfile`, and only there.** `reference/keym2.py` writes decrypted output at `0600` and narrows an existing file to match, so a recovery on a shared machine is not readable by other accounts. Redirecting stdout instead hands file creation to the shell, which uses your umask — usually world-readable. |
 | Clipboard is cleared | **Best-effort, and only the current entry.** The browser may refuse the write. More importantly, clipboard *history* — Windows Win+V, a clipboard manager, phone keyboard history, cloud clipboard sync — keeps its own copy that no website can reach or even detect. If you copy a seed phrase on a machine with history enabled, treat it as still there. |
 
 ### What this does not protect against
@@ -534,6 +540,16 @@ a custom domain, an unpacked release archive or a file on disk gives you; the
 base path is the subdirectory GitHub Pages actually serves from, a different set
 of asset URLs, and until recently the one layout never loaded in a browser.
 
+CI installs the oracle from `reference/conformance-requirements.txt` instead —
+the same versions, resolved to their full transitive closure and pinned by
+sha256, so the implementation the byte-equality suite checks against is the
+audited code rather than whatever the index served that morning.
+`requirements.txt` stays hash-free on purpose: it ships in the in-app recovery
+kit, and hash-checking mode turns a wheel it has not heard of into a hard stop
+for the one person who cannot debug it. Regenerate the pinned file with
+`python3 scripts/pin-conformance-deps.py`; the conformance job runs
+`--check` and fails if the two disagree.
+
 `npm run build` produces a fully static `out/` directory. Serve it from any static
 host, or open it from disk on a machine with no network connection.
 
@@ -547,7 +563,7 @@ still recoverable — the format is specified, and a second implementation of it
 ships in this repository.
 
 ```bash
-pip install cryptography argon2-cffi
+pip install cryptography argon2-cffi                  # or: -r reference/requirements.txt
 
 python3 reference/keym2.py inspect --in backup.keym   # what is this file?
 python3 reference/keym2.py decrypt --in backup.keym   # prompts for the password
@@ -555,6 +571,21 @@ python3 reference/keym2.py decrypt --in backup.keym   # prompts for the password
 
 No browser, no Node, no npm, no network. `inspect` reports the container's KDF,
 cipher, and whether a key file is needed **without** asking for a password.
+Any recent version of either library works — the container format does not
+depend on them, and the conformance suite proves it by opening frozen fixtures
+under whatever is installed. `reference/requirements.txt` records the versions
+these scripts were actually run against, if you would rather pin.
+
+**What it does so a recovery does not leak what it just recovered.** With
+`--outfile`, the plaintext is written `0600` — owner only — and an existing
+file at that path is narrowed to match rather than keeping the permissions it
+already had. That covers `--outfile` and nothing else: redirect stdout instead
+(`decrypt --in backup.keym > seed.txt`) and the *shell* creates the file, at
+your umask, which on most systems is world-readable. Separately, passing a
+secret as an argument — `--password`, `--share`, `--prf-output` — prints a
+warning, because an argument sits in your shell history and was visible in the
+process list to every other account on the machine while the KDF ran. Prefer
+the interactive prompt, or `--shares-from` with a file only you can read.
 
 **Two scripts, because there are two container versions.** The app writes
 **KEYM v2** and `keym2.py` reads it. Backups made before that are **v1** and
