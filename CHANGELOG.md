@@ -53,7 +53,35 @@
   other's containers happily even when they disagree about how to write one.
   The §5.2 verdict is cross-checked too: the reference writes a container, strips
   a slot out of it, and the TypeScript must reach the same three-state answer.
-  Both still write v2 by default; the switch is phase 4, with the fixtures.
+  **v3 is now frozen into the fixture corpus**, which is what turns the format
+  from implemented into promised. Thirteen new vectors: six across every KDF and
+  cipher pair, three share sets and three passkey slots — the enrolment paths,
+  because §5.3's re-seal is the work v3 adds and a MAC that verified only on the
+  day it was written would look identical to a correct one — and one container
+  with an heir's slot cut out of it. Both implementations open all thirteen and
+  agree on the §5.2 verdict for each.
+
+  That stripped vector is §1.1's attack frozen as bytes, and the corpus is where
+  it belongs rather than only in a test that builds one at runtime: a detection
+  checked against a container the same code produced can agree with itself. It
+  asserts the whole of §5.2 — the plaintext still comes back, the report still
+  says the table changed, and the heir whose slot was cut is locked out for
+  good.
+
+  **The app can now open a v3 container at all.** `detectFormat` named only v2
+  and v1, so `decryptData` routed version 3 to the v1 path and refused it as
+  "a newer KEYM version" — a reader turning away a format it had already
+  implemented, and a plain violation of §6. The container parser had learned
+  0x03; the dispatcher in front of it had not. Both are named now, and the
+  §5.2 verdict travels out through the worker to the screen, because a report
+  that stops inside the crypto core is not reported to anyone: opening a
+  container whose slot table has changed now says so, in as many words, without
+  claiming to know which unlock method moved.
+
+  Both implementations still *write* v2 by default. The fixture argument for
+  waiting is now spent — v3 has its own vectors — so what remains is a product
+  decision about when new backups should start carrying a format only newer
+  readers understand.
 
 
 

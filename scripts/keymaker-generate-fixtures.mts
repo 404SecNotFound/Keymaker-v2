@@ -36,7 +36,13 @@ import {
   CipherId,
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
-import { addShamirSlotKeym2, addPasskeySlotKeym2 } from "../src/lib/keym-v2.ts";
+import {
+  addShamirSlotKeym2,
+  addPasskeySlotKeym2,
+  encryptKeym2,
+  keym2SlotLen,
+  KEYM2_VERSION_V3,
+} from "../src/lib/keym-v2.ts";
 import { buildSelfExtractingPage } from "../src/lib/keym-v2-selfextract.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -71,7 +77,7 @@ const ARGON_PARAMS: KdfParams = {
 
 interface Combo {
   name: string;
-  version: 1 | 2;
+  version: 1 | 2 | 3;
   kdf: KdfParams;
   cipher: CipherId;
   kdfName: string;
@@ -87,7 +93,11 @@ const CIPHERS: Array<{ id: CipherId; name: string; slug: string }> = [
   { id: CipherId.CHAINED, name: "chained", slug: "chained" },
 ];
 const combos: Combo[] = [];
-for (const version of [1, 2] as const) {
+// v3 reuses v2's KDF parameters exactly. The revision changed the header and
+// added a MAC; it did not move the cost floor, and holding the derivation
+// settings still is what makes a v2 and a v3 vector comparable on the one axis
+// that did change.
+for (const version of [1, 2, 3] as const) {
   const kdfs: Array<{ params: KdfParams; name: string }> = [
     { params: version === 1 ? PBKDF2_V1_PARAMS : PBKDF2_V2_PARAMS, name: "pbkdf2" },
     { params: ARGON_PARAMS, name: "argon2id" },
@@ -96,7 +106,7 @@ for (const version of [1, 2] as const) {
     for (const cipher of CIPHERS) {
       const base = `${kdf.name}-${cipher.slug}`;
       combos.push({
-        name: version === 1 ? base : `v2-${base}`,
+        name: version === 1 ? base : `v${version}-${base}`,
         version,
         kdf: kdf.params,
         cipher: cipher.id,
@@ -131,13 +141,26 @@ async function main() {
 
     const plaintext = `Keymaker fixture — v${c.version} ${c.kdfName} / ${c.cipherName}`;
     const keyFile = c.cipherName === "chacha20-poly1305" ? hexToArrayBuffer(KEYFILE_HEX) : null;
-    const write = c.version === 1 ? encryptData : encryptContainer;
-    const ct = await write(
-      new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
-      PASSWORD,
-      keyFile ? keyFile.slice(0) : null,
-      { kdf: c.kdf, cipher: c.cipher }
-    );
+    // v3 goes through `encryptKeym2` directly rather than `encryptContainer`,
+    // because the version is not something the container-level entry point
+    // takes: it writes whatever `KEYM2_VERSION` currently names, and that is
+    // still v2 (keym-v2.ts's note on why). A vector for a version the app does
+    // not yet default to has to say which version it wants.
+    const ct =
+      c.version === 3
+        ? await encryptKeym2(
+            new TextEncoder().encode(plaintext),
+            PASSWORD,
+            keyFile ? new Uint8Array(keyFile.slice(0)) : null,
+            { kdf: c.kdf, cipher: c.cipher },
+            KEYM2_VERSION_V3
+          )
+        : await (c.version === 1 ? encryptData : encryptContainer)(
+            new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
+            PASSWORD,
+            keyFile ? keyFile.slice(0) : null,
+            { kdf: c.kdf, cipher: c.cipher }
+          );
     writeFileSync(join(DIR, file), Buffer.from(ct));
     fixtures.push({
       name: c.name,
@@ -147,6 +170,11 @@ async function main() {
       cipher: c.cipherName,
       keyFile: keyFile !== null,
       plaintext,
+      // v3 §5.2. Recorded per fixture rather than inferred from the version,
+      // so that the one vector below whose table was tampered with states its
+      // expectation in the same field as the ones whose table is intact —
+      // a reader that inferred "v3 ⇒ authentic" could not express it.
+      ...(c.version === 3 ? { slotTableAuthentic: true } : {}),
     });
     wrote++;
     console.log(`wrote ${file} (${ct.byteLength} bytes)`);
@@ -253,6 +281,166 @@ async function main() {
     console.log(`wrote ${file} (${container.byteLength} bytes, passkey slot)`);
   }
 
+  // ---- KEYM v3 (docs/FORMAT-V3-DESIGN.md) ---------------------------------
+  //
+  // The enrolment paths are the ones worth freezing. §5.3 is where v3 adds work
+  // v2 never did: adding or removing a slot must *re-seal* `slot_table_mac`,
+  // and a re-seal that produced a MAC nobody could verify afterwards would look
+  // exactly like a correct one on the day it was written. Only a container
+  // written then and read now can tell those two apart.
+  for (const cipher of CIPHERS) {
+    const name = `v3-shamir-${cipher.slug}`;
+    const file = `${name}.keym`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+      continue;
+    }
+
+    const plaintext = `Keymaker fixture — v3 shamir 3-of-5 / ${cipher.name}`;
+    const base = await encryptKeym2(
+      new TextEncoder().encode(plaintext),
+      PASSWORD,
+      null,
+      { kdf: PBKDF2_V2_PARAMS, cipher: cipher.id },
+      KEYM2_VERSION_V3
+    );
+    const { container, shares } = await addShamirSlotKeym2(base, { password: PASSWORD }, 3, 5);
+    writeFileSync(join(DIR, file), Buffer.from(container));
+    fixtures.push({
+      name,
+      file,
+      version: 3,
+      kdf: "pbkdf2",
+      cipher: cipher.name,
+      keyFile: false,
+      plaintext,
+      shamir: { threshold: 3, shares },
+      slotTableAuthentic: true,
+    });
+    wrote++;
+    console.log(`wrote ${file} (${container.byteLength} bytes, 5 shares, re-sealed table)`);
+  }
+
+  for (const cipher of CIPHERS) {
+    const name = `v3-passkey-${cipher.slug}`;
+    const file = `${name}.keym`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+      continue;
+    }
+
+    const plaintext = `Keymaker fixture — v3 passkey / ${cipher.name}`;
+    const base = await encryptKeym2(
+      new TextEncoder().encode(plaintext),
+      PASSWORD,
+      null,
+      { kdf: PBKDF2_V2_PARAMS, cipher: cipher.id },
+      KEYM2_VERSION_V3
+    );
+    const salt = crypto.getRandomValues(new Uint8Array(32));
+    const prfOutput = crypto.getRandomValues(new Uint8Array(32));
+    const container = await addPasskeySlotKeym2(base, { password: PASSWORD }, prfOutput, salt);
+    writeFileSync(join(DIR, file), Buffer.from(container));
+    fixtures.push({
+      name,
+      file,
+      version: 3,
+      kdf: "pbkdf2",
+      cipher: cipher.name,
+      keyFile: false,
+      plaintext,
+      passkey: { prfOutputHex: Buffer.from(prfOutput).toString("hex") },
+      slotTableAuthentic: true,
+    });
+    wrote++;
+    console.log(`wrote ${file} (${container.byteLength} bytes, passkey slot, re-sealed table)`);
+  }
+
+  // §1.1's attack, frozen as bytes. This is the container v3 exists for.
+  //
+  // Two slots — the owner's password and an heir's passkey — and then the
+  // heir's slot is cut out and `slot_count` decremented, which is the whole of
+  // the attack: no key material is needed, the owner still opens the file
+  // normally, and before v3 nothing about it looked wrong. The heir is locked
+  // out permanently and finds out at the worst possible moment.
+  //
+  // Freezing it rather than only building one at test time pins the detection
+  // against a byte pattern that cannot drift with the generator: if
+  // `verifySlotTable` ever quietly started returning true, a container
+  // constructed by the same code that verifies it could agree with itself,
+  // and this one could not.
+  //
+  // §5.2 is why it belongs in a corpus of things that *open*. A stripped
+  // container must still hand back its plaintext — refusing would turn
+  // detectable tampering into a lost backup — so this vector makes the same
+  // promise every other one here makes, plus one more: that the reader says so.
+  {
+    const name = "v3-stripped-aes256gcm";
+    const file = `${name}.keym`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+    } else {
+      const plaintext = "Keymaker fixture — v3 stripped slot / aes-256-gcm";
+      const base = await encryptKeym2(
+        new TextEncoder().encode(plaintext),
+        PASSWORD,
+        null,
+        { kdf: PBKDF2_V2_PARAMS, cipher: CipherId.AES_256_GCM },
+        KEYM2_VERSION_V3
+      );
+      const salt = crypto.getRandomValues(new Uint8Array(32));
+      const prfOutput = crypto.getRandomValues(new Uint8Array(32));
+      const enrolled = await addPasskeySlotKeym2(base, { password: PASSWORD }, prfOutput, salt);
+
+      // v3 §3's layout, written out rather than imported. The offsets are the
+      // one thing a fixture generator should state for itself: taking them from
+      // the implementation under test would make a vector that agrees with
+      // whatever that implementation currently believes.
+      const SLOT_COUNT_OFFSET_V3 = 24;
+      const SLOT_TABLE_OFFSET_V3 = 57;
+      const width = keym2SlotLen(CipherId.AES_256_GCM);
+      if (enrolled[SLOT_COUNT_OFFSET_V3] !== 2) {
+        throw new Error(`expected 2 slots to strip from, found ${enrolled[SLOT_COUNT_OFFSET_V3]}`);
+      }
+      const head = enrolled.slice(0, SLOT_TABLE_OFFSET_V3);
+      head[SLOT_COUNT_OFFSET_V3] = 1;
+      const stripped = new Uint8Array([
+        ...head,
+        // Slot 0 — the owner's passphrase — survives. Slot 1, the heir's, does
+        // not. `slot_table_mac` at offset 25 is left exactly as written, which
+        // is what the attacker has no way to recompute: it is keyed from the
+        // master key (§5.1), and holding no slot secret means holding no way
+        // to re-seal (§5.3).
+        ...enrolled.subarray(SLOT_TABLE_OFFSET_V3, SLOT_TABLE_OFFSET_V3 + width),
+        ...enrolled.subarray(SLOT_TABLE_OFFSET_V3 + 2 * width),
+      ]);
+
+      writeFileSync(join(DIR, file), Buffer.from(stripped));
+      fixtures.push({
+        name,
+        file,
+        version: 3,
+        kdf: "pbkdf2",
+        cipher: "aes-256-gcm",
+        keyFile: false,
+        plaintext,
+        // The credential that was cut out. Kept so a reader can prove the harm
+        // as well as the detection: this PRF output opened the container before
+        // the strip and must not open it after.
+        strippedPasskey: { prfOutputHex: Buffer.from(prfOutput).toString("hex") },
+        slotTableAuthentic: false,
+      });
+      wrote++;
+      console.log(`wrote ${file} (${stripped.byteLength} bytes, heir's slot stripped)`);
+    }
+  }
+
   // §7.2. A self-extracting page, frozen whole.
   //
   // What this pins is narrower and more important than "the container opens":
@@ -312,7 +500,11 @@ async function main() {
         note:
           "APPEND-ONLY corpus. Test-only credentials — never use for real data. " +
           "A fixture with no `version` field is v1; the field was added when v2 " +
-          "vectors joined the corpus and the v1 entries were left untouched.",
+          "vectors joined the corpus and the v1 entries were left untouched. " +
+          "`slotTableAuthentic` appears only on v3 vectors, which are the only " +
+          "ones carrying a slot_table_mac: true where the table is intact, " +
+          "false for the one vector whose slot was stripped (v3 §5.2 — it must " +
+          "still open, and the reader must still report the table has changed).",
         fixtures,
       },
       null,

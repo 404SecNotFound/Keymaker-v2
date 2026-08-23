@@ -71,7 +71,13 @@ export const KEYM2_VERSION_V3 = 0x03;
  * the same one `reference/keym2.py` gives: the app's containers are what the
  * frozen fixtures and the byte-equality cross-test are built from, and moving
  * the default before v3 has fixtures of its own would retire that coverage
- * rather than extend it. Phase 4 flips this.
+ * rather than extend it.
+ *
+ * That argument is now spent — v3 has thirteen vectors of its own in the corpus
+ * and both implementations are held to them. What is left is not a coverage
+ * question but a product one: every reader that opens a v3 container has to
+ * have shipped first, and a backup is the last place to find out it did not.
+ * Reading v3 works today, everywhere; writing it is the decision still open.
  */
 export const KEYM2_VERSION = KEYM2_VERSION_V2;
 

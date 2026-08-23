@@ -3,7 +3,7 @@
   "version": 1,
   "password": "correct horse battery staple — test only",
   "keyFileHex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-  "note": "APPEND-ONLY corpus. Test-only credentials — never use for real data. A fixture with no `version` field is v1; the field was added when v2 vectors joined the corpus and the v1 entries were left untouched.",
+  "note": "APPEND-ONLY corpus. Test-only credentials — never use for real data. A fixture with no `version` field is v1; the field was added when v2 vectors joined the corpus and the v1 entries were left untouched. `slotTableAuthentic` appears only on v3 vectors, which are the only ones carrying a slot_table_mac: true where the table is intact, false for the one vector whose slot was stripped (v3 §5.2 — it must still open, and the reader must still report the table has changed).",
   "fixtures": [
     {
       "name": "pbkdf2-aes256gcm",
@@ -108,6 +108,66 @@
       "plaintext": "Keymaker fixture — v2 argon2id / chained"
     },
     {
+      "name": "v3-pbkdf2-aes256gcm",
+      "file": "v3-pbkdf2-aes256gcm.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 pbkdf2 / aes-256-gcm",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-pbkdf2-chacha20poly1305",
+      "file": "v3-pbkdf2-chacha20poly1305.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": true,
+      "plaintext": "Keymaker fixture — v3 pbkdf2 / chacha20-poly1305",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-pbkdf2-chained",
+      "file": "v3-pbkdf2-chained.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 pbkdf2 / chained",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-argon2id-aes256gcm",
+      "file": "v3-argon2id-aes256gcm.keym",
+      "version": 3,
+      "kdf": "argon2id",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 argon2id / aes-256-gcm",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-argon2id-chacha20poly1305",
+      "file": "v3-argon2id-chacha20poly1305.keym",
+      "version": 3,
+      "kdf": "argon2id",
+      "cipher": "chacha20-poly1305",
+      "keyFile": true,
+      "plaintext": "Keymaker fixture — v3 argon2id / chacha20-poly1305",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-argon2id-chained",
+      "file": "v3-argon2id-chained.keym",
+      "version": 3,
+      "kdf": "argon2id",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 argon2id / chained",
+      "slotTableAuthentic": true
+    },
+    {
       "name": "v2-shamir-aes256gcm",
       "file": "v2-shamir-aes256gcm.keym",
       "version": 2,
@@ -199,6 +259,118 @@
       "passkey": {
         "prfOutputHex": "01e2394c628b1a26e669c13e80b7e9c6f96802f3d97f13139fc090ece76a00ad"
       }
+    },
+    {
+      "name": "v3-shamir-aes256gcm",
+      "file": "v3-shamir-aes256gcm.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 shamir 3-of-5 / aes-256-gcm",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE1:6T51-H403-04B4-7Z8A-TXD7-5V7R-QKJS-VWKP-R38Y-XHDP-PHJS-FB31-QZZ3-2FF0-ACPD-DXVM-2THG",
+          "KMSHARE1:6T51-H403-0B4Z-C08S-3QQP-2SKA-PMWS-NRS6-48N1-4NF7-WCN8-AV8R-M3KG-SW70-S19Z-S3QM-7SJG",
+          "KMSHARE1:6T51-H403-0DG7-W4JZ-98PD-C12N-ZBNK-EFDC-APWB-0PE8-H23J-V9WM-PVRF-3SF5-06TW-ZPH4-MT00",
+          "KMSHARE1:6T51-H403-0JQP-J8NF-DQTF-ZXF7-6BCZ-W4HA-E79F-9K75-4APV-JNQ9-5XTX-6SPK-FZ03-0R6F-X6HG",
+          "KMSHARE1:6T51-H403-0M3E-2CF9-78VM-H5YR-FM5N-7K50-0S05-DG6A-9401-3735-75H2-WWYP-PRK0-68GT-BZNG"
+        ]
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-shamir-chacha20poly1305",
+      "file": "v3-shamir-chacha20poly1305.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 shamir 3-of-5 / chacha20-poly1305",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE1:DS7E-T103-07GB-RFZJ-GCAA-14H2-QDCA-BSR5-DBCE-1Y92-0M0X-GR5N-3NEZ-TYK9-E67P-MDKS-1T40",
+          "KMSHARE1:DS7E-T103-0826-NAMX-HZKS-CPYR-TW2J-2P7M-PDTE-5XDB-951P-ERBQ-R0Z4-KZPC-8YNK-F1G5-HG40",
+          "KMSHARE1:DS7E-T103-0DFY-DPVQ-57EF-HPD1-B5QN-FHF7-NFXA-Y2DD-FVR9-SWVJ-2452-HD8K-SPVP-Q3RK-W310",
+          "KMSHARE1:DS7E-T103-0KXF-Q19T-PDN5-HKCS-AFYN-8CQM-0A34-NCGV-J16K-JJ9W-6RXQ-3JRK-CBHY-CE9Q-GEHG",
+          "KMSHARE1:DS7E-T103-0PGQ-FX6G-2N8K-CKZ0-VPBJ-5BZ7-3840-EKGX-MZZC-5PSS-WW7H-106C-X3ZV-MTSJ-ZTS0"
+        ]
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-shamir-chained",
+      "file": "v3-shamir-chained.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 shamir 3-of-5 / chained",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE1:MZNR-WFR3-0744-DH0D-N6Y4-276S-XJ8M-KRHF-1DGV-S7Z2-5QJY-J204-33ZV-RDPF-1X4R-WZA0-RFD0",
+          "KMSHARE1:MZNR-WFR3-0BS8-WTD2-4PND-SEDQ-Q9BG-C75S-1ZDE-R06K-3YBT-D7W5-JAC5-ESJ4-EP7H-FJ6E-AH5G",
+          "KMSHARE1:MZNR-WFR3-0CBY-TDGH-CTM7-DKNE-B2SE-JTW4-Y80P-C2MP-G6V1-ZX4W-TQY9-RZRY-BA4N-G3HB-KZJG",
+          "KMSHARE1:MZNR-WFR3-0JRC-EKRS-A3B7-W911-SBBQ-46SP-FXHY-15MT-X8KE-TA58-S6EB-AJN3-MV4M-VF43-0JFG",
+          "KMSHARE1:MZNR-WFR3-0NAT-845A-2FAD-8MSR-50S9-TV0B-GAW6-N76Z-EG3N-8GXH-HVW7-WMZS-H77G-454M-4E70"
+        ]
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-passkey-aes256gcm",
+      "file": "v3-passkey-aes256gcm.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 passkey / aes-256-gcm",
+      "passkey": {
+        "prfOutputHex": "dbca6138976de060eb7ffd4fa20aeb4753a79952a6d1a904ad4ded5b5d873573"
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-passkey-chacha20poly1305",
+      "file": "v3-passkey-chacha20poly1305.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 passkey / chacha20-poly1305",
+      "passkey": {
+        "prfOutputHex": "8464200c13103d20ffba8d28a138dd5dc166e47579248742dd58ce73f4565720"
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-passkey-chained",
+      "file": "v3-passkey-chained.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 passkey / chained",
+      "passkey": {
+        "prfOutputHex": "b066d3a6266c354f0f14493ebdcc77d38de0fb3fdbe3b5d0802a672e06719eac"
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-stripped-aes256gcm",
+      "file": "v3-stripped-aes256gcm.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 stripped slot / aes-256-gcm",
+      "strippedPasskey": {
+        "prfOutputHex": "8ee8184f62c3be585c8859d321623e2747e4e9b35ad2215da6b366849773946f"
+      },
+      "slotTableAuthentic": false
     },
     {
       "name": "v2-selfextract",
