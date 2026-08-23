@@ -25,6 +25,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import errno
 import os
 import struct
 import sys
@@ -390,7 +391,7 @@ def read_container(path: str | None) -> bytes:
     tool that only understood one of them would fail for reasons the person
     holding it could not diagnose.
     """
-    raw = open(path, "rb").read() if path else sys.stdin.buffer.read()
+    raw = _read_bytes(path)
 
     # Check the text prefix *before* the magic bytes: "KEYM1:" begins with the
     # same four ASCII characters as the binary magic, so a magic-first test
@@ -526,7 +527,7 @@ def main() -> int:
         data = (
             read_container(args.infile)
             if args.cmd == "decrypt"
-            else (open(args.infile, "rb").read() if args.infile else sys.stdin.buffer.read())
+            else _read_bytes(args.infile)
         )
         key_file = open(args.key_file, "rb").read() if args.key_file else None
         password = resolve_password(args.password, confirm=(args.cmd == "encrypt"))
@@ -567,11 +568,79 @@ def main() -> int:
             return 1
 
     if args.outfile:
-        open(args.outfile, "wb").write(out)
+        # 0600. On the decrypt branch `out` is the plaintext, and
+        # `open(path, "wb")` creates at 0666 & ~umask — 0644 on a stock account.
+        # keym2.py was fixed for this; this file was not, and it is the one an
+        # heir with a *v1* backup runs. A v1 backup is by definition an older
+        # one, so the person opening it is more likely to be an heir than the
+        # author, which is the wrong way round for the file to be the laxer of
+        # the two.
+        #
+        # Kept as a local rather than imported from keym2.py: these two
+        # references are deliberately independent implementations, and a shared
+        # helper would make a bug in one a bug in both.
+        with _open_private(args.outfile) as fh:
+            fh.write(out)
     else:
         sys.stdout.buffer.write(out)
     return 0
 
 
+def _read_bytes(path: str | None) -> bytes:
+    """
+    Read `path`, or stdin when there is none.
+
+    A mistyped path is the most ordinary mistake a person makes, and an
+    unguarded `open()` answered it with a FileNotFoundError traceback. To
+    someone opening a dead relative's backup, a Python traceback reads as
+    "the file is destroyed" — which is exactly the wrong conclusion to hand
+    them about a file they simply named wrong.
+    """
+    if not path:
+        return sys.stdin.buffer.read()
+    try:
+        with open(path, "rb") as fh:
+            return fh.read()
+    except OSError as exc:
+        raise KeymError(f"cannot read {path}: {exc.strerror}") from None
+
+
+def _open_private(path: str):
+    """
+    Open `path` for writing, readable only by its owner. See the call site.
+
+    O_CREAT's mode is ignored when the file already exists, so an existing 0644
+    file would otherwise keep its bits; `fchmod` on the descriptor just opened
+    covers that without the race a path-based `chmod` would have. Where it is
+    unavailable or refused — Windows, a FIFO, a filesystem with no mode bits —
+    the write still goes ahead: failing to narrow permissions is not a reason
+    to refuse someone their own plaintext.
+
+    O_NOFOLLOW where the platform has it, so a symlink planted at `--out` is
+    refused rather than written through. Not O_EXCL: refusing to overwrite
+    would strand the ordinary case of re-running a command after a typo, and
+    this is a recovery tool.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(path, flags, 0o600)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise KeymError(
+                f"refusing to write {path}: it is a symbolic link"
+            ) from None
+        raise KeymError(f"cannot write {path}: {exc.strerror}") from None
+    if hasattr(os, "fchmod"):
+        try:
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
+    return os.fdopen(fd, "wb")
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    try:
+        raise SystemExit(main())
+    except KeymError as _e:
+        print(f"error: {_e}", file=sys.stderr)
+        raise SystemExit(1) from None
