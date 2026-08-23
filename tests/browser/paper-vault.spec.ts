@@ -1,5 +1,8 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { encodePaperParts } from "../../src/lib/keym-v2-paper";
 import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 
 /**
@@ -205,5 +208,78 @@ test.describe("paper vault", () => {
     // session, which is the surface auto-lock and the field blur exist to
     // shrink.
     await expect(page.locator(".paper-vault")).toHaveCount(0);
+  });
+});
+
+/**
+ * §7.1's other half: the parts printed above have to be readable back.
+ *
+ * The print kit shipped a year before anything could reassemble what it
+ * printed. `decodePaperParts` was written, exported, and called from nowhere in
+ * the app — only from `keym2.py join`. Meanwhile the decrypt box, on seeing a
+ * part, said "scan them all into this box, one per line", and on being given
+ * exactly that said it again. The one instruction the paper vault gives its own
+ * user could not be followed in the tool that gave it.
+ *
+ * Built from a frozen corpus container rather than one this test wrote, for the
+ * reason v3-default.spec.ts gives: a round trip through code that agrees with
+ * itself proves only that.
+ */
+test.describe("a printed backup can be scanned back in", () => {
+  const CORPUS = resolve(__dirname, "../../scripts/fixtures/keymaker");
+  const meta = JSON.parse(readFileSync(resolve(CORPUS, "fixtures.json"), "utf8")) as {
+    password: string;
+    fixtures: Array<{ name: string; file: string; plaintext: string }>;
+  };
+  const fx = meta.fixtures.find((f) => f.name === "pbkdf2-aes256gcm");
+
+  test("every part pasted in, one per line, opens the backup", async ({ page }) => {
+    if (!fx) throw new Error("corpus has no pbkdf2-aes256gcm fixture");
+    const container = new Uint8Array(readFileSync(resolve(CORPUS, fx.file)));
+    // Derived from the container rather than fixed. The corpus vectors are
+    // small — 97 bytes here — so a printer-sized capacity yields one part, and
+    // a single part would pass this test without reassembling anything. Three
+    // is the smallest count that exercises ordering as well as joining.
+    const parts = encodePaperParts(container, Math.ceil(container.length / 3));
+    expect(parts.length, "the fixture must split into more than one part").toBeGreaterThan(1);
+
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+
+    // One part first. This is the state the old code got stuck in, and the
+    // message is still right — it is the *next* step that used to be missing.
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(parts[0] as string);
+    await expect(
+      page.getByText(/part 1 of \d+ of a paper backup/i),
+      "a single part should still say which part it is and that the rest are needed"
+    ).toBeVisible();
+
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(parts.join("\n"));
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(meta.password);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+
+    await expect(
+      page.locator("#output-text"),
+      "the parts this app printed did not reassemble into the backup it printed them from"
+    ).toHaveValue(fx.plaintext, { timeout: 90_000 });
+  });
+
+  test("a missing page is named as a missing page, not as a wrong password", async ({ page }) => {
+    if (!fx) throw new Error("corpus has no pbkdf2-aes256gcm fixture");
+    const container = new Uint8Array(readFileSync(resolve(CORPUS, fx.file)));
+    const parts = encodePaperParts(container, Math.ceil(container.length / 3));
+
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    // All but the last. Routed to the AEAD this is "decryption failed", which
+    // sends someone to retype a password that was never wrong.
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(parts.slice(0, -1).join("\n"));
+
+    await expect(
+      page.getByText(/Missing part \d+ of \d+/i),
+      "a short set of parts must say which page is missing"
+    ).toBeVisible();
   });
 });

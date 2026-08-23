@@ -7,7 +7,7 @@ import { PaperVault } from "@/components/paper-vault";
 import { SelfExtractExport } from "@/components/self-extract-export";
 import { armorKeym2, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
-import { looksLikePaperPart, describePaperPart } from "@/lib/keym-v2-paper";
+import { looksLikePaperPart, describePaperPart, decodePaperParts } from "@/lib/keym-v2-paper";
 import {
   KeyRound,
   Lock,
@@ -1412,19 +1412,44 @@ export function EncryptorTool() {
       return;
     }
 
-    // §7.1. A part is not a container either, and the section requires a reader
-    // to report *which* part it is holding rather than failing it as corrupt.
-    // The encoding shipped with 4.2 and this report is what it specifies.
+    // §7.1. Paper parts, and the same rule §7.2 sets for a self-extracting
+    // page: a reader that recognises the encoding and *can* use it must use it.
+    //
+    // This branch used to only report. It told the reader "scan them all into
+    // this box, one per line" — and then, when they did, told them the same
+    // thing again, because nothing here ever reassembled anything.
+    // `decodePaperParts` was written, exported and reachable from no caller in
+    // the app; only `keym2.py join` ever used it. So the one instruction the
+    // paper vault gives its own user could not be followed in the tool that
+    // gave it.
     if (decrypting && looksLikePaperPart(next)) {
-      const part = describePaperPart(next.trim().split(/\s+/)[0] ?? "");
-      setTextInputRejected(
-        part
-          ? `That is part ${part.index} of ${part.total} of a paper backup. Every one ` +
-            `of the ${part.total} parts is needed — scan them all into this box, one per line.`
-          : "That is one part of a paper backup. Every part is needed — scan them " +
-            "all into this box, one per line."
-      );
-      setTextSecret(next);
+      const lines = next.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      try {
+        // Structural, never routed through the AEAD, for the reason the
+        // self-extract branch gives above and `decodePaperParts` repeats: a
+        // missing page reported as a decryption failure sends someone to
+        // retype a password that was never wrong.
+        const container = decodePaperParts(lines);
+        setTextInputRejected(null);
+        setTextSecret(armorKeym2(container));
+        toast({
+          title: `Paper backup reassembled from ${lines.length} ${lines.length === 1 ? "part" : "parts"}`,
+          description: "Type the password to open it.",
+        });
+      } catch (e) {
+        // Every one of these names what is actually wrong — which part is
+        // missing, which was scanned twice, which does not belong to this set.
+        // The one-part case is the common one and gets the fuller sentence.
+        const part =
+          lines.length === 1 ? describePaperPart(lines[0] ?? "") : null;
+        setTextInputRejected(
+          part
+            ? `That is part ${part.index} of ${part.total} of a paper backup. Every one ` +
+              `of the ${part.total} parts is needed — scan them all into this box, one per line.`
+            : (e as Error).message
+        );
+        setTextSecret(next);
+      }
       return;
     }
 

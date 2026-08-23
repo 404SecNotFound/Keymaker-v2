@@ -12,6 +12,7 @@
  *
  *   - armor (`keym2:…`), pasted into the decrypt box
  *   - Shamir shares (`KMSHARE1:…`), typed in off paper by an heir
+ *   - paper parts (`KMPART1:i/n:…`), scanned back off a printed page
  *   - the §7.2 self-extracting page, handed to `keym2.py` or pasted back
  *   - the slot table itself, whose `slot_count` is deliberately outside every
  *     AAD (§5.3) and is therefore the one header field an attacker can edit
@@ -50,6 +51,12 @@ import {
   KEYM2_MAX_SLOTS,
 } from "../src/lib/keym-v2.ts";
 import { combineShares } from "../src/lib/keym-v2-shamir.ts";
+import {
+  decodePaperParts,
+  describePaperPart,
+  encodePaperParts,
+  looksLikePaperPart,
+} from "../src/lib/keym-v2-paper.ts";
 import { looksLikeSelfExtract } from "../src/lib/keym-v2-selfextract.ts";
 import { CipherId, KdfId } from "../src/lib/keymaker-crypto.ts";
 
@@ -465,6 +472,159 @@ async function main() {
     seProbes++;
   }
   console.log(`  ${seProbes} pasted-text inputs probed`);
+
+  // ---- 7b. Paper parts ----
+  //
+  // §7.1's decoder, and the last text surface neither harness reached. It is
+  // the one whose input is *worst*: armor and shares are pasted from a file or
+  // a password manager, and a paper part comes off a printed page through a
+  // camera, from someone who cannot debug what the scanner produced.
+  //
+  // The property that matters is the same one the armor probes assert, and it
+  // matters more here. A decoder that quietly drops characters it does not
+  // recognise turns a damaged scan into a *different container*, which then
+  // fails AEAD — and the person is told their password is wrong. They retype a
+  // password they know is right while the actual problem is a page still in
+  // the tray. So: every mutation is either refused, or gives back exactly the
+  // bytes that were printed. Never something in between.
+  console.log("\nPaper parts (KMPART1:i/n:…) — scanned back off a printed page:");
+  const parts = encodePaperParts(threeSlot, 120);
+  const rejoined = decodePaperParts(parts);
+  check(
+    rejoined.length === threeSlot.length && rejoined.every((b, i) => b === threeSlot[i]),
+    `paper: the real thing does not round-trip (${parts.length} parts)`
+  );
+
+  let paperProbes = 0;
+  const decodesToSame = (set: string[]): "same" | "different" | "rejected" => {
+    let out: Uint8Array;
+    try {
+      out = decodePaperParts(set);
+    } catch {
+      return "rejected";
+    }
+    return out.length === threeSlot.length && out.every((b, i) => b === threeSlot[i])
+      ? "same"
+      : "different";
+  };
+
+  // Single-character damage, everywhere a scanner could put it, split by what
+  // the substituted character *is* — because the two classes have genuinely
+  // different best answers and running them together hid that.
+  //
+  //   Outside the alphabet ("!", "/", ":"): MUST be refused. This is the
+  //   discards-junk trap the armor probes already guard. A decoder that skips
+  //   characters it does not recognise turns a damaged scan into a *different
+  //   container*, which then fails AEAD — and the person is told their password
+  //   is wrong. They retype a password they know is right while the real
+  //   problem is a page still in the tray.
+  //
+  //   Inside the alphabet ("0"), or whitespace: cannot be refused, and this
+  //   sweep is where that became clear. A base64url character standing in for
+  //   another base64url character encodes different data and nothing in §7.1
+  //   can tell — paper parts carry no checksum, unlike Shamir shares (§4.6).
+  //   Whitespace is worse: §7.1 strips it so a printed part can wrap, so a
+  //   space landing on a character *deletes* it. Three quarters of those change
+  //   the body's length mod 4 in a way `atob` still catches; the rest do not.
+  //
+  // The residual is real and is the AEAD's job, which is the correct place for
+  // it: the container authenticates every byte. What the format cannot do is
+  // tell the *reader* that a scan is the likelier cause than a password. Adding
+  // a checksum would mean changing §7.1 and invalidating every page already
+  // printed, which is a worse trade than the wrong error message.
+  const OUTSIDE_ALPHABET = ["!", "/", ":", "="];
+  const INSIDE_OR_STRIPPED = ["0", " "];
+  let undetectable = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const original = parts[i] as string;
+    for (const at of [0, 3, 8, 10, 12, Math.floor(original.length / 2), original.length - 1]) {
+      if (at >= original.length) continue;
+
+      for (const junk of OUTSIDE_ALPHABET) {
+        const set = parts.slice();
+        set[i] = original.slice(0, at) + junk + original.slice(at + 1);
+        check(
+          decodesToSame(set) === "rejected",
+          `paper-damage: part ${i + 1} char ${at} -> ${JSON.stringify(junk)} was not refused, ` +
+            `and ${JSON.stringify(junk)} is not in the part alphabet — the decoder is ` +
+            `discarding what it does not recognise`
+        );
+        paperProbes++;
+      }
+
+      for (const junk of INSIDE_OR_STRIPPED) {
+        const set = parts.slice();
+        set[i] = original.slice(0, at) + junk + original.slice(at + 1);
+        const verdict = decodesToSame(set);
+        // Never a *longer* result: that would mean the decoder invented bytes,
+        // which no substitution can justify and which would be a real defect
+        // rather than the acknowledged residual.
+        if (verdict === "different") undetectable++;
+        check(
+          verdict !== "different" || decodePaperParts(set).length <= threeSlot.length,
+          `paper-damage: part ${i + 1} char ${at} -> ${JSON.stringify(junk)} produced *more* ` +
+            `bytes than were printed`
+        );
+        paperProbes++;
+      }
+    }
+  }
+  // Recorded rather than asserted away. A number that silently went to zero
+  // would mean a checksum had appeared; a number that grew would mean the
+  // alphabet had widened. Either is worth noticing.
+  console.log(
+    `  ${undetectable} same-alphabet substitutions changed the bytes undetectably ` +
+      `(no checksum in §7.1 — the AEAD catches these)`
+  );
+
+  // Reassembly failures, each of which the decoder promises to name as a
+  // reassembly failure rather than let through to the AEAD.
+  for (const [label, set] of [
+    ["a missing part", parts.slice(0, -1)],
+    ["a duplicated part", [...parts, parts[0] as string]],
+    ["nothing at all", [] as string[]],
+    ["parts from two different backups",
+      [parts[0] as string, (parts[0] as string).replace(/\/\d+:/, "/99:")]],
+  ] as const) {
+    check(
+      decodesToSame(set as string[]) === "rejected",
+      `paper-reassembly: ${label} was accepted`
+    );
+    paperProbes++;
+  }
+
+  // Whitespace must keep being accepted: a scanned page wraps, and §7.1 says so.
+  // Without this the checks above could be satisfied by refusing everything.
+  check(
+    decodesToSame(parts.map((p) => `  ${p}\n`)) === "same",
+    "paper-whitespace: padded and newline-terminated parts were refused, but that is how they scan"
+  );
+  paperProbes++;
+
+  // Random text, and the two total functions that see it. Both drive UI
+  // branches on whatever was pasted, so a throw from either reaches the page as
+  // an unhandled rejection.
+  const rngPaper = makeRng(0x9a71e2);
+  for (let i = 0; i < 300; i++) {
+    const len = rngPaper() % 200;
+    let body = "";
+    for (let j = 0; j < len; j++) body += String.fromCharCode(32 + (rngPaper() % 95));
+    const text = i % 3 === 0 ? `KMPART1:${rngPaper() % 99999}/${rngPaper() % 99999}:${body}` : body;
+    await probeText(() => {
+      check(
+        typeof looksLikePaperPart(text) === "boolean",
+        `paper-total#${i}: looksLikePaperPart did not return a boolean`
+      );
+      const d = describePaperPart(text);
+      check(
+        d === null || (Number.isInteger(d.index) && Number.isInteger(d.total)),
+        `paper-total#${i}: describePaperPart returned ${JSON.stringify(d)}`
+      );
+    }, `paper-total#${i}`);
+    await probeText(() => decodePaperParts([text]), `paper-random#${i}`);
+    paperProbes += 2;
+  }
+  console.log(`  ${paperProbes} paper inputs probed across ${parts.length} real parts`);
 
   // ---- 8. Determinism ----
   console.log("\nDeterminism (same bytes, three runs, identical verdict):");
