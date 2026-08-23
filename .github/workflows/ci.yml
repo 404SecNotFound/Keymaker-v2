@@ -75,6 +75,19 @@ jobs:
       - name: Parser fuzzing
         run: npm run test:fuzz
 
+      # The v2 surfaces the job above does not reach. `decryptData` dispatches
+      # on the version byte, so v1's random blobs do land in the v2 parser, but
+      # only as noise: nothing there deforms a real multi-slot container, and
+      # nothing touches the inputs that arrive as *text* — armor, Shamir shares
+      # and the self-extracting page — or `slot_count`, the one header field
+      # §5.3 deliberately leaves outside every AAD.
+      #
+      # ~4 min. It runs here rather than as its own job because `ci` finishes
+      # well inside the browser matrix either way, so this costs no wall clock
+      # on the critical path and one less job to keep configured.
+      - name: KEYM v2 fuzzing
+        run: npm run test:fuzz2
+
       - name: Production build (static export + CSP hashes)
         run: npm run build
 

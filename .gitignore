@@ -26,6 +26,7 @@ yarn-error.log*
 # keymaker test runner bundles
 scripts/.regression.build.mjs
 scripts/.fuzz.build.mjs
+scripts/.fuzz2.build.mjs
 scripts/.generate.build.mjs
 scripts/.keym2-dispatch.build.mjs
 scripts/.calibration.build.mjs
