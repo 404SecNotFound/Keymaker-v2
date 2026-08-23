@@ -19,6 +19,8 @@ import {
   KdfId,
   decryptData,
   detectFormat,
+  MAX_CONTAINER_SIZE,
+  oversizeRecoveryHelp,
   encryptData,
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
@@ -324,6 +326,73 @@ check(
   "arbitrary text prices as null"
 );
 check(describeUnlockCost(null) === null, "a null cost produces no notice");
+// --- an oversized container is a dead end only in the browser --------------
+//
+// MAX_PLAINTEXT_SIZE is a property of this build: a tab holds the container
+// and the recovered file at once. §5's chunking means the format has no such
+// limit, and keym2.py has none either — verified before this message was
+// written, not after: a 150 MiB file round-trips through the reference
+// byte-identically in about two seconds at ~634 MiB peak RSS.
+//
+// The old refusal said "maximum size is 100MB" and, on the decrypt side, told
+// the reader to choose a smaller file. There is no smaller version of a
+// backup. Someone recovering an inheritance would reasonably conclude the
+// archive was unusable.
+
+const help = oversizeRecoveryHelp();
+check(help.includes("keym2.py"), "the oversize message names the tool that can open it", help);
+check(help.includes("decrypt --in"), "the oversize message gives the actual command");
+check(help.includes("RECOVERY.md"), "the oversize message points at the full procedure");
+check(
+  /no size limit/i.test(help),
+  "the oversize message says the format is not the limit"
+);
+// The two failure modes this replaces, neither of which may come back.
+check(
+  !/smaller file|smaller than/i.test(help),
+  "the oversize message must not tell the reader to shrink a backup",
+  help
+);
+check(
+  !/^Encrypted data is too large\.?$/i.test(help.trim()),
+  "the oversize message is more than a restatement of the limit"
+);
+
+// And it is what decryptData actually throws, rather than a string that merely
+// exists. Allocating past the ceiling is the only way to reach that branch.
+{
+  const oversized = new Uint8Array(MAX_CONTAINER_SIZE + 1);
+  let message = "";
+  try {
+    await decryptData(oversized.buffer as ArrayBuffer, PASSWORD, null);
+    message = "(no error thrown)";
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  check(
+    message.includes("keym2.py"),
+    "decryptData's too-large error carries the recovery route",
+    message.slice(0, 120)
+  );
+}
+
+// The encrypt side keeps the opposite advice, because there it is correct: a
+// file you are about to encrypt genuinely can be replaced with a smaller one.
+{
+  const oversized = new Uint8Array(MAX_CONTAINER_SIZE + 1);
+  let message = "";
+  try {
+    await encryptData(oversized.buffer as ArrayBuffer, PASSWORD, null);
+    message = "(no error thrown)";
+  } catch (e) {
+    message = e instanceof Error ? e.message : String(e);
+  }
+  check(
+    /too large/i.test(message) && !message.includes("keym2.py"),
+    "encrypting an oversized file still says to pick a smaller one",
+    message.slice(0, 120)
+  );
+}
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {

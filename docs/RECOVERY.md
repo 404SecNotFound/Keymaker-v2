@@ -163,6 +163,20 @@ machine while the key derivation runs — seconds, for Argon2id.
 
 ---
 
+## If the web app said the backup was too large
+
+That limit belongs to the web app, not to your backup and not to the format.
+A browser tab has to hold the container and the recovered file in memory at
+once, so the app stops at 100 MB. `keym2.py` does not: it has no size limit,
+and the steps above are the whole procedure regardless of how big the file is.
+
+Measured on an ordinary laptop, a 150 MiB backup decrypts in about two seconds
+and needs roughly 640 MB of RAM while it runs. Larger files scale from there —
+budget several times the file size in memory, and use a machine with room for
+it rather than the smallest one to hand.
+
+Nothing else changes. Same command, same password, same output.
+
 ## If it does not work
 
 The error is deliberately vague: *"decryption failed"* covers a wrong
