@@ -661,6 +661,38 @@ async function verifySlotTable(parsed: Keym2Container, master: Uint8Array): Prom
   return diff === 0;
 }
 
+const SLOT_TABLE_CHANGED_WRITE =
+  "This backup's list of unlock methods has changed since it was created, so Keymaker will not edit it. " +
+  "Making a change now would re-sign the altered list and permanently destroy the evidence that it was altered. " +
+  "The backup itself is untouched and still opens: unlock it, and save a fresh copy instead.";
+
+/**
+ * v3 §5.3 step 2. Refuse to rewrite a slot table that does not verify, and
+ * erase the master key on the way out.
+ *
+ * The deliberate opposite of §5.2, for a reason that is about who pays. A
+ * *reader* that refuses costs someone their plaintext, so it reports instead
+ * and hands the data over. A *writer* that refuses costs one edit that can be
+ * made another way; a writer that proceeds signs the attacker's table with the
+ * real key, and is irreversible.
+ *
+ * Without this, v3 detects a strip only until the victim next uses the app.
+ * The owner is the one person who can still open a container whose heir slot
+ * was removed — their own slot is the one left — so the owner is the one whose
+ * next enrolment launders it, and every reader afterwards is told the table is
+ * authentic. Which it now is.
+ *
+ * `=== false` rather than a falsy test: `verifySlotTable` answers `null` for a
+ * v2 container, which claims nothing and must keep the enrolment it always
+ * allowed.
+ */
+async function requireAuthenticSlotTable(parsed: Keym2Container, master: Uint8Array): Promise<void> {
+  if ((await verifySlotTable(parsed, master)) === false) {
+    secureErase(master);
+    throw new KeymakerError("invalid-input", SLOT_TABLE_CHANGED_WRITE);
+  }
+}
+
 
 // ---------------------------------------------------------------------------
 // Key derivation (§4)
@@ -1351,6 +1383,8 @@ export async function addShamirSlotKeym2(
     throw new KeymakerError("invalid-input", `A container can hold at most ${KEYM2_MAX_SLOTS} slots.`);
   }
   const { master } = await unwrapMasterKey(parsed, secrets);
+  // Before the KDF, not after: a refused edit should be the cheap outcome.
+  await requireAuthenticSlotTable(parsed, master);
 
   // The salt is chosen before the shares exist, because share_set_id derives
   // from it (§4.6). Two slots cannot share a salt without sharing a set id.
@@ -1480,6 +1514,8 @@ export async function addPasskeySlotKeym2(
     throw new KeymakerError("invalid-input", `A container can hold at most ${KEYM2_MAX_SLOTS} slots.`);
   }
   const { master } = await unwrapMasterKey(parsed, secrets);
+  // Before the KDF, not after: a refused edit should be the cheap outcome.
+  await requireAuthenticSlotTable(parsed, master);
 
   const prefix = packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, salt, KEYM2_SLOT_TYPE_PASSKEY);
   // Same round-trip through the reader's own validator as the other builders.

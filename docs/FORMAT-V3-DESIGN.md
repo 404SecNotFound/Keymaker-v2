@@ -206,9 +206,10 @@ whole of what is known.
 Adding or removing a slot:
 
 1. Unwrap the master key through any one slot the actor holds a secret for.
-2. Rewrite the slot table.
-3. Recompute `slot_table_mac` over the new table.
-4. Leave `container_id` and the payload untouched.
+2. **Verify the existing `slot_table_mac`. If it does not verify, refuse.**
+3. Rewrite the slot table.
+4. Recompute `slot_table_mac` over the new table.
+5. Leave `container_id` and the payload untouched.
 
 No other slot is re-wrapped, and the payload is not re-encrypted. This is what
 keeps §1.2's property true, and it means authorised revocation and unauthorised
@@ -217,6 +218,36 @@ does not.
 
 An implementation that cannot recompute the MAC — because it holds no slot
 secret — MUST NOT write a slot table at all. There is no partial edit.
+
+#### Why step 2 is normative, and why it refuses where §5.2 reports
+
+Without it the previous paragraph is false. A writer that re-seals whatever
+table it is handed will happily sign a stripped one: the attacker removes the
+heir's slot, the owner — who still opens the container, because their own slot
+is the one left — later enrols a passkey, and the enrolment mints a **valid**
+MAC over the attacker's table. The evidence is not merely missed, it is
+destroyed, permanently and by the one person who would have noticed. Every
+later reader is told the table is authentic, and it is: this implementation
+said so.
+
+This is the one place a v3 implementation refuses, and the asymmetry with §5.2
+is the point rather than an inconsistency:
+
+- §5.2 governs a **reader**, where refusing costs the plaintext. A backup that
+  will not open is worse than a backup with a warning on it.
+- §5.3 governs a **writer**, where refusing costs nothing. The container is
+  untouched and still opens; only this one edit does not happen. Proceeding, by
+  contrast, is irreversible.
+
+So a writer MUST NOT re-seal a table it could not verify, and the refusal MUST
+say what is actually known — the table changed — without claiming to know which
+slot changed, per §5.2's last paragraph. It SHOULD name the way forward, which
+is to decrypt and write a fresh container.
+
+The rule keys on `false`, not on "not true". A v2 container verifies as
+*unknown*: it carries no MAC, nothing is claimed about it, and enrolment on it
+proceeds exactly as it always has. Refusing there would remove a capability to
+fix a gap v2 never claimed to close.
 
 ---
 

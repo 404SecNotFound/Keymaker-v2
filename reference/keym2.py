@@ -1833,6 +1833,37 @@ SLOT_TABLE_CHANGED = (
     "authentic; only the list of secrets that can open it is in question."
 )
 
+SLOT_TABLE_CHANGED_WRITE = (
+    "refusing to edit the slot table: it has changed since this backup was "
+    "created (v3 \u00a75.3). Writing now would recompute slot_table_mac over the "
+    "altered table and permanently destroy the evidence that it was altered. "
+    "The container is untouched and still opens: decrypt it and encrypt a "
+    "fresh one instead."
+)
+
+
+def require_authentic_slot_table(container: bytes, core: CoreHeader,
+                                 records: list[bytes], master_key: bytes) -> None:
+    """
+    v3 §5.3 step 2. Refuse to rewrite a slot table that does not verify.
+
+    The counterpart to §5.2, and deliberately the opposite answer. A *reader*
+    that refuses costs someone their plaintext, so it reports instead. A
+    *writer* that refuses costs nothing at all — the container is not modified
+    and still opens by every path it did a moment ago — while a writer that
+    proceeds is irreversible: it signs the attacker's table with the real key,
+    and every reader afterwards is correctly told the table is authentic.
+
+    That is the whole strip attack completed by the victim. The owner is the
+    one person still able to open a container whose heir slot was removed, so
+    the owner is the one whose next enrolment launders it.
+
+    ``is False`` and not ``not ...``: ``verify_slot_table`` answers ``None`` for
+    v2, which claims nothing and must not block an edit v2 always allowed.
+    """
+    if verify_slot_table(container, core, records, master_key) is False:
+        raise UsageError(SLOT_TABLE_CHANGED_WRITE)
+
 
 @dataclass(frozen=True)
 class DecryptResult:
@@ -1985,6 +2016,7 @@ def add_slot(
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
         shares=unlock_shares, prf_output=unlock_prf_output)
+    require_authentic_slot_table(container, core, records, master)
     if len(records) >= SLOT_COUNT_MAX:
         raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
 
@@ -2026,6 +2058,7 @@ def add_shamir_slot(
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
         shares=unlock_shares, prf_output=unlock_prf_output)
+    require_authentic_slot_table(container, core, records, master)
     if len(records) >= SLOT_COUNT_MAX:
         raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
 
@@ -2072,6 +2105,7 @@ def add_passkey_slot(
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
         shares=unlock_shares, prf_output=unlock_prf_output)
+    require_authentic_slot_table(container, core, records, master)
     if len(records) >= SLOT_COUNT_MAX:
         raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
 
@@ -2128,6 +2162,7 @@ def remove_slot(
         core, records, payload, master = recover_master_key(
             container, unlock_password, keyfile_bytes=unlock_keyfile,
             shares=unlock_shares, prf_output=unlock_prf_output)
+        require_authentic_slot_table(container, core, records, master)
     else:
         if (unlock_password is not None or unlock_shares
                 or unlock_prf_output is not None):
@@ -2185,6 +2220,7 @@ def rewrap_slot(
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
         shares=unlock_shares, prf_output=unlock_prf_output)
+    require_authentic_slot_table(container, core, records, master)
     if not (0 <= index < len(records)):
         raise UsageError(f"no slot at index {index}")
 
@@ -3808,6 +3844,60 @@ def _selftest() -> int:
                           SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN])
         check("v2 removal still needs no secret at all",
               decrypt(remove_slot(v2two, 1), pw) == v3msg)
+
+        # --- §5.3 step 2: a writer must not re-seal a table it cannot verify ---
+        #
+        # The attack these checks close is the strip attack *finished by the
+        # victim*. After a strip, the owner is the one person who can still open
+        # the container — their slot is the one left — so the owner is the one
+        # whose next enrolment recomputes the MAC over the attacker's table and
+        # signs it with the real key. Every reader afterwards is told the table
+        # is authentic, correctly: this implementation said so. Detection is not
+        # missed, it is destroyed.
+        #
+        # Each write path is asked separately. They do not share a code path to
+        # the guard, and a rule enforced in four places out of five is a rule an
+        # attacker picks the fifth for.
+        v3three, _v3texts = add_shamir_slot(
+            add_slot(v3one, pw, pw2, **fast), pw, 2, 3)
+        clipped = strip_slot(v3three, 2)
+        reports("the setup is a real strip: the table reports as not authentic",
+                lambda: decrypt_report(clipped, pw).slot_table_authentic, False)
+
+        check("enrolling a passphrase on a stripped table is refused",
+              _raises_usage(lambda: add_slot(clipped, pw, "third", **fast)))
+        check("enrolling a share set on a stripped table is refused",
+              _raises_usage(lambda: add_shamir_slot(clipped, pw, 2, 3)))
+        check("enrolling a passkey on a stripped table is refused",
+              _raises_usage(lambda: add_passkey_slot(clipped, pw, b"\x7e" * PRF_OUTPUT_LEN)))
+        check("revoking a slot from a stripped table is refused",
+              _raises_usage(lambda: remove_slot(clipped, 1, unlock_password=pw)))
+        check("rewrapping a slot in a stripped table is refused",
+              _raises_usage(lambda: rewrap_slot(clipped, 0, pw, "third", **fast)))
+
+        # The refusal is the cheap half of the trade, and this is what makes it
+        # cheap: §5.2 still applies, so nothing was lost by declining the edit.
+        # A reader refusing here would cost the plaintext; a writer refusing here
+        # costs one edit that can be done another way.
+        opens("a refused edit leaves the container readable",
+              lambda: decrypt(clipped, pw), v3msg)
+        check("a refused edit leaves the container byte-identical",
+              clipped == strip_slot(v3three, 2))
+
+        # What the guard is standing in front of. `assemble` is the primitive
+        # underneath every write path, and it will seal whatever it is handed —
+        # it has to, since it is also how an authorised edit is written. Reached
+        # directly it launders the strip, which is precisely the outcome above.
+        _cc, _cr, _cp = parse_container(clipped)
+        _cmaster = recover_master_key(clipped, pw)[3]
+        laundered = assemble(_cc, _cr, _cp, _cmaster)
+        reports("re-sealing a stripped table by hand does launder it — hence the guard",
+                lambda: decrypt_report(laundered, pw).slot_table_authentic, True)
+        check("and the laundered container still cannot be opened by the stripped slot",
+              _raises_keym(lambda: decrypt(laundered, "third")))
+
+        check("a v2 table, which claims nothing, is still freely editable",
+              len(parse_container(add_slot(v2two, pw, "third", **fast))[1]) == 3)
 
         # --- §5.3, no partial edits ---
         check("assemble refuses to write a v3 table without the master key",
