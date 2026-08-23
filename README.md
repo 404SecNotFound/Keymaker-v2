@@ -382,6 +382,7 @@ None of the three protects a compromised device. That is the next section.
 | Old files keep opening | **Tested.** Fixture corpus from prior releases, gated in CI. |
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
 | Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
+| Recovered plaintext on disk | **Enforced for `--outfile`, and only there.** `reference/keym2.py` writes decrypted output at `0600` and narrows an existing file to match, so a recovery on a shared machine is not readable by other accounts. Redirecting stdout instead hands file creation to the shell, which uses your umask — usually world-readable. |
 | Clipboard is cleared | **Best-effort, and only the current entry.** The browser may refuse the write. More importantly, clipboard *history* — Windows Win+V, a clipboard manager, phone keyboard history, cloud clipboard sync — keeps its own copy that no website can reach or even detect. If you copy a seed phrase on a machine with history enabled, treat it as still there. |
 
 ### What this does not protect against
@@ -557,7 +558,7 @@ still recoverable — the format is specified, and a second implementation of it
 ships in this repository.
 
 ```bash
-pip install cryptography argon2-cffi
+pip install cryptography argon2-cffi                  # or: -r reference/requirements.txt
 
 python3 reference/keym2.py inspect --in backup.keym   # what is this file?
 python3 reference/keym2.py decrypt --in backup.keym   # prompts for the password
@@ -565,6 +566,21 @@ python3 reference/keym2.py decrypt --in backup.keym   # prompts for the password
 
 No browser, no Node, no npm, no network. `inspect` reports the container's KDF,
 cipher, and whether a key file is needed **without** asking for a password.
+Any recent version of either library works — the container format does not
+depend on them, and the conformance suite proves it by opening frozen fixtures
+under whatever is installed. `reference/requirements.txt` records the versions
+these scripts were actually run against, if you would rather pin.
+
+**What it does so a recovery does not leak what it just recovered.** With
+`--outfile`, the plaintext is written `0600` — owner only — and an existing
+file at that path is narrowed to match rather than keeping the permissions it
+already had. That covers `--outfile` and nothing else: redirect stdout instead
+(`decrypt --in backup.keym > seed.txt`) and the *shell* creates the file, at
+your umask, which on most systems is world-readable. Separately, passing a
+secret as an argument — `--password`, `--share`, `--prf-output` — prints a
+warning, because an argument sits in your shell history and was visible in the
+process list to every other account on the machine while the KDF ran. Prefer
+the interactive prompt, or `--shares-from` with a file only you can read.
 
 **Two scripts, because there are two container versions.** The app writes
 **KEYM v2** and `keym2.py` reads it. Backups made before that are **v1** and
