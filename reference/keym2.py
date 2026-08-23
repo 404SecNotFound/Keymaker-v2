@@ -202,14 +202,43 @@ from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 # =============================================================================
 
 MAGIC = b"KEYM"
-VERSION = 2
+
+VERSION_V2 = 2
+VERSION_V3 = 3
+SUPPORTED_VERSIONS = (VERSION_V2, VERSION_V3)
+
+# The version this implementation *writes* by default.
+#
+# v3 §6 says writers SHOULD emit v3, and this reference deliberately does not
+# yet. Phase 2 is the Python side alone: the TypeScript core is phase 3, and
+# until it exists the byte-for-byte conformance job has nothing to compare a v3
+# container against. Flipping this before then would not make the format safer,
+# it would make the one test that proves the two implementations agree stop
+# testing anything. `encrypt(..., version=VERSION_V3)` is the opt-in until then.
+VERSION = VERSION_V2
 
 # §3. The header is in two parts and the split is load-bearing (§5.3): the core
 # header is authenticated by the payload, each slot prefix by its own wrap, and
 # slot_count by neither.
+#
+# The unsuffixed names are v2's, kept because v2 is still what this file writes
+# and what most of the selftest exercises. v3 widens the core header and inserts
+# the slot-table MAC ahead of the table, so every offset past byte 4 moves;
+# `core_header_len`, `slot_count_offset` and `slot_table_offset` below are the
+# version-dependent forms, and code that can see either version uses those.
 CORE_HEADER_LEN = 8      # bytes [0, 8) — the payload AAD
 SLOT_COUNT_OFFSET = 8
 SLOT_TABLE_OFFSET = 9
+
+# v3 §3. The core header grows by the 16-byte container_id; slot_table_mac sits
+# between slot_count and the table, at a fixed offset, so a reader reaches it
+# without first trusting slot_count.
+CONTAINER_ID_LEN = 16
+SLOT_TABLE_MAC_LEN = 32
+CORE_HEADER_LEN_V3 = 24        # bytes [0, 24)
+SLOT_COUNT_OFFSET_V3 = 24
+SLOT_TABLE_MAC_OFFSET_V3 = 25
+SLOT_TABLE_OFFSET_V3 = 57
 
 SLOT_PREFIX_LEN = 48     # §4.4, bytes [0, 48) of a slot
 SLOT_SALT_OFFSET = 8     # within the slot
@@ -306,6 +335,13 @@ INFO_PRF_SALT = b"keymaker.v2.prf-salt"
 # §4.7. WebAuthn's PRF extension returns 32 bytes.
 PRF_OUTPUT_LEN = 32
 
+# v3 §5.1. The info string for the slot-table MAC key. It carries "v3" where
+# every string above carries "v2", which is the whole of the domain separation
+# needed: K_table cannot collide with a payload key, a slot key or a PRF salt
+# because no v2 derivation can ever be handed this info string.
+INFO_SLOT_TABLE = b"keymaker.v3.slot-table"
+
+
 # §4.6, the share record. 42 bytes: set id, threshold, index, value, checksum.
 SHARE_SET_ID_LEN = 4
 SHARE_VALUE_LEN = 32
@@ -395,25 +431,79 @@ def slot_len(cipher_id: int) -> int:
     return SLOT_PREFIX_LEN + MASTER_KEY_LEN + tag_overhead(cipher_id)
 
 
+# --- version-dependent header geometry (v3 §3) -------------------------------
+#
+# Three functions rather than three dicts so that an unknown version is a loud
+# failure at the point of use. A reader that has already passed
+# parse_core_header cannot reach them with a bad version; a writer that
+# constructs a CoreHeader by hand can, and should hear about it.
+
+def core_header_len(version: int) -> int:
+    """Length of the payload AAD, and of the first half of every slot's AAD."""
+    if version == VERSION_V2:
+        return CORE_HEADER_LEN
+    if version == VERSION_V3:
+        return CORE_HEADER_LEN_V3
+    raise UsageError(f"unknown version {version}")
+
+
+def slot_count_offset(version: int) -> int:
+    return core_header_len(version)
+
+
+def slot_table_offset(version: int) -> int:
+    """Where the slot table starts: straight after slot_count in v2, after
+    slot_count and the 32-byte MAC in v3."""
+    if version == VERSION_V2:
+        return SLOT_TABLE_OFFSET
+    if version == VERSION_V3:
+        return SLOT_TABLE_OFFSET_V3
+    raise UsageError(f"unknown version {version}")
+
+
 # =============================================================================
 # §C  CORE HEADER AND SLOT TABLE
 # =============================================================================
 
 @dataclass(frozen=True)
 class CoreHeader:
-    """§3, bytes [0, 8). The payload AAD, and the only part every AEAD
-    invocation in the container agrees on."""
+    """§3, bytes [0, 8) in v2 and [0, 24) in v3. The payload AAD, and the only
+    part every AEAD invocation in the container agrees on.
+
+    v3 §3 widens it by ``container_id`` and nothing else, which is what makes
+    per-container binding free: both AADs are already "the core header", so
+    neither construction changes to gain it.
+    """
 
     cipher_id: int
     flags: int = 0
+    version: int = VERSION_V2
+    # v3 §4. Empty for v2, where the field does not exist. Not a secret — it
+    # appears in the clear in every copy of the backup.
+    container_id: bytes = b""
 
     @property
     def tag_overhead(self) -> int:
         return tag_overhead(self.cipher_id)
 
+    @property
+    def is_v3(self) -> bool:
+        return self.version == VERSION_V3
+
+    def __post_init__(self) -> None:
+        if self.version == VERSION_V2:
+            if self.container_id:
+                raise UsageError("v2 containers have no container_id")
+        elif self.version == VERSION_V3:
+            if len(self.container_id) != CONTAINER_ID_LEN:
+                raise UsageError(f"container_id must be {CONTAINER_ID_LEN} bytes")
+        else:
+            raise UsageError(f"unknown version {self.version}")
+
     def pack(self) -> bytes:
-        out = MAGIC + bytes([VERSION, self.cipher_id, self.flags, 0])
-        assert len(out) == CORE_HEADER_LEN
+        out = MAGIC + bytes([self.version, self.cipher_id, self.flags, 0]) \
+            + self.container_id
+        assert len(out) == core_header_len(self.version)
         return out
 
 
@@ -469,11 +559,21 @@ def parse_core_header(data: bytes) -> CoreHeader:
     Every check here runs before any KDF is invoked, and before a single byte is
     allocated on the strength of something the container claims.
     """
-    if len(data) < SLOT_TABLE_OFFSET:
+    # Enough bytes to read the version before dispatching on it. Five is the
+    # magic plus the version byte, and it is all this first check can assume:
+    # how much more is required depends on the answer.
+    if len(data) < 5:
         raise _reject()
     if data[:4] != MAGIC:
         raise _reject()
-    if data[4] != VERSION:
+
+    version = data[4]
+    # v3 §6: a v3 reader MUST open v1, v2 and v3. v1 has its own file; here the
+    # bound is v2 or v3, and anything else is an unknown version. A v2-only
+    # reader rejects 0x03 through this same check, which is what §6 relies on.
+    if version not in SUPPORTED_VERSIONS:
+        raise _reject()
+    if len(data) < slot_table_offset(version):
         raise _reject()
 
     cipher_id = data[5]
@@ -488,7 +588,10 @@ def parse_core_header(data: bytes) -> CoreHeader:
     if data[7] != 0:  # §3 reserved
         raise _reject()
 
-    return CoreHeader(cipher_id=cipher_id, flags=flags)
+    container_id = (data[8:8 + CONTAINER_ID_LEN] if version == VERSION_V3
+                    else b"")
+    return CoreHeader(cipher_id=cipher_id, flags=flags, version=version,
+                      container_id=container_id)
 
 
 def parse_container(data: bytes) -> tuple[CoreHeader, list[bytes], bytes]:
@@ -506,12 +609,13 @@ def parse_container(data: bytes) -> tuple[CoreHeader, list[bytes], bytes]:
     """
     core = parse_core_header(data)
 
-    slot_count = data[SLOT_COUNT_OFFSET]
+    slot_count = data[slot_count_offset(core.version)]
     if not (SLOT_COUNT_MIN <= slot_count <= SLOT_COUNT_MAX):
         raise _reject()
 
     width = slot_len(core.cipher_id)
-    payload_offset = SLOT_TABLE_OFFSET + slot_count * width
+    table = slot_table_offset(core.version)
+    payload_offset = table + slot_count * width
 
     # §6: shorter than payload_offset plus the minimum payload for one chunk.
     # The minimum chunk is zero plaintext bytes and its tag(s).
@@ -519,10 +623,25 @@ def parse_container(data: bytes) -> tuple[CoreHeader, list[bytes], bytes]:
         raise _reject()
 
     slots = [
-        data[SLOT_TABLE_OFFSET + i * width: SLOT_TABLE_OFFSET + (i + 1) * width]
+        data[table + i * width: table + (i + 1) * width]
         for i in range(slot_count)
     ]
     return core, slots, data[payload_offset:]
+
+
+def read_slot_table_mac(data: bytes) -> Optional[bytes]:
+    """
+    v3 §3. The stored ``slot_table_mac``, or None for a v2 container.
+
+    Read straight out of the bytes at a fixed offset, deliberately without
+    consulting ``slot_count`` — that is the reason §3 puts the MAC *before* the
+    table rather than after it. ``parse_core_header`` has already established
+    the container is long enough to hold it.
+    """
+    core = parse_core_header(data)
+    if not core.is_v3:
+        return None
+    return data[SLOT_TABLE_MAC_OFFSET_V3:SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN]
 
 
 def parse_slot(record: bytes) -> Slot:
@@ -896,8 +1015,86 @@ def unwrap_master_key_from_slot(core: CoreHeader, record: bytes, slot: Slot,
 
 
 # =============================================================================
+# §D1  SLOT TABLE AUTHENTICATION (v3 §5)
+# =============================================================================
+#
+# What v3 adds, and the only thing it adds. A v2 slot table is authenticated
+# slot-by-slot and never as a whole, so an attacker who can write the file can
+# delete a slot and the container still opens for everyone else — silently, and
+# permanently for whoever was enrolled in the deleted slot.
+#
+# The fix has to survive the constraint v2 §5.3 states at WRAP_NONCE: a slot
+# table has to be mutable by someone holding one secret, or slots are not worth
+# having. It does, because recomputing this MAC needs the *master key*, and
+# unwrapping any one slot yields the master key. One secret still suffices, and
+# no other slot is touched.
+
+def slot_table_key(master_key: bytes) -> bytes:
+    """
+    v3 §5.1. ``HKDF-SHA-256(ikm=master_key, salt="", info="keymaker.v3.slot-table")``.
+
+    The empty salt is written out rather than passed as ``salt=None``, for the
+    same reason ``_expand`` writes out its zero salt: the two are identical by
+    construction — RFC 5869 substitutes HashLen zeros for an absent salt, and
+    HMAC zero-pads any short key to the block size, so an empty salt and a
+    32-zero-byte salt produce the same PRK — and a second implementer should not
+    have to derive that to be sure the two agree.
+    """
+    if len(master_key) != MASTER_KEY_LEN:
+        raise UsageError("master key must be 32 bytes")
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=SLOT_TABLE_MAC_LEN,
+        salt=b"",
+        info=INFO_SLOT_TABLE,
+    ).derive(master_key)
+
+
+def compute_slot_table_mac(core: CoreHeader, records: list[bytes],
+                           master_key: bytes) -> bytes:
+    """
+    v3 §5.1. HMAC-SHA-256 over ``core_header || slot_count || every record``.
+
+    Whole records, not just prefixes. The wrapped key and its tag are already
+    authenticated by the slot itself, so covering them adds no cryptographic
+    strength — it adds simplicity. "Every byte of the table, in order" has no
+    edge cases, and it pins slot order as a side effect, which is why the
+    reordering attack of §1.1 stops being possible even though it was inert.
+    """
+    if not core.is_v3:
+        raise UsageError("slot_table_mac is a v3 field")
+    if not (SLOT_COUNT_MIN <= len(records) <= SLOT_COUNT_MAX):
+        raise UsageError(f"slot_count must be {SLOT_COUNT_MIN}..{SLOT_COUNT_MAX}")
+    width = slot_len(core.cipher_id)
+    for record in records:
+        if len(record) != width:
+            raise UsageError("slot record has the wrong width for this cipher")
+    msg = core.pack() + bytes([len(records)]) + b"".join(records)
+    return hmac.new(slot_table_key(master_key), msg, hashlib.sha256).digest()
+
+
+def verify_slot_table(container: bytes, core: CoreHeader, records: list[bytes],
+                      master_key: bytes) -> Optional[bool]:
+    """
+    v3 §5.2. True/False for a v3 container, None for a v2 one, which has no MAC
+    to check and about which nothing is therefore claimed.
+
+    Compared in constant time. Not because a timing signal here would be worth
+    much — reaching this point at all requires having already unwrapped a slot —
+    but because a MAC comparison written the other way is the kind of thing that
+    gets copied into a place where it does matter.
+    """
+    if not core.is_v3:
+        return None
+    stored = read_slot_table_mac(container)
+    assert stored is not None
+    return hmac.compare_digest(stored, compute_slot_table_mac(core, records, master_key))
+
+
+# =============================================================================
 # §D2  SHAMIR SHARE SETS (§4.6)
 # =============================================================================
+
 #
 # Nothing below touches the container layout. A share set is a slot whose secret
 # is reconstructed from paper instead of typed; §4.3 onwards is unchanged.
@@ -1429,15 +1626,35 @@ def build_passphrase_slot(
     return prefix + wrap_master_key(core, prefix, slot_key, master_key)
 
 
-def assemble(core: CoreHeader, slots: list[bytes], payload: bytes) -> bytes:
-    """§3. Core header, slot count, slot table, payload."""
+def assemble(core: CoreHeader, slots: list[bytes], payload: bytes,
+             master_key: Optional[bytes] = None) -> bytes:
+    """
+    §3. Core header, slot count, slot table, payload — plus, for v3, the
+    slot-table MAC between the count and the table.
+
+    ``master_key`` is required for v3 and refused for v2. That asymmetry is v3
+    §5.3 made unavoidable: "an implementation that cannot recompute the MAC —
+    because it holds no slot secret — MUST NOT write a slot table at all." A
+    default of None would let a caller emit a v3 container with a zero or stale
+    MAC, which is exactly the file a stripping attacker produces.
+    """
     if not (SLOT_COUNT_MIN <= len(slots) <= SLOT_COUNT_MAX):
         raise UsageError(f"slot_count must be {SLOT_COUNT_MIN}..{SLOT_COUNT_MAX}")
     width = slot_len(core.cipher_id)
     for record in slots:
         if len(record) != width:
             raise UsageError("slot record has the wrong width for this cipher")
-    return core.pack() + bytes([len(slots)]) + b"".join(slots) + payload
+
+    head = core.pack() + bytes([len(slots)])
+    if core.is_v3:
+        if master_key is None:
+            raise UsageError(
+                "writing a v3 slot table needs the master key to recompute "
+                "slot_table_mac (v3 §5.3); there is no partial edit")
+        head += compute_slot_table_mac(core, slots, master_key)
+    elif master_key is not None:
+        raise UsageError("v2 containers have no slot_table_mac")
+    return head + b"".join(slots) + payload
 
 
 def encrypt_payload(core: CoreHeader, master_key: bytes, plaintext: bytes) -> bytes:
@@ -1466,20 +1683,37 @@ def encrypt(
     salt: Optional[bytes] = None,
     master_key: Optional[bytes] = None,
     enforce_write_policy: bool = True,
+    version: int = VERSION,
+    container_id: Optional[bytes] = None,
 ) -> bytes:
     """
-    Write a single-slot v2 container.
+    Write a single-slot container — v2 by default, v3 on request.
 
-    ``salt`` and ``master_key`` exist for cross-implementation byte comparison
-    and nothing else. §4.5 forbids caller-supplied values for either in any
-    interface meant for real data: reusing a master key reuses every (key,
-    nonce) pair in the container, which for an AEAD means recoverable plaintext
-    and forgeable tags. The CLI exposes them behind ``--salt`` / ``--master-key``
-    with the same warning.
+    ``version=VERSION_V3`` is the opt-in described at ``VERSION`` above: the
+    format is specified and implemented here, and stays off by default until the
+    TypeScript core can be held to the same bytes.
+
+    ``salt``, ``master_key`` and ``container_id`` exist for cross-implementation
+    byte comparison and nothing else. §4.5 forbids caller-supplied values for
+    the first two in any interface meant for real data: reusing a master key
+    reuses every (key, nonce) pair in the container, which for an AEAD means
+    recoverable plaintext and forgeable tags. The CLI exposes them behind
+    ``--salt`` / ``--master-key`` with the same warning. ``container_id`` is not
+    secret (v3 §4), so pinning it leaks nothing — but pinning it across two
+    different containers defeats the one thing it is for.
     """
-    core = CoreHeader(cipher_id=cipher_id)
     if cipher_id not in (CIPHER_AES, CIPHER_CHACHA, CIPHER_CHAINED):
         raise UsageError(f"unknown cipher_id {cipher_id}")
+    if version not in SUPPORTED_VERSIONS:
+        raise UsageError(f"unknown version {version}")
+
+    if version == VERSION_V3:
+        if container_id is None:
+            container_id = os.urandom(CONTAINER_ID_LEN)
+    elif container_id is not None:
+        raise UsageError("container_id is a v3 field")
+    core = CoreHeader(cipher_id=cipher_id, version=version,
+                      container_id=container_id or b"")
 
     if master_key is None:
         master_key = os.urandom(MASTER_KEY_LEN)
@@ -1492,7 +1726,8 @@ def encrypt(
         time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
         salt=salt, enforce_write_policy=enforce_write_policy,
     )
-    return assemble(core, [record], encrypt_payload(core, master_key, plaintext))
+    return assemble(core, [record], encrypt_payload(core, master_key, plaintext),
+                    master_key if core.is_v3 else None)
 
 
 def slot_secret_for(
@@ -1583,25 +1818,64 @@ def recover_master_key(
     raise _reject()
 
 
-def decrypt(
+SLOT_TABLE_CHANGED = (
+    "the slot table has changed since this backup was created: a recovery "
+    "option may have been added or removed. The data below is intact and "
+    "authentic; only the list of secrets that can open it is in question."
+)
+
+
+@dataclass(frozen=True)
+class DecryptResult:
+    """What a v3-aware reader knows after opening a container.
+
+    ``slot_table_authentic`` is None for a v2 container. That is not "fine", it
+    is "unknown, and unknowable" — v2 has no MAC, and the §1.1 stripping attack
+    against it remains possible and undetectable. Three states rather than a
+    bool because collapsing None into True would make every v2 container claim
+    an assurance the format cannot give.
+    """
+
+    plaintext: bytes
+    slot_table_authentic: Optional[bool]
+
+    @property
+    def slot_table_tampered(self) -> bool:
+        return self.slot_table_authentic is False
+
+
+def decrypt_report(
     container: bytes,
     password: Optional[str] = None,
     *,
     keyfile_bytes: Optional[bytes] = None,
     shares: Optional[list[str]] = None,
     prf_output: Optional[bytes] = None,
-) -> bytes:
+) -> DecryptResult:
     """
-    Decrypt a v2 container, or raise KeymError with a single generic message.
+    Decrypt, and report on the slot table rather than judging it.
 
-    §5.5's hazard is why this returns bytes rather than yielding them: "a prefix
-    of verified chunks is not a verified prefix of the file". Nothing is
-    returned until the final chunk has verified *and* carried final_flag, so a
-    caller cannot accidentally treat 899 good chunks out of 900 as a result.
+    v3 §5.2 is normative and counter-intuitive: on a MAC mismatch the reader
+    **MUST still return the plaintext**, and **MUST report** that the table is
+    not authentic. Refusing would convert detectable tampering into a lost
+    backup, which is the more severe outcome and the one this project declines
+    to cause. The payload is independently authenticated and unaffected; what
+    changed is the *recovery options*, not the data.
+
+    This is the single exception to §6's generic-error rule, and it does not
+    leak: the check runs only after a secret has already unwrapped a slot, so
+    reaching it proves the caller holds valid key material. An attacker who
+    cannot open the container never sees this result, so there is no oracle.
+
+    The report does not say *which* slot changed, because it cannot — the MAC
+    covers the table as a whole and the sealed table is not recoverable from the
+    tampered one. "Something changed" is the whole of what is known.
     """
-    core, _records, payload, master = recover_master_key(
+    core, records, payload, master = recover_master_key(
         container, password, keyfile_bytes=keyfile_bytes, shares=shares,
         prf_output=prf_output)
+    authentic = verify_slot_table(container, core, records, master)
+
 
     tag = core.tag_overhead
     sizes = _chunk_layout(len(payload), tag)
@@ -1628,11 +1902,47 @@ def decrypt(
 
     if offset != len(payload):
         raise _reject()
-    return b"".join(out)
+    return DecryptResult(plaintext=b"".join(out), slot_table_authentic=authentic)
+
+
+def decrypt(
+    container: bytes,
+    password: Optional[str] = None,
+    *,
+    keyfile_bytes: Optional[bytes] = None,
+    shares: Optional[list[str]] = None,
+    prf_output: Optional[bytes] = None,
+    on_slot_table_change: Optional[object] = None,
+) -> bytes:
+    """
+    Decrypt a container, or raise KeymError with a single generic message.
+
+    §5.5's hazard is why this returns bytes rather than yielding them: "a prefix
+    of verified chunks is not a verified prefix of the file". Nothing is
+    returned until the final chunk has verified *and* carried final_flag, so a
+    caller cannot accidentally treat 899 good chunks out of 900 as a result.
+
+    v3 §5.2 requires the slot-table report to reach somebody, and a function
+    returning only bytes has nowhere to put it. So the default here is to write
+    one line to stderr — a library printing is a small rudeness, and a reader
+    that silently swallows "your recovery options changed" is a larger one.
+    Pass ``on_slot_table_change`` to route it somewhere else; use
+    ``decrypt_report`` to get the flag as a value and print nothing.
+    """
+    result = decrypt_report(
+        container, password, keyfile_bytes=keyfile_bytes, shares=shares,
+        prf_output=prf_output)
+    if result.slot_table_tampered:
+        if on_slot_table_change is not None:
+            on_slot_table_change(container)
+        else:
+            print(f"warning: {SLOT_TABLE_CHANGED}", file=sys.stderr)
+    return result.plaintext
 
 
 # =============================================================================
 # §F  SLOT MUTATION
+
 # =============================================================================
 #
 # The document's §4.3 and §5.3 both turn on one requirement: a slot table must
@@ -1675,7 +1985,8 @@ def add_slot(
         time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
         salt=salt, enforce_write_policy=enforce_write_policy,
     )
-    return assemble(core, records + [record], payload)
+    return assemble(core, records + [record], payload,
+                    master if core.is_v3 else None)
 
 
 def add_shamir_slot(
@@ -1712,7 +2023,8 @@ def add_shamir_slot(
     record, texts = build_shamir_slot(
         core, master, k, n,
         salt=salt, share_secret=share_secret, coefficients=coefficients)
-    return assemble(core, records + [record], payload), texts
+    return (assemble(core, records + [record], payload,
+                     master if core.is_v3 else None), texts)
 
 
 def _passkey_only(records: list[bytes]) -> bool:
@@ -1765,20 +2077,59 @@ def add_passkey_slot(
             "a passkey is hardware, and a container only a lost key opens is "
             "lost data (§4.7)"
         )
-    return assemble(core, out, payload)
+    return assemble(core, out, payload, master if core.is_v3 else None)
 
 
-def remove_slot(container: bytes, index: int) -> bytes:
+def remove_slot(
+    container: bytes,
+    index: int,
+    *,
+    unlock_password: Optional[str] = None,
+    unlock_keyfile: Optional[bytes] = None,
+    unlock_shares: Optional[list[str]] = None,
+    unlock_prf_output: Optional[bytes] = None,
+) -> bytes:
     """
-    Drop a slot by position. Needs no secret at all — which is correct: removing
-    an unlock path is not a privileged operation on a file you already hold, and
+    Drop a slot by position.
+
+    For v2 this needs no secret at all, and that is correct for v2: removing an
+    unlock path is not a privileged operation on a file you already hold, and
     the remaining slots are untouched because no wrap depends on its position.
+
+    For v3 it needs one, and that difference *is* the format change. A v3 slot
+    table carries a MAC only the master key can recompute, so v3 §5.3 says an
+    implementation that holds no slot secret "MUST NOT write a slot table at
+    all. There is no partial edit." Authorised revocation and the §1.1 stripping
+    attack produce different files — the first carries a valid MAC, the second
+    does not — and that distinction only exists if this function declines to
+    forge the first when it cannot.
+
+    An attacker is of course not obliged to call this function; they can edit
+    the bytes directly, and v3 does not stop them. What v3 does is make the
+    result detectable, which is all §5.2 ever claimed.
     """
-    core, records, payload = parse_container(container)
+    core = parse_core_header(container)
+    master: Optional[bytes] = None
+    if core.is_v3:
+        if (unlock_password is None and not unlock_shares
+                and unlock_prf_output is None):
+            raise UsageError(
+                "removing a slot from a v3 container needs a secret that opens "
+                "it, to recompute slot_table_mac (v3 §5.3)")
+        core, records, payload, master = recover_master_key(
+            container, unlock_password, keyfile_bytes=unlock_keyfile,
+            shares=unlock_shares, prf_output=unlock_prf_output)
+    else:
+        if (unlock_password is not None or unlock_shares
+                or unlock_prf_output is not None):
+            raise UsageError("v2 slot removal takes no unlock secret")
+        core, records, payload = parse_container(container)
+
     if not (0 <= index < len(records)):
         raise UsageError(f"no slot at index {index}")
     if len(records) == 1:
         raise UsageError("refusing to remove the last slot; the container would be unopenable")
+
 
     remaining = records[:index] + records[index + 1:]
     # §4.7 again, and this is the path that would otherwise walk around it:
@@ -1791,7 +2142,7 @@ def remove_slot(container: bytes, index: int) -> bytes:
             "only slot is a passkey slot, and a passkey is hardware (§4.7). "
             "Add another unlock path first."
         )
-    return assemble(core, remaining, payload)
+    return assemble(core, remaining, payload, master)
 
 
 def rewrap_slot(
@@ -1844,7 +2195,8 @@ def rewrap_slot(
         time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
         salt=salt, enforce_write_policy=enforce_write_policy,
     )
-    return assemble(core, records[:index] + [record] + records[index + 1:], payload)
+    return assemble(core, records[:index] + [record] + records[index + 1:], payload,
+                    master if core.is_v3 else None)
 
 
 # =============================================================================
@@ -2190,10 +2542,21 @@ def _inspect(container: bytes) -> str:
         CIPHER_CHAINED: "chained (AES-256-GCM then ChaCha20-Poly1305)",
     }[core.cipher_id]
     lines = [
-        "KEYM v2",
+        f"KEYM v{core.version}",
         f"  cipher      {cipher}",
-        f"  slots       {len(records)}",
     ]
+    if core.is_v3:
+        lines.append(f"  container   {core.container_id.hex()}")
+        # Deliberately not "mac ok" / "mac bad": whether the MAC is *correct* is
+        # not knowable here. inspect holds no secret, so it cannot derive
+        # K_table, and v3 §5.2 puts the answer behind having already unwrapped a
+        # slot. Printing the stored bytes says what is on disk and claims
+        # nothing about them.
+        mac = read_slot_table_mac(container)
+        assert mac is not None
+        lines.append(f"  table mac   {mac.hex()} (unverified: needs a secret)")
+    lines.append(f"  slots       {len(records)}")
+
     for i, record in enumerate(records):
         lines.extend(_describe_slot(i, record))
     lines.append(f"  chunks      {len(sizes)} ({sum(sizes)} plaintext bytes)")
@@ -2233,8 +2596,60 @@ def _selftest() -> int:
         except KeymError:
             check(name, False)
 
+    def reports(name: str, fn, expected: Optional[bool]) -> None:
+        """Like check(), for the slot-table verdict.
+
+        A KeymError here is a failed check rather than a crash, for the reason
+        opens() gives: v3 §5.2 says a reader must *not* raise on a table that
+        does not verify, so a reader that raises has to be measured doing it. If
+        it were allowed to abort the run instead, the negative control that
+        introduced the bug would print no failures at all and read as though
+        nothing noticed.
+        """
+        try:
+            check(name, fn() is expected)
+        except KeymError:
+            check(name, False)
+
+    def _raises_keym(fn) -> bool:
+
+        try:
+            fn()
+        except KeymError:
+            return True
+        return False
+
+    def _raises_usage(fn) -> bool:
+        try:
+            fn()
+        except UsageError:
+            return True
+        return False
+
+    def _unwraps_but_fails(container: bytes, password: str) -> bool:
+        """The v2 transplant: the slot's tag verifies, and the payload then does
+        not. Both halves are asserted, because either alone is the wrong claim."""
+        core, records, _payload = parse_container(container)
+        slot = _attemptable(records[0])
+        if slot is None:
+            return False
+        master = unwrap_master_key_from_slot(
+            core, records[0], slot, build_kdf_input(password, None))
+        return master is not None and _raises_keym(lambda: decrypt(container, password))
+
+    def _slot_never_unwraps(container: bytes, password: str) -> bool:
+        """The v3 transplant: the tag does not verify, so the walk finds nothing."""
+        core, records, _payload = parse_container(container)
+        slot = _attemptable(records[0])
+        if slot is None:
+            return False
+        master = unwrap_master_key_from_slot(
+            core, records[0], slot, build_kdf_input(password, None))
+        return master is None and _raises_keym(lambda: decrypt(container, password))
+
     pw = "correct horse battery staple"
     pw2 = "a second, entirely different secret"
+
     kf = b"\x01\x02\x03" * 100
     fast = dict(iterations=1000, time_cost=1, memory_kib=8, parallelism=1,
                 enforce_write_policy=False)
@@ -3219,7 +3634,221 @@ def _selftest() -> int:
     # on the run where it matters.
     check("no warning when neither was passed", _warns_for() == "")
 
+    # A crash anywhere in the v3 section would leave every check below it
+    # unrecorded and print nothing at all, which is how a broken implementation
+    # can look like a clean run. Running it inside a function and reporting the
+    # abort as its own named check means a control that breaks v3 structurally
+    # is measured rather than merely fatal.
+    def _v3_section() -> None:
+        # =====================================================================
+        # KEYM v3 (docs/FORMAT-V3-DESIGN.md)
+        # =====================================================================
+        #
+        # Only the delta: the widened core header, container_id, and the slot-table
+        # MAC. Everything above this line is v2 and stays v2 — this file still
+        # *writes* v2 by default, so those checks are testing the shipping writer,
+        # not a legacy path.
+
+        def strip_slot(container: bytes, index: int) -> bytes:
+            """
+            The §1.1 attack, written as an attacker would: drop a record, decrement
+            slot_count, leave every other byte — the stored MAC included — alone.
+
+            Deliberately not built on remove_slot(). remove_slot is the *authorised*
+            edit and for v3 it recomputes the MAC, which is the very difference
+            under test; using it here would test nothing. No secret is used, and the
+            point of §1.1 is that none is needed.
+            """
+            core, records, payload = parse_container(container)
+            table = slot_table_offset(core.version)
+            keep = records[:index] + records[index + 1:]
+            head = bytearray(container[:table])
+            head[slot_count_offset(core.version)] = len(keep)
+            return bytes(head) + b"".join(keep) + payload
+
+        def reorder_slots(container: bytes) -> bytes:
+            """Reverse the slot table, touching nothing else."""
+            core, records, payload = parse_container(container)
+            table = slot_table_offset(core.version)
+            return container[:table] + b"".join(reversed(records)) + payload
+
+        v3msg = b"the heir needs this in twenty years \xf0\x9f\x97\x9d" * 4
+        v3one = encrypt(v3msg, pw, version=VERSION_V3, **fast)
+
+        # --- §3, header geometry ---
+        check("a v3 container declares version 3", v3one[4] == VERSION_V3)
+        check("the v3 core header is 24 bytes",
+              len(CoreHeader(CIPHER_AES, version=VERSION_V3,
+                             container_id=b"\x11" * CONTAINER_ID_LEN).pack())
+              == CORE_HEADER_LEN_V3)
+        check("the v3 slot table starts at 57", slot_table_offset(VERSION_V3) == 57)
+        check("v2's offsets are untouched by v3 existing",
+              slot_table_offset(VERSION_V2) == SLOT_TABLE_OFFSET == 9)
+        v3core, v3records, v3payload = parse_container(v3one)
+        check("a v3 container's payload starts after the MAC and the table",
+              len(v3one) - len(v3payload)
+              == SLOT_TABLE_OFFSET_V3 + len(v3records) * slot_len(CIPHER_AES))
+
+        # --- §4, container_id ---
+        check("container_id is 16 bytes", len(v3core.container_id) == CONTAINER_ID_LEN)
+        check("container_id is the core header's second half",
+              v3one[8:24] == v3core.container_id)
+        check("a second container gets a different container_id",
+              encrypt(v3msg, pw, version=VERSION_V3, **fast)[8:24] != v3one[8:24])
+        check("a v2 container has no container_id",
+              parse_core_header(encrypt(v3msg, pw, **fast)).container_id == b"")
+
+        # --- §5, the round trip ---
+        opens("a v3 container round-trips", lambda: decrypt(v3one, pw), v3msg)
+        reports("a freshly written v3 slot table is authentic",
+                lambda: decrypt_report(v3one, pw).slot_table_authentic, True)
+        reports("a v2 container reports the table as unknown, not as authentic",
+                lambda: decrypt_report(encrypt(v3msg, pw, **fast), pw).slot_table_authentic,
+                None)
+
+        # --- §1.1, the attack this format revision exists for ---
+        v3two = add_slot(v3one, pw, pw2, **fast)
+        check("both secrets open the two-slot v3 container",
+              decrypt(v3two, pw) == v3msg and decrypt(v3two, pw2) == v3msg)
+        reports("enrolling a slot leaves the table authentic",
+                lambda: decrypt_report(v3two, pw).slot_table_authentic, True)
+        check("enrolling a slot did not re-encrypt the payload",
+              v3two[SLOT_TABLE_OFFSET_V3 + 2 * slot_len(CIPHER_AES):]
+              == v3one[SLOT_TABLE_OFFSET_V3 + slot_len(CIPHER_AES):])
+
+        stripped = strip_slot(v3two, 1)
+        # §5.2 is normative and counter-intuitive, so it gets both halves as
+        # separate checks: the plaintext MUST come back, *and* the table MUST be
+        # reported. A reader that refused here would satisfy neither.
+        opens("a stripped v3 container still returns the plaintext",
+              lambda: decrypt(stripped, pw), v3msg)
+        reports("a stripped v3 container reports the table as not authentic",
+                lambda: decrypt_report(stripped, pw).slot_table_authentic, False)
+        check("the stripped slot's owner is locked out — the harm being reported",
+              _raises_keym(lambda: decrypt(stripped, pw2)))
+        check("stripping is what an attacker can still do: the file is well-formed",
+              parse_container(stripped)[0].version == VERSION_V3)
+
+        # The contrast that motivates the whole revision. Same attack, v2 container,
+        # and nothing anywhere can tell.
+        v2two = add_slot(encrypt(v3msg, pw, **fast), pw, pw2, **fast)
+        v2stripped = strip_slot(v2two, 1)
+        opens("the same attack on v2 also returns the plaintext",
+              lambda: decrypt(v2stripped, pw), v3msg)
+        reports("on v2 the attack is undetectable — there is nothing to check",
+                lambda: decrypt_report(v2stripped, pw).slot_table_authentic, None)
+
+        # --- §5.1, order is pinned as a side effect ---
+        reordered = reorder_slots(v3two)
+        opens("a reordered v3 table still opens with the first secret",
+              lambda: decrypt(reordered, pw), v3msg)
+        reports("a reordered v3 table is reported as not authentic",
+                lambda: decrypt_report(reordered, pw).slot_table_authentic, False)
+
+        # --- §5.3, authorised revocation and stripping produce different files ---
+        revoked = remove_slot(v3two, 1, unlock_password=pw)
+        reports("authorised removal produces an authentic table",
+                lambda: decrypt_report(revoked, pw).slot_table_authentic, True)
+        check("revocation and stripping differ only in the MAC",
+              len(revoked) == len(stripped)
+              and revoked[SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN:]
+              == stripped[SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN:]
+              and revoked[SLOT_TABLE_MAC_OFFSET_V3:
+                          SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN]
+              != stripped[SLOT_TABLE_MAC_OFFSET_V3:
+                          SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN])
+        check("v2 removal still needs no secret at all",
+              decrypt(remove_slot(v2two, 1), pw) == v3msg)
+
+        # --- §5.3, no partial edits ---
+        check("assemble refuses to write a v3 table without the master key",
+              _raises_usage(lambda: assemble(v3core, v3records, v3payload)))
+        check("removing a v3 slot without a secret is refused, not guessed at",
+              _raises_usage(lambda: remove_slot(v3two, 1)))
+        check("a v2 container refuses a master key it has nowhere to put",
+              _raises_usage(lambda: assemble(
+                  CoreHeader(CIPHER_AES), [v3records[0]], v3payload, b"\x00" * 32)))
+
+        # --- §1.1's transplant, now refused a step earlier ---
+        #
+        # Same password and same slot salt, so in v2 the two containers' slot AADs
+        # are byte-identical and a transplanted record verifies — uselessly, because
+        # it unwraps to the wrong master key. v3's container_id makes the AAD
+        # differ, so it does not verify at all.
+        shared_salt = b"\x5a" * SALT_LEN
+        a2 = encrypt(b"container A", pw, salt=shared_salt, **fast)
+        b2 = encrypt(b"container B", pw, salt=shared_salt, **fast)
+        w = slot_len(CIPHER_AES)
+        transplant2 = (b2[:SLOT_TABLE_OFFSET] + a2[SLOT_TABLE_OFFSET:SLOT_TABLE_OFFSET + w]
+                       + b2[SLOT_TABLE_OFFSET + w:])
+        check("in v2 a transplanted slot verifies and still opens nothing",
+              _unwraps_but_fails(transplant2, pw))
+
+        a3 = encrypt(b"container A", pw, version=VERSION_V3, salt=shared_salt, **fast)
+        b3 = encrypt(b"container B", pw, version=VERSION_V3, salt=shared_salt, **fast)
+        transplant3 = (b3[:SLOT_TABLE_OFFSET_V3]
+                       + a3[SLOT_TABLE_OFFSET_V3:SLOT_TABLE_OFFSET_V3 + w]
+                       + b3[SLOT_TABLE_OFFSET_V3 + w:])
+        check("in v3 a transplanted slot does not even unwrap",
+              _slot_never_unwraps(transplant3, pw))
+
+        # --- §8, the published test vector ---
+        #
+        # Pinned so the specification and this implementation cannot drift
+        # apart quietly. §8 prints these bytes as the thing the TypeScript core
+        # must reproduce in phase 3; if a header field or the MAC construction
+        # moves, the failure should surface here rather than as a puzzled reader
+        # comparing hex by hand six months from now.
+        #
+        # The one place in this selftest that pays real Argon2id costs, against
+        # the cheap-parameters rule at the top. Deliberate: a vector written
+        # with parameters the writer's own policy rejects would document a
+        # container this project refuses to produce. It measures at well under a
+        # tenth of a second, which is not the kind of cost that rule is about.
+        vec_pw = "correct horse battery staple — test only"
+        vec_pt = b"Keymaker fixture - KEYM v3 / argon2id / aes-256-gcm"
+        vec_salt = bytes.fromhex(
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
+        vec_mk = bytes.fromhex(
+            "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f")
+        vec_cid = bytes.fromhex("0123456789abcdef0123456789abcdef")
+        vec = encrypt(vec_pt, vec_pw, salt=vec_salt, master_key=vec_mk,
+                      container_id=vec_cid, version=VERSION_V3)
+        check("the §8 test vector reproduces byte for byte", vec.hex() == (
+            "4b45594d030000000123456789abcdef0123456789abcdef015ff0c0fb11b440"
+            "58abe6be48b590178d0752bc88f0f3954de69c98a68007c41800010000000000"
+            "0000112233445566778899aabbccddeeff00112233445566778899aabbccddee"
+            "ff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea5"
+            "8ebba4ecc919f86d5c86811a5e72ed5e5b7f66708362672c51f8cb0a5cf3cd81"
+            "3330ece0b1f8961f08f3750ad2414b298413cc7e6e30ae646ca833cfd9c4d76d"
+            "55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e"))
+        check("the §8 K_table intermediate matches", slot_table_key(vec_mk).hex()
+              == "351351be1b09b978ae98feede32b49f98af1acd365aeda6943178985395e7cf6")
+        check("the §8 core header is 24 bytes of the documented layout",
+              vec[:CORE_HEADER_LEN_V3].hex()
+              == "4b45594d030000000123456789abcdef0123456789abcdef")
+        check("the §8 vector's stored MAC is the documented one",
+              read_slot_table_mac(vec).hex()
+              == "5ff0c0fb11b44058abe6be48b590178d0752bc88f0f3954de69c98a68007c418")
+
+        # --- §6, migration ---
+
+        check("an unknown version is still rejected",
+              _raises_keym(lambda: decrypt(bytes([v3one[0], v3one[1], v3one[2],
+                                                  v3one[3], 4]) + v3one[5:], pw)))
+        check("v1 and v2 magic dispatch is unchanged by v3",
+              detect(v3one) == "keym-binary-v3" and detect(a2) == "keym-binary-v2")
+
+    v3_crash = None
+    try:
+        _v3_section()
+    except (KeymError, UsageError, AssertionError, ValueError) as exc:
+        v3_crash = f"{type(exc).__name__}: {exc}"
+    check(f"the v3 section ran to completion{'' if v3_crash is None else f' ({v3_crash})'}",
+          v3_crash is None)
+
     failed = [name for name, ok in checks if not ok]
+
     for name, ok in checks:
         print(f"  {'ok  ' if ok else 'FAIL'} {name}")
     print()
@@ -3369,6 +3998,16 @@ def main(argv: Optional[list[str]] = None) -> int:
             p.add_argument("--salt", help="32-byte hex slot salt (conformance testing only)")
             p.add_argument("--master-key",
                            help="32-byte hex master key (conformance testing only)")
+            # v3 §6 says writers SHOULD emit v3; this one does not yet, and the
+            # flag is why. See the comment at VERSION: until the TypeScript core
+            # writes v3 too, defaulting to it would silence the byte-for-byte
+            # conformance job rather than strengthen anything.
+            p.add_argument("--v3", action="store_true",
+                           help="write a KEYM v3 container (authenticated slot table)")
+            p.add_argument("--container-id",
+                           help="16-byte hex container id, v3 only "
+                                "(conformance testing only)")
+
 
     insp = sub.add_parser("inspect", help="describe a container without decrypting it")
     insp.add_argument("--in", dest="infile", help="input path (default: stdin)")
@@ -3657,7 +4296,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 parallelism=args.parallelism,
                 salt=bytes.fromhex(args.salt) if args.salt else None,
                 master_key=bytes.fromhex(args.master_key) if args.master_key else None,
+                version=VERSION_V3 if args.v3 else VERSION_V2,
+                container_id=(bytes.fromhex(args.container_id)
+                              if args.container_id else None),
             )
+
             if args.armor:
                 out = armor(out).encode()
         else:
@@ -3669,8 +4312,18 @@ def main(argv: Optional[list[str]] = None) -> int:
                 data = extract_selfextract(data)
             elif args.armor or detect(data) == "keym2-armor":
                 data = dearmor(data.decode())
-            out = decrypt(data, password, keyfile_bytes=keyfile, shares=shares,
-                          prf_output=prf_output)
+            # decrypt_report rather than decrypt, so the v3 §5.2 report is
+            # something this CLI states deliberately rather than a side effect
+            # of the library printing. The plaintext still goes to stdout in
+            # full: refusing to hand it over is precisely what §5.2 forbids,
+            # and a person recovering a backup years from now needs the data
+            # first and the warning second.
+            result = decrypt_report(data, password, keyfile_bytes=keyfile,
+                                    shares=shares, prf_output=prf_output)
+            out = result.plaintext
+            if result.slot_table_tampered:
+                print(f"warning: {SLOT_TABLE_CHANGED}", file=sys.stderr)
+
     except (KeymError, UsageError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
