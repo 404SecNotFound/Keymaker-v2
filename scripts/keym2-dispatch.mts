@@ -153,6 +153,70 @@ check(
 );
 await expectReject("uppercase KEYM2: is refused", async () => dearmorKeym2("KEYM2:AAAA"));
 
+// --- encryptKeym2 must draw a fresh master key every time --------------------
+//
+// This is the one entry point the UI actually calls, and until now nothing
+// tested the quality of the key it generates — only that containers
+// round-trip. The byte-equality conformance suite cannot help: it drives
+// `encryptKeym2WithExplicitSecrets`, because pinning bytes against the Python
+// reference means supplying the salt and master key rather than generating
+// them.
+//
+// That gap has teeth. Zero the master key inside `encryptKeym2` and every
+// container is wrapped and sealed under a key of all zeros. Nothing appears to
+// break: the slot wraps the same zeros the payload keys derive from, so the
+// container decrypts perfectly and every round-trip test passes while the
+// master key is a constant the whole world knows.
+//
+// The test is an XOR relation, not a byte comparison, and the first attempt
+// here got that wrong. Comparing two containers byte-for-byte looks sufficient
+// — payload nonces are deterministic counters (§5.2), so a constant key means
+// a constant keystream — but the payload AAD covers the core header, which
+// carries a *random* salt. Same key, same nonce, same plaintext, different AAD
+// still produces a different GCM tag. The bytes differ, the comparison passes,
+// and the keystream is reused anyway. That test was green against a master key
+// hard-coded to zero.
+//
+// AES-GCM is counter mode, so key and nonce reuse means the same keystream:
+// c1 ^ c2 == p1 ^ p2, exactly, over the ciphertext body. That identity holds
+// however the tag or the header differ, and it is the actual harm — two
+// plaintexts under one keystream — rather than a proxy for it.
+const KEYSTREAM_PROBE_LEN = 32;
+const GCM_TAG_LEN = 16;
+const probeA = new Uint8Array(KEYSTREAM_PROBE_LEN).fill(0x41);
+const probeB = new Uint8Array(KEYSTREAM_PROBE_LEN).fill(0x5a);
+
+const encProbe = (pt: Uint8Array) =>
+  encryptKeym2(pt, PASSWORD, null, { kdf: FAST, cipher: CipherId.AES_256_GCM });
+const cA = await encProbe(probeA);
+const cB = await encProbe(probeB);
+
+/** The ciphertext body of the single payload chunk: everything before its tag. */
+const body = (c: Uint8Array) =>
+  c.subarray(c.length - GCM_TAG_LEN - KEYSTREAM_PROBE_LEN, c.length - GCM_TAG_LEN);
+
+const bodyA = body(cA);
+const bodyB = body(cB);
+let keystreamReused = bodyA.length === bodyB.length;
+for (let i = 0; i < bodyA.length && keystreamReused; i++) {
+  if ((bodyA[i]! ^ bodyB[i]!) !== (probeA[i]! ^ probeB[i]!)) keystreamReused = false;
+}
+
+check(
+  !keystreamReused,
+  "two containers share a payload keystream (c1^c2 == p1^p2): encryptKeym2 is not drawing a fresh master key"
+);
+
+// The control on the control. If the slice missed the ciphertext body the XOR
+// above would compare tag or header bytes, never match, and pass for the wrong
+// reason — so confirm the window really is the body by checking it is not the
+// plaintext itself and that both containers are the size this assumes.
+check(cA.length === cB.length, "the two probe containers differ in length; the body slice assumes they do not");
+check(
+  Buffer.compare(Buffer.from(bodyA), Buffer.from(probeA)) !== 0,
+  "the sliced window equals the plaintext, so it is not ciphertext and the XOR test proves nothing"
+);
+
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) {
   console.log("Version dispatch FAILED.");

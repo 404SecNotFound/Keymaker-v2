@@ -235,6 +235,35 @@ test.describe("auto-lock and clipboard", () => {
     ).toBeVisible();
   });
 
+  test("the copy toast does not promise more than a web page can deliver", async ({
+    page,
+    context,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "clipboard permissions are Chromium-only here");
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.goto("/");
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await decryptPassword(page).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Copy$/i })).click();
+
+    const toast = visible(page.getByText(/overwritten in|is overwritten in/i)).first();
+    await expect(toast).toBeVisible();
+
+    // The timer reaches the current clipboard entry and nothing else. Windows
+    // Clipboard History, a macOS clipboard manager, phone keyboard history and
+    // cloud clipboard sync each keep their own copy, and none is reachable —
+    // or detectable — from a web page. The wording this replaces said the
+    // secret "will be overwritten in 60 seconds", full stop, which for anyone
+    // with history on is a promise the platform breaks: one Win+V recovers a
+    // seed phrase from a machine its owner was told was clean.
+    await expect(
+      visible(page.getByText(/clipboard history|Win\+V/i)),
+      "the copy toast does not mention clipboard history, so it overpromises"
+    ).toBeVisible();
+  });
+
   test("copying starts a visible countdown and clears unconditionally", async ({
     page,
     context,

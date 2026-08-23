@@ -195,4 +195,47 @@ test.describe("service worker updates wait for the user", () => {
     expect(code.slice(code.indexOf("addEventListener('message'"))).toContain("skipWaiting");
     expect(source).toContain("SKIP_WAITING");
   });
+
+  test("the deployed worker promotes only for a page it serves", async () => {
+    // `message` is same-origin, and on GitHub Pages the origin is shared with
+    // every other project site the same account publishes. That is not a
+    // theoretical neighbour: it is the same fact that made cache eviction a
+    // cross-app problem in KM-R06. Any of those pages can reach this
+    // registration through `navigator.serviceWorker.getRegistration()` and
+    // post to `registration.waiting`, and an unguarded handler would promote
+    // — swapping the running version out from under a tab that is part-way
+    // through encrypting a seed phrase, which is the exact outcome the install
+    // handler declines to cause on its own.
+    //
+    // Asserted against the built artifact for the reason the test above gives:
+    // the behavioural version needs a second scope and a real update cycle,
+    // and the regression worth catching is a guard deleted from the file that
+    // ships.
+    const source = readFileSync(join(BUILD_DIR, "sw.js"), "utf8");
+    const code = source
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+
+    const messageBody = code.slice(code.indexOf("addEventListener('message'"));
+
+    // The sender's own URL, checked against this registration's scope. Both
+    // halves matter: `event.source` is what the browser sets to the sending
+    // client and cannot be forged from script, and `registration.scope` is
+    // what distinguishes our page from a neighbour on the same origin.
+    expect(
+      messageBody,
+      "the message handler does not look at which client sent it"
+    ).toContain("event.source");
+    expect(
+      messageBody,
+      "the message handler does not check the sender against the worker's scope"
+    ).toContain("registration.scope");
+
+    // And the guard has to run before the promotion, not after it.
+    expect(
+      messageBody.indexOf("registration.scope"),
+      "the scope check comes after skipWaiting, so it guards nothing"
+    ).toBeLessThan(messageBody.indexOf("self.skipWaiting()"));
+  });
 });

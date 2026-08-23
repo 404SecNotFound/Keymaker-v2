@@ -114,9 +114,26 @@ self.addEventListener('install', (event) => {
 // that promotes a waiting worker, which is what keeps the version stable for
 // the lifetime of a page that never accepts.
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
-    self.skipWaiting();
-  }
+  if (!event.data || event.data.type !== 'SKIP_WAITING') return;
+
+  // Only from a page this worker actually serves.
+  //
+  // `message` is same-origin, and on GitHub Pages the origin is shared with
+  // every other project site the same account publishes — the same fact that
+  // made cache eviction a cross-app problem (KM-R06, see the activate handler
+  // above). Without this check any of those pages could post SKIP_WAITING and
+  // promote Keymaker's waiting worker, which is precisely the thing the
+  // install handler declines to do on its own: swapping the running version
+  // out from under a tab part-way through encrypting a seed phrase.
+  //
+  // event.source is the Client that sent it. Requiring its URL to sit under
+  // this registration's scope refuses a neighbour without refusing our own
+  // page, and there is no ambiguity about which is which.
+  const source = event.source;
+  if (!source || typeof source.url !== 'string') return;
+  if (!source.url.startsWith(self.registration.scope)) return;
+
+  self.skipWaiting();
 });
 
 // ---- Activate: clean up old caches ----
