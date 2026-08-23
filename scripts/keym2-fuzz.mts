@@ -43,6 +43,7 @@ import {
   dearmorKeym2,
   decryptKeym2,
   encryptKeym2WithExplicitSecrets,
+  KEYM2_VERSION_V2,
   inspectKeym2,
   keym2SlotLen,
   KEYM2_ARMOR_PREFIX,
@@ -245,8 +246,19 @@ async function main() {
   //
   // `encryptKeym2WithExplicitSecrets` exists for exactly this: the conformance
   // suite uses it to pin bytes against the Python reference. Same reason here.
+  // Pinned to v2, explicitly, and that is the whole point of this file.
+  //
+  // `KEYM2_VERSION` now means v3, so an unpinned call here builds a v3
+  // container — and this harness's SLOT_COUNT_OFFSET/SLOT_TABLE_OFFSET are v2's
+  // (8 and 9), mirrored rather than imported precisely so the layout moving
+  // shows up as a failure instead of silently sliding. It did: flipping the
+  // default writer failed this build with "KEYM v3 requires a 16-byte container
+  // id" before a single probe ran. The mirror worked as designed.
+  //
+  // v2 stays fuzzed because v2 containers stay readable forever. v3 needs its
+  // own harness with its own offsets; it does not get to share this one.
   const oneSlot = await encryptKeym2WithExplicitSecrets(
-    plaintext, PASSWORD, null, FAST, FIXED_SALT, FIXED_MASTER_KEY
+    plaintext, PASSWORD, null, FAST, FIXED_SALT, FIXED_MASTER_KEY, KEYM2_VERSION_V2
   );
   const shareSet = await addShamirSlotKeym2(
     oneSlot, { password: PASSWORD, keyFile: null }, 2, 3,
@@ -264,7 +276,7 @@ async function main() {
   // pinned inputs is the cheapest way to hold that: it costs one extra PBKDF2
   // and it fails the moment someone reintroduces a random secret here.
   const rebuilt = await encryptKeym2WithExplicitSecrets(
-    plaintext, PASSWORD, null, FAST, FIXED_SALT, FIXED_MASTER_KEY
+    plaintext, PASSWORD, null, FAST, FIXED_SALT, FIXED_MASTER_KEY, KEYM2_VERSION_V2
   );
   check(
     rebuilt.length === oneSlot.length && rebuilt.every((b, i) => b === oneSlot[i]),
