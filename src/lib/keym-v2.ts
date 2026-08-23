@@ -1126,10 +1126,38 @@ async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Ui
  * opened on the first one is not a price worth paying to conceal an index from
  * someone already holding the container.
  */
-async function unwrapMasterKey(
+/**
+ * Every slot the caller's secrets open, in table order.
+ *
+ * A generator rather than a function returning the first, because the first is
+ * not always the right one and the walk has to be resumable to find that out.
+ *
+ * §4.4's walk answers "which slot does this secret open?", but the question
+ * `decryptKeym2` needs answered is "which slot yields the master key that opens
+ * the *payload*?" — and those come apart. Splice a slot from a container whose
+ * password you know in *ahead* of the victim's own, bump `slot_count`, and the
+ * foreign slot unwraps first to the wrong master key; the payload then fails,
+ * and a walk that stopped at the first unwrap rejects a container with a
+ * perfectly good slot sitting at index 1. The victim types the correct password
+ * and is told the backup does not open.
+ *
+ * v3 closes the way in: `container_id` is in the slot AAD, so a slot from
+ * another container no longer unwraps at all. This is for v2, which stays
+ * readable forever and has no such binding — and it is the right shape
+ * regardless. "The key I got does not open the payload" has exactly one correct
+ * response, and it is to keep looking.
+ *
+ * The cost is bounded by the budget already disclosed: the worst case was
+ * always "try every slot", and this reaches it rather than exceeding it. Each
+ * extra candidate adds one chunk-0 AEAD, which is not a KDF.
+ *
+ * The caller owns every yielded `master` and must erase it, including the ones
+ * it discards.
+ */
+async function* unwrapCandidates(
   container: Keym2Container,
   secrets: Keym2Secrets
-): Promise<{ master: Uint8Array; slot: Keym2Slot }> {
+): AsyncGenerator<{ master: Uint8Array; slot: Keym2Slot }> {
   for (const record of container.records) {
     const slot = parseKeym2Slot(record);
     if (slot === null) continue;
@@ -1185,8 +1213,27 @@ async function unwrapMasterKey(
       secureErase(slotKey);
     }
     if (master !== null && master.length === MASTER_KEY_LEN) {
-      return { master, slot };
+      yield { master, slot };
+    } else if (master !== null) {
+      secureErase(master);
     }
+  }
+}
+
+/**
+ * The first slot the caller's secrets open.
+ *
+ * What the enrolment paths want: they need *a* master key, and any slot that
+ * yields one is proof the caller may edit this container. Only `decryptKeym2`
+ * has a second opinion about which one is right, because only it has a payload
+ * to check the answer against.
+ */
+async function unwrapMasterKey(
+  container: Keym2Container,
+  secrets: Keym2Secrets
+): Promise<{ master: Uint8Array; slot: Keym2Slot }> {
+  for await (const candidate of unwrapCandidates(container, secrets)) {
+    return candidate;
   }
   reject();
 }
@@ -1634,31 +1681,62 @@ export async function decryptKeym2(
   // either, so an empty one must not become a passphrase attempt that burns a
   // full Argon2id derivation per slot on its way to the same failure.
   const hasOtherSecret = (shares !== undefined && shares.length > 0) || prfOutput !== undefined;
-  const { master, slot } = await unwrapMasterKey(parsed, {
+  const secrets: Keym2Secrets = {
     password: password === "" && hasOtherSecret ? undefined : password,
     keyFile,
     shares,
     prfOutput,
-  });
+  };
 
-  // Verified before the master key is erased, and before any plaintext is
-  // returned — but *after* a slot has already opened, which is what makes this
-  // exception to §6's generic-error rule leak nothing: an attacker who cannot
-  // open the container never reaches it, so there is no oracle.
-  const slotTableAuthentic = await verifySlotTable(parsed, master);
+  // Chunk 0 decides which slot was the right one.
+  //
+  // A slot that unwraps has produced *a* master key, not necessarily *the*
+  // master key — see `unwrapCandidates`. The payload's own authentication is
+  // the only thing that can tell the difference, and chunk 0 carries it, so a
+  // candidate is confirmed or discarded for the price of one AEAD open. A walk
+  // that committed to the first unwrap would reject a container that opens.
+  const last = sizes.length - 1;
+  const firstBlobLen = (sizes[0] as number) + parsed.core.tagOverhead;
+  const firstBlob = parsed.payload.subarray(0, firstBlobLen);
+  if (firstBlob.length !== firstBlobLen) reject();
 
-  const keys = await payloadKeys(master, parsed.core.cipher);
-  secureErase(master);
+  let chosen:
+    | { keys: AeadKeys; slot: Keym2Slot; slotTableAuthentic: boolean | null; first: Uint8Array }
+    | null = null;
+  for await (const candidate of unwrapCandidates(parsed, secrets)) {
+    // Verified before the master key is erased, and before any plaintext is
+    // returned — but *after* a slot has already opened, which is what makes
+    // this exception to §6's generic-error rule leak nothing: an attacker who
+    // cannot open the container never reaches it, so there is no oracle.
+    //
+    // Computed per candidate, and kept only for the one that turns out to be
+    // right. A discarded candidate's verdict describes a key that does not
+    // open this payload, and reporting it would be reporting on the attacker's
+    // spliced slot rather than on the owner's table.
+    const slotTableAuthentic = await verifySlotTable(parsed, candidate.master);
+    const keys = await payloadKeys(candidate.master, parsed.core.cipher);
+    secureErase(candidate.master);
 
+    const first = await open(parsed.core.cipher, keys, nonceFor(0, last === 0), firstBlob, parsed.coreBytes);
+    if (first === null) {
+      secureErase(keys.chachaKey);
+      continue;
+    }
+    chosen = { keys, slot: candidate.slot, slotTableAuthentic, first };
+    break;
+  }
+  // Exhausting the table is the only failure, exactly as it was before: §6's
+  // generic rejection, with nothing said about how far the walk got.
+  if (chosen === null) reject();
+  const { keys, slot, slotTableAuthentic } = chosen;
 
   // Declared outside the try so the `finally` can reach it: a mid-container
   // authentication failure still leaves real plaintext in the chunks decoded
   // before it.
-  const out: Uint8Array[] = [];
+  const out: Uint8Array[] = [chosen.first];
   try {
-    let offset = 0;
-    const last = sizes.length - 1;
-    for (let i = 0; i < sizes.length; i++) {
+    let offset = firstBlobLen;
+    for (let i = 1; i < sizes.length; i++) {
       const size = sizes[i];
       if (size === undefined) reject();
       const blobLen = size + parsed.core.tagOverhead;

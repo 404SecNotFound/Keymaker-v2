@@ -2247,13 +2247,22 @@ export function EncryptorTool() {
         // that just succeeded — the file opened, on the terms it was written —
         // and is appended below purely so the owner knows to consider
         // re-encrypting rather than inheriting the weakness unaware.
-        let weakKdf: string | null = null;
+        // Taken from the reader, which knows which slot answered. It used to be
+        // taken from `inspect…(headerPeek)`, which reads slot 0 — correct for
+        // the one-slot containers this app writes, and wrong for every other
+        // shape: unlock a two-slot container with the heir's share set and the
+        // advisory described the owner's passphrase slot. Worse, an attacker
+        // who can reorder a table chooses which slot is at index 0, and so
+        // chooses which KDF the owner is told about.
+        //
+        // The labels beside it still come from the header. Those describe the
+        // *container* — its cipher, its slot count — which is a property of the
+        // file rather than of the way in, and slot 0's KDF label is the
+        // conventional summary of it.
+        const weakKdf = decryptResult.weakKdf;
         if (decryptResult.format === "keym-v1") {
           const inspected = inspectKeym(headerPeek);
-          if (inspected) {
-            info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
-            weakKdf = inspected.weakKdf;
-          }
+          if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
         } else if (
           decryptResult.format === "keym-v2" ||
           decryptResult.format === "keym-v3"
@@ -2267,7 +2276,6 @@ export function EncryptorTool() {
             // Only worth saying when it is not the one-slot case every
             // container this version writes has.
             if (inspected.slots > 1) info += ` · ${inspected.slots} slots`;
-            weakKdf = inspected.weakKdf;
           }
         }
         if (weakKdf) {

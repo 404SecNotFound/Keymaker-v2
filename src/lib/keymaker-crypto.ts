@@ -1001,6 +1001,19 @@ export interface DecryptResult {
    * value was produced. What changed is the container's recovery options.
    */
   slotTableAuthentic: boolean | null;
+  /**
+   * `describeWeakKdf` for the slot that actually opened the container, or null
+   * when nothing about it is weak — and null for every format with no slots.
+   *
+   * Reported from here rather than re-derived by the caller because only the
+   * reader knows which slot answered. The UI used to inspect slot 0, which is
+   * the right answer for the one-slot containers this app writes and the wrong
+   * one for everything else: enrol a share set and the advisory describes the
+   * passphrase slot whichever one you unlocked with, and an attacker who can
+   * reorder a table chooses which KDF the owner is told about. The information
+   * existed at the library boundary and was dropped one layer above it.
+   */
+  weakKdf: string | null;
 }
 
 /**
@@ -1128,7 +1141,7 @@ export async function decryptData(
     // keeps the v1 path structurally unable to be changed by v2 work. It also
     // keeps v2 out of the initial bundle until a v2 container is actually
     // opened.
-    const { decryptKeym2 } = await import("./keym-v2");
+    const { decryptKeym2, KEYM2_KDF_HKDF } = await import("./keym-v2");
     try {
       const result = await decryptKeym2(
         fullData,
@@ -1145,6 +1158,13 @@ export async function decryptData(
         format,
         keyFileUsed: result.keyFileUsed,
         slotTableAuthentic: result.slotTableAuthentic,
+        // The slot the walk settled on, not slot 0. `kdf` is HKDF for a Shamir
+        // or passkey slot, which has no cost parameters to be weak — §6 pins
+        // that pairing — so those correctly report nothing.
+        weakKdf:
+          result.slot.kdf.kdf === KEYM2_KDF_HKDF
+            ? null
+            : describeWeakKdf(result.slot.kdf as KdfParams),
       };
     } finally {
       // Same contract as every other path here: the caller's key file buffer
@@ -1159,7 +1179,7 @@ export async function decryptData(
       password,
       keyFileBuffer
     );
-    return { data, format, keyFileUsed: keyFileBuffer !== null, slotTableAuthentic: null };
+    return { data, format, keyFileUsed: keyFileBuffer !== null, slotTableAuthentic: null, weakKdf: null };
   }
 
   let parsed: ParsedKeym | null = null;
@@ -1211,6 +1231,10 @@ export async function decryptData(
       format,
       keyFileUsed: (parsed.flags & 0x01) !== 0,
       slotTableAuthentic: null,
+      // v1 has one slot and `parsed` is it, so the same verdict is available
+      // here as in the header inspection the UI was doing. The difference is
+      // that here it cannot be about a different slot.
+      weakKdf: describeWeakKdf(parsed.kdf),
     };
   } catch (error) {
     // Structural and configuration failures pass through with their real

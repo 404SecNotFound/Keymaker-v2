@@ -121,6 +121,7 @@ export type CryptoResponse =
        * the error path below this needs no reconstruction.
        */
       slotTableAuthentic: boolean | null;
+      weakKdf: string | null;
     }
   /**
    * Errors cross the boundary as plain data.
@@ -274,6 +275,7 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       format: result.format,
       keyFileUsed: result.keyFileUsed,
       slotTableAuthentic: result.slotTableAuthentic,
+      weakKdf: result.weakKdf,
     };
     ctx.postMessage(response, [result.data]);
   } catch (error) {
