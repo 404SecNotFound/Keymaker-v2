@@ -523,9 +523,13 @@ npm run typecheck
 
 npm run test:crypto       # frozen IBTZ core — the legacy decryption contract
 npm run test:keymaker     # container suite — round-trips, tamper rejection, fixtures
-npm run test:fuzz         # malformed containers against the parser
+npm run test:fuzz         # malformed containers against the v1 parser
+npm run test:fuzz2        # the v2 surfaces: slot table, armor, shares, self-extract
+npm run test:fuzz3        # the v3 slot table — every covered byte must be reported
 npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference
+npm run test:conformance2 # ...and the same for v2/v3, byte for byte
+npm run test:keym2        # the Python reference against itself
 npm run test:recovery     # the documented recovery procedure, end to end
 
 ```
