@@ -1,5 +1,7 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 
 /**
@@ -39,6 +41,44 @@ async function encryptWith(page: Page, kdf: "pbkdf2" | "argon2id") {
 }
 
 test.describe("§7.2 self-extracting page", () => {
+  test("the exported page pins its own script by hash", async ({ page, context }, testInfo) => {
+    // The page carries `script-src 'sha256-…'` for the one script it contains,
+    // which means a stale constant does not degrade the policy — it kills the
+    // page. The browser refuses the only script on it, the heir gets a
+    // document that renders and cannot decrypt, and nothing says why.
+    //
+    // The test above catches that too, by failing to decrypt. This one exists
+    // so the failure names the cause instead of looking like a broken
+    // decryptor, because the person who next edits DECRYPTOR_JS is the person
+    // who needs to be told exactly which constant to update.
+    await encryptWith(page, "pbkdf2");
+    const control = visible(page.getByTestId("selfextract-download"));
+    const [download] = await Promise.all([page.waitForEvent("download"), control.click()]);
+    const saved = testInfo.outputPath("hash-check.html");
+    await download.saveAs(saved);
+    const html = readFileSync(saved, "utf8");
+
+    const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+    expect(scripts.length, "the page should contain exactly one inline script").toBe(1);
+
+    const actual = "sha256-" + createHash("sha256").update(scripts[0]![1]!, "utf8").digest("base64");
+    const csp = html.match(/http-equiv="Content-Security-Policy" content="([^"]*)"/)?.[1] ?? "";
+
+    expect(csp, "the exported page carries no CSP").not.toBe("");
+    expect(
+      csp,
+      `SELF_EXTRACT_SCRIPT_SHA256 is stale — DECRYPTOR_JS now hashes to ${actual}. ` +
+        "Update the constant in src/lib/keym-v2-selfextract.ts or the exported page cannot run its own script."
+    ).toContain(actual);
+
+    // The directives that make the policy worth carrying, not just present.
+    expect(csp, "the page can still reach the network").toContain("connect-src 'none'");
+    expect(csp, "the page has no default deny").toContain("default-src 'none'");
+    expect(csp, "the script is not pinned, so any inline script would run").not.toContain(
+      "script-src 'unsafe-inline'"
+    );
+  });
+
   test("a PBKDF2/AES backup exports a page that opens itself offline", async ({
     page,
     context,

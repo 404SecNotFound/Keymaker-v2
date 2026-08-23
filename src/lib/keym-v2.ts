@@ -27,7 +27,12 @@
  *   hashed key file remove that — and make a 100 MB key file cost 32 bytes of
  *   KDF input instead of 100 MB.
  * - **Chunked AEAD** (§5). The plaintext no longer has to be held, encrypted
- *   and authenticated as one buffer, which is what forced the 100 MB cap.
+ *   and authenticated as one buffer, which is what forced the *format* to cap
+ *   payloads at 100 MB. The app still caps them there — MAX_PLAINTEXT_SIZE,
+ *   enforced by the UI — because this build assembles the plaintext as one
+ *   array before encrypting and again after decrypting. The format is
+ *   unbounded; the browser is not, and lifting the limit without streaming
+ *   those paths would swap a clear refusal for an out-of-memory tab.
  * - **Armor that cannot be mistaken for the magic** (§7): `keym2:` starts with
  *   0x6B, the magic with 0x4B.
  *
