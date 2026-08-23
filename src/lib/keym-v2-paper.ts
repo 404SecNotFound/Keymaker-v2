@@ -88,11 +88,28 @@ export function encodePaperParts(container: Uint8Array, capacity: number): strin
 /**
  * §7.1. Reassemble paper parts, byte for byte.
  *
- * Every failure is reported as a *reassembly* failure. Letting a short or
- * misordered set through to the AEAD would surface as "decryption failed",
- * which a user reads as a wrong password — and acts on by retyping a password
- * they already know is right, while the actual problem is a page still in the
- * scanner.
+ * Every failure this function *can* see is reported as a reassembly failure.
+ * Letting a short or misordered set through to the AEAD would surface as
+ * "decryption failed", which a user reads as a wrong password — and acts on by
+ * retyping a password they already know is right, while the actual problem is
+ * a page still in the scanner.
+ *
+ * What it cannot see, stated because the sentence above used to imply
+ * otherwise: a part is structure plus base64url, and §7.1 gives it **no
+ * checksum** — unlike a Shamir share, which carries one (§4.6). A character
+ * misread as another character *in the alphabet* encodes different data and
+ * nothing here can tell. Whitespace is the same case by a different route:
+ * §7.1 strips it so a printed part can wrap, so a space landing on a character
+ * deletes it, and only the three-in-four that break the body's length mod 4
+ * are caught by the decoder below.
+ *
+ * That residual is the AEAD's, which is the right place for it — the container
+ * authenticates every byte, so damage never yields wrong plaintext, only a
+ * refusal. The cost is the refusal's *wording*, and the fix for that is not a
+ * format change: adding a checksum to §7.1 would invalidate every page already
+ * printed, which is a worse trade than a misleading error message. Measured by
+ * `scripts/keym2-fuzz.mts`, which reports the count rather than asserting it
+ * away.
  */
 export function decodePaperParts(parts: readonly string[]): Uint8Array {
   const seen = new Map<number, Uint8Array>();
