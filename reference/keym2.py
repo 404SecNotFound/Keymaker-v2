@@ -209,13 +209,22 @@ SUPPORTED_VERSIONS = (VERSION_V2, VERSION_V3)
 
 # The version this implementation *writes* by default.
 #
-# v3 §6 says writers SHOULD emit v3, and this reference deliberately does not
-# yet. Phase 2 is the Python side alone: the TypeScript core is phase 3, and
-# until it exists the byte-for-byte conformance job has nothing to compare a v3
-# container against. Flipping this before then would not make the format safer,
-# it would make the one test that proves the two implementations agree stop
-# testing anything. `encrypt(..., version=VERSION_V3)` is the opt-in until then.
-VERSION = VERSION_V2
+# v3 §6 says writers SHOULD emit v3, and both implementations now do. The three
+# things that had to be true first are:
+#
+#   1. A second implementation to compare bytes against (phase 3), or the
+#      conformance job would have had nothing to hold a v3 container to.
+#   2. Frozen v3 fixtures (phase 4), or moving the default would have retired
+#      the corpus's coverage rather than extended it.
+#   3. Every shipped reader able to open v3 — including the decryptor embedded
+#      in a self-extracting page, which cannot be updated afterwards because it
+#      travels inside the backup it opens.
+#
+# Reading is unaffected and deliberately permissive: v1, v2 and v3 all open, and
+# nothing rewrites an existing file. `encrypt(..., version=VERSION_V2)` still
+# writes v2 for anyone who needs to produce one — a vector for the frozen
+# corpus, say, or a container for a reader that predates v3.
+VERSION = VERSION_V3
 
 # §3. The header is in two parts and the split is load-bearing (§5.3): the core
 # header is authenticated by the payload, each slot prefix by its own wrap, and
@@ -2677,14 +2686,19 @@ def _selftest() -> int:
     # plus an empty one. Asserted on the container length, which is the thing
     # two implementations have to agree on.
     one_slot_aes = SLOT_TABLE_OFFSET + slot_len(CIPHER_AES)
+    # Measured against the version this implementation writes, which is what a
+    # second implementation has to match. Spelled `slot_table_offset(VERSION)`
+    # rather than a constant so that moving the default cannot quietly turn this
+    # into an assertion about a layout nothing emits any more.
+    one_slot_written = slot_table_offset(VERSION) + slot_len(CIPHER_AES)
     check("A1: exact multiple is one chunk",
           len(encrypt(b"\x00" * CHUNK_SIZE, pw, kdf_id=KDF_PBKDF2,
                       cipher_id=CIPHER_AES, **fast))
-          == one_slot_aes + CHUNK_SIZE + TAG_LEN)
+          == one_slot_written + CHUNK_SIZE + TAG_LEN)
     check("A1: one chunk over is two chunks",
           len(encrypt(b"\x00" * (CHUNK_SIZE + 1), pw, kdf_id=KDF_PBKDF2,
                       cipher_id=CIPHER_AES, **fast))
-          == one_slot_aes + CHUNK_SIZE + TAG_LEN + 1 + TAG_LEN)
+          == one_slot_written + CHUNK_SIZE + TAG_LEN + 1 + TAG_LEN)
 
     # --- §3: the layout constants two implementations must agree on ---
     check("slot is 96 bytes for aes", slot_len(CIPHER_AES) == 96)
@@ -2763,7 +2777,15 @@ def _selftest() -> int:
     # payload, every byte of every slot prefix by that slot's own wrap. The one
     # byte deliberately covered by neither is slot_count, and it gets its own
     # check below rather than being quietly excluded from this one.
-    base = encrypt(b"tamper me", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, **fast)
+    # Pinned to v2, because everything from here to the v3 section reads the
+    # container at v2's offsets (SLOT_TABLE_OFFSET, SLOT_COUNT_OFFSET) and
+    # asserts v2's semantics — including that a slot can be removed with no
+    # secret at all, which §5.3 deliberately stops being true in v3. Left on the
+    # default it would silently become a v3 container tested with v2 arithmetic,
+    # which is a suite that still runs and no longer means anything. v3's
+    # equivalents live in the v3 section below.
+    base = encrypt(b"tamper me", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
+                   version=VERSION_V2, **fast)
 
     def survives(index: int) -> bool:
         mutated = bytearray(base)
@@ -3185,9 +3207,20 @@ def _selftest() -> int:
     # --- §4.5: the conformance entry point is the only way to fix either ---
     fixed_salt = bytes(range(32))
     fixed_mk = bytes(range(32, 64))
+    # Three pinned inputs, not two. v3 §4 draws container_id from the CSPRNG for
+    # every container, so leaving it out makes two otherwise identical v3
+    # containers differ — which is the field working, not a determinism bug.
+    #
+    # The version is stated rather than defaulted, and that is about the *next*
+    # person to change the default: `container_id` is rejected outright on v2,
+    # so left implicit this raises instead of failing, and a run that dies here
+    # prints no failing checks at all. A control that kills the suite looks
+    # exactly like a control that never fired.
+    fixed_cid = bytes(range(64, 80))
     twice = [
         encrypt(b"determinism", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
-                salt=fixed_salt, master_key=fixed_mk, **fast)
+                salt=fixed_salt, master_key=fixed_mk, container_id=fixed_cid,
+                version=VERSION_V3, **fast)
         for _ in range(2)
     ]
     check("fixed salt and master key give byte-identical containers",
@@ -3390,7 +3423,9 @@ def _selftest() -> int:
         rejects(f"{c_name}: two shares",
                 lambda: decrypt(enrolled, shares=share_texts[:2]))
         check(f"{c_name}: the payload was not re-encrypted by enrolment",
-              enrolled.endswith(base[9 + slot_len(cipher_id):]))
+              enrolled.endswith(
+                  base[slot_table_offset(parse_core_header(base).version)
+                       + slot_len(cipher_id):]))
 
     # The composition the envelope exists for, exercised rather than described:
     # enrol shares holding only the password, then re-password holding only the
@@ -3506,7 +3541,13 @@ def _selftest() -> int:
 
     # Round trip, on a container that already has a passphrase — the only way
     # §4.7 permits a passkey slot to exist at all.
-    pk_base = encrypt(b"opened by a passkey", pw, kdf_id=KDF_PBKDF2, **fast)
+    # v3 explicitly, for the same reason the determinism block states its
+    # version: the two removals below pass an unlock secret, which v3 §5.3
+    # requires and v2 rejects outright. Left on the default this region raises
+    # the moment the default is anything but v3, and a suite that dies prints no
+    # failing checks — the failure would look like nothing happening.
+    pk_base = encrypt(b"opened by a passkey", pw, kdf_id=KDF_PBKDF2,
+                      version=VERSION_V3, **fast)
     pk_container = add_passkey_slot(pk_base, pw, fixed_prf)
     check("a passkey slot opens the container with its PRF output",
           decrypt(pk_container, prf_output=fixed_prf) == b"opened by a passkey")
@@ -3523,10 +3564,16 @@ def _selftest() -> int:
           parse_container(pk_container)[2] == parse_container(pk_base)[2])
 
     # §4.7's normative rule, from both directions that could reach it.
+    #
+    # The secret is supplied because these containers are v3 now, and §5.3 makes
+    # any slot-table edit need one. Without it the first check would still pass
+    # and would no longer be testing §4.7 at all — `remove_slot` would refuse
+    # for want of a secret, long before it got as far as noticing that the edit
+    # would leave a container only a passkey opens.
     refuses("removing the last non-passkey slot",
-            lambda: remove_slot(pk_container, 0))
+            lambda: remove_slot(pk_container, 0, unlock_password=pw))
     check("removing the passkey slot itself is fine",
-          len(parse_container(remove_slot(pk_container, 1))[1]) == 1)
+          len(parse_container(remove_slot(pk_container, 1, unlock_password=pw))[1]) == 1)
 
     # Determinism, for the cross-implementation comparison.
     check("an explicit salt gives a byte-identical passkey slot",
@@ -3696,14 +3743,16 @@ def _selftest() -> int:
         check("a second container gets a different container_id",
               encrypt(v3msg, pw, version=VERSION_V3, **fast)[8:24] != v3one[8:24])
         check("a v2 container has no container_id",
-              parse_core_header(encrypt(v3msg, pw, **fast)).container_id == b"")
+              parse_core_header(
+                  encrypt(v3msg, pw, version=VERSION_V2, **fast)).container_id == b"")
 
         # --- §5, the round trip ---
         opens("a v3 container round-trips", lambda: decrypt(v3one, pw), v3msg)
         reports("a freshly written v3 slot table is authentic",
                 lambda: decrypt_report(v3one, pw).slot_table_authentic, True)
         reports("a v2 container reports the table as unknown, not as authentic",
-                lambda: decrypt_report(encrypt(v3msg, pw, **fast), pw).slot_table_authentic,
+                lambda: decrypt_report(
+                    encrypt(v3msg, pw, version=VERSION_V2, **fast), pw).slot_table_authentic,
                 None)
 
         # --- §1.1, the attack this format revision exists for ---
@@ -3731,7 +3780,7 @@ def _selftest() -> int:
 
         # The contrast that motivates the whole revision. Same attack, v2 container,
         # and nothing anywhere can tell.
-        v2two = add_slot(encrypt(v3msg, pw, **fast), pw, pw2, **fast)
+        v2two = add_slot(encrypt(v3msg, pw, version=VERSION_V2, **fast), pw, pw2, **fast)
         v2stripped = strip_slot(v2two, 1)
         opens("the same attack on v2 also returns the plaintext",
               lambda: decrypt(v2stripped, pw), v3msg)
@@ -3776,8 +3825,8 @@ def _selftest() -> int:
         # it unwraps to the wrong master key. v3's container_id makes the AAD
         # differ, so it does not verify at all.
         shared_salt = b"\x5a" * SALT_LEN
-        a2 = encrypt(b"container A", pw, salt=shared_salt, **fast)
-        b2 = encrypt(b"container B", pw, salt=shared_salt, **fast)
+        a2 = encrypt(b"container A", pw, version=VERSION_V2, salt=shared_salt, **fast)
+        b2 = encrypt(b"container B", pw, version=VERSION_V2, salt=shared_salt, **fast)
         w = slot_len(CIPHER_AES)
         transplant2 = (b2[:SLOT_TABLE_OFFSET] + a2[SLOT_TABLE_OFFSET:SLOT_TABLE_OFFSET + w]
                        + b2[SLOT_TABLE_OFFSET + w:])
@@ -3832,6 +3881,17 @@ def _selftest() -> int:
               == "5ff0c0fb11b44058abe6be48b590178d0752bc88f0f3954de69c98a68007c418")
 
         # --- §6, migration ---
+
+        # §6, and the premise every explicit `version=VERSION_V2` above depends
+        # on. Without this nothing here would notice the default sliding back to
+        # v2: the pinned containers would still be v2 and still pass, the v3
+        # section passes its version explicitly and would still pass, and the
+        # suite would go green while the format being written was the one with
+        # the strippable slot table. Asserted on the wire as well as on the
+        # constant, because they are two different ways to be wrong.
+        check("this implementation writes v3 by default", VERSION == VERSION_V3)
+        check("a container written with no version says v3 on the wire",
+              encrypt(v3msg, pw, **fast)[4] == VERSION_V3)
 
         check("an unknown version is still rejected",
               _raises_keym(lambda: decrypt(bytes([v3one[0], v3one[1], v3one[2],

@@ -30,7 +30,10 @@ import {
   armorKeym2,
   dearmorKeym2,
   encryptKeym2,
+  KEYM2_VERSION_V2,
   KEYM2_VERSION_V3,
+  keym2SlotCountOffset,
+  keym2SlotTableOffset,
   isKeym2Binary,
   keym2SlotLen,
   keym2UnlockCost,
@@ -80,10 +83,13 @@ const v1 = new Uint8Array(await encryptData(toArrayBuffer(enc.encode("v1 payload
   kdf: FAST,
   cipher: CipherId.AES_256_GCM,
 }));
-const v2 = await encryptKeym2(enc.encode("v2 payload"), PASSWORD, null, {
-  kdf: FAST,
-  cipher: CipherId.AES_256_GCM,
-});
+const v2 = await encryptKeym2(
+  enc.encode("v2 payload"),
+  PASSWORD,
+  null,
+  { kdf: FAST, cipher: CipherId.AES_256_GCM },
+  KEYM2_VERSION_V2
+);
 
 const v3 = await encryptKeym2(
   enc.encode("v3 payload"),
@@ -262,19 +268,24 @@ check(
 // refuse such a container without stranding a conforming one, so it prices it
 // and says so.
 
-const SLOT_COUNT_OFFSET = 8;
-const SLOT_TABLE_OFFSET = 9;
+
 
 /** One real container, then its slot record repeated `n` times. */
 function withRepeatedSlots(container: Uint8Array, n: number): Uint8Array {
+  const version = container[4] as number;
+  const table = keym2SlotTableOffset(version);
+  const countAt = keym2SlotCountOffset(version);
   const width = keym2SlotLen(CipherId.AES_256_GCM);
-  const record = container.subarray(SLOT_TABLE_OFFSET, SLOT_TABLE_OFFSET + width);
-  const payload = container.subarray(SLOT_TABLE_OFFSET + width);
-  const out = new Uint8Array(SLOT_TABLE_OFFSET + n * width + payload.length);
-  out.set(container.subarray(0, SLOT_TABLE_OFFSET), 0);
-  out[SLOT_COUNT_OFFSET] = n;
-  for (let i = 0; i < n; i++) out.set(record, SLOT_TABLE_OFFSET + i * width);
-  out.set(payload, SLOT_TABLE_OFFSET + n * width);
+  const record = container.subarray(table, table + width);
+  const payload = container.subarray(table + width);
+  const out = new Uint8Array(table + n * width + payload.length);
+  out.set(container.subarray(0, table), 0);
+  out[countAt] = n;
+  for (let i = 0; i < n; i++) out.set(record, table + i * width);
+  out.set(payload, table + n * width);
+  // On v3 this leaves slot_table_mac describing a table that no longer exists,
+  // which is correct and irrelevant: pricing an unlock happens before any
+  // secret is offered, so it cannot verify a MAC and must not pretend to.
   return out;
 }
 

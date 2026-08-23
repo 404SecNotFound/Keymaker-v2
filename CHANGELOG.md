@@ -78,10 +78,26 @@
   container whose slot table has changed now says so, in as many words, without
   claiming to know which unlock method moved.
 
-  Both implementations still *write* v2 by default. The fixture argument for
-  waiting is now spent — v3 has its own vectors — so what remains is a product
-  decision about when new backups should start carrying a format only newer
-  readers understand.
+  **Both implementations now write v3 by default.** New backups carry an
+  authenticated slot table; nothing rewrites an existing file, and v1 and v2
+  containers open exactly as before.
+
+  What gated this was not the format but the readers. Three of them open a
+  Keymaker backup, and only two can ever be updated: the app and `keym2.py`.
+  The third is the decryptor inside a §7.2 self-extracting page, which travels
+  *in* the backup — a page written today runs the reader it was born with for as
+  long as the file exists. That reader was v2-only, so moving the default before
+  teaching it v3 would have made every page exported afterwards a backup with no
+  way into it. It now reads both, and reports §5.2's verdict on its own face:
+  a page whose slot table has changed still opens, and says so.
+
+  Two more places had learned v2's layout by hand and had to be shown the
+  version byte. The page *builder*'s subset check read `slot_count` from offset
+  8, which in v3 is the first byte of `container_id` — it answered "the password
+  slot uses Argon2id" for a PBKDF2 container, because it was walking the header
+  as though it were the slot table. `isKeym2Binary` compared against "the
+  version we write" rather than naming v2 and v3, so the flip would have made it
+  stop recognising every v2 backup in existence.
 
 
 

@@ -11,14 +11,15 @@ IBTZ v1 and headerless v0.
 > [HOW-IT-WORKS.md](HOW-IT-WORKS.md), which covers the same ground with
 > diagrams. This document is the contract; that one is the explanation.
 >
-> The successor format is specified in
-> [FORMAT-V2-DESIGN.md](FORMAT-V2-DESIGN.md), and it is what the application
-> writes today — a file the app produces now is KEYM v2, not v1. **KEYM v1 as
-> specified here is frozen and stays readable forever**: v2 changed nothing
-> about how an existing container is parsed or decrypted, the version byte is
-> what dispatches between them, and the frozen fixture corpus is what holds
-> that in place. This document is why a v1 container written years ago still
-> opens.
+> The successor formats are specified in
+> [FORMAT-V2-DESIGN.md](FORMAT-V2-DESIGN.md) and
+> [FORMAT-V3-DESIGN.md](FORMAT-V3-DESIGN.md), and v3 is what the application
+> writes today — a file the app produces now is KEYM v3, not v1. **KEYM v1 as
+> specified here is frozen and stays readable forever**: neither successor
+> changed anything about how an existing container is parsed or decrypted, the
+> version byte is what dispatches between them, and the frozen fixture corpus is
+> what holds that in place. This document is why a v1 container written years
+> ago still opens.
 
 All multi-byte integers are **big-endian**. All byte offsets below are
 absolute, counted from the first byte of the file.

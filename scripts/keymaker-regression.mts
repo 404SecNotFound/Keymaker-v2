@@ -644,8 +644,10 @@ async function main() {
   // plaintext handed back in silence is just v2.
   console.log("\nKEYM v3 slot-table authentication (§5):");
   {
-    const { encryptKeym2, decryptKeym2, addPasskeySlotKeym2, keym2SlotLen, KEYM2_VERSION_V3 } =
-      await import("../src/lib/keym-v2.ts");
+    const {
+      encryptKeym2, decryptKeym2, addPasskeySlotKeym2, keym2SlotLen,
+      KEYM2_VERSION_V2, KEYM2_VERSION_V3,
+    } = await import("../src/lib/keym-v2.ts");
 
     // §3's layout, written out rather than imported — the same reason the
     // fixture generator writes it out. A tamper built from the implementation's
@@ -813,10 +815,17 @@ async function main() {
     // carries no `slot_table_mac`, so nothing is claimed about its table — and
     // a reader that collapsed "no claim" into `false` would accuse every backup
     // written before this revision of having been tampered with.
-    const v2Container = await encryptKeym2(enc.encode(V3_PT), V3_PW, null, {
-      kdf: PBKDF2_FAST,
-      cipher: CipherId.AES_256_GCM,
-    });
+    // Asks for v2 explicitly. This container exists to be the version that
+    // carries no slot_table_mac, and the default is v3 now — left implicit it
+    // would quietly become a v3 container and assert `null` about a table that
+    // has a perfectly good MAC, which is the opposite of the check.
+    const v2Container = await encryptKeym2(
+      enc.encode(V3_PT),
+      V3_PW,
+      null,
+      { kdf: PBKDF2_FAST, cipher: CipherId.AES_256_GCM },
+      KEYM2_VERSION_V2
+    );
     const v2Read = await mustOpen("v2 container", () =>
       decryptKeym2(v2Container, V3_PW, null)
     );

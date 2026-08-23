@@ -73,13 +73,24 @@ export const KEYM2_VERSION_V3 = 0x03;
  * the default before v3 has fixtures of its own would retire that coverage
  * rather than extend it.
  *
- * That argument is now spent — v3 has thirteen vectors of its own in the corpus
- * and both implementations are held to them. What is left is not a coverage
- * question but a product one: every reader that opens a v3 container has to
- * have shipped first, and a backup is the last place to find out it did not.
- * Reading v3 works today, everywhere; writing it is the decision still open.
+ * That argument was spent once v3 had thirteen vectors of its own in the corpus
+ * and both implementations were held to them. What remained was a product
+ * question — every reader that opens a v3 container has to have shipped first,
+ * and a backup is the last place to find out one did not — and it has now been
+ * answered: **new containers are v3.**
+ *
+ * Three readers had to learn v3 before this line could move, and the third is
+ * the one that constrains it. `keym2.py` and this module are updatable. The
+ * decryptor embedded in a self-extracting page (§7.2) is not: it ships *inside*
+ * the backup, so a page written today runs the reader it was born with,
+ * forever. That reader understands v2 and v3 as of this change, which is what
+ * makes writing v3 safe rather than merely permitted.
+ *
+ * Nothing rewrites an existing backup. v1 and v2 containers stay readable
+ * indefinitely (v3 §6), and moving one to v3 means decrypting and re-encrypting
+ * it, which is the owner's decision and needs their secret.
  */
-export const KEYM2_VERSION = KEYM2_VERSION_V2;
+export const KEYM2_VERSION = KEYM2_VERSION_V3;
 
 /** §3, bytes [0, 8) in v2. The payload AAD. */
 export const KEYM2_CORE_HEADER_LEN = 8;
@@ -110,11 +121,11 @@ function coreHeaderLen(version: number): number {
   reject();
 }
 
-function slotCountOffset(version: number): number {
+export function keym2SlotCountOffset(version: number): number {
   return coreHeaderLen(version);
 }
 
-function slotTableOffset(version: number): number {
+export function keym2SlotTableOffset(version: number): number {
   if (version === KEYM2_VERSION_V2) return SLOT_TABLE_OFFSET;
   if (version === KEYM2_VERSION_V3) return SLOT_TABLE_OFFSET_V3;
   reject();
@@ -392,7 +403,7 @@ export function parseKeym2CoreHeader(data: Uint8Array): Keym2CoreHeader {
   // v3 §6: a v3 reader MUST open v1, v2 and v3. v1 has its own module; here the
   // bound is v2 or v3, and anything else is an unknown version.
   if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) reject();
-  if (data.length < slotTableOffset(version)) reject();
+  if (data.length < keym2SlotTableOffset(version)) reject();
 
 
   const cipher = data[5] as CipherId;
@@ -441,11 +452,11 @@ interface Keym2Container {
 function parseKeym2Container(data: Uint8Array): Keym2Container {
   const core = parseKeym2CoreHeader(data);
 
-  const slotCount = data[slotCountOffset(core.version)] as number;
+  const slotCount = data[keym2SlotCountOffset(core.version)] as number;
   if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) reject();
 
   const width = keym2SlotLen(core.cipher);
-  const table = slotTableOffset(core.version);
+  const table = keym2SlotTableOffset(core.version);
   const payloadOffset = table + slotCount * width;
 
   // §6: shorter than payload_offset plus the minimum payload for one chunk.
@@ -1263,7 +1274,7 @@ export async function encryptKeym2WithExplicitSecrets(
   // offset, not v2's: a v3 header followed by one byte is shorter than
   // `parseKeym2CoreHeader` requires, and would fail this self-check for a
   // reason that has nothing to do with the header being wrong.
-  parseKeym2CoreHeader(concat([coreBytes, new Uint8Array(slotTableOffset(version) - coreBytes.length)]));
+  parseKeym2CoreHeader(concat([coreBytes, new Uint8Array(keym2SlotTableOffset(version) - coreBytes.length)]));
 
   if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + tagOverheadFor(options.cipher))])) === null) {
     throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
@@ -1800,8 +1811,8 @@ export function keym2UnlockCost(data: Uint8Array): Keym2UnlockCost | null {
     // in a v3 container reads the first byte of container_id — a random value,
     // so a v3 container would be priced from a random slot count or, more
     // often, silently refuse to be priced at all.
-    const table = slotTableOffset(core.version);
-    const slotCount = data[slotCountOffset(core.version)] as number;
+    const table = keym2SlotTableOffset(core.version);
+    const slotCount = data[keym2SlotCountOffset(core.version)] as number;
     if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) return null;
 
     const width = keym2SlotLen(core.cipher);
@@ -1875,8 +1886,8 @@ export function inspectKeym2(
 ): { kdfLabel: string; cipherLabel: string; slots: number; weakKdf: string | null } | null {
   try {
     const core = parseKeym2CoreHeader(data);
-    const table = slotTableOffset(core.version);
-    const slotCount = data[slotCountOffset(core.version)] as number;
+    const table = keym2SlotTableOffset(core.version);
+    const slotCount = data[keym2SlotCountOffset(core.version)] as number;
     if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) return null;
 
     const width = keym2SlotLen(core.cipher);
@@ -1929,9 +1940,17 @@ export function inspectKeym2(
   }
 }
 
-/** Does this look like a v2 binary container? Byte 4 is the discriminator. */
+/**
+ * Does this look like a binary container this module handles — v2 or v3?
+ *
+ * The versions are named rather than compared against `KEYM2_VERSION`. Written
+ * that way this asked "is this the version we currently *write*", which is a
+ * different question and answered wrongly the moment the default moved: every
+ * v2 backup in existence would have stopped being recognised as one, by a
+ * module that opens them perfectly well.
+ */
 export function isKeym2Binary(data: Uint8Array): boolean {
   if (data.length < 5) return false;
   for (let i = 0; i < MAGIC.length; i++) if (data[i] !== MAGIC[i]) return false;
-  return data[4] === KEYM2_VERSION;
+  return data[4] === KEYM2_VERSION_V2 || data[4] === KEYM2_VERSION_V3;
 }
