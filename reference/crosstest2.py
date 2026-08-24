@@ -705,6 +705,53 @@ def main() -> int:
         two_slot = keym2.add_slot(one_slot, PASSWORD, PASSWORD2,
                                   kdf_id=keym2.KDF_PBKDF2, iterations=PBKDF2_ITERS)
 
+        # §6's pairing rule, made observable.
+        #
+        # Editing a slot's kdf_id byte does not test this. A slot wrapped under
+        # a PBKDF2-derived key cannot open through HKDF regardless of the rule,
+        # so "disqualified before the KDF" and "derived the wrong key" produce
+        # the same answer and the case passes with the rule deleted. That is not
+        # hypothetical: it is what the first version of this test did, and the
+        # negative control is what caught it.
+        #
+        # So the slot is *built*: slot_type = passphrase, kdf_id = HKDF, and the
+        # master key genuinely sealed under HKDF(build_kdf_input(password)).
+        # With the rule, both implementations refuse it before deriving
+        # anything. Without the rule it opens on a password that was never
+        # stretched, which is the vulnerability §6 exists to prevent, and the
+        # control confirms exactly that.
+        HKDF_PASSWORD = "a password nothing stretched"
+        _core, _records, _payload, _master = keym2.recover_master_key(two_slot, PASSWORD)
+        _hkdf_slot = keym2.Slot(
+            slot_type=keym2.SLOT_TYPE_PASSPHRASE, kdf_id=keym2.KDF_HKDF,
+            slot_flags=0, salt=bytes(range(32)), wrapped_key=b"")
+        _prefix = _hkdf_slot.pack_prefix()
+        _records2 = _records + [
+            _prefix + keym2.wrap_master_key(
+                _core, _prefix,
+                keym2.derive_slot_key(_hkdf_slot, keym2.build_kdf_input(HKDF_PASSWORD, None)),
+                _master)
+        ]
+        unstretched = (two_slot[:keym2.SLOT_TABLE_OFFSET - 1] + bytes([len(_records2)])
+                       + b"".join(_records2) + _payload)
+
+        def rekdf(blob: bytes, index: int, kdf_id: int, params: bytes) -> bytes:
+            """Rewrite a slot's kdf_id *and* its 8-byte parameter block.
+
+            Both together, deliberately. Flipping kdf_id alone would leave
+            PBKDF2's parameters behind, and §4.6 already refuses an HKDF slot
+            whose parameter block is non-zero — so the case would be refused for
+            a reason that has nothing to do with the pairing, and would keep
+            passing if the pairing rule were deleted. Zeroing the block leaves
+            the §6 pairing as the only thing standing between the slot and a
+            derivation.
+            """
+            at = keym2.SLOT_TABLE_OFFSET + index * keym2.slot_len(keym2.CIPHER_AES)
+            return (blob[:at + 1] + bytes([kdf_id]) + blob[at + 2:at + 40]
+                    + params + blob[at + 48:])
+
+        HKDF_NO_PARAMS = b"\x00" * 8
+
         params_at = keym2.SLOT_TABLE_OFFSET + 40
         over_cap = (two_slot[:params_at] + (10_000_001).to_bytes(4, "big")
                     + two_slot[params_at + 4:])
@@ -720,6 +767,18 @@ def main() -> int:
              retype(retype(two_slot, 0, 0x7F), 1, 0x7F), PASSWORD2, False),
             ("out-of-bounds slot 0, slot 1 still opens", over_cap, PASSWORD2, True),
             ("out-of-bounds slot 0, its own password fails", over_cap, PASSWORD, False),
+            # §6's pairing, in the direction that is a vulnerability rather
+            # than merely wasteful. See `unstretched` above for why the slot is
+            # built rather than edited: only a slot that *would* open makes the
+            # rule observable.
+            ("a passphrase slot wrapped under HKDF does not open, whatever it declares",
+             unstretched, HKDF_PASSWORD, False),
+            ("...and the honest slots in that same container still do",
+             unstretched, PASSWORD, True),
+            # Disqualified is not the same as fatal. §4.4 still applies: a slot
+            # nobody can use must cost the container nothing.
+            ("a slot edited to declare HKDF is skipped, not fatal",
+             rekdf(two_slot, 0, keym2.KDF_HKDF, HKDF_NO_PARAMS), PASSWORD2, True),
         ):
             js = js_opens(blob, password)
             py = py_opens(blob, password)

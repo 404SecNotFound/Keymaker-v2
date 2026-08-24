@@ -31,6 +31,8 @@ import {
   dearmorKeym2,
   encryptKeym2,
   KEYM2_VERSION_V2,
+  KEYM2_HEADER_PEEK_BYTES,
+  KEYM2_MAX_SLOTS,
   KEYM2_VERSION_V3,
   keym2SlotCountOffset,
   keym2SlotTableOffset,
@@ -429,6 +431,55 @@ check(
     /too large/i.test(message) && !message.includes("keym2.py"),
     "encrypting an oversized file still says to pick a smaller one",
     message.slice(0, 120)
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The header peek has to cover the largest slot table any version can hold
+// ---------------------------------------------------------------------------
+//
+// The unlock-cost notice is the one thing the app says *before* spending the
+// KDF budget, and it is computed from a fixed-size prefix of the container
+// rather than the whole file. keym2UnlockCost returns null the moment that
+// prefix stops short of the slot table, so a peek that is too small does not
+// misprice the unlock — it silently prices nothing, on precisely the container
+// the warning exists for.
+//
+// 1 KiB was chosen against v2 + AES, whose table ends at 777. Two things have
+// moved since: v3 put the table at 57 instead of 9, and the chained cipher's
+// second tag makes a slot 112 bytes instead of 96. It still fits, but the
+// margin is 71 bytes rather than the 247 the original reasoning suggests, so
+// the relationship is asserted here against the constants instead of being
+// re-derived by hand the next time one of them changes.
+{
+  const CIPHERS: [string, CipherId][] = [
+    ["aes-256-gcm", CipherId.AES_256_GCM],
+    ["chacha20-poly1305", CipherId.CHACHA20_POLY1305],
+    ["chained", CipherId.CHAINED],
+  ];
+  let worst = 0;
+  let worstLabel = "";
+  for (const version of [2, KEYM2_VERSION_V3]) {
+    for (const [name, cipher] of CIPHERS) {
+      const end = keym2SlotTableOffset(version) + KEYM2_MAX_SLOTS * keym2SlotLen(cipher);
+      if (end > worst) {
+        worst = end;
+        worstLabel = `v${version} + ${name}`;
+      }
+    }
+  }
+  check(
+    KEYM2_HEADER_PEEK_BYTES >= worst,
+    "the header peek covers the largest slot table any version and cipher can produce",
+    `worst case is ${worst} bytes (${worstLabel}); the peek reads ${KEYM2_HEADER_PEEK_BYTES}. ` +
+      "Below the worst case, keym2UnlockCost returns null and the notice silently stops appearing."
+  );
+  // A peek that covered everything by being enormous would pass the line above
+  // while defeating the point of reading a prefix at all.
+  check(
+    KEYM2_HEADER_PEEK_BYTES <= 64 * 1024,
+    "the header peek is still a prefix rather than the whole container",
+    `${KEYM2_HEADER_PEEK_BYTES} bytes`
   );
 }
 
