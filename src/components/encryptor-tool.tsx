@@ -5,7 +5,7 @@ import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, typ
 import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
 import { SelfExtractExport } from "@/components/self-extract-export";
-import { armorKeym2, KEYM2_VERSION } from "@/lib/keym-v2";
+import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperParts } from "@/lib/keym-v2-paper";
 import {
@@ -2187,13 +2187,15 @@ export function EncryptorTool() {
         // zero bytes and the format readback below would silently go blank.
         //
         // 1 KiB, not the 128 bytes this used to take. 128 covered the largest
-        // KEYM v1 header (71) with room to spare, but a v2 slot table is
-        // 9 + slot_count x 96 bytes and reaches 777 at the eight slots §6
-        // allows. Pricing the unlock below needs all of them, and a peek that
-        // stopped short would silently price only the slots it happened to
-        // see — reporting a cheap unlock for the expensive container this is
-        // for.
-        const headerPeek = new Uint8Array(inputBuffer.slice(0, Math.min(1024, inputBuffer.byteLength)));
+        // KEYM v1 header (71) with room to spare, but a slot table reaches 953
+        // bytes at v3 + chained + the eight slots §6 allows. Pricing the unlock
+        // below needs all of them, and a peek that stopped short would silently
+        // price nothing at all — on exactly the expensive container this is
+        // for. The size and its derivation live beside the format constants
+        // they depend on; keym2-dispatch.mts asserts the relationship.
+        const headerPeek = new Uint8Array(
+          inputBuffer.slice(0, Math.min(KEYM2_HEADER_PEEK_BYTES, inputBuffer.byteLength))
+        );
 
         // Say so before the wait, not after it.
         //

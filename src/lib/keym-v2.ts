@@ -146,6 +146,32 @@ const SLOT_COUNT_MIN = 1;
 export const KEYM2_MAX_SLOTS = 8;
 
 /**
+ * How much of a container has to be read before its unlock can be priced.
+ *
+ * `keym2UnlockCost` needs every slot record, so this has to cover the largest
+ * slot table the format permits — and the largest is not the one the number was
+ * originally chosen against. 1 KiB was justified as "a v2 slot table is
+ * 9 + slot_count x 96 and reaches 777 at the eight slots §6 allows", which was
+ * true and is now the loosest of the four combinations:
+ *
+ *   | version | cipher  | table ends at |
+ *   |---------|---------|---------------|
+ *   | v2      | AES     |           777 |
+ *   | v2      | chained |           905 |
+ *   | v3      | AES     |           825 |
+ *   | v3      | chained |           953 |
+ *
+ * v3 moved the table from 9 to 57, and the chained cipher's doubled tag makes a
+ * slot 112 bytes rather than 96. The real worst case is 953, so 1 KiB still
+ * holds — with 71 bytes of margin, not the 247 the original reasoning implies.
+ * `keym2-dispatch.mts` asserts the relationship against the format constants so
+ * a future version, cipher or slot bound cannot quietly outgrow it: a peek that
+ * stopped short would return null and silently price nothing, on exactly the
+ * expensive containers the notice exists for.
+ */
+export const KEYM2_HEADER_PEEK_BYTES = 1024;
+
+/**
  * §5.1. A constant of the format, deliberately not a header field — a header
  * field would be an attacker-controlled allocation size read before
  * authentication. Overhead is 16 bytes per chunk, about 0.0015% at this size.
