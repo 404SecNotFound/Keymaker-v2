@@ -96,6 +96,19 @@ async function slotTypes(page: Page, armor: string): Promise<number[]> {
   }, armor);
 }
 
+/** Turn on recovery shares and set k-of-n. Mirrors shamir-ui.spec.ts's helper. */
+async function enableShares(page: Page, k: number, n: number) {
+  const sharesSwitch = visible(page.getByRole("switch", { name: "Recovery shares" }));
+  await expect
+    .poll(async () => {
+      if ((await sharesSwitch.getAttribute("aria-checked")) !== "true") await sharesSwitch.click();
+      return sharesSwitch.getAttribute("aria-checked");
+    }, { timeout: 5_000 })
+    .toBe("true");
+  await visible(page.getByLabel("Shares to print")).fill(String(n));
+  await visible(page.getByLabel("Needed to open")).fill(String(k));
+}
+
 /** Encrypt `secret` and return the armored container from the Result field. */
 async function encryptAndRead(page: Page, secret: string): Promise<string> {
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
@@ -315,6 +328,81 @@ test.describe("§4.7 passkey slots", () => {
     } finally {
       await cdp.detach();
     }
+  });
+
+  /**
+   * The two enrolment paths have to write the same container.
+   *
+   * `encryptViaWorker` enrols the share set and then the passkey. The no-worker
+   * fallback beside it used to do the opposite, not by decision but because the
+   * early return for "no share set" sat between the two blocks. Both containers
+   * open, so nothing failed — and nothing in the suite called this function
+   * with both options set, so nothing looked.
+   *
+   * That matters because of what the fallback is *for*: a browser that cannot
+   * start a Worker should still write the backup everyone else writes. A
+   * different slot order is a different file from the same inputs, on the one
+   * path least likely to be the one anybody tests by hand.
+   *
+   * ## Why a second context rather than a second navigation
+   *
+   * `page.route(…, abort)` only intercepts the network. Once the service worker
+   * has precached crypto-worker.js it serves it from cache, so blocking the
+   * route after the first load leaves the page with a perfectly good worker and
+   * the "fallback" leg silently measures the worker path a second time. The
+   * first version of this test did exactly that and passed with the defect
+   * reintroduced. A fresh context, routed before its first navigation, is what
+   * makes the second leg real — and `page.on("worker")` is what proves it,
+   * rather than leaving it to be assumed.
+   */
+  test("the no-worker fallback writes the same slot order the worker does", async ({ browser }) => {
+    async function slotOrder(blockWorker: boolean): Promise<{ types: number[]; workers: number }> {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      let workers = 0;
+      page.on("worker", (w) => {
+        if (w.url().includes("crypto-worker")) workers++;
+      });
+      if (blockWorker) await page.route("**/crypto-worker.js", (route) => route.abort());
+      const { cdp } = await addVirtualAuthenticator(page);
+      try {
+        await prepareEncrypt(page, true);
+        if (blockWorker) await page.waitForTimeout(2_000); // let the readiness probe fail
+        await enableShares(page, 2, 3);
+        const types = await slotTypes(page, await encryptAndRead(page, "both paths, one layout"));
+        return { types, workers };
+      } finally {
+        await cdp.send("WebAuthn.disable").catch(() => {});
+        await context.close();
+      }
+    }
+
+    const viaWorker = await slotOrder(false);
+    const viaFallback = await slotOrder(true);
+
+    // Without this the whole test is vacuous: two runs of the worker path
+    // trivially agree.
+    expect(
+      viaWorker.workers,
+      "the worker leg never started a crypto worker, so it is not the worker path"
+    ).toBeGreaterThan(0);
+    expect(
+      viaFallback.workers,
+      "the fallback leg started a crypto worker — the route did not take, so this " +
+        "measures the worker path twice and cannot see an ordering difference"
+    ).toBe(0);
+
+    // 0x00 passphrase, 0x02 Shamir, 0x01 passkey — asserted literally as well as
+    // compared, so a change that reordered *both* paths together still has to be
+    // a deliberate one.
+    expect(
+      viaWorker.types,
+      "the worker path stopped writing passphrase, Shamir, passkey"
+    ).toEqual([0x00, 0x02, 0x01]);
+    expect(
+      viaFallback.types,
+      "the no-worker fallback writes a different container from the same inputs"
+    ).toEqual(viaWorker.types);
   });
 
   test("without the toggle, no passkey slot is written", async ({ page }) => {

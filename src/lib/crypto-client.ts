@@ -179,13 +179,22 @@ function terminate() {
  * is cheap relative to an Argon2id run, and it is the difference between a
  * cancel that stops burning the user's battery and one that merely stops
  * listening.
+ *
+ * **Returns whether work was actually stopped**, which is not the same question
+ * as whether the caller should stop waiting. With no worker there is nothing to
+ * terminate: the derivation is running in this realm, WebCrypto will finish it,
+ * and all a caller can do is discard the result. That is still worth doing, but
+ * it is not a cancellation and the UI must not claim it is — the meter that
+ * certified a password it had not earned the right to certify is the same
+ * mistake in a different place.
  */
-export function cancelAllCryptoWork(): void {
-  if (!worker) return;
+export function cancelAllCryptoWork(): boolean {
+  if (!worker) return false;
   failAllPending(new Error("Cancelled."));
   terminate();
   // The next call spawns a fresh worker, which has to prove itself again.
   readiness = null;
+  return true;
 }
 
 function post<T extends CryptoResponse>(
@@ -249,46 +258,59 @@ async function encryptViaWorkerInner(
     const keyFileForSlots =
       keyFile && (shamir || passkey) ? new Uint8Array(keyFile.slice(0)) : null;
     let out = await encryptContainer(data, password, keyFile, options);
-    // §4.7, and the same argument the share fallback makes below: a browser
-    // where the Worker failed to start must not quietly produce a container
-    // with no passkey slot, reported as success.
-    if (passkey) {
-      const { addPasskeySlotKeym2 } = await import("./keym-v2");
-      const enrolled = await addPasskeySlotKeym2(
-        new Uint8Array(out),
-        { password, keyFile: keyFileForSlots },
-        passkey.prfOutput,
-        passkey.salt
-      );
-      out = enrolled.buffer.slice(
-        enrolled.byteOffset,
-        enrolled.byteOffset + enrolled.byteLength
-      ) as ArrayBuffer;
-    }
-    if (!shamir) {
+    let shares: string[] | undefined;
+    try {
+      // Shamir first, then passkey — the order crypto-worker.ts uses.
+      //
+      // This path used to enrol the passkey first, purely because the early
+      // return for "no share set" sat between the two blocks. Same slots, but
+      // in the other order, so a browser that fell back produced a *different
+      // container* from the same inputs: [passphrase, passkey, shamir] rather
+      // than [passphrase, shamir, passkey]. Both open, which is why nothing
+      // noticed — nothing exercises this call with both options set. The
+      // fallback exists so a browser without a Worker writes the same backup,
+      // and "the same backup" has to include the byte layout.
+      if (shamir) {
+        // The no-worker fallback has to do the same work, or enabling shares
+        // would silently produce a container with no share slot on a browser
+        // where the Worker failed to start — a backup the heirs cannot open,
+        // reported as success.
+        const { addShamirSlotKeym2 } = await import("./keym-v2");
+        const enrolled = await addShamirSlotKeym2(
+          new Uint8Array(out),
+          { password, keyFile: keyFileForSlots },
+          shamir.threshold,
+          shamir.count
+        );
+        out = enrolled.container.buffer.slice(
+          enrolled.container.byteOffset,
+          enrolled.container.byteOffset + enrolled.container.byteLength
+        ) as ArrayBuffer;
+        shares = enrolled.shares;
+      }
+
+      // §4.7, and the same argument: a browser where the Worker failed to start
+      // must not quietly produce a container with no passkey slot, reported as
+      // success.
+      if (passkey) {
+        const { addPasskeySlotKeym2 } = await import("./keym-v2");
+        const enrolled = await addPasskeySlotKeym2(
+          new Uint8Array(out),
+          { password, keyFile: keyFileForSlots },
+          passkey.prfOutput,
+          passkey.salt
+        );
+        out = enrolled.buffer.slice(
+          enrolled.byteOffset,
+          enrolled.byteOffset + enrolled.byteLength
+        ) as ArrayBuffer;
+      }
+    } finally {
+      // In a `finally` now: the copy outlives two awaits that can each throw,
+      // and an enrolment that fails part-way used to leave it in the heap.
       secureErase(keyFileForSlots);
-      return { data: out };
     }
-    // The no-worker fallback has to do the same work, or enabling shares would
-    // silently produce a container with no share slot on a browser where the
-    // Worker failed to start — a backup the heirs cannot open, reported as
-    // success.
-    const { addShamirSlotKeym2 } = await import("./keym-v2");
-    const enrolled = await addShamirSlotKeym2(
-      new Uint8Array(out),
-      { password, keyFile: keyFileForSlots },
-      shamir.threshold,
-      shamir.count
-    );
-    const result = {
-      data: enrolled.container.buffer.slice(
-        enrolled.container.byteOffset,
-        enrolled.container.byteOffset + enrolled.container.byteLength
-      ) as ArrayBuffer,
-      shares: enrolled.shares,
-    };
-    secureErase(keyFileForSlots);
-    return result;
+    return { data: out, shares };
   }
   lastRunUsedWorker = true;
 

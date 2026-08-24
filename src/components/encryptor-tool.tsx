@@ -1502,12 +1502,23 @@ export function EncryptorTool() {
     // Same two steps clearSensitiveState uses: move the counter so the
     // in-flight completion path goes quiet, then actually kill the worker.
     opSeqRef.current++;
-    cancelAllCryptoWork();
+    const stopped = cancelAllCryptoWork();
     setIsLoading(false);
     setUnlockCostNotice(null);
+    // `stopped` is false when there was no worker to terminate — a browser
+    // where the script could not load, running the derivation in this realm.
+    // Moving opSeqRef still guarantees the result is discarded, but WebCrypto
+    // will finish the work regardless, and saying "cancelled" there would be
+    // claiming something the app did not do. Distinguishing the two costs one
+    // sentence and keeps the button honest on the browsers least able to
+    // afford the wait.
     toast({
-      title: "Stopped",
-      description: "The unlock was cancelled. Your password and file are still here.",
+      title: stopped ? "Stopped" : "Stopped waiting",
+      description: stopped
+        ? "The unlock was cancelled. Your password and file are still here."
+        : "This browser could not start the background worker, so the derivation " +
+          "already under way will run to completion — its result is discarded. " +
+          "Your password and file are still here.",
     });
   }, [toast]);
 
@@ -2124,6 +2135,23 @@ export function EncryptorTool() {
           // reissue them — so they must not be left to be noticed.
           setIssuedShares({ threshold: shamirThreshold, shares: encrypted.shares });
         }
+        // **Do not put an `await` between here and the delivery below.**
+        //
+        // The auto-lock fires from a timer, so it can only interleave at a task
+        // boundary. Today there is none between issuing the shares and writing
+        // the container out, which is the only reason the bad interleaving is
+        // unreachable: shares displayed, then the lock, then the container
+        // silently not delivered — a set of one-time shares for a backup the
+        // user never received, presented as if it were their recovery kit.
+        //
+        // A lock that fires during `encryptViaWorker` above is fine and is the
+        // common case: `isStale()` is then true here, the shares are dropped
+        // *and* so is the container, and the user redoes an operation that
+        // produced nothing. Nothing is left half-issued.
+        //
+        // Anything added below that needs to await must re-check `isStale()`
+        // after the await and before touching state, the way the text branch
+        // does.
 
         if (inputType === 'file') {
             const blob = new Blob([resultBuffer]);
