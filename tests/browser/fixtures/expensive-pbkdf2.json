@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "A KEYM v3 container whose slot 0 declares 9,000,000 PBKDF2 iterations \u2014 inside",
+    "\u00a76's ceiling of 10,000,000, so a reader must accept the slot and run the KDF.",
+    "",
+    "The count was raised after the slot was sealed, so the wrap will not open and",
+    "the container will not decrypt. That is deliberate and irrelevant: \u00a76 bounds-",
+    "checks the parameters and then derives, so the expensive part happens before",
+    "the reader can discover the slot is a dead end. What this fixture buys is a",
+    "derivation long enough to press Stop during, on a page with no Worker \u2014 the",
+    "one configuration where Stop cannot actually stop anything.",
+    "",
+    "Argon2id will not do: on the main thread hash-wasm blocks the event loop, so",
+    "the button never renders. PBKDF2 goes through WebCrypto, off-thread, and",
+    "leaves the tab responsive \u2014 which is exactly why the wording matters there."
+  ],
+  "password": "correct-horse-battery-staple-9271!X",
+  "iterations": 9000000,
+  "armor": "keym2:S0VZTQMAAAAptg-Ued39TT4Ht_tY_PbbAQnRvyl5AQwOC5L4eSNVAS-6P2t3Z7KJRM3BqLQKiopvAAAAAAAAAADjGvJb2HufWDS1F55oYcBiDfFglkXXatHiLo5nLVJ-JgCJVEAAAAAA0tOxbc4fawRUw01nqxYr7eg74r04we9wy5u19Cuh7-nQ8RjG9BkE2QhZGVHOMSSP2vSp2isPZzAq32vSkvXYshQh844b6pHBHr81NPeIbuRUih3M8VtgC25_"
+}

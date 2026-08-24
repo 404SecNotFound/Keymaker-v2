@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
 
 /**
@@ -227,6 +229,71 @@ test("a running derivation can be stopped, and the inputs survive", async ({ pag
     visible(page.getByPlaceholder("Enter a strong password")),
     "stopping threw away the password the user had typed"
   ).toHaveValue(STRONG_PASSWORD);
+
+  await running;
+});
+
+/**
+ * Stop is honest about what it did.
+ *
+ * With a worker, the click terminates it and the derivation genuinely ends —
+ * the test above. With no worker there is nothing to terminate: the derivation
+ * runs in this realm, WebCrypto finishes it whatever the page does, and all
+ * Stop can achieve is discarding the result. Both are worth doing and only one
+ * is a cancellation. Saying "the unlock was cancelled" in the second case is
+ * the KM-02 shape — a claim the software has not earned — and it lands on
+ * precisely the browsers least able to afford the wait it is denying.
+ *
+ * ## Three dead ends, recorded so nobody re-walks them
+ *
+ *  - **Argon2id with no worker never renders the button.** hash-wasm derives
+ *    synchronously, so on the main thread it blocks the event loop and React
+ *    never paints Stop. A real property, and a friendlier one than this case:
+ *    a frozen tab cannot mislead anybody.
+ *  - **Encrypting cannot be made slow enough.** The UI writes PBKDF2 at a fixed
+ *    1,000,000 iterations, about a second of WebCrypto.
+ *  - **Building the container in-page and reloading does not remove the
+ *    worker.** `page.route(…, abort)` only sees the network; once the service
+ *    worker has precached crypto-worker.js it serves it from cache on the
+ *    reload and the page has a perfectly good worker. The route has to be in
+ *    place before the first navigation, which means the container cannot come
+ *    from this page — hence the fixture.
+ */
+test("Stop does not claim to have cancelled work it could not stop", async ({ page }) => {
+  const fixture = JSON.parse(
+    readFileSync(join(process.cwd(), "tests/browser/fixtures/expensive-pbkdf2.json"), "utf8")
+  ) as { password: string; armor: string };
+
+  // Before the first goto, so no service worker is ever registered to serve a
+  // cached copy of the script we are trying to take away.
+  await page.route("**/crypto-worker.js", (route) => route.abort());
+
+  await page.goto("/");
+  await useTextMode(page);
+  await page.waitForTimeout(2_000); // let the readiness probe fail
+
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await visible(page.getByPlaceholder("Enter text to decrypt")).fill(fixture.armor);
+  await visible(page.getByPlaceholder("Enter decryption password")).fill(fixture.password);
+  const running = startOperation(page, /^Decrypt Text$/i);
+  await confirmInFlight(page);
+
+  await visible(page.getByTestId("cancel-operation")).click();
+
+  // The wording has to distinguish the two cases, and has to say what actually
+  // becomes of the work rather than going quiet about it.
+  await expect(
+    page.getByText(/run to completion/i).first(),
+    "Stop reported a cancellation on a page with no worker to cancel"
+  ).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/^The unlock was cancelled/)).toHaveCount(0);
+
+  // Still a usable outcome: the inputs survive, as they do with a worker.
+  await expect(
+    visible(page.getByPlaceholder("Enter decryption password")),
+    "stopping threw away the password the user had typed"
+  ).toHaveValue(fixture.password);
 
   await running;
 });
