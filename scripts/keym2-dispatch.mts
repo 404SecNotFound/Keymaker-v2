@@ -35,7 +35,6 @@ import {
   KEYM2_MAX_SLOTS,
   KEYM2_VERSION_V3,
   keym2SlotCountOffset,
-  keym2SlotLen,
   keym2SlotTableOffset,
   isKeym2Binary,
   keym2SlotLen,
