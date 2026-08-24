@@ -4083,6 +4083,76 @@ def _selftest() -> int:
     check(f"the v3 section ran to completion{'' if v3_crash is None else f' ({v3_crash})'}",
           v3_crash is None)
 
+    # --- the multi-secret matrix -------------------------------------------
+    #
+    # password x key file x share set x passkey, over both versions, all three
+    # ciphers and both KDFs. Each of those axes is covered somewhere above; the
+    # combinations mostly were not, and a container carrying every kind of slot
+    # at once is the one an heir is most likely to be holding — it is what the
+    # app writes when every option is switched on.
+    #
+    # Cheap parameters throughout, as everywhere else here: this is about the
+    # format's behaviour under combination, not about KDF cost.
+    def _matrix_section() -> None:
+        m_pw, m_kf, m_prf = "matrix password", b"\xa5" * 512, bytes(range(200, 232))
+        m_msg = b"every kind of slot at once"
+        for m_ver in (VERSION_V2, VERSION_V3):
+            for m_cid, m_cn in ((CIPHER_AES, "aes"), (CIPHER_CHACHA, "chacha"),
+                                (CIPHER_CHAINED, "chained")):
+                for m_kid, m_kn in ((KDF_PBKDF2, "pbkdf2"), (KDF_ARGON2ID, "argon2id")):
+                    for m_use_kf in (False, True):
+                        kf = m_kf if m_use_kf else None
+                        tag = f"v{m_ver}/{m_cn}/{m_kn}/{'keyfile' if m_use_kf else 'no keyfile'}"
+                        base = encrypt(m_msg, m_pw, kdf_id=m_kid, cipher_id=m_cid,
+                                       keyfile_bytes=kf, version=m_ver, **fast)
+                        enrolled, m_shares = add_shamir_slot(base, m_pw, 2, 3,
+                                                             unlock_keyfile=kf)
+                        enrolled = add_passkey_slot(enrolled, m_pw, m_prf,
+                                                    unlock_keyfile=kf)
+                        opens(f"{tag}: the password still opens it",
+                              lambda c=enrolled, k=kf: decrypt(c, m_pw, keyfile_bytes=k), m_msg)
+                        opens(f"{tag}: two shares open it with no other secret",
+                              lambda c=enrolled, sh=m_shares: decrypt(c, None, shares=sh[:2]),
+                              m_msg)
+                        # Not the lowest-indexed pair: §4.6 selects the k lowest
+                        # of whatever it is given, so any two must reconstruct.
+                        opens(f"{tag}: shares 2 and 3 open it too",
+                              lambda c=enrolled, sh=m_shares: decrypt(c, None, shares=sh[1:3]),
+                              m_msg)
+                        opens(f"{tag}: the passkey opens it alone",
+                              lambda c=enrolled: decrypt(c, None, prf_output=m_prf), m_msg)
+                        opens(f"{tag}: holding every secret at once still opens it",
+                              lambda c=enrolled, k=kf, sh=m_shares: decrypt(
+                                  c, m_pw, keyfile_bytes=k, shares=sh[:2], prf_output=m_prf),
+                              m_msg)
+                        rejects(f"{tag}: one share is not two",
+                                lambda c=enrolled, sh=m_shares: decrypt(c, None, shares=sh[:1]))
+                        rejects(f"{tag}: a wrong PRF output",
+                                lambda c=enrolled: decrypt(c, None, prf_output=bytes(32)))
+                        if m_use_kf:
+                            # The flag describes the slot, not the container:
+                            # the passphrase slot needs the key file and the
+                            # HKDF slots must not claim to.
+                            rejects(f"{tag}: the password without the key file",
+                                    lambda c=enrolled: decrypt(c, m_pw))
+                            table = (SLOT_TABLE_OFFSET if m_ver == VERSION_V2
+                                     else SLOT_TABLE_OFFSET_V3)
+                            width = slot_len(m_cid)
+                            flags = [enrolled[table + i * width + 2] for i in range(3)]
+                            check(f"{tag}: only the passphrase slot flags a key file",
+                                  bool(flags[0] & SLOT_FLAG_KEYFILE)
+                                  and not (flags[1] & SLOT_FLAG_KEYFILE)
+                                  and not (flags[2] & SLOT_FLAG_KEYFILE))
+
+    matrix_crash = None
+    try:
+        _matrix_section()
+    except (KeymError, UsageError, AssertionError, ValueError) as exc:
+        matrix_crash = f"{type(exc).__name__}: {exc}"
+    check(f"the multi-secret matrix ran to completion"
+          f"{'' if matrix_crash is None else f' ({matrix_crash})'}",
+          matrix_crash is None)
+
     failed = [name for name, ok in checks if not ok]
 
     for name, ok in checks:
