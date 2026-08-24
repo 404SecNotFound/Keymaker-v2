@@ -207,6 +207,25 @@ export default function VerifyBuild() {
         from anybody and still prints <span className="font-mono">Verified OK</span>.
       </p>
 
+      <p className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/6 p-3 text-[13px] leading-relaxed text-muted-foreground">
+        <strong className="text-foreground">Get that identity from somewhere other than this page.</strong>{" "}
+        It is the one value the whole check rests on, and it reached you from the origin you are
+        checking. Sigstore signing is open to any GitHub repository, so a tampered copy of this page
+        can name <em>its own</em> workflow, sign its own manifest with it, and every command here
+        will genuinely pass. Read the string out of{" "}
+        <a
+          className="underline hover:no-underline"
+          href={`${REPO}/blob/main/docs/VERIFYING.md`}
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          docs/VERIFYING.md
+        </a>{" "}
+        in the repository, or skip it entirely and run{" "}
+        <code className="font-mono">node scripts/verify-manifest.mjs</code> from a clone — that
+        script carries the identity in its own source and takes nothing from the site under test.
+      </p>
+
       {/* ---- Check 3 ---- */}
 
       <h2 className="mt-10 text-lg font-semibold tracking-tight">
@@ -241,6 +260,15 @@ export default function VerifyBuild() {
       <h2 className="mt-10 text-lg font-semibold tracking-tight">What none of this proves</h2>
 
       <ul className="mt-3 space-y-2 text-[14px] leading-relaxed text-muted-foreground">
+        <li>
+          <strong className="text-foreground">Not the identity in that command.</strong> A hostile
+          origin serves a hostile page, and the certificate identity printed above is the trust root
+          of the entire procedure. Substituting it is not forgery and does not fail any check — the
+          attacker&rsquo;s signature over the attacker&rsquo;s manifest is real, and{" "}
+          <code className="font-mono">cosign</code> will say so. This is not something a better page
+          could fix; a page cannot establish its own provenance. It is why the string has to come
+          from the repository rather than from here.
+        </li>
         <li>
           <strong className="text-foreground">Not that the code is correct.</strong> Verification
           says the bytes you ran match the source in the repository. Whether that source is any good

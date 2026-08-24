@@ -116,6 +116,55 @@ The certificate identity is the load-bearing argument, so pass it explicitly.
 `cosign verify-blob` without `--certificate-identity` will happily accept a
 signature from *anybody*.
 
+### Where you got that identity is the whole question
+
+The paragraph above holds only if the identity you passed is the right one, and
+it is worth following what happens when it is not — because that failure is
+silent and it looks exactly like success.
+
+Sigstore keyless signing is available to **any** GitHub repository, free and
+without approval. Someone who controls the origin serving you Keymaker can
+therefore:
+
+1. build a modified bundle;
+2. generate `SHA256SUMS` over their own files;
+3. sign that manifest with a workflow in *their* repository, obtaining a real
+   Fulcio certificate and a real Rekor entry; and
+4. serve a verify page that prints their own workflow in
+   `--certificate-identity`.
+
+Run the commands exactly as that page presents them and `sha256sum -c` passes,
+`cosign verify-blob` prints **Verified OK**, and both results are correct.
+Nothing has been forged. The signature is genuine — it is simply not ours.
+`--certificate-oidc-issuer` does not discriminate either, because their workflow
+authenticates to the same GitHub issuer this one does.
+
+So the identity string is the trust root of everything on this page, and a trust
+root obtained from the artifact under examination is not a trust root at all.
+**The identity has to reach you by some route other than the deployment you are
+checking.** Reading it here, in the repository, is such a route. Reading it off
+the running app's verify page is not: that page is served by the origin whose
+honesty is the open question.
+
+No better-written page can fix this. A page cannot establish its own provenance,
+and one that appeared to would be lying — which is why the in-app page states
+what the build *claims* and refuses to certify itself. The only useful response
+is to be explicit about which value carries the weight, and this is it.
+
+#### The form of the check that does not have this problem
+
+`node scripts/verify-manifest.mjs ./site`, shown above, is run from a clone with
+no `KEYMAKER_CERT_IDENTITY` set. It uses the identity compiled into the script —
+the one in the source you cloned, not one handed to you by the site being
+tested. That makes it strictly stronger than pasting the `cosign` command out of
+a running deployment, and it is the form to prefer when the question is *"is
+this deployment genuine?"* rather than *"are these files internally
+consistent?"*.
+
+The `cosign` invocation stays, because it depends on nothing of ours and is the
+right tool when you would rather not run our script either. Take the identity
+from the repository rather than from the page, and it answers the same question.
+
 ---
 
 ## 2. Rebuild it yourself
@@ -202,6 +251,12 @@ Being precise here matters more than sounding reassuring.
   the artifact, not on the machine running it.
 - **A signature is not a promise about behaviour.** It says who produced these
   bytes. It says nothing about whether those bytes are any good.
+- **It does not verify itself, and neither does the in-app page.** Every check
+  here is only as good as the certificate identity you passed, and a deployment
+  that is lying to you will hand you an identity that makes its own signature
+  verify. See [Where you got that identity is the whole
+  question](#where-you-got-that-identity-is-the-whole-question) — this is the
+  limit worth understanding before any of the others.
 
 ## If verification fails
 

@@ -134,6 +134,65 @@ test.describe("verify this build", () => {
     await expect(page.getByText(/This page will not tell you it has verified itself/i)).toBeVisible();
   });
 
+  test("the printed identity names the repository the page itself points at", async ({ page }) => {
+    await page.goto(VERIFY_URL);
+    const body = await page.evaluate(() => document.body.innerText);
+
+    // The identity is the trust root of the entire procedure, and the attack it
+    // has to survive is *substitution*, not forgery. A hostile origin that names
+    // its own workflow gets a real Fulcio certificate, a real Rekor entry, and a
+    // `cosign verify-blob` that prints Verified OK — every check on this page
+    // passes and all of them are correct. No browser test can catch that; the
+    // page discloses it instead, and the test below pins the disclosure.
+    //
+    // What a test *can* catch is the two halves disagreeing. The suffix check
+    // above — "deploy.yml@refs/heads/main" — is satisfied by any repository on
+    // GitHub, so it pins the workflow and the ref while saying nothing about the
+    // owner, which is the exact component a substitution changes. Bind it to the
+    // repository the page links to, so a build that cites one repo and verifies
+    // against another fails here rather than in front of a reader.
+    const docsHref = await page
+      .getByRole("link", { name: "docs/VERIFYING.md" })
+      .first()
+      .getAttribute("href");
+    const repo = /^(https:\/\/github\.com\/[^/]+\/[^/]+)\/blob\//.exec(docsHref ?? "")?.[1];
+    expect(repo, `no repository URL readable off the page (href: ${docsHref})`).toBeDefined();
+
+    expect(
+      body,
+      "the cosign identity does not name the repository this page links to"
+    ).toContain(`${repo}/.github/workflows/deploy.yml@refs/heads/main`);
+  });
+
+  test("says the identity has to come from somewhere other than this page", async ({ page }) => {
+    await page.goto(VERIFY_URL);
+    const body = await page.evaluate(() => document.body.innerText);
+
+    // The one limit a reader has to know before acting on anything here, and
+    // the one the rest of the page's honesty does not already cover: the page
+    // is careful never to certify itself, but it still *hands over the
+    // parameter* that decides whether the check means anything. Someone who
+    // follows the instructions to the letter, on a tampered deployment, gets
+    // Verified OK. If this disclosure is ever dropped, the page goes back to
+    // reading like a procedure that works.
+    expect(
+      /identity from somewhere other than this page/i.test(body),
+      "the page no longer tells the reader to source the certificate identity out-of-band"
+    ).toBe(true);
+
+    await expect(
+      page.getByText(/Not the identity in that command/i),
+      "the honest-limits list lost the identity-substitution entry"
+    ).toBeVisible();
+
+    // Naming the non-circular alternative is the actionable half. Without it
+    // the disclosure is a warning with nothing to do about it.
+    expect(
+      body.includes("verify-manifest.mjs"),
+      "the page warns about the identity without naming the check that avoids it"
+    ).toBe(true);
+  });
+
   test("is reachable from the app's footer", async ({ page }) => {
     await page.goto("/");
     const link = page.getByRole("link", { name: /Verify this build/i }).first();
