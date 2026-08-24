@@ -13,6 +13,7 @@
     "test:fuzz": "node scripts/keymaker-test.mjs fuzz",
     "test:fuzz2": "node scripts/keymaker-test.mjs fuzz2",
     "test:fuzz3": "node scripts/keymaker-test.mjs fuzz3",
+    "test:shamir": "node scripts/keymaker-test.mjs shamir",
     "test:browser": "playwright test",
     "test:conformance": "python3 reference/crosstest.py",
     "test:keym2": "python3 reference/keym2.py selftest",

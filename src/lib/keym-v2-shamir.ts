@@ -120,8 +120,11 @@ export function gfMul(a: number, b: number): number {
  *
  * Square-and-multiply over the *public* constant 254, so branching on the
  * exponent's bits is not a secret-dependent branch. `gfInv(0)` is 0 and is never
- * reached — the only inversions here are of `x_i ^ x_m` for distinct indices,
- * and duplicates are rejected before this runs.
+ * reached — the only inversions here are of `x_i ^ x_m` for indices that are
+ * distinct *as field elements*, which is what `shamirCombine` now checks. It
+ * previously compared the caller's numbers, so 257 and 1 passed as distinct,
+ * `x_i ^ x_m` masked to 0, and this was reached after all — returning an
+ * all-zero "secret".
  */
 export function gfInv(a: number): number {
   let result = 1;
@@ -207,8 +210,16 @@ export function shamirSplit(
 export function shamirCombine(parts: ShamirPart[]): Uint8Array {
   if (parts.length === 0) reject();
   const xs = parts.map((p) => p.index);
+  // §4.6: the bounds are on the *field element*. `gfMul` masks its operands to
+  // 0xff, so a guard that compares the caller's numbers is checking a different
+  // domain from the one the arithmetic uses — 256 and 0 are the same point, so
+  // are 257 and 1, and 1.5 truncates to 1. Each of those slipped past the two
+  // checks below and reconstructed a clean 32-byte value that was simply wrong,
+  // which is precisely the outcome §4.6 requires be refused. Unreachable from
+  // `combineShares`, where the index arrives as one byte; reachable here,
+  // because this function is exported.
+  if (xs.some((x) => !Number.isInteger(x) || x < 1 || x > 255)) reject();
   if (new Set(xs).size !== xs.length) reject();
-  if (xs.some((x) => x === 0)) reject();
   const width = (parts[0] as ShamirPart).value.length;
   if (parts.some((p) => p.value.length !== width)) reject();
 

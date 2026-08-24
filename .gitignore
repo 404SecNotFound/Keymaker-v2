@@ -31,6 +31,7 @@ scripts/.fuzz3.build.mjs
 scripts/.generate.build.mjs
 scripts/.keym2-dispatch.build.mjs
 scripts/.calibration.build.mjs
+scripts/.shamir.build.mjs
 *.tsbuildinfo
 
 # playwright

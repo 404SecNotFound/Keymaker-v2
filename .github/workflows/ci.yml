@@ -100,6 +100,14 @@ jobs:
       - name: KEYM v3 slot-table fuzzing
         run: npm run test:fuzz3
 
+      # The Shamir field arithmetic under a hostile caller. Separate from the
+      # parity gate because parity cannot see this class of defect: the index
+      # guard compared the caller's number while the arithmetic reduced modulo
+      # 256, and both implementations produced the same clean wrong answer from
+      # the same invalid index — agreement, with neither side right. Seconds.
+      - name: Shamir core, adversarially
+        run: npm run test:shamir
+
       - name: Production build (static export + CSP hashes)
         run: npm run build
 

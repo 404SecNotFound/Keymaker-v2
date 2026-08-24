@@ -1193,8 +1193,11 @@ def gf_inv(a: int) -> int:
 
     Square-and-multiply over the *public* constant 254, so branching on the
     exponent's bits is not a secret-dependent branch. gf_inv(0) is 0, which is
-    never reached: the only inversions here are of ``x_i ^ x_m`` for distinct
-    indices, and combine_shares rejects duplicates before it gets this far.
+    never reached: the only inversions here are of ``x_i ^ x_m`` for indices
+    that are distinct *as field elements*, which is what shamir_combine now
+    checks. It previously compared the caller's numbers instead, so 257 and 1
+    passed as distinct, ``x_i ^ x_m`` reduced to 0, and this was reached after
+    all — returning an all-zero "secret".
     """
     result = 1
     for bit in (1, 1, 1, 1, 1, 1, 1, 0):   # 254, most significant bit first
@@ -1265,9 +1268,18 @@ def shamir_combine(shares: list[tuple[int, bytes]]) -> bytes:
     if not shares:
         raise _reject()
     xs = [x for x, _ in shares]
-    if len(set(xs)) != len(xs):
+    # §4.6: the bounds are on the *field element*. gf_mul reduces its operands
+    # modulo 256, so a guard that compares whatever the caller handed us is
+    # checking a different domain from the one the arithmetic uses. 256 and 0
+    # are the same point; so are 257 and 1, and a non-integer index reaches
+    # gf_mul's `b >> 1` and raises TypeError rather than rejecting. Every one of
+    # those reconstructs a clean 32-byte value that is simply wrong, which is
+    # the outcome §4.6 requires be refused instead.
+    if any(not isinstance(x, int) or isinstance(x, bool) for x in xs):
         raise _reject()
-    if any(x == 0 for x in xs):
+    if any(x < 1 or x > 255 for x in xs):
+        raise _reject()
+    if len(set(xs)) != len(xs):
         raise _reject()
     width = len(shares[0][1])
     if any(len(v) != width for _, v in shares):
@@ -3501,6 +3513,50 @@ def _selftest() -> int:
             lambda: shamir_split(secret32[:16], 2, 3))
     refuses("the wrong number of explicit coefficients",
             lambda: shamir_split(secret32, 3, 5, coefficients=os.urandom(32)))
+
+    # §4.6: the index bound is on the field element, not on the number the
+    # caller happens to be holding. gf_mul reduces modulo 256, so each of these
+    # is a legal point wearing an illegal number — and each one used to
+    # reconstruct a clean 32-byte value that was simply wrong. The TypeScript
+    # agreed with every one of those wrong values byte for byte, which is why
+    # crosstest2.py could not see it: parity establishes agreement, not
+    # correctness.
+    _p23 = shamir_split(secret32, 2, 3)
+    _v0, _v1 = _p23[0][1], _p23[1][1]
+    for _label, _idx, _other in (
+        ("an index of 0", 0, 1),
+        ("an index of 256, which is the point 0", 256, 1),
+        ("an index of 512, also the point 0", 512, 1),
+        ("a negative index", -1, 1),
+        ("index 257 beside index 1 — one point, two numbers", 257, 1),
+        ("a non-integer index", 1.5, 1),
+        ("a boolean index", True, 2),
+    ):
+        # Not `rejects`: before the guard existed, a non-integer index reached
+        # `x_i ^ x_m` and raised TypeError. rejects() only catches KeymError, so
+        # the traceback escaped and aborted the run — the suite crashed instead
+        # of printing the one line naming the disagreement, which is exactly the
+        # shape CLAUDE.md warns makes a negative control look like it did not
+        # bite. Any exception that is not the documented §6 rejection is
+        # recorded as a failed check rather than allowed to escape.
+        def _rejects_cleanly(name: str, i: object, o: int) -> None:
+            try:
+                shamir_combine([(i, _v0), (o, _v1)])   # type: ignore[list-item]
+            except KeymError:
+                check(f"reject {name}", True)
+            except Exception as exc:                    # noqa: BLE001
+                check(f"reject {name} (raised {type(exc).__name__}, not KeymError)", False)
+            else:
+                check(f"reject {name}", False)
+
+        _rejects_cleanly(f"{_label} in shamir_combine", _idx, _other)
+    # ...while the top of the legal range still reconstructs. n is capped at 16
+    # by the print kit, so the point at x=255 is taken off the polynomial.
+    _coeffs = os.urandom(32)
+    _p2 = shamir_split(secret32, 2, 2, coefficients=_coeffs)
+    _at255 = bytes(secret32[j] ^ gf_mul(_coeffs[j], 255) for j in range(32))
+    check("index 255 is field-legal and still reconstructs",
+          shamir_combine([(255, _at255), (1, _p2[0][1])]) == secret32)
 
     # --- the slot, in a container -------------------------------------------
     for cipher_id, c_name in ((CIPHER_AES, "aes"), (CIPHER_CHACHA, "chacha"),
