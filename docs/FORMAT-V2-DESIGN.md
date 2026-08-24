@@ -1297,8 +1297,14 @@ the writer only; everything else here is normative on read:
 
 - a writer MUST reject `n` outside `k`..16;
 - reject `k` outside 2..16;
-- reject a share index of 0, and reject a supplied share set containing two
-  shares with the same index;
+- reject a share index outside `1..255`, and reject a supplied share set
+  containing two shares with the same index. Both bounds are on the *field
+  element*, not on whatever number type the host language happens to be holding:
+  the interpolation reduces every index modulo 256, so a check that admits a
+  value the arithmetic then reduces to an already-present index — or to 0 — has
+  not enforced the rule it appears to. An implementation MUST reject before
+  interpolating rather than rely on its caller, because reconstruction from an
+  index it never validated returns a clean 32-byte value that is simply wrong;
 - reject a share whose recomputed checksum differs, or whose `share_set_id` does
   not match the one derived from the slot's `slot_salt`;
 - reject a share text whose final base32 character carries non-zero padding bits;
