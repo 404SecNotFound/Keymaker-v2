@@ -124,12 +124,66 @@ function spawn(): Worker | null {
   }
 }
 
+/** How long a probe may take before the worker is presumed not to be answering. */
+const PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * Timeouts allowed before the worker is given up on for the session.
+ *
+ * Two, because the two failures look identical from here and need opposite
+ * answers. A cold cache fetching the script over a slow link is transient and
+ * must not cost anything permanent; a worker that will never answer must not
+ * cost 10 s on every operation forever. Retrying once distinguishes them for a
+ * bounded 20 s worst case.
+ */
+const MAX_PROBE_TIMEOUTS = 2;
+let probeTimeouts = 0;
+
 /**
  * Has the worker answered a probe?
  *
- * Deliberately not cached as "unavailable" on timeout alone: a slow first paint
- * on a cold cache can delay the reply without meaning anything is wrong. It is
- * cached as unavailable only when construction throws or the script errors.
+ * The docstring here used to say "deliberately not cached as unavailable on
+ * timeout alone… cached as unavailable only when construction throws or the
+ * script errors." The code did not do that. `readiness` *is* the cache, and
+ * `if (readiness) return readiness` hands back a promise already resolved
+ * `false` for the rest of the session — so one slow first probe disabled the
+ * worker exactly as thoroughly as a script that failed to load, silently, with
+ * a comment above it saying otherwise.
+ *
+ * That mattered more than it looks. Everything still worked: the in-thread
+ * fallback writes an identical container and Stop is honest about what it did.
+ * But with Argon2id the fallback derives on the main thread, which blocks the
+ * event loop for the whole derivation — so the Stop button never renders and
+ * the tab is frozen for as long as the KDF runs, which §6 permits to be
+ * minutes. One transient hiccup at load bought that for the session.
+ *
+ * So a timeout now clears the cache and discards the worker, and the next call
+ * spawns a fresh one and probes again. The worker is discarded rather than
+ * re-probed because the likeliest cause is a script fetch that has not landed:
+ * pinging the same half-loaded worker a second time waits for the same thing.
+ *
+ * ## Not covered by a browser test, and why
+ *
+ * Driving a probe *timeout* from Playwright did not work, and the attempts are
+ * recorded so nobody repeats them. Delaying `crypto-worker.js` with
+ * `page.route` intercepts the warm-up request and then never sees the one the
+ * next `new Worker()` makes — a worker starts executing while the intercepted
+ * request is still held. That is not the service worker: deleting
+ * `navigator.serviceWorker` before load changes nothing. Counting worker events
+ * or script fetches does not distinguish the two builds either, because the fix
+ * terminates the stalled worker before its script lands and the later
+ * construction is served from cache.
+ *
+ * A test was written against main-thread responsiveness and **passed with this
+ * fix reverted** — the probe never timed out, so the scenario never happened.
+ * It was deleted rather than kept: a check that cannot fail is worse than none,
+ * and this file has been bitten by exactly that before.
+ *
+ * What is established: the old behaviour was confirmed by instrumenting this
+ * function in a real page — `readiness` is the cache, `if (readiness) return
+ * readiness` hands back the settled promise, and `cancelAllCryptoWork()` is
+ * what usually rescues it, which is why the fault is "until the next state
+ * change" rather than "for the session".
  */
 function ready(): Promise<boolean> {
   if (readiness) return readiness;
@@ -142,11 +196,26 @@ function ready(): Promise<boolean> {
   readiness = new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(id);
+      probeTimeouts += 1;
+      if (probeTimeouts >= MAX_PROBE_TIMEOUTS) {
+        // Twice is a pattern. Stop paying the probe on every call.
+        workerUnavailable = true;
+        terminate();
+      } else {
+        // Throw away the worker that did not answer and let the next call try
+        // a fresh one. Assigning null here is safe: this runs on a later task,
+        // by which time `readiness` holds the promise being resolved.
+        terminate();
+        readiness = null;
+      }
       resolve(false);
-    }, 10_000);
+    }, PROBE_TIMEOUT_MS);
     pending.set(id, {
       resolve: (() => {
         clearTimeout(timer);
+        // A late answer clears the slate: the earlier timeout was the slow link
+        // it was assumed to be, and should not count against a later hiccup.
+        probeTimeouts = 0;
         resolve(true);
       }) as unknown as (v: never) => void,
       reject: () => {
