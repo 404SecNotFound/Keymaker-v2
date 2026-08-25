@@ -36,11 +36,15 @@ card: shorter, printable, and assuming the worst.
 Nothing else. In particular you do **not** need this repository's application,
 its dependencies, or any part of the JavaScript.
 
-**There are two scripts because there are two container versions.** Keymaker
-writes **v2** today and wrote **v1** before that. Both stay readable forever;
-neither script reads the other's format, and step 2 tells you which one you
-have. Keep both — an old backup needs the old script, and *old backups are the
-ones most likely to need this page.*
+**There are two scripts because there are two generations of the format.**
+`keym2.py` reads everything Keymaker writes today: **v3**, the current default,
+and **v2** before it. `keym.py` reads **v1**, which came first. All three stay
+readable forever; neither script reads the other's generation, and step 2 tells
+you which one you have. Keep both — an old backup needs the old script, and *old
+backups are the ones most likely to need this page.*
+
+You do not need to work out whether you have v2 or v3. `keym2.py` reads both and
+says which it found; the distinction matters to the format, not to you.
 
 **If you enrolled a passkey, it will not help you here.** A passkey is quick
 access, not a backup. It only answers at the website it was created on, so if
@@ -89,11 +93,16 @@ If your backup is **text**, the first six characters say it outright:
 
 | Starts with | Version | Script |
 |---|---|---|
-| `keym2:` | v2 | `keym2.py` |
+| `keym2:` | v3 or v2 | `keym2.py` |
 | `KEYM1:` | v1 | `keym.py` |
 
-Note the case. They differ by one letter and it is deliberate — see *Why the
-prefixes look almost the same* below.
+**`keym2:` covers both v3 and v2 on purpose.** The prefix names the generation,
+not the revision, so a backup written today and one written before v3 existed
+look identical here — and both open with the same script. If you want to know
+which one you are holding, `keym2.py inspect` says so.
+
+Note the case. `keym2:` and `KEYM1:` differ by one letter and it is deliberate —
+see *Why the prefixes look almost the same* below.
 
 If your backup is a **file**, ask each script in turn. Neither needs a password
 and neither can damage the file:

@@ -7,7 +7,7 @@ import { PaperVault } from "@/components/paper-vault";
 import { SelfExtractExport } from "@/components/self-extract-export";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
-import { looksLikePaperPart, describePaperPart, decodePaperParts } from "@/lib/keym-v2-paper";
+import { looksLikePaperPart, describePaperPart, decodePaperParts, splitPaperParts } from "@/lib/keym-v2-paper";
 import {
   KeyRound,
   Lock,
@@ -1423,7 +1423,7 @@ export function EncryptorTool() {
     // paper vault gives its own user could not be followed in the tool that
     // gave it.
     if (decrypting && looksLikePaperPart(next)) {
-      const lines = next.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const lines = splitPaperParts(next);
       try {
         // Structural, never routed through the AEAD, for the reason the
         // self-extract branch gives above and `decodePaperParts` repeats: a

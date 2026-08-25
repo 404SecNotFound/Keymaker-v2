@@ -64,7 +64,7 @@ import {
   addPasskeySlotKeym2,
   derivePrfSalt,
 } from "../src/lib/keym-v2.ts";
-import { encodePaperParts, decodePaperParts } from "../src/lib/keym-v2-paper.ts";
+import { encodePaperParts, decodePaperParts, splitPaperParts } from "../src/lib/keym-v2-paper.ts";
 import {
   buildSelfExtractingPage,
   embedSelfExtract,
@@ -276,9 +276,10 @@ try {
     writeFileSync(outFile, reasons.join("\n") + (reasons.length ? "\n" : ""), "utf8");
     process.exit(reasons.length ? 3 : 0);
   } else if (cmd === "join") {
-    const lines = readFileSync(inFile, "utf8")
-      .split("\n")
-      .filter((l) => l.trim() && !l.trimStart().startsWith("#"));
+    // splitPaperParts, not a private copy. This filtered `#` comments itself
+    // until now, which meant conformance handed the decoder text no user ever
+    // produces and could not see that the app's own splitter kept them.
+    const lines = splitPaperParts(readFileSync(inFile, "utf8"));
     writeFileSync(outFile, Buffer.from(decodePaperParts(lines)));
   } else if (cmd === "decrypt2") {
     // Deliberately the v2 module directly rather than decryptData(), so a

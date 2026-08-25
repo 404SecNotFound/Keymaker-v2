@@ -167,8 +167,40 @@ export function decodePaperParts(parts: readonly string[]): Uint8Array {
 }
 
 /** §7.1. Whether some pasted text is a paper part, for the wrong-box report. */
+/**
+ * Pasted text split into the lines `decodePaperParts` expects.
+ *
+ * Blank lines and `#` comments are dropped, because `keym2.py split` writes
+ * `# part 1 of 4` above each part and an heir pastes the file it produced, not
+ * a hand-cleaned version of it.
+ *
+ * This lives here because it existed three times and agreed twice. The Python
+ * CLI dropped comments, `bridge.mts`'s `join` dropped comments, and the app —
+ * the only one of the three a person actually uses — did not. The conformance
+ * suite could not see the difference: its own harness filtered the comments out
+ * before handing anything to the decoder, so it was testing text no user ever
+ * produces. One definition, used by all of them, is what stops that recurring.
+ */
+export function splitPaperParts(text: string): string[] {
+  return text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"));
+}
+
+/**
+ * §7.1. Does this paste look like paper parts?
+ *
+ * Answered on the first *part* line rather than the first line, so the CLI's
+ * own output routes here. Before, a leading `# part 1 of 4` made this false and
+ * the paste fell through to the container reader, which reported that the text
+ * was not a container — true, unhelpful, and not what went wrong.
+ *
+ * Total by contract: this is called on whatever was pasted.
+ */
 export function looksLikePaperPart(text: string): boolean {
-  return text.trimStart().startsWith(KEYM2_PART_PREFIX);
+  const first = splitPaperParts(text)[0];
+  return first !== undefined && first.startsWith(KEYM2_PART_PREFIX);
 }
 
 /**

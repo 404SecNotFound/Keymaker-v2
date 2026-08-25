@@ -56,6 +56,7 @@ import {
   describePaperPart,
   encodePaperParts,
   looksLikePaperPart,
+  splitPaperParts,
 } from "../src/lib/keym-v2-paper.ts";
 import { looksLikeSelfExtract } from "../src/lib/keym-v2-selfextract.ts";
 import { CipherId, KdfId } from "../src/lib/keymaker-crypto.ts";
@@ -624,6 +625,31 @@ async function main() {
     await probeText(() => decodePaperParts([text]), `paper-random#${i}`);
     paperProbes += 2;
   }
+  // The one paste shape that actually reaches this code: the file
+  // `keym2.py split` wrote. It leads with `# part 1 of n`, which used to make
+  // looksLikePaperPart false — so the paste fell through to the container
+  // reader and an heir was told their paper backup was not a container. True,
+  // unhelpful, and not what had gone wrong.
+  {
+    const cliStyle = parts.map((p, i) => `# part ${i + 1} of ${parts.length}\n${p}`).join("\n") + "\n";
+    check(
+      looksLikePaperPart(cliStyle),
+      "paper: the CLI's own split output is recognised as paper parts"
+    );
+    const rejoined = decodePaperParts(splitPaperParts(cliStyle));
+    check(
+      Buffer.from(rejoined).equals(Buffer.from(threeSlot)),
+      "paper: and it reassembles to the container it came from"
+    );
+    // The splitter must drop comments without dropping anything else: a part
+    // is never blank and never starts with '#'.
+    check(
+      splitPaperParts(cliStyle).length === parts.length,
+      `paper: splitPaperParts kept ${splitPaperParts(cliStyle).length} lines, expected ${parts.length}`
+    );
+    paperProbes += 3;
+  }
+
   console.log(`  ${paperProbes} paper inputs probed across ${parts.length} real parts`);
 
   // ---- 8. Determinism ----

@@ -315,6 +315,7 @@ def main() -> int:
 
         error_paths(tmp)
 
+    recovery_version_claims()
     walkthrough()
 
     print(f"\n{passed} passed, {failed} failed")
@@ -460,6 +461,65 @@ def error_paths(tmp: Path) -> None:
             mode = stat.S_IMODE(dec.stat().st_mode)
             check(mode == 0o600,
                   f"v{version} writes the plaintext owner-only, not {oct(mode)}")
+
+
+# ----------------------------------------------------------------------------
+# docs/RECOVERY.md — the version it claims must be the version we write
+# ----------------------------------------------------------------------------
+
+RECOVERY = ROOT / "docs" / "RECOVERY.md"
+
+
+def recovery_version_claims() -> None:
+    """
+    Every version this document asserts, checked against what the CLI writes.
+
+    RECOVERY.md said "Keymaker writes **v2** today" in one paragraph and "**v3**
+    — what the app writes today" seventy lines later, for as long as v3 has been
+    the default. Both sentences were hand-written and nothing compared either to
+    the code, so the document contradicted itself in front of the one reader who
+    cannot check: an heir, holding a container, with the app gone.
+
+    Other surfaces were made constant-driven when v3 landed; this one was missed
+    because it is prose rather than a template — which is why it needs a gate
+    rather than a proofread.
+
+    """
+    doc = RECOVERY.read_text(encoding="utf-8")
+    # Paragraph wrapping put "writes **v2**" and "today" on different lines in
+    # the original, so the claim has to be matched against unwrapped text.
+    flat = re.sub(r"\s+", " ", doc)
+
+    sys.path.insert(0, str(ROOT / "reference"))
+    import keym2
+
+    version = keym2.VERSION
+
+    for claimed in re.findall(r"writes \*\*v(\d+)\*\*", flat):
+        check(int(claimed) == version,
+              f"RECOVERY.md's 'writes **v{claimed}**' matches what is written",
+              f"document says v{claimed}, the app writes v{version}")
+
+    check(f"**v{version}**" in doc,
+          f"RECOVERY.md names v{version}, the version being written",
+          "the current version is not mentioned at all")
+
+    # The armor-prefix table must name the current version against keym2:, which
+    # covers v2 and v3 alike. A row listing only the older one tells an heir
+    # their fresh backup is something it is not.
+    row = re.search(r"^\|\s*`keym2:`\s*\|([^|]*)\|", doc, re.MULTILINE)
+    check(row is not None, "RECOVERY.md has a keym2: row in the prefix table")
+    if row is not None:
+        listed = re.findall(r"v(\d+)", row.group(1))
+        check(str(version) in listed,
+              f"the keym2: prefix row lists v{version}",
+              f"row lists {listed or 'no versions'}; the app writes v{version}")
+
+    # Two scripts, three versions. A sentence claiming one script per version is
+    # the shape the original error took.
+    check("two container versions" not in doc,
+          "RECOVERY.md no longer claims there are two container versions",
+          "there are three (v1, v2, v3) and two scripts; keym2.py reads v2 and v3")
 
 
 # ----------------------------------------------------------------------------
