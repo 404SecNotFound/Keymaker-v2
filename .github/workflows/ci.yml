@@ -111,6 +111,14 @@ jobs:
       - name: Production build (static export + CSP hashes)
         run: npm run build
 
+      # The mirroring recipe in docs/VERIFYING.md, executed against the build
+      # just produced. It was `wget -r` and it did not work: a crawler cannot
+      # reach files nothing links to, and 23 of 58 manifest entries are in that
+      # category, so the documented procedure reported a third of an honest
+      # deployment as FAILED. Needs `out/`, so it runs after the build.
+      - name: The documented verification recipe still works
+        run: npm run test:verify-recipe
+
   # Two clean builds of the same commit must produce identical bytes.
   #
   # This is what makes the signed manifest mean something a user can act on.
