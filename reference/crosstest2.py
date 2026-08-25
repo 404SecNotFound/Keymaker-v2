@@ -1042,6 +1042,43 @@ def main() -> int:
 
         check("py reassembles js's parts", keym2.decode_parts(js_parts) == good)
 
+        # What `keym2.py split` actually writes, comments and all.
+        #
+        # The hand-built file below is bare parts, and `bridge.mts`'s join had a
+        # private `#` filter, so between them this suite handed the decoder a
+        # text no heir ever holds. The one artefact that matters — the file the
+        # CLI produced — had never crossed the boundary. It does now, through
+        # the same splitPaperParts the app uses.
+        cli_parts_file = tmp / "cli-parts.txt"
+        subprocess.run(
+            [sys.executable, str(HERE / "keym2.py"), "split",
+             "--in", str(long_src), "--out", str(cli_parts_file),
+             "--capacity", "1734"],
+            check=True,
+        )
+        cli_text = cli_parts_file.read_text()
+        check("the CLI's split output carries # comment lines",
+              "# part 1 of" in cli_text, cli_text[:60])
+        js_from_cli = tmp / "js-from-cli.bin"
+        # Guarded: a divergence here makes the bridge *raise*, and an unguarded
+        # call would abort the suite with a traceback instead of printing the
+        # one line that names the disagreement — which reads exactly like a
+        # negative control that did not fire. It is how this check behaved the
+        # first time its control was run.
+        try:
+            bridge("join", "--in", str(cli_parts_file), "--out", str(js_from_cli))
+            joined = js_from_cli.read_bytes()
+        except BridgeError as exc:
+            joined = None
+            js_join_detail = str(exc)
+        else:
+            js_join_detail = ""
+        check("js reassembles the CLI's own split output, comments and all",
+              joined == good, js_join_detail)
+        check("py reassembles it too, from the same file",
+              keym2.decode_parts([ln for ln in cli_text.splitlines()
+                                  if ln.strip() and not ln.lstrip().startswith("#")]) == good)
+
         py_parts_file = tmp / "py-parts.txt"
         py_parts_file.write_text("\n".join(py_parts) + "\n")
         js_rejoined = tmp / "js-rejoined.bin"
