@@ -39,12 +39,30 @@ Every deployment publishes two extra files at its root:
 Download the site and check it:
 
 ```bash
-# Mirror the deployment (or use a copy you already have)
-wget -r -np -nH --cut-dirs=1 https://404secnotfound.github.io/Keymaker-v2/ -P site
+# Fetch the manifest, then exactly the files it names.
+mkdir -p site && cd site
+BASE=https://404secnotfound.github.io/Keymaker-v2
+curl -fsSL -o SHA256SUMS          "$BASE/SHA256SUMS"
+curl -fsSL -o SHA256SUMS.sigstore "$BASE/SHA256SUMS.sigstore"
+sed 's/^[0-9a-f]\{64\}  //' SHA256SUMS |
+  while IFS= read -r path; do
+    curl -fsSL --create-dirs -o "$path" "$BASE/$path"
+  done
 
-cd site
 sha256sum -c SHA256SUMS
 ```
+
+**Why this fetches a list instead of crawling.** `wget -r` follows links, and a
+deployment contains files nothing links to: `.nojekyll`, the error page, and the
+router payloads the app requests at runtime. Measured on the current build, **23
+of 58 manifest entries are unreachable by link-following** — a mirror made that
+way is missing a third of the artifact, and `sha256sum -c` reports every one as
+a failure. That is a recipe which cries wolf on an honest deployment, and the
+first thing it teaches is to ignore it.
+
+The manifest is the file list. Reading it is also the stronger check: a crawler
+can only find what the site chooses to link, whereas every signed file appears
+here whether the site links it or not.
 
 `sha256sum` is on every Unix machine and has nothing to do with this project,
 which is the point: that step needs no software you have to trust us about.
