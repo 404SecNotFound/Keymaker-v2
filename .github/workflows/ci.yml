@@ -56,6 +56,12 @@ jobs:
       - name: Release notes still track docs/VERIFYING.md
         run: npm run test:release-notes
 
+      # The README's command list against package.json. Six of sixteen test
+      # scripts had drifted out of it — the same shape as RECOVERY.md claiming
+      # v2 while the app wrote v3. Cheap, so it runs early.
+      - name: README documents every test script
+        run: npm run test:readme
+
       - name: KEYM v1 regression suite
         run: npm run test:keymaker
 
