@@ -22,6 +22,7 @@
     "test:wordlist": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-wordlist.mjs",
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:verify-recipe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-recipe-test.mjs",
+    "test:readme": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/readme-scripts-test.mjs",
     "analyze": "ANALYZE=true next build --webpack",
     "build:worker": "node scripts/build-crypto-worker.mjs",
     "verify:reproducible": "node scripts/verify-reproducible.mjs",

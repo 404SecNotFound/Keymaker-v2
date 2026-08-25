@@ -534,7 +534,19 @@ npm run test:conformance2 # ...and the same for v2/v3, byte for byte
 npm run test:keym2        # the Python reference against itself
 npm run test:recovery     # the documented recovery procedure, end to end
 
+npm run test:shamir          # the Shamir core under a hostile caller, not a typo
+npm run test:keym2-dispatch  # version routing: v1 stays v1, v2/v3 go to v2/v3
+npm run test:calibration     # the Argon2id cost the device actually measures
+npm run test:wordlist        # the shipped EFF array against EFF's own checksum
+npm run test:release-notes   # release notes stay generated from docs/VERIFYING.md
+npm run test:verify-recipe   # VERIFYING.md's mirroring recipe, executed (needs build)
 ```
+
+That list is not maintained by hand. `npm run test:readme` fails if
+`package.json` grows a `test:` script this section does not mention — the same
+drift that let RECOVERY.md claim the app wrote v2 for as long as v3 has been the
+default. A list of commands nobody re-checks is a list that quietly stops being
+true.
 
 The browser suite runs against whichever layout it was built for. CI builds and
 serves it the way `deploy.yml` does, under `/Keymaker-v2/`; locally it defaults
