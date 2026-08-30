@@ -54,17 +54,53 @@ test.beforeEach(async ({ page }) => {
   await page.goto("/");
 });
 
-test("encrypt: the pane restates the plan before anything exists", async ({ page }) => {
+test("encrypt: with no input the pane summarises instead of itemising", async ({ page }) => {
   const pane = inspector(page);
+  // The header still names what this writes — that is the one line worth
+  // reading before anything exists, and §"Anticipation" keeps it.
   await expect(pane).toContainText("What will be written");
   await expect(pane).toContainText("KEYM v3");
-  // The declared slot, not a parsed one: Argon2id is the default the form
-  // starts on, and the pane must say so without a container existing.
+  await expect(page.getByTestId("inspector-plan-summary")).toBeVisible();
+  await expect(pane).toContainText("AES-256-GCM");
+  await expect(pane).toContainText("1 way in");
+
+  // The control on the collapse: these are the itemisation, and if any of
+  // them is still painted then the summary is decoration on top of the wall
+  // rather than a replacement for it.
+  await expect(pane).not.toContainText("salts and nonces are drawn fresh at seal time");
+  await expect(pane).not.toContainText("Argon2id");
+  await expect(pane).not.toContainText("ways in · as configured");
+  await expect(slotRows(page)).toHaveCount(0);
+});
+
+test("encrypt: the itemisation is one click away, and still restates the form", async ({ page }) => {
+  const pane = inspector(page);
+  await visible(page.getByRole("button", { name: "Show the header it will write" })).click();
+
+  // Everything the pane used to say unprompted, said on request instead.
   await expect(pane).toContainText("Passphrase");
   await expect(pane).toContainText("Argon2id");
   await expect(pane).toContainText("salts and nonces are drawn fresh at seal time");
-  // Nothing parsed yet, so no parsed slot rows.
+  await expect(page.getByTestId("inspector-plan-summary")).toHaveCount(0);
+  // Still a declared plan, not a parsed container.
   await expect(slotRows(page)).toHaveCount(0);
+});
+
+test("encrypt: real input opens the itemisation without being asked", async ({ page }) => {
+  await useTextMode(page);
+  const pane = inspector(page);
+  await expect(page.getByTestId("inspector-plan-summary")).toBeVisible();
+
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+
+  await expect(page.getByTestId("inspector-plan-summary")).toHaveCount(0);
+  await expect(pane).toContainText("salts and nonces are drawn fresh at seal time");
+  await expect(pane).toContainText(`input · ${SECRET.length.toLocaleString("en-US")} bytes`);
+
+  // And it closes again when the input goes away: the rule is about whether
+  // the thing exists, not a latch that only ever opens once.
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill("");
+  await expect(page.getByTestId("inspector-plan-summary")).toBeVisible();
 });
 
 test("encrypt: after sealing, the pane shows what the bytes say", async ({ page }) => {
