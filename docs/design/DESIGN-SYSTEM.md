@@ -110,7 +110,7 @@ dots may use the same values.
 
 ## Type
 
-- **Satoshi Variable** for everything textual.
+- **Plus Jakarta Sans Variable** for everything textual.
   - Display: weight **300**, sizes 36/44/56px, tracking −0.02em,
     line-height ≤ 1.1. A display headline at ≥600 weight is a defect.
   - UI and body: 400 and 500 only, 13–16px.
@@ -121,6 +121,28 @@ dots may use the same values.
   defect (emphasis uses `ink`).
 - Floors from the browser suite override everything: 12px minimum
   rendered size, WCAG AA contrast, visible focus.
+
+This said **Satoshi Variable** until the licence was read. Satoshi is under the
+ITF Free Font License, whose §02 forbids distributing the font "through
+another font website, font library, marketplace, repository, download service"
+or via "publicly accessible servers", and requires any third party to obtain
+their own copy from Fontshare. This repository is public, so the binary can
+never live in it. Self-hosting on the deployed site is permitted (§01) — but a
+font that may not be in the source while it must be in the deployment breaks
+the promise that the build is reproducible from what you can read, and that
+promise is worth more than a typeface.
+
+So the display face was never actually drawn: the stack fell through to
+whatever system UI face the reader had, which is why the interface read as
+characterless rather than quiet. Plus Jakarta Sans is OFL-1.1, ships on npm as
+`@fontsource-variable/plus-jakarta-sans`, and is therefore vendored,
+precached, and offline like JetBrains Mono. Its 200–800 axis covers the 300
+display weight this system is built on.
+
+Any future replacement is subject to the same test, in this order: the licence
+must permit redistribution in a public repository, then it must self-host from
+the lockfile, then it must carry a light weight. A face that fails the first
+is not a candidate however well it reads.
 
 ## Imagery
 

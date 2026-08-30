@@ -10,6 +10,11 @@
   — the one place that document allows them.
 */
 @font-face {
+  font-family: 'Plus Jakarta Sans Variable';
+  src: url('../node_modules/@fontsource-variable/plus-jakarta-sans/files/plus-jakarta-sans-latin-wght-normal.woff2') format('woff2-variations');
+  font-weight: 200 800;
+}
+@font-face {
   font-family: 'JetBrains Mono Variable';
   src: url('../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
   font-weight: 100 800;
@@ -19,10 +24,12 @@ body {
   width: 1200px; height: 630px; overflow: hidden; position: relative;
   background: #0E0D0B;
   color: #F5F3F1;
-  /* Satoshi once it is vendored; the system UI face until then. The same
-     stack globals.css declares, so the card and the app fall back together
-     rather than drifting apart. */
-  font-family: 'Satoshi Variable', 'Satoshi', ui-sans-serif, system-ui,
+  /* The same stack globals.css declares, so the card and the app cannot drift
+     apart. Loaded from node_modules by the @font-face above rather than left
+     to a fallback, because the card is rendered once and shipped as pixels —
+     a missing face here is baked into the artifact rather than recovered on
+     the next page load. */
+  font-family: 'Plus Jakarta Sans Variable', ui-sans-serif, system-ui,
     -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
 }
 
