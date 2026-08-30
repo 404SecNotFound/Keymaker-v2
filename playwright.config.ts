@@ -1,4 +1,5 @@
-import { defineConfig, devices } from "@playwright/test";
+import { defineConfig, devices, chromium, firefox, webkit } from "@playwright/test";
+import { existsSync } from "node:fs";
 
 /**
  * Browser tests run against the **production static export**, not the dev
@@ -31,6 +32,61 @@ import { defineConfig, devices } from "@playwright/test";
  */
 const BASE_PATH = (process.env.KEYMAKER_BASE_PATH ?? "").replace(/\/$/, "");
 
+/**
+ * Only the engines whose binaries are actually present — locally.
+ *
+ * `npx playwright install` needs a CDN, and an environment without one has
+ * Chromium and nothing else. The suite then reported ~320 failures that were
+ * all `Executable doesn't exist`: three hundred red lines that look exactly
+ * like a regression and say nothing about the code. Dropping the projects that
+ * cannot run turns that into one honest line.
+ *
+ * **Never in CI.** There the browsers are installed by a step that can itself
+ * break, and a config that quietly skips an engine when its binary is missing
+ * would turn that broken step into a green run covering one engine instead of
+ * three — the failure this whole suite exists to prevent, hidden by the thing
+ * meant to make it readable. In CI every project stays, and a missing binary
+ * fails as loudly as it should.
+ *
+ * If nothing survives, that is not a reason to run zero tests and exit 0. A
+ * suite that passes by having no work to do is the worst outcome of the three,
+ * so it throws instead.
+ */
+const ENGINES = [
+  { name: "chromium", launcher: chromium, use: devices["Desktop Chrome"] },
+  { name: "firefox", launcher: firefox, use: devices["Desktop Firefox"] },
+  { name: "webkit", launcher: webkit, use: devices["Desktop Safari"] },
+] as const;
+
+const installed = (launcher: { executablePath(): string }): boolean => {
+  try {
+    return existsSync(launcher.executablePath());
+  } catch {
+    return false;
+  }
+};
+
+const PROJECTS = process.env.CI
+  ? ENGINES.map((e) => ({ name: e.name, use: { ...e.use } }))
+  : (() => {
+      const present = ENGINES.filter((e) => installed(e.launcher));
+      const absent = ENGINES.filter((e) => !installed(e.launcher)).map((e) => e.name);
+      if (present.length === 0) {
+        throw new Error(
+          "No Playwright browser binaries are installed, so this suite would " +
+            "report success without running anything.\n" +
+            "Install at least one with `npx playwright install chromium`."
+        );
+      }
+      if (absent.length > 0) {
+        console.warn(
+          `\nplaywright: skipping ${absent.join(" and ")} — not installed here. ` +
+            `Running ${present.map((e) => e.name).join(", ")} only; CI covers all three.\n`
+        );
+      }
+      return present.map((e) => ({ name: e.name, use: { ...e.use } }));
+    })();
+
 export default defineConfig({
   testDir: "./tests/browser",
   // Crypto is CPU-bound; too many parallel workers just contend for cores and
@@ -59,11 +115,7 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
 
-  projects: [
-    { name: "chromium", use: { ...devices["Desktop Chrome"] } },
-    { name: "firefox", use: { ...devices["Desktop Firefox"] } },
-    { name: "webkit", use: { ...devices["Desktop Safari"] } },
-  ],
+  projects: PROJECTS,
 
   webServer: {
     // A checked-in server from Node's standard library, not `npx --yes serve`.

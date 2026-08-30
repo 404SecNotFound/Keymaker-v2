@@ -1,40 +1,100 @@
 <!doctype html><meta charset="utf-8"><style>
-@font-face{font-family:'Inter Variable';
-  src:url('../node_modules/@fontsource-variable/inter/files/inter-latin-wght-normal.woff2') format('woff2-variations');
-  font-weight:100 900;}
-*{margin:0;box-sizing:border-box}
-body{width:1200px;height:630px;background:#08090a;font-family:'Inter Variable',sans-serif;
-  font-feature-settings:'cv01' on,'ss03' on,'zero' on;overflow:hidden;position:relative;color:#f7f8f8;
-  background-image:radial-gradient(ellipse 60% 55% at 26% -10%, rgba(228,242,34,0.07), transparent 65%);}
-.copy{position:absolute;left:72px;top:0;bottom:0;width:700px;display:flex;flex-direction:column;justify-content:center;}
-.eb{font-family:ui-monospace,'SF Mono',monospace;font-size:15px;letter-spacing:.16em;color:#62666d;
-  text-transform:uppercase;margin-bottom:26px;}
-h1{font-size:62px;line-height:1.04;font-weight:510;letter-spacing:-0.022em;}
-h1 span{color:#62666d;}
-.sub{margin-top:24px;font-size:22px;line-height:1.45;color:#9ca0a8;max-width:32ch;font-weight:400;}
-.foot{position:absolute;left:72px;bottom:48px;display:flex;align-items:center;gap:14px;}
-.brand{font-size:21px;font-weight:590;letter-spacing:-0.011em;}
-.url{font-family:ui-monospace,'SF Mono',monospace;font-size:14px;color:#62666d;margin-left:6px;}
-.art{position:absolute;right:64px;top:50%;transform:translateY(-50%);width:400px;height:400px;}
-.bloom{position:absolute;inset:-60px;background:radial-gradient(circle at 62% 42%, rgba(228,242,34,0.16), transparent 60%);}
-.mark{position:absolute;inset:0;filter:drop-shadow(0 30px 60px rgba(0,0,0,0.8)) drop-shadow(0 0 46px rgba(228,242,34,0.12));}
-.hexline{position:absolute;right:64px;bottom:48px;font-family:ui-monospace,monospace;font-size:13px;
-  letter-spacing:.06em;color:#3a3d33;}
-.hexline b{color:#8b942a;font-weight:500;}
+/*
+  The social card, as source. public/og-card.png is a 1200x630 screenshot of
+  this file, written by `node scripts/make-og-card.mjs`.
+
+  It lives in the repository so the card is regenerable the way every other
+  artifact here is: from source, with the same fonts, the same hero plate and
+  the same palette the app ships. Every colour below is a value from
+  docs/design/DESIGN-SYSTEM.md, and the sparks appear only inside the imagery
+  — the one place that document allows them.
+*/
+@font-face {
+  font-family: 'JetBrains Mono Variable';
+  src: url('../node_modules/@fontsource-variable/jetbrains-mono/files/jetbrains-mono-latin-wght-normal.woff2') format('woff2-variations');
+  font-weight: 100 800;
+}
+* { margin: 0; box-sizing: border-box; }
+body {
+  width: 1200px; height: 630px; overflow: hidden; position: relative;
+  background: #0E0D0B;
+  color: #F5F3F1;
+  /* Satoshi once it is vendored; the system UI face until then. The same
+     stack globals.css declares, so the card and the app fall back together
+     rather than drifting apart. */
+  font-family: 'Satoshi Variable', 'Satoshi', ui-sans-serif, system-ui,
+    -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* The Deep Field plate, mounted the way the hero mounts it: behind
+   everything, low, and dissolved to flat canvas before it reaches any text. */
+.plate {
+  position: absolute; inset: 0;
+  background: url('../public/hero-deep-field.webp') center/cover no-repeat;
+  opacity: 0.55;
+}
+.scrim {
+  position: absolute; inset: 0;
+  background:
+    radial-gradient(ellipse 72% 95% at 28% 50%, #0E0D0B 32%, rgba(14,13,11,0.74) 62%, transparent 88%),
+    linear-gradient(90deg, #0E0D0B 16%, transparent 68%);
+}
+
+.copy {
+  position: absolute; left: 76px; top: 0; bottom: 0; width: 700px;
+  display: flex; flex-direction: column; justify-content: center;
+}
+.eb {
+  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+  font-size: 15px; letter-spacing: 0.16em; text-transform: uppercase;
+  color: #878078; margin-bottom: 26px;
+}
+h1 {
+  /* Weight 300 at −0.02em: the whispered display the system asks for. */
+  font-size: 64px; line-height: 1.04; font-weight: 300; letter-spacing: -0.02em;
+}
+h1 span { color: #878078; }
+.sub {
+  margin-top: 24px; font-size: 21px; line-height: 1.45; color: #A9A29A;
+  max-width: 32ch; font-weight: 400;
+}
+
+.foot {
+  position: absolute; left: 76px; bottom: 48px;
+  display: flex; align-items: center; gap: 14px;
+}
+.mark { width: 30px; height: 30px; display: block; }
+.brand { font-size: 21px; font-weight: 500; letter-spacing: -0.011em; }
+.url {
+  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+  font-size: 14px; color: #878078; margin-left: 6px;
+}
+
+/* The real opening of a v3 container — the same bytes the inspector
+   annotates in the app, in the face the app sets them in. */
+.hex {
+  position: absolute; right: 64px; bottom: 48px;
+  font-family: 'JetBrains Mono Variable', ui-monospace, monospace;
+  font-size: 13px; letter-spacing: 0.06em; color: #878078;
+}
+.hex b { color: #F5F3F1; font-weight: 500; }
 </style><body>
+<div class="plate"></div>
+<div class="scrim"></div>
+
 <div class="copy">
   <div class="eb">Client-side &nbsp;·&nbsp; Offline &nbsp;·&nbsp; Open source</div>
   <h1>Encrypt everything.<br><span>Trust nothing.</span></h1>
   <div class="sub">Runs entirely in your browser. No accounts, no servers, no upload.</div>
 </div>
-<div class="art">
-  <div class="bloom"></div>
+
+<div class="foot">
   <svg class="mark" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
     <defs>
       <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#f2f960"/>
-        <stop offset="45%" stop-color="#e4f222"/>
-        <stop offset="100%" stop-color="#9aa317"/>
+        <stop offset="0%" stop-color="#F5F3F1"/>
+        <stop offset="20%" stop-color="#D8D2CA"/>
+        <stop offset="100%" stop-color="#A9A29A"/>
       </linearGradient>
       <mask id="k">
         <rect width="512" height="512" fill="white"/>
@@ -44,20 +104,9 @@ h1 span{color:#62666d;}
     </defs>
     <rect width="512" height="512" rx="123" fill="url(#g)" mask="url(#k)"/>
   </svg>
+  <div class="brand">Keymaker</div>
+  <div class="url">404secnotfound.github.io/Keymaker-v2</div>
 </div>
-<div class="foot"><div class="brand">Keymaker</div>
-  <div class="url">404secnotfound.github.io/Keymaker-v2</div></div>
-<div class="hexline">4B 45 59 4D <b>03</b> · KEYM v3</div>
+
+<div class="hex"><b>4B 45 59 4D 03</b> · KEYM v3</div>
 </body>
-<!--
-  The social card, as source. public/og-card.png is a 1200x630 screenshot of
-  this file:
-
-      npx playwright screenshot --viewport-size=1200,630 \
-        "file://$PWD/scripts/og-card-template.html" public/og-card.png
-
-  It lives in the repository so the card is regenerable the same way every
-  other artifact here is: from source, with the same Inter files the app
-  ships. The hex line is the real v3 header opening — 4B 45 59 4D 03 — the
-  same bytes the container inspector annotates in the app.
--->

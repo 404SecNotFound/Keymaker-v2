@@ -189,6 +189,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
+const VIEWS = 6;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -213,6 +214,18 @@ try {
     await page.waitForTimeout(400);
     collect(await scan(page, tab.toLowerCase()));
   }
+
+  // Dialogs render into a portal at the end of <body>, so nothing above ever
+  // reaches them: the workbench sweep restyled these surfaces and no run had
+  // looked at one. The recovery kit is the cheapest to open — a footer button,
+  // no crypto — and it carries the whole dialog vocabulary: overlay, panel,
+  // heading, body copy, inline code chips and a bordered download row.
+  await page.getByRole('tab', { name: 'Encrypt' }).locator('visible=true').first().click();
+  await page.getByRole('button', { name: /Recovery kit/ }).locator('visible=true').first().click();
+  await page.getByRole('dialog').waitFor({ state: 'visible', timeout: 15_000 });
+  await page.waitForTimeout(400);
+  collect(await scan(page, 'recovery dialog'));
+  await page.keyboard.press('Escape');
 
   await page.goto(`${BASE}/verify.html`, { waitUntil: 'networkidle' });
   collect(await scan(page, 'verify'));
@@ -263,7 +276,7 @@ for (const s of samples) {
   if (rec.seen.length < 3) rec.seen.push(`${s.label} · ${s.tag}.${s.cls || '(no class)'} · ${s.prop}`);
 }
 
-console.log(`palette-audit: ${samples.length} painted colours across 5 views\n`);
+console.log(`palette-audit: ${samples.length} painted colours across ${VIEWS} views\n`);
 
 if (unreadable.length) {
   console.error(`FAIL — ${unreadable.length} colour(s) the audit could not resolve:`);

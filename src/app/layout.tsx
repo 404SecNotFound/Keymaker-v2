@@ -110,7 +110,7 @@ export default function RootLayout({
         <link rel="icon" type="image/x-icon" href={`${BASE}/favicon.ico`} />
         <link rel="manifest" href={`${BASE}/manifest.json`} />
         <link rel="apple-touch-icon" sizes="1024x1024" href={`${BASE}/apple-touch-icon.png`} />
-        <meta name="theme-color" content="#08090a" />
+        <meta name="theme-color" content="#0E0D0B" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />

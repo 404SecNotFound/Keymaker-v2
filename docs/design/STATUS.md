@@ -93,6 +93,15 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   *rendered* page, not the source, because a wash only becomes a colour after
   the browser composites it.
 
+- Pieces 3 and 4: the dialogs, the verify page, the PWA icons and the social
+  card. The palette gate now opens a dialog too — dialogs render into a portal
+  at the end of `<body>`, so no earlier run had ever looked at one, and the
+  first that did found the modal scrim still on `bg-black/80`.
+- `node scripts/make-icons.mjs` and `node scripts/make-og-card.mjs` regenerate
+  the brand artifacts and verify their own output before shipping it.
+- `playwright.config.ts` drops engines whose binaries are missing — locally
+  only. In CI every project stays, so a broken install step still fails.
+
 ## Loose ends
 
 - **Satoshi is still not vendored.** It heads both text stacks in
@@ -106,14 +115,14 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
 - Grab reference screenshots (images.refero.design and elevenlabs.io) so the
   craft review can compare pixels, not just mechanisms. Still blocked in a
   sealed container; both hosts are refused at the proxy.
-- Pieces 2–4 of the loop: the workbench, the tools, and verify/social. The
-  most concrete piece-2 item is the `bg-white/N` and `border-white/N` washes
-  through `encryptor-tool.tsx` — they predate the token layer and produce
-  desaturated surfaces off-system rather than reading from `inset`/`line`.
-  Piece 4 owns `scripts/og-card-template.html`, which still carries the lime
-  gradient, and the PWA icons.
-- Decide the fate of PR #116: supersede with one Nightpaper PR from this
-  branch, or land #116 first and diff the restyle on top.
+- One flaky browser test, seen once and not reproduced: `calibration.spec.ts`
+  › "reports the estimate as measured rather than typical" failed in a full
+  run and passed alone and in the next two full runs. It measures real device
+  timing, so it is load-sensitive by construction. Not diagnosed, not
+  "fixed" — recorded so the next person who sees it knows it is not new.
+- Open the Nightpaper PR. #116 is merged, so `main` currently ships the Linear
+  identity; this branch supersedes it visually and nothing on the live site
+  changes until it lands.
 
 ## Notes for whoever picks this up
 

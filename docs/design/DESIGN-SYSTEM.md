@@ -77,6 +77,14 @@ chrome, or text. Strip the imagery from any screen and what remains is
 entirely warm monochrome. For data-viz strokes on dark grounds the lifted
 cuts `#5C7FFF` / `#FF7A47` are permitted, in viz only.
 
+## Overlays
+
+A modal scrim is the one surface that must be translucent — it dims whatever
+happens to be behind it, which no opaque token can do. It is `canvas` at
+**80%**, not black: a pure-black scrim is the same cool-neutral drift as a
+white wash, just in the other direction, and against a warm ground it reads
+grey. `rgba(14, 13, 11, 0.8)`.
+
 ## Semantic status (data, not decoration)
 
 Warm-shifted, used as text on their own `/10` washes and required to pass
