@@ -8,8 +8,20 @@ import { cn } from "@/lib/utils"
 // keeps it reading as ink on paper rather than as a floating block. The primary
 // action is the highest-contrast neutral; the only coloured button in the app
 // is a destructive confirmation.
+//
+// Disabled is a named state, not a fraction of the enabled one. This was
+// `disabled:opacity-50`, which on the filled primary composites #F5F3F1 over
+// the near-black canvas into a mid grey pill — indistinguishable from an
+// ordinary button, so the most important control in the app announced itself
+// in the treatment reserved for controls you cannot use. It is also the same
+// defect the palette forbids in `text-body/60` form, one level up: dimming the
+// element instead of choosing a tone, so nobody decides the result.
+//
+// A disabled control now stops being filled: no background, `line` border,
+// `muted` label. Fill, border and text move together, so the difference
+// survives greyscale and a glance. See DESIGN-SYSTEM.md § Disabled.
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full border text-sm font-medium ring-offset-background transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full border text-sm font-medium ring-offset-background transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:cursor-not-allowed disabled:border-border disabled:bg-transparent disabled:text-subtle-foreground [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {
