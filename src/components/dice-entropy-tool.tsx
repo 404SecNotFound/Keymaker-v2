@@ -166,7 +166,7 @@ export function DiceEntropyTool() {
   const verdictUI = {
     below: {
       icon: ShieldAlert,
-      classes: "border-destructive/40 bg-destructive/10 text-destructive",
+      classes: "border-destructive/40 bg-destructive/10 text-red-400",
       title: "Below the 128-bit floor",
       body: `Keep rolling — ${remaining} more ${calc.validSides}-sided ${rollWord} to reach your ${targetBits}-bit target.`,
     },

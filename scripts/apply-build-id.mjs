@@ -69,9 +69,17 @@ if (!sw.includes(ASSETS_PLACEHOLDER)) {
 
 // Every JS/CSS chunk the export emitted, as request paths. Content-hashed and
 // therefore immutable, which is what makes precaching them safe.
+//
+// The two Latin Inter files ride along for the same reason the chunks do:
+// they are content-hashed, and without them the first offline visit renders
+// in the fallback stack — the app works, but looks different offline, which
+// is exactly the kind of quiet inconsistency the precache exists to prevent.
+// Only Latin: the other subsets are fetched on demand for text that uses
+// them, and precaching every script would quadruple the font bytes for
+// glyphs the UI never draws.
 const staticDir = join(OUT_DIR, '_next', 'static');
 const precache = walk(staticDir)
-  .filter((f) => /\.(js|css)$/.test(f))
+  .filter((f) => /\.(js|css)$/.test(f) || /inter-latin(-ext)?-wght-normal[^/]*\.woff2$/.test(f))
   .map((f) => `${BASE}${f.slice(OUT_DIR.length)}`)
   .sort();
 
@@ -81,7 +89,7 @@ if (precache.length === 0) {
 }
 
 const precacheBytes = walk(staticDir)
-  .filter((f) => /\.(js|css)$/.test(f))
+  .filter((f) => /\.(js|css)$/.test(f) || /inter-latin(-ext)?-wght-normal[^/]*\.woff2$/.test(f))
   .reduce((n, f) => n + readFileSync(f).length, 0);
 
 // Hash every emitted file except the worker itself, whose content is about to
