@@ -31,6 +31,52 @@ for (const s of scripts) {
   console.log(`  ${missing.includes(s) ? "FAIL" : "ok  "} README documents ${s}`);
 }
 
+// ---------------------------------------------------------------------------
+// The audit-scope disclaimer stays true
+// ---------------------------------------------------------------------------
+//
+// README tells the reader that SECURITY-AUDIT.md does not cover the format the
+// app writes — v2, v3, the slot table, Shamir, passkey. That is true today: the
+// document's scope line names the v1 container and the app shell, and it
+// mentions none of those subjects.
+//
+// It is exactly the kind of claim that goes quietly false in the good case. The
+// day someone commissions an audit of the format and writes it up, the README
+// will still be telling people it does not exist — under-claiming to the people
+// deciding whether to trust the thing, which is the same failure as
+// over-claiming, pointed the other way.
+//
+// So: if SECURITY-AUDIT.md starts discussing the current format, this fails and
+// asks for the README to be re-read.
+const audit = readFileSync(join(ROOT, "SECURITY-AUDIT.md"), "utf8");
+const formatSubjects = ["KEYM v3", "slot_table_mac", "Shamir", "passkey"];
+const nowCovered = formatSubjects.filter((t) => audit.includes(t));
+const disclaims = readme.includes("not in that scope");
+
+// Bound in both directions. The first version only caught the audit widening,
+// which meant the disclaimer could simply be deleted and nothing would complain
+// — and a deleted disclaimer reads to a visitor as "audited". Its own negative
+// control is what showed that.
+const shouldDisclaim = nowCovered.length === 0;
+const scopeOk = shouldDisclaim === disclaims;
+
+console.log(
+  `  ${scopeOk ? "ok  " : "FAIL"} README's audit-scope disclaimer matches SECURITY-AUDIT.md`
+);
+if (!scopeOk) {
+  console.error(
+    shouldDisclaim
+      ? `\nSECURITY-AUDIT.md still covers only the v1 core — it mentions none of ` +
+          `${formatSubjects.join(", ")} — but README no longer says the format is ` +
+          `"not in that scope".\nSilence there reads as "audited" to someone deciding ` +
+          `whether to trust a seed phrase to this.`
+      : `\nSECURITY-AUDIT.md now discusses ${nowCovered.join(", ")}, but README still ` +
+          `says the format is "not in that scope".\nIf the audit was widened, say so — ` +
+          `the disclaimer is now under-claiming to exactly the people it was written for.`
+  );
+  process.exit(1);
+}
+
 if (missing.length) {
   console.error(
     `\n${missing.length} of ${scripts.length} test scripts are missing from README.md: ` +
