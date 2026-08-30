@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
+import { WORST_CASE_PROBE_MS } from "../../src/lib/worker-probe-policy";
 
 /**
  * Crypto runs off the main thread.
@@ -363,11 +364,26 @@ test("a derivation that will freeze the tab says so before it starts", async ({ 
   await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
   const running = startOperation(page, /^Encrypt Text$/i);
 
+  // Derived, not chosen, and deliberately generous.
+  //
+  // With the setup above the probe does not take the timeout path at all: a
+  // Worker constructor that throws is cached as unavailable immediately, so the
+  // warning is decided in milliseconds. The deadline is expressed in terms of
+  // WORST_CASE_PROBE_MS anyway, because that is the ceiling if this test ever
+  // reverts to a setup where the worker merely fails to answer, and a deadline
+  // equal to that ceiling is a test racing the thing it waits for.
+  //
+  // The record matters here. An earlier fix read this failure as exactly that
+  // race and widened the deadline, which was wrong: the real cause was the
+  // page.route abort not blocking the worker in every engine, so Firefox kept a
+  // healthy worker and correctly declined to warn. Widening a deadline made a
+  // green run more likely without making the premise true. The premise
+  // assertion above is what actually closes it.
   await expect(
     page.getByText(/stop responding until it finishes/i).first(),
     "no warning before a derivation that blocks the event loop — the tab freezes " +
       "with no spinner and no Stop button, and nothing said it would"
-  ).toBeVisible({ timeout: 20_000 });
+  ).toBeVisible({ timeout: WORST_CASE_PROBE_MS + 15_000 });
 
   await running;
 });

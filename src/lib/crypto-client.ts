@@ -30,7 +30,7 @@ import {
   type DetectedFormat,
 } from "./keymaker-crypto";
 import type { CryptoRequest, CryptoResponse } from "./crypto-worker";
-import { ProbePolicy } from "./worker-probe-policy";
+import { ProbePolicy, PROBE_TIMEOUT_MS } from "./worker-probe-policy";
 import { calibrateArgon2, type Calibration } from "./kdf-calibration";
 
 export interface DecryptOutcome {
@@ -139,8 +139,9 @@ function spawn(): Worker | null {
   }
 }
 
-/** How long a probe may take before the worker is presumed not to be answering. */
-const PROBE_TIMEOUT_MS = 10_000;
+// How long a probe may take now lives in `worker-probe-policy.ts` beside the
+// retry count: the two are one policy, and a browser test needs to derive its
+// deadline from both without importing this module's browser globals.
 
 /**
  * The retry decision lives in `worker-probe-policy.ts` so it can be tested in
