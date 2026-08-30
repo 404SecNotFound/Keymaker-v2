@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## Keymaker v2.1.0
+
+Everything below shipped between v1.0.0 and v2.1.0. There is no separate
+v2.0.0 section: that tag was cut mid-stream, while this file still said
+"Unreleased", and splitting the entries after the fact would be a guess about
+which side of a lightweight ref each one fell on. The commit range is the
+authority for that; this is the record of what changed.
 
 ### Added
 - **Diceware passphrase generator.** Seven words drawn uniformly from the EFF
