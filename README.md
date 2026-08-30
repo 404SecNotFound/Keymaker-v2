@@ -388,6 +388,24 @@ None of the three protects a compromised device. That is the next section.
 
 ## Security model
 
+**What has been audited, and what has not.** Everything in this table is a claim
+this project makes about its own code, so the scope of outside review is part of
+reading it. [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) is real and found real
+defects — but its scope line reads: *the KEYM v1 container,
+`src/lib/keymaker-crypto.ts`, the encryptor UI, the dice entropy tool, the CSP
+build pipeline, and CI.*
+
+**The container format this app writes today is not in that scope.** KEYM v2 and
+v3, the authenticated slot table, Shamir share sets, passkey slots, paper parts
+and the self-extracting page all came later. They have been through several
+external review passes, and the findings are fixed, tested and traceable in the
+commit history — but none of them appear in that document, and no audit has been
+scoped to them.
+
+If you are deciding whether to trust a seed phrase to this, weigh that before the
+test counts. A large suite written by the same people who wrote the code is
+evidence about care, not about independence.
+
 | Property | Strength of guarantee |
 |---|---|
 | Data never leaves the device | **Auditable, not structural.** There is no telemetry and no code that transmits anything; the build is reproducible and the manifest signed, so you can confirm that rather than trust it. The CSP raises the cost — `connect-src 'none'` blocks `fetch`, XHR, WebSocket, EventSource and `sendBeacon` — but it does not make transmission impossible: `img-src 'self'` alone lets a URL carry data off the page, and a `<meta>` policy does not reach Web Workers at all. [What the policy does and does not do](docs/HOW-IT-WORKS.md#what-the-csp-does-not-do). |
@@ -696,7 +714,7 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
-| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Current Keymaker v2 audit, findings and disposition |
+| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | External review of the v1 core and the app shell — read its scope line; it predates the v2/v3 format |
 | [`SECURITY-AUDIT-ITTYBITZ-2026-04.md`](SECURITY-AUDIT-ITTYBITZ-2026-04.md) | Historical IttyBitz audit — legacy core only |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
