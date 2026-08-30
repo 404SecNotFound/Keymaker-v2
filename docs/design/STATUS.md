@@ -134,9 +134,51 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   `enableShares` in the same file already did. Did not reproduce in the next
   full run; the byte-level assertion stays, since it is the thing that would
   catch a toggle that is on and does nothing.
-- Merge the Nightpaper PR (#117). #116 is merged, so `main` currently ships the
-  Linear identity; this branch supersedes it visually and nothing on the live
-  site changes until it lands.
+- **Iconography is inconsistent, and it is not the stroke weight.** Measured,
+  not guessed — see "The icon audit" below. Waiting on a screenshot to say
+  which of the five sizes looks wrong before anything is changed.
+
+## The icon audit
+
+Review point 5 was "iconography is inconsistent". The obvious suspect is stroke
+weight, and it is innocent: there is not one `strokeWidth` prop in `src/`, so
+every lucide icon in the app renders at the library default of `2`. There is
+nothing to normalise there.
+
+What is actually inconsistent is **size**, in three separate ways.
+
+**Five sizes, two of them used once.** `h-3` (12px), `h-3.5` (14px), `h-4`
+(16px), `h-4.5` (18px) and `h-5` (20px) are all in use; `h-3` appears once
+(`encryptor-tool.tsx`, the inline Download) and `h-4.5` once
+(`dice-entropy-tool.tsx`). `h-4.5` does compile — Tailwind v4 resolves
+fractional spacing dynamically, confirmed by running the class through
+`@tailwindcss/postcss` — so it is a one-off, not a typo.
+
+**Apparent line weight is a function of that size.** Lucide draws a 2-unit
+stroke on a 24 grid, so the painted stroke is `2 x size/24`: 1.00px at 12,
+1.17px at 14, 1.33px at 16, 1.50px at 18, 1.67px at 20. A 67% spread in line
+weight across one icon family is what reads as "inconsistent" long before glyph
+choice does. Normalising sizes fixes the weights; there is no separate weight
+fix to make.
+
+**Inside a button the authored size is fiction.** The button base carries
+`[&_svg]:size-4`, which compiles to `.[&_svg]:size-4 svg` — a class plus a type
+selector, specificity (0,1,1) — and that outranks `.h-5` at (0,1,0). Measured
+in chromium rather than reasoned about: an icon written `h-5 w-5` inside a
+button computes to 16x16, one written `h-3.5 w-3.5` also computes to 16x16, and
+the same `h-5 w-5` icon outside a button computes to 20x20. So the encrypt
+CTA's `Lock className="mr-2 h-5 w-5"` paints at 16px, and every per-icon size
+class written inside a button is dead code.
+
+**Two names for one icon.** `AlertTriangle` and `TriangleAlert` are the same
+export object — verified by `===`, not by reading the docs. `AlertTriangle` is
+the deprecated alias. `container-inspector.tsx` imports the current name,
+everything else imports the alias. Invisible to a user, but it means a search
+for one usage misses half of them. `Check` and `CheckCircle2` are separately
+both used for the "ok" state.
+
+Nothing here has been changed. The diagnosis does not need the screenshot; the
+decision about which sizes survive does.
 
 ## The browser job, and why it was red
 
