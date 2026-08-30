@@ -1,4 +1,5 @@
 @import 'tailwindcss';
+@import '@fontsource-variable/inter/index.css';
 
 @plugin 'tailwindcss-animate';
 
@@ -6,8 +7,8 @@
 
 @theme {
   --font-body:
-    system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, Roboto,
-    Helvetica Neue, Arial, sans-serif;
+    'Inter Variable', system-ui, -apple-system, BlinkMacSystemFont, Segoe UI,
+    Roboto, Helvetica Neue, Arial, sans-serif;
 
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
@@ -35,8 +36,8 @@
   --color-ring: hsl(var(--ring));
 
   --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 2px);
-  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 6px);
+  --radius-sm: calc(var(--radius) - 8px);
 }
 
 /*
@@ -58,19 +59,15 @@
 }
 
 @utility glass-card {
-  background: hsla(0, 0%, 100%, 0.04);
-  backdrop-filter: blur(40px) saturate(180%);
-  -webkit-backdrop-filter: blur(40px) saturate(180%);
-  border: 1px solid hsla(0, 0%, 100%, 0.08);
-  box-shadow: 0 30px 80px -20px rgba(0, 0, 0, 0.5);
+  background: hsl(var(--muted));
+  border: 1px solid hsl(var(--border));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 40px 80px -40px rgba(0, 0, 0, 0.8);
 }
 
 @utility hero-gradient-text {
-  background: linear-gradient(180deg, #fff 0%, #b8b8be 100%);
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: transparent;
+  color: hsl(var(--foreground));
 }
 
 @layer base {
@@ -83,35 +80,35 @@
     --secondary-foreground: 0 0% 9%;
     --muted: 0 0% 96.1%;
     --muted-foreground: 0 0% 45.1%;
-    --accent: 33 61% 47%;
-    --accent-foreground: 0 0% 9%;
+    --accent: 64 65% 34%;
+    --accent-foreground: 0 0% 98%;
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 98%;
     --success: 142.1 76.2% 36.3%;
     --success-foreground: 0 0% 98%;
     --border: 0 0% 89.8%;
     --input: 0 0% 89.8%;
-    --ring: 0 0% 3.9%;
+    --ring: 220 9% 46%;
     --radius: 0.75rem;
   }
   .dark {
-    --background: 0 0% 0%;
-    --foreground: 240 5% 96%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 0 0% 9%;
-    --secondary: 240 4% 12%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 4% 10%;
-    --muted-foreground: 240 5% 65%;
-    --accent: 33 61% 47%;
-    --accent-foreground: 0 0% 9%;
-    --destructive: 0 72% 51%;
+    --background: 210 11% 4%;
+    --foreground: 180 7% 97%;
+    --primary: 64 89% 54%;
+    --primary-foreground: 66 84% 4%;
+    --secondary: 210 5% 8%;
+    --secondary-foreground: 180 7% 97%;
+    --muted: 210 6% 6%;
+    --muted-foreground: 220 6% 64%;
+    --accent: 64 89% 54%;
+    --accent-foreground: 66 84% 4%;
+    --destructive: 358 75% 59%;
     --destructive-foreground: 0 0% 98%;
-    --success: 156 72% 52%;
-    --success-foreground: 0 0% 9%;
-    --border: 240 6% 14%;
-    --input: 240 6% 14%;
-    --ring: 33 61% 47%;
+    --success: 150 43% 51%;
+    --success-foreground: 210 11% 4%;
+    --border: 223 9% 15%;
+    --input: 223 9% 15%;
+    --ring: 220 9% 70%;
   }
 }
 
@@ -127,15 +124,15 @@
   body {
     @apply bg-background text-foreground;
     letter-spacing: -0.011em;
+    font-feature-settings: 'cv01' on, 'ss03' on, 'zero' on;
     background-color: hsl(var(--background));
     background-image:
-      radial-gradient(ellipse 80% 60% at 50% -10%, rgba(245, 158, 11, 0.12), transparent 60%),
-      radial-gradient(ellipse 60% 50% at 100% 100%, rgba(239, 68, 68, 0.06), transparent 60%);
+      radial-gradient(ellipse 55% 45% at 50% -8%, rgba(228, 242, 34, 0.05), transparent 65%);
     background-attachment: fixed;
     min-height: 100vh;
   }
   h1, h2, h3, h4 {
-    letter-spacing: -0.025em;
+    letter-spacing: -0.022em;
   }
 }
 

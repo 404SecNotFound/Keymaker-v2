@@ -110,7 +110,7 @@ export default function RootLayout({
         <link rel="icon" type="image/x-icon" href={`${BASE}/favicon.ico`} />
         <link rel="manifest" href={`${BASE}/manifest.json`} />
         <link rel="apple-touch-icon" sizes="1024x1024" href={`${BASE}/apple-touch-icon.png`} />
-        <meta name="theme-color" content="#c07f2e" />
+        <meta name="theme-color" content="#08090a" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -135,7 +135,7 @@ export default function RootLayout({
                   banner.id = 'sw-update-banner';
                   banner.type = 'button';
                   banner.setAttribute('role', 'alert');
-                  banner.style.cssText = 'position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:9999;background:#c07f2e;color:#000;padding:0.75rem 1.25rem;border:0;border-radius:0.5rem;font:inherit;font-size:0.875rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+                  banner.style.cssText = 'position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:9999;background:#e4f222;color:#0d0e02;padding:0.75rem 1.25rem;border:0;border-radius:0.5rem;font:inherit;font-size:0.875rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
                   banner.textContent = 'A new version of Keymaker is ready — tap to reload';
                   banner.onclick = function() {
                     // Nothing swaps until this click. Promoting the waiting
