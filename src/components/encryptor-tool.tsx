@@ -389,6 +389,35 @@ function clickDownloadLink(href: string, filename: string) {
   document.body.removeChild(a);
 }
 
+/**
+ * Wait until the browser has actually painted.
+ *
+ * A warning that a derivation is about to freeze the tab is only useful if it
+ * is on screen *before* the freeze. Setting React state does not achieve that:
+ * the update is scheduled, and the paint happens when the browser next gets a
+ * turn — which it never does if the calling code goes straight on into a
+ * synchronous, main-thread KDF. `await` yields a microtask, and a microtask is
+ * not a frame.
+ *
+ * Two frames rather than one: the first is when React commits the update, the
+ * second is after the browser has drawn it. Raced against a short timer so a
+ * page that never animates — a background tab, a headless browser with frames
+ * throttled — cannot hang the operation instead of merely not painting it. The
+ * cost is at most one quarter-second, and only on the path where the
+ * alternative is a tab that stops responding for minutes.
+ */
+function paintedFrame(): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 250);
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        clearTimeout(timer);
+        resolve();
+      })
+    );
+  });
+}
+
 function triggerDownload(blob: Blob, filename: string) {
   const url = URL.createObjectURL(blob);
   clickDownloadLink(url, filename);
@@ -2143,6 +2172,10 @@ export function EncryptorTool() {
                 "there is no Stop button while that happens. Nothing is wrong and nothing " +
                 "is lost; it will come back on its own."
             );
+            // Before, not during. The next few statements end in a synchronous
+            // derivation that owns the event loop, so this is the last moment
+            // the browser can draw anything at all.
+            await paintedFrame();
           }
         }
 
@@ -2310,7 +2343,12 @@ export function EncryptorTool() {
             }
           }
           const combined = [notice, freeze].filter(Boolean).join(" ");
-          if (combined && !isStale()) setUnlockCostNotice(combined);
+          if (combined && !isStale()) {
+            setUnlockCostNotice(combined);
+            // Same reason as the encrypt side: if this one carries the freeze
+            // warning, the unlock below is about to take the event loop.
+            if (freeze) await paintedFrame();
+          }
         }
 
         // §4.7. A passkey unlock reads before it asks. The PRF salt derives

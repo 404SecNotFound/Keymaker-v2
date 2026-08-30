@@ -317,12 +317,47 @@ test("Stop does not claim to have cancelled work it could not stop", async ({ pa
  * recorded in crypto-client.ts.
  */
 test("a derivation that will freeze the tab says so before it starts", async ({ page }) => {
-  await page.route("**/crypto-worker.js", (route) => route.abort());
+  // The no-worker page, produced deterministically rather than by intercepting
+  // the script.
+  //
+  // This used to be `page.route("**/crypto-worker.js").abort()`, and that is
+  // not reliable across engines — `crypto-client.ts` records the same thing
+  // from the other side: the route never sees the request the next
+  // `new Worker()` makes. This is the only test in the file that *needs* the
+  // block to have worked. The two that share the setup pass either way, because
+  // encryption succeeds with a worker too, so nothing else noticed when the
+  // interception quietly did nothing and the page — correctly, having a healthy
+  // worker — declined to warn.
+  //
+  // Making the constructor throw reaches the same state through a door the
+  // client already documents ("a Worker cannot be constructed — an unusual
+  // embedding, a policy that blocks it"): `spawn()` catches, marks the worker
+  // unavailable for the session, and `ready()` resolves false.
+  await page.addInitScript(() => {
+    class BlockedWorker {
+      constructor() {
+        throw new Error("Worker construction blocked by the test");
+      }
+    }
+    Object.defineProperty(window, "Worker", { value: BlockedWorker, configurable: true });
+  });
+
+  // The premise, asserted rather than assumed. With a working worker the page
+  // is *right* not to warn, so the assertion below would be reporting a defect
+  // that is not there. Same mechanism as the first test in this file.
+  const workers: string[] = [];
+  page.on("worker", (w) => workers.push(w.url()));
 
   await page.goto("/");
   await useTextMode(page);
   await maxOutArgon2id(page);
-  await page.waitForTimeout(2_000); // let the readiness probe fail
+  await page.waitForTimeout(2_000); // let the readiness probe settle
+
+  expect(
+    workers.filter((u) => u.endsWith("/crypto-worker.js")),
+    "the crypto worker was supposed to be unavailable — while the page has one, " +
+      "this test says nothing about the freeze warning"
+  ).toHaveLength(0);
 
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill("secret");
   await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
