@@ -298,6 +298,66 @@ test("Stop does not claim to have cancelled work it could not stop", async ({ pa
   await running;
 });
 
+/**
+ * The tab is about to freeze, and the page says so first.
+ *
+ * With no Worker, Argon2id derives in hash-wasm on the main thread: the event
+ * loop is blocked for the whole run, so the spinner does not animate and Stop
+ * never renders. The work completes and the container is identical — the tab is
+ * simply gone for the duration, which §6 permits to be minutes.
+ *
+ * The alternative fix was quietly lowering the cost when no worker is
+ * available. That is the trade this project does not make: the KDF and its
+ * parameters are the user's choice, and writing a weaker backup than the one
+ * they asked for to spare them a wait is worse than the wait.
+ *
+ * Aborting the script *before the first navigation* is what reliably produces a
+ * no-worker page — the same setup as "encryption still works when the worker
+ * script cannot load" above. Delaying it does not, which is a separate story
+ * recorded in crypto-client.ts.
+ */
+test("a derivation that will freeze the tab says so before it starts", async ({ page }) => {
+  await page.route("**/crypto-worker.js", (route) => route.abort());
+
+  await page.goto("/");
+  await useTextMode(page);
+  await maxOutArgon2id(page);
+  await page.waitForTimeout(2_000); // let the readiness probe fail
+
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill("secret");
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  const running = startOperation(page, /^Encrypt Text$/i);
+
+  await expect(
+    page.getByText(/stop responding until it finishes/i).first(),
+    "no warning before a derivation that blocks the event loop — the tab freezes " +
+      "with no spinner and no Stop button, and nothing said it would"
+  ).toBeVisible({ timeout: 20_000 });
+
+  await running;
+});
+
+test("a worker-backed derivation does not warn about a freeze", async ({ page }) => {
+  // The control on the test above. Same settings, worker available: the warning
+  // must not appear, or it is decoration rather than information.
+  await page.goto("/");
+  await useTextMode(page);
+  await maxOutArgon2id(page);
+  await page.waitForTimeout(2_000);
+
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill("secret");
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  const running = startOperation(page, /^Encrypt Text$/i);
+  await confirmInFlight(page);
+
+  await expect(
+    page.getByText(/stop responding until it finishes/i),
+    "warned about a frozen tab while running off-thread, where nothing freezes"
+  ).toHaveCount(0);
+
+  await running;
+});
+
 test("the Stop button is absent when nothing is running", async ({ page }) => {
   // The control on the test above: if Stop were always rendered, finding it
   // mid-derivation would prove nothing about the busy state.

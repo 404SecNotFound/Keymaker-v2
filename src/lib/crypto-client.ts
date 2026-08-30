@@ -30,6 +30,7 @@ import {
   type DetectedFormat,
 } from "./keymaker-crypto";
 import type { CryptoRequest, CryptoResponse } from "./crypto-worker";
+import { ProbePolicy } from "./worker-probe-policy";
 import { calibrateArgon2, type Calibration } from "./kdf-calibration";
 
 export interface DecryptOutcome {
@@ -67,6 +68,20 @@ const pending = new Map<number, Pending>();
 
 /** True when the last operation ran off the main thread. Exposed for tests. */
 export let lastRunUsedWorker = false;
+
+/**
+ * Will the next operation run off the main thread?
+ *
+ * Asked *before* starting, so the page can say what is about to happen rather
+ * than discovering it afterwards. `lastRunUsedWorker` answers the same question
+ * one operation too late to warn anybody.
+ *
+ * This shares `ready()`'s cached verdict, so it costs nothing once the warm-up
+ * probe has settled and cannot disagree with what the operation then does.
+ */
+export function workerWillBeUsed(): Promise<boolean> {
+  return ready();
+}
 
 function spawn(): Worker | null {
   if (workerUnavailable) return null;
@@ -128,16 +143,10 @@ function spawn(): Worker | null {
 const PROBE_TIMEOUT_MS = 10_000;
 
 /**
- * Timeouts allowed before the worker is given up on for the session.
- *
- * Two, because the two failures look identical from here and need opposite
- * answers. A cold cache fetching the script over a slow link is transient and
- * must not cost anything permanent; a worker that will never answer must not
- * cost 10 s on every operation forever. Retrying once distinguishes them for a
- * bounded 20 s worst case.
+ * The retry decision lives in `worker-probe-policy.ts` so it can be tested in
+ * node. See that file for the reasoning, and for what its tests do *not* cover.
  */
-const MAX_PROBE_TIMEOUTS = 2;
-let probeTimeouts = 0;
+const probes = new ProbePolicy();
 
 /**
  * Has the worker answered a probe?
@@ -196,8 +205,7 @@ function ready(): Promise<boolean> {
   readiness = new Promise<boolean>((resolve) => {
     const timer = setTimeout(() => {
       pending.delete(id);
-      probeTimeouts += 1;
-      if (probeTimeouts >= MAX_PROBE_TIMEOUTS) {
+      if (probes.onTimeout() === "give-up") {
         // Twice is a pattern. Stop paying the probe on every call.
         workerUnavailable = true;
         terminate();
@@ -215,7 +223,7 @@ function ready(): Promise<boolean> {
         clearTimeout(timer);
         // A late answer clears the slate: the earlier timeout was the slow link
         // it was assumed to be, and should not count against a later hiccup.
-        probeTimeouts = 0;
+        probes.onAnswer();
         resolve(true);
       }) as unknown as (v: never) => void,
       reject: () => {
