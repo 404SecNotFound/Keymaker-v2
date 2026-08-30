@@ -38,11 +38,15 @@ including the filled primary.
 
 ## Text
 
-| token     | value     | on canvas | use                                              |
-| --------- | --------- | --------- | ------------------------------------------------ |
-| `ink`     | `#F5F3F1` | 17.4:1    | headlines, primary labels — never pure `#FFFFFF` |
-| `body`    | `#A9A29A` | 7.7:1     | body copy, secondary labels                      |
-| `muted`   | `#878078` | 5.0:1     | captions, hints — 12px minimum, nothing smaller  |
+| token     | value     | canvas | card | inset | raised | use                                              |
+| --------- | --------- | ------ | ---- | ----- | ------ | ------------------------------------------------ |
+| `ink`     | `#F5F3F1` | 17.6:1 | 16.5 | 15.7  | 14.1   | headlines, primary labels — never pure `#FFFFFF` |
+| `body`    | `#A9A29A` | 7.7:1  | 7.2  | 6.9   | 6.2    | body copy, secondary labels                      |
+| `muted`   | `#918A83` | 5.7:1  | 5.4  | 5.1   | 4.6    | captions, hints — 12px minimum, nothing smaller  |
+
+Every ground is listed because the floor applies to the **pair**, not to the
+token. A single "on canvas" column is what let `muted` sit under AA on `inset`
+through two separate fixes of the same value.
 
 These three are the whole text scale. Opacity modifiers on top of them
 (`text-body/60` and the like) are not part of it: they were how the old
@@ -50,9 +54,22 @@ palette drifted under the contrast floor without anyone deciding to, so a
 tone that needs to be quieter uses the next token down, not a fraction of the
 one above.
 
-`muted` was `#7E776F` when this file was first written, which measures 4.40:1
-on `canvas` — under the 4.5:1 AA floor. The floor overrides the palette, so
-the value lifted two lightness points rather than the floor bending.
+`muted` has now been lifted twice, and the second time is the instructive one.
+It was `#7E776F` when this file was first written, 4.40:1 on `canvas`, under
+the 4.5:1 AA floor; the floor overrides the palette, so the value rose two
+lightness points to `#878078` rather than the floor bending.
+
+That fix measured `canvas`, because `canvas` was the only column this table
+had. But `muted` is captions and hints, and those live in fields, wells and
+segmented tracks — `inset`. On `inset` the lifted value read **4.45:1**, still
+under the floor it had just been raised to clear, and on `raised`, the hover
+state of those same controls, **4.01:1**. A token does not have a contrast
+ratio. A pair does, and the table now says so in four columns.
+
+`scripts/palette-audit.mjs` checks every pair in that table before it opens a
+browser. What it does not check is which pairs the app actually composes: it
+proves the palette cannot fail, not that no element picked an unlisted ground.
+The membership half of the same gate is what keeps grounds on the list.
 
 ## Actions
 

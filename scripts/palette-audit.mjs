@@ -44,7 +44,7 @@ const ALLOWED = new Set(
     // Surfaces
     '#0e0d0b', '#171512', '#1d1a17', '#262320', '#292521', '#3a342e',
     // Text
-    '#f5f3f1', '#a9a29a', '#878078',
+    '#f5f3f1', '#a9a29a', '#918a83',
     // Primary action and its ink
     '#fdfcfc', '#14120f',
     // Semantic status — data, not decoration
@@ -56,6 +56,76 @@ const ALLOWED = new Set(
 
 /** How far a rendered colour may sit from a named one and still count as it. */
 const TOLERANCE = 10;
+
+/**
+ * The text scale and the grounds it can be drawn on, from the same document.
+ *
+ * Membership was the only thing this gate checked, and membership cannot see
+ * the defect it missed: every colour involved was a named one, and the pair
+ * they formed was still under AA. `muted` was raised once to clear 4.5:1 on
+ * `canvas` and sat at 4.45:1 on `inset` afterwards — the ground its own row
+ * describes it as living on — because the table had a single "on canvas"
+ * column and the fix measured the column.
+ *
+ * A token does not have a contrast ratio; a pair does. Every pair is checked
+ * below, and the check is arithmetic on constants, so it runs before the
+ * browser starts and fails in milliseconds.
+ *
+ * What this does NOT establish: that the app only ever composes these pairs.
+ * It proves the palette cannot fail. The membership sweep further down is what
+ * keeps an element from inventing a ground that is not on the list.
+ */
+const TEXT_TOKENS = { ink: '#f5f3f1', body: '#a9a29a', muted: '#918a83' };
+const GROUND_TOKENS = {
+  canvas: '#0e0d0b',
+  card: '#171512',
+  inset: '#1d1a17',
+  raised: '#262320',
+};
+const AA_FLOOR = 4.5;
+
+const channels = (hex) =>
+  [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+
+const relativeLuminance = (hex) => {
+  const [r, g, b] = channels(hex).map((c) =>
+    c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4)
+  );
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+const contrast = (a, b) => {
+  const [x, y] = [relativeLuminance(a), relativeLuminance(b)];
+  return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
+};
+
+const underFloor = [];
+for (const [textName, text] of Object.entries(TEXT_TOKENS)) {
+  for (const [groundName, ground] of Object.entries(GROUND_TOKENS)) {
+    const ratio = contrast(text, ground);
+    if (ratio < AA_FLOOR) {
+      underFloor.push({ textName, text, groundName, ground, ratio });
+    }
+  }
+}
+
+if (underFloor.length) {
+  console.error(
+    `FAIL — ${underFloor.length} text/ground pair(s) below the ${AA_FLOOR}:1 AA floor:\n`
+  );
+  for (const p of underFloor) {
+    console.error(
+      `  ${p.textName} ${p.text} on ${p.groundName} ${p.ground} — ${p.ratio.toFixed(2)}:1`
+    );
+  }
+  console.error(
+    '\nDESIGN-SYSTEM.md says the floor overrides the palette. Lift the text\n' +
+      'token until it clears on every ground, and update its row: the table\n' +
+      'carries one column per ground precisely so a fix cannot measure one\n' +
+      'and call it done.'
+  );
+  process.exit(1);
+}
 
 const hexOf = (r, g, b) =>
   '#' + [r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('');

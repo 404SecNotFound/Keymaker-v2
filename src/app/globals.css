@@ -161,9 +161,17 @@
     --muted: 30 12% 10%; /* fields, wells, segmented tracks */
     --muted-foreground: 32 8% 63%; /* body        #A9A29A — 7.7:1 on canvas */
     /* #7E776F, the hex the system named for `muted`, lands at 4.40:1 on canvas
-       — under the 4.5:1 AA floor that DESIGN-SYSTEM.md says overrides it. Two
-       lightness points buy 4.99:1; the file records the lifted value. */
-    --subtle-foreground: 32 6% 50%; /* muted       #878078 — 5.0:1 on canvas */
+       — under the 4.5:1 AA floor that DESIGN-SYSTEM.md says overrides it.
+       Lifting to 50% bought 4.98:1 and the file recorded it.
+
+       That fix measured one ground. `muted` is captions and hints, which live
+       in fields, wells and segmented tracks — `inset`, not `canvas` — and on
+       `inset` the lifted value still read 4.45:1, under the same floor it was
+       raised to clear. On `raised`, the hover state of those same controls, it
+       read 4.01:1. The floor applies to the pair, not to the token, so the
+       value is now the lowest lightness that clears 4.5:1 on every ground the
+       system defines: canvas 5.70, card 5.35, inset 5.09, raised 4.59. */
+    --subtle-foreground: 32 6% 54%; /* muted       #918A83 — 5.7:1 on canvas */
 
     /* Hover/open surface, not an accent colour — there is no accent colour. */
     --accent: 30 12% 10%;
