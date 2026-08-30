@@ -31,6 +31,33 @@
 /** Timeouts tolerated before the worker is abandoned for the session. */
 export const MAX_PROBE_TIMEOUTS = 2;
 
+/**
+ * How long one probe may take before the worker is presumed not to be
+ * answering.
+ *
+ * Lives here rather than in `crypto-client.ts` because the duration and the
+ * retry count are one policy, not two, and because this module is pure: a test
+ * can import it without pulling `Worker`, `window` or the crypto bundle into
+ * node. `WORST_CASE_PROBE_MS` below is the number a test actually needs, and
+ * deriving it is the point — a browser test that hard-codes its own deadline
+ * silently becomes a race the moment either constant here changes.
+ */
+export const PROBE_TIMEOUT_MS = 10_000;
+
+/**
+ * The longest `workerWillBeUsed()` can take to answer `false` when the worker
+ * script never loads and never errors: every probe runs its full timeout, and
+ * the last one gives up.
+ *
+ * This bit the freeze-warning browser test. Its assertion window was 20 s and
+ * this value is 20 s, so the deadline *equalled* the worst case and the test
+ * was decided by which side of the boundary the run landed on. Chromium and
+ * WebKit fire an error event on an aborted worker script and resolve in
+ * milliseconds, never reaching the timeout path at all; Firefox takes the
+ * timeout path, which is why one engine of three failed intermittently.
+ */
+export const WORST_CASE_PROBE_MS = PROBE_TIMEOUT_MS * MAX_PROBE_TIMEOUTS;
+
 export type ProbeDecision = "retry" | "give-up";
 
 /**
