@@ -23,7 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { composeNotes, readSources } from './release-notes.mjs';
+import { composeNotes, readSources, writtenFormatVersion } from './release-notes.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -54,11 +54,11 @@ function refuses(name, opts, expectedFragment) {
 
 console.log('Release notes generator\n');
 
-const { doc, version } = readSources();
+const { doc, version, formatVersion } = readSources();
 const TAG = `v${version}`;
 const IDENTITY = `https://github.com/404SecNotFound/Keymaker-v2/.github/workflows/release.yml@refs/tags/${TAG}`;
 
-const notes = composeNotes({ doc, version, tag: TAG, workflowRef: IDENTITY, changelog: 'Something changed.' });
+const notes = composeNotes({ doc, version, formatVersion, tag: TAG, workflowRef: IDENTITY, changelog: 'Something changed.' });
 
 // ---- 1. The cosign command is copied, not retyped ----
 
@@ -198,12 +198,16 @@ check(
 
 // ---- 5. Content the roadmap asks for ----
 
-check('the notes state the container format', notes.includes('KEYM v2'));
+check(
+  'the notes state the container format this build actually writes',
+  notes.includes(`writing **KEYM v${formatVersion}** containers`),
+  `the implementation writes v${formatVersion}; the notes do not say so`
+);
 check('the notes point at the independent implementation', notes.includes('reference/keym2.py'));
 check('an annotated tag’s message becomes "What changed"', notes.includes('## What changed\n\nSomething changed.'));
 check(
   'a tag with no message omits the section rather than emptying it',
-  !composeNotes({ doc, version, tag: TAG, workflowRef: IDENTITY, changelog: '  \n  ' }).includes('## What changed')
+  !composeNotes({ doc, version, formatVersion, tag: TAG, workflowRef: IDENTITY, changelog: '  \n  ' }).includes('## What changed')
 );
 // The artifact is built for /Keymaker-v2/. Someone who unpacks it expecting a
 // portable build gets a blank page and no explanation.
@@ -220,7 +224,7 @@ check(
 );
 refuses(
   'refuses a workflow ref it cannot derive a repository URL from',
-  { doc, version, tag: TAG, workflowRef: 'release.yml@refs/tags/v2.0.0' },
+  { doc, version, formatVersion, tag: TAG, workflowRef: 'release.yml@refs/tags/v2.0.0' },
   'could not derive the repository URL'
 );
 
@@ -233,7 +237,7 @@ refuses(
 
 refuses(
   'refuses when the cosign block is gone from the document',
-  { doc: doc.replace(/```bash\n[^`]*cosign verify-blob[\s\S]*?```/, ''), version, tag: TAG, workflowRef: IDENTITY },
+  { doc: doc.replace(/```bash\n[^`]*cosign verify-blob[\s\S]*?```/, ''), version, formatVersion, tag: TAG, workflowRef: IDENTITY },
   'found 0'
 );
 
@@ -243,7 +247,7 @@ const docWithTwo = doc.replace(
 );
 refuses(
   'refuses when the document grows a second copy',
-  { doc: docWithTwo, version, tag: TAG, workflowRef: IDENTITY },
+  { doc: docWithTwo, version, formatVersion, tag: TAG, workflowRef: IDENTITY },
   'found 2'
 );
 
@@ -260,14 +264,56 @@ refuses(
 
 refuses(
   'refuses a tag that disagrees with package.json',
-  { doc, version, tag: 'v9.9.9', workflowRef: IDENTITY },
+  { doc, version, formatVersion, tag: 'v9.9.9', workflowRef: IDENTITY },
   'does not match package.json'
 );
 
 refuses(
   'refuses when the sha256sum block is gone',
-  { doc: doc.replace(/```bash\n[^`]*sha256sum -c SHA256SUMS[\s\S]*?```/, ''), version, tag: TAG, workflowRef: IDENTITY },
+  { doc: doc.replace(/```bash\n[^`]*sha256sum -c SHA256SUMS[\s\S]*?```/, ''), version, formatVersion, tag: TAG, workflowRef: IDENTITY },
   'sha256sum -c SHA256SUMS'
+);
+
+// ---- 4. The container version is read, not restated ----
+//
+// This is the check the notes did not have. "KEYM v2" was prose in three
+// places; when the writer moved to v3 nothing made them follow, and v2.1.0
+// published notes that opened with "writing KEYM v2 containers" and linked
+// FORMAT-V2-DESIGN.md while the tag message below said v3. The reader most
+// likely to read that section is one holding a file that will not open, and it
+// pointed them at the wrong specification.
+
+check(
+  'and link that version\'s specification, not another one',
+  notes.includes(`docs/FORMAT-V${formatVersion}-DESIGN.md`) &&
+    !/FORMAT-V(?!${formatVersion}\b)\d+-DESIGN/.test(notes.replace(new RegExp(`FORMAT-V${formatVersion}-DESIGN`, 'g'), '')),
+  'the notes link a format document other than the one this build writes'
+);
+
+// The number comes from src/lib/keym-v2.ts. If that declaration moves, the
+// extractor must refuse rather than fall back to a number that used to be true.
+refuses(
+  'refuses to compose without a format version rather than defaulting',
+  { doc, version, tag: TAG, workflowRef: IDENTITY },
+  'needs formatVersion'
+);
+
+check(
+  'reads the written version out of the implementation',
+  writtenFormatVersion('export const KEYM2_VERSION = KEYM2_VERSION_V7;') === 7,
+  'the extractor did not read the declared version'
+);
+
+let extractorRefused = false;
+try {
+  writtenFormatVersion('const KEYM2_VERSION = "not a version";');
+} catch {
+  extractorRefused = true;
+}
+check(
+  'refuses when the declaration it reads is gone',
+  extractorRefused,
+  'it returned a version from a source that does not declare one'
 );
 
 console.log();

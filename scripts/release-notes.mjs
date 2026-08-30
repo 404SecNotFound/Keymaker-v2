@@ -34,7 +34,7 @@
  * The composition is a pure function so the test can feed it a mangled document
  * and check that it refuses, rather than only checking that it works.
  */
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { dirname, join } from 'node:path';
 // Shared with next.config.js, which injects the same commands into the in-app
@@ -57,7 +57,7 @@ export const ROOT = join(HERE, '..');
  * @param {string} opts.workflowRef  the certificate identity that will sign it
  * @param {string} [opts.changelog]  the annotated tag's message, if it has one
  */
-export function composeNotes({ doc, version, tag, workflowRef, changelog = '' }) {
+export function composeNotes({ doc, version, tag, workflowRef, changelog = '', formatVersion }) {
   // Roadmap 6.1 decided the footer and package.json must not carry different
   // application versions. A tag is a third place the number appears, and the
   // one users cite. Catch the disagreement here, where it costs a failed
@@ -110,12 +110,24 @@ export function composeNotes({ doc, version, tag, workflowRef, changelog = '' })
     );
   }
 
+  // No default. A default here is what the literal "v2" was: a value that keeps
+  // composing after it stops being true, in the one document a reader consults
+  // precisely because their file will not open.
+  if (!Number.isInteger(formatVersion)) {
+    throw new Error(
+      'composeNotes needs formatVersion — the container version this build writes. ' +
+        'It comes from readSources(); do not restate it here.'
+    );
+  }
+  const keym = `KEYM v${formatVersion}`;
+  const specPath = `docs/FORMAT-V${formatVersion}-DESIGN.md`;
+
   // Written by whoever cut the tag. Omitted rather than filled with a
   // placeholder when the tag carries no message: an empty "What changed" is a
   // worse answer than no heading, because it reads as "nothing changed".
   const changed = changelog.trim() ? `## What changed\n\n${changelog.trim()}\n\n` : '';
 
-  return `Keymaker **${tag}**, writing **KEYM v2** containers. Those are two
+  return `Keymaker **${tag}**, writing **${keym}** containers. Those are two
 different version numbers and they move independently — see the bottom of these
 notes if a file will not open.
 
@@ -172,25 +184,66 @@ for hosting elsewhere; to host it at another path, build from source, which
 
 ## Container format
 
-This release writes **KEYM v2** containers. The format is specified in
-[docs/FORMAT-V2-DESIGN.md](${link('docs/FORMAT-V2-DESIGN.md')}) and implemented
+This release writes **${keym}** containers. The format is specified in
+[${specPath}](${link(specPath)}) and implemented
 independently in [reference/keym2.py](${link('reference/keym2.py')}), which decrypts your
 files without this application, this website, or a browser. If this project
 disappears, that file and the printed procedure in
 [docs/RECOVERY.md](${link('docs/RECOVERY.md')}) are enough.
 
-**${tag} is the application version. KEYM v2 is the format version.** They are
+**${tag} is the application version. ${keym} is the format version.** They are
 separate numbers on purpose, because they answer different questions: which app
 you are running, and which file you are holding. A file that will not open is
 almost always a question about the second.
 `;
 }
 
-/** Read the two inputs from the working tree. Split out so tests need no I/O. */
+/**
+ * Which container version this build writes, read from the implementation.
+ *
+ * This was the string "KEYM v2", three times, as prose. When the writer moved
+ * to v3 nothing made the notes follow, and v2.1.0 shipped notes whose first
+ * line said the release writes v2 while the tag message two paragraphs below
+ * said v3 — sending a reader whose file will not open to the wrong
+ * specification, from the document that exists to answer exactly that.
+ *
+ * A regex over a source file is blunt, and is the deliberate choice: the
+ * publish job runs with no `npm ci` at all (see release.yml, which says why),
+ * so this script cannot import the module, and a second hand-kept copy of the
+ * number is the thing that just failed. It refuses rather than guessing if the
+ * declaration moves, because a wrong version here is worse than no notes.
+ */
+export function writtenFormatVersion(source) {
+  const match = /^export const KEYM2_VERSION\s*=\s*KEYM2_VERSION_V(\d+)\s*;/m.exec(source);
+  if (!match) {
+    throw new Error(
+      'could not read KEYM2_VERSION from src/lib/keym-v2.ts, so the notes cannot say ' +
+        'which container version this release writes. Update the pattern here rather ' +
+        'than writing the version back into the notes by hand.'
+    );
+  }
+  return Number(match[1]);
+}
+
+/** Read the inputs from the working tree. Split out so tests need no I/O. */
 export function readSources() {
+  const formatVersion = writtenFormatVersion(
+    readFileSync(join(ROOT, 'src', 'lib', 'keym-v2.ts'), 'utf8')
+  );
+  // The notes link this file by name. Deriving the name means a version with no
+  // document would link a 404 from the paragraph telling a reader where their
+  // format is written down, so the file is required to exist.
+  const spec = `docs/FORMAT-V${formatVersion}-DESIGN.md`;
+  if (!existsSync(join(ROOT, spec))) {
+    throw new Error(
+      `this build writes KEYM v${formatVersion}, but ${spec} does not exist — the notes ` +
+        'would link it from the section that tells a reader where the format is specified.'
+    );
+  }
   return {
     doc: readFileSync(join(ROOT, 'docs', 'VERIFYING.md'), 'utf8'),
     version: JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version,
+    formatVersion,
   };
 }
 
