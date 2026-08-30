@@ -3,6 +3,30 @@
 ## Unreleased
 
 ### Added
+- **A container inspector beside the form.** The desktop layout is now a
+  two-pane workbench: the form on the left, and on the right a pane that
+  reads the container's header out loud — the magic bytes, the format
+  generation, and every slot in the table with its KDF and cost. It parses
+  with the same functions the unlock path trusts, live as a container is
+  loaded on the Decrypt side and from a header peek captured at seal time on
+  the Encrypt side; before anything exists it restates the form's plan,
+  labelled as a plan. A v2 container is called out as having an
+  unauthenticated slot table; the browser suite holds the pane's slot count
+  to the container's own slot-count byte, and a corrupted version byte must
+  produce no rows at all.
+
+### Changed
+- **The visual identity moved from amber glass to a hairline near-black
+  system** — `#08090a` ground, `0.5px`-feel borders instead of blur and
+  shadows, radii of 12px/6px, Inter (self-hosted, lockfile-pinned, the Latin
+  faces precached for offline) with tight display tracking, and a single
+  acid-lime accent reserved for the primary action. The KDF and cipher
+  option cards now carry `aria-pressed`, so selection is machine-readable
+  rather than a paint detail; the logo, PWA icons, theme colour and social
+  card follow, and the social card's source template lives in
+  `scripts/og-card-template.html` so it regenerates from the repository like
+  everything else.
+
 - **Diceware passphrase generator.** Seven words drawn uniformly from the EFF
   Long Wordlist with rejection sampling — 90 bits, stated exactly. The wordlist
   is fetched from three independent redistributions that must agree on the full

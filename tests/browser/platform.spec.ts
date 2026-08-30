@@ -109,8 +109,11 @@ test("Argon2id is the default and the UI does not offer a dead option", async ({
     return {
       argonText: argon?.textContent ?? "",
       argonDisabled: argon?.hasAttribute("disabled") ?? false,
-      // The selected option carries the accent border.
-      argonSelected: argon?.className.includes("border-accent") ?? false,
+      // The selected option says so in a machine-readable way — aria-pressed
+      // — rather than via whatever border class the current design paints.
+      // The class sniff broke the day the palette changed, which is exactly
+      // the kind of coupling a selection test should not have.
+      argonSelected: argon?.getAttribute("aria-pressed") === "true",
     };
   });
 

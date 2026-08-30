@@ -4,6 +4,7 @@
 import { useState, useRef, type ChangeEvent, type DragEvent, type RefObject, type ReactNode, useCallback, useEffect, useMemo } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
+import { ContainerInspector, type InspectorPlan } from "@/components/container-inspector";
 import { SelfExtractExport } from "@/components/self-extract-export";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
@@ -525,7 +526,7 @@ const FileSelector = ({
           }
         }}
       >
-        <div className="mb-3 grid h-12 w-12 place-items-center rounded-xl bg-white/5 text-accent">
+        <div className="mb-3 grid h-12 w-12 place-items-center rounded-xl border border-white/8 bg-white/4 text-muted-foreground">
           {icon}
         </div>
         <div className="w-full overflow-hidden">
@@ -539,7 +540,7 @@ const FileSelector = ({
           <h2 className="text-[15px] font-medium text-foreground">{label}</h2>
           <p className={cn(
             "mt-1 w-full overflow-hidden truncate text-[13px]",
-            selectedFile ? "font-medium text-accent" : "text-muted-foreground"
+            selectedFile ? "font-medium text-foreground" : "text-muted-foreground"
           )}>
             {selectedFile ? selectedFile.name : description}
           </p>
@@ -1087,6 +1088,16 @@ export function EncryptorTool() {
   const [shamirCount, setShamirCount] = useState(3);
   const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
   /**
+   * The workbench pane's copy of the opening bytes of the last container this
+   * session wrote — captured before the download hands the only full copy to
+   * the browser, because a file encrypt keeps nothing else around to parse.
+   * Ciphertext header and slot table only, never key material, but it still
+   * describes the user's backup, so it is wiped with everything else.
+   */
+  const [sealedPeek, setSealedPeek] = useState<Uint8Array | null>(null);
+  /** Decrypt-side twin: read live off the loaded input, before any unlock. */
+  const [decryptPeek, setDecryptPeek] = useState<Uint8Array | null>(null);
+  /**
    * Read by the auto-lock interval, which closes over state from the render
    * that armed it. The effect depends on `hasSecretsOnScreen` only, so by the
    * time the interval fires `issuedShares` in its closure may be a tick old —
@@ -1555,6 +1566,7 @@ export function EncryptorTool() {
     setDecryptInfo(null);
     setSlotTableWarning(false);
     setVerifyResult(null);
+    setSealedPeek(null);
 
     // Anything rendering a secret.
     setIsQrModalOpen(false);
@@ -1716,6 +1728,7 @@ export function EncryptorTool() {
       setShowDecryptedText(false);
       setDecryptInfo(null);
       setSlotTableWarning(false);
+      setSealedPeek(null);
       setIsDecryptedQrModalOpen(false);
       setIsDecryptedQrRevealed(false);
       setDecryptedQrStatus({ kind: "idle" });
@@ -2078,6 +2091,7 @@ export function EncryptorTool() {
     setDecryptInfo(null);
     setSlotTableWarning(false);
     setVerifyResult(null);
+    setSealedPeek(null);
     setDecryptedQrStatus({ kind: "idle" });
 
     // Verify-only is a decrypt-side control; it must not silently apply to an
@@ -2130,6 +2144,14 @@ export function EncryptorTool() {
           passkey
         );
         resultBuffer = encrypted.data;
+        // The inspector's copy of what was just written: header and slot
+        // table only, sliced synchronously — the note below forbids an await
+        // in this window, and this needs none.
+        if (!isStale()) {
+          setSealedPeek(
+            new Uint8Array(resultBuffer.slice(0, Math.min(KEYM2_HEADER_PEEK_BYTES, resultBuffer.byteLength)))
+          );
+        }
         if (encrypted.shares && !isStale()) {
           // Straight to the modal. These exist exactly once — nothing can
           // reissue them — so they must not be left to be noticed.
@@ -3082,10 +3104,11 @@ export function EncryptorTool() {
                         <button
                           type="button"
                           onClick={() => setKdfChoice("pbkdf2")}
+                          aria-pressed={kdfChoice === "pbkdf2"}
                           className={cn(
                             "rounded-lg border p-3 text-left transition-colors",
                             kdfChoice === "pbkdf2"
-                              ? "border-accent/60 bg-accent/10"
+                              ? "border-white/20 bg-white/6"
                               : "border-white/10 bg-white/2 hover:border-white/20"
                           )}
                         >
@@ -3098,17 +3121,18 @@ export function EncryptorTool() {
                           type="button"
                           onClick={() => argon2Available !== false && setKdfChoice("argon2id")}
                           disabled={argon2Available === false}
+                          aria-pressed={kdfChoice === "argon2id"}
                           className={cn(
                             "rounded-lg border p-3 text-left transition-colors",
                             kdfChoice === "argon2id"
-                              ? "border-accent/60 bg-accent/10"
+                              ? "border-white/20 bg-white/6"
                               : "border-white/10 bg-white/2 hover:border-white/20",
                             argon2Available === false && "cursor-not-allowed opacity-40 hover:border-white/10"
                           )}
                         >
                           <p className="text-[13px] font-semibold">
                             Argon2id{" "}
-                            <span className="text-accent">
+                            <span className="text-foreground">
                               {argon2Available === false ? "· unavailable" : "· recommended · default"}
                             </span>
                           </p>
@@ -3197,10 +3221,11 @@ export function EncryptorTool() {
                             key={id}
                             type="button"
                             onClick={() => setCipherChoice(id)}
+                            aria-pressed={cipherChoice === id}
                             className={cn(
                               "flex w-full items-start gap-2.5 rounded-lg border p-3 text-left transition-colors",
                               cipherChoice === id
-                                ? "border-accent/60 bg-accent/10"
+                                ? "border-white/20 bg-white/6"
                                 : "border-white/10 bg-white/2 hover:border-white/20"
                             )}
                           >
@@ -3385,7 +3410,7 @@ export function EncryptorTool() {
                     )}
 
                     {/* Security summary */}
-                    <p className="rounded-lg bg-accent/8 px-3 py-2 text-[12px] text-muted-foreground">
+                    <p className="rounded-lg border border-white/8 bg-white/3 px-3 py-2 text-[12px] text-muted-foreground">
                       <span className="font-medium text-foreground">Effective configuration:</span>{" "}
                       {kdfChoice === "argon2id"
                         ? `Argon2id(${argonMemoryMiB} MiB, t=${argonTimeCost}, p=${argonParallelism})`
@@ -3738,7 +3763,7 @@ export function EncryptorTool() {
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}
-        className="mt-2 h-auto w-full rounded-xl bg-linear-to-br from-[#e3a35c] via-[#c07f2e] to-[#8a5a1c] py-3.5 text-[15px] font-semibold text-black shadow-[0_8px_24px_-8px_rgba(192,127,46,0.5)] transition-all hover:-translate-y-px hover:shadow-[0_12px_32px_-8px_rgba(192,127,46,0.65)] disabled:opacity-40 disabled:hover:translate-y-0"
+        className="mt-2 h-auto w-full rounded-md bg-primary py-3.5 text-[15px] font-semibold text-primary-foreground shadow-[0_0_0_1px_rgba(228,242,34,0.35),0_8px_24px_-8px_rgba(228,242,34,0.3)] transition-all hover:-translate-y-px hover:bg-primary/90 hover:shadow-[0_0_0_1px_rgba(228,242,34,0.45),0_12px_32px_-8px_rgba(228,242,34,0.4)] disabled:opacity-40 disabled:hover:translate-y-0"
       >
         {isLoading ? (
           <Loader2 className="mr-2 h-5 w-5 animate-spin" />
@@ -3813,7 +3838,91 @@ export function EncryptorTool() {
   // tabs on one row; at the tabs' full padding that row needs 412px, so every
   // phone narrower than an iPhone 14 Pro Max scrolled the whole page sideways —
   // which is what made the results grid look like it was overlapping.
-  const tabTriggerClasses = "rounded-lg px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground sm:px-4 data-[state=active]:bg-white/10 data-[state=active]:text-foreground data-[state=active]:shadow-xs";
+  /**
+   * Feed the workbench pane on the decrypt side: the same bounded header peek
+   * the unlock-cost notice takes, but read as the input changes rather than
+   * when the button is pressed — the whole point of the pane is that the file
+   * explains itself before anything is spent. File reads stop at the peek
+   * bound; armored pastes decode only a slice sized to cover it, so a
+   * pathological paste costs the same as a healthy one (§ the paste gate
+   * bounds the full decode separately).
+   */
+  useEffect(() => {
+    if (mode !== "decrypt") {
+      setDecryptPeek(null);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        if (inputType === "file" && file) {
+          const head = await file.slice(0, KEYM2_HEADER_PEEK_BYTES).arrayBuffer();
+          if (!cancelled) setDecryptPeek(new Uint8Array(head));
+          return;
+        }
+        if (inputType === "text") {
+          const trimmed = textSecret.trim();
+          if (
+            trimmed.startsWith(KEYM_V2_TEXT_PREFIX) &&
+            trimmed.length <= MAX_BASE64_INPUT_CHARS
+          ) {
+            const { dearmorKeym2 } = await import("@/lib/keym-v2");
+            // 1392 armor characters cover the peek even if every 64-column
+            // line break survived the paste; a slice that cuts mid-quantum
+            // throws, is caught, and reads as "nothing loaded yet".
+            const head = dearmorKeym2(
+              trimmed.slice(0, KEYM_V2_TEXT_PREFIX.length + 1392)
+            );
+            if (!cancelled) setDecryptPeek(head.subarray(0, KEYM2_HEADER_PEEK_BYTES));
+            return;
+          }
+        }
+        if (!cancelled) setDecryptPeek(null);
+      } catch {
+        if (!cancelled) setDecryptPeek(null);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, inputType, file, textSecret]);
+
+  /**
+   * The encrypt side of the pane restates the form, it does not predict the
+   * worker: every string here names the same value processData will hand it.
+   * The PBKDF2 literal is the one the operation uses — if that number moves,
+   * this label is one of the two places it is written.
+   */
+  const inspectorPlan: InspectorPlan | null = useMemo(() => {
+    if (mode !== "encrypt") return null;
+    return {
+      kdfLabel:
+        kdfChoice === "argon2id"
+          ? `Argon2id · ${argonMemoryMiB} MiB · t=${argonTimeCost} · p=${argonParallelism}`
+          : "PBKDF2 · 1,000,000 iterations",
+      cipherLabel:
+        cipherChoice === CipherId.AES_256_GCM
+          ? "AES-256-GCM"
+          : cipherChoice === CipherId.CHACHA20_POLY1305
+            ? "ChaCha20-Poly1305"
+            : "AES-256-GCM + ChaCha20-Poly1305",
+      keyFile: useKeyFile && keyFile !== null,
+      shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
+      passkey: usePasskey,
+      inputBytes:
+        inputType === "file"
+          ? (file?.size ?? null)
+          : textSecret.length > 0
+            ? new TextEncoder().encode(textSecret).length
+            : null,
+    };
+  }, [
+    mode, kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism,
+    cipherChoice, useKeyFile, keyFile, shamirEnabled, shamirThreshold,
+    shamirCount, usePasskey, inputType, file, textSecret,
+  ]);
+
+  const tabTriggerClasses = "rounded-md px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground sm:px-4 data-[state=active]:bg-white/8 data-[state=active]:text-foreground data-[state=active]:shadow-[inset_0_0_0_1px_rgba(255,255,255,0.09)]";
 
   return (
     <Tabs value={mode} onValueChange={handleModeChange} className="flex min-h-screen flex-col">
@@ -3824,9 +3933,9 @@ export function EncryptorTool() {
             <svg viewBox="0 0 512 512" width={28} height={28} aria-label="Keymaker Logo" role="img" xmlns="http://www.w3.org/2000/svg">
               <defs>
                 <linearGradient id="kmHdrGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stopColor="#e3a35c" />
-                  <stop offset="45%" stopColor="#c07f2e" />
-                  <stop offset="100%" stopColor="#8a5a1c" />
+                  <stop offset="0%" stopColor="#f2f960" />
+                  <stop offset="45%" stopColor="#e4f222" />
+                  <stop offset="100%" stopColor="#9aa317" />
                 </linearGradient>
                 <mask id="kmHdrKey">
                   <rect width="512" height="512" fill="white" />
@@ -3868,21 +3977,45 @@ export function EncryptorTool() {
 
       {/* ---- MAIN CONTENT ---- */}
       <div className="w-full flex-1">
-        <div className="mx-auto max-w-[680px] px-4 pb-24 pt-12 sm:px-6 sm:pt-16">
+        <div
+          className={cn(
+            "mx-auto px-4 pb-24 pt-12 sm:px-6 sm:pt-16",
+            mode === "tools" ? "max-w-[680px]" : "max-w-[680px] lg:max-w-[1152px]"
+          )}
+        >
           {/* Hero */}
           <div className="mb-10 text-center sm:mb-14">
-            <h1 className="hero-gradient-text text-[44px] font-bold leading-[1.05] tracking-[-0.04em] sm:text-[56px]">
-              Encrypt everything.<br />Trust nothing.
+            <p className="font-mono text-[12px] uppercase tracking-[0.14em] text-muted-foreground">
+              Client-side · Offline · Open source
+            </p>
+            {/* The second line dims rather than the whole block fading through
+                a gradient: the thesis stays paper-white, the counterweight
+                steps back, and the contrast between them is the design. */}
+            <h1 className="hero-gradient-text mt-4 text-[44px] font-[510] leading-[1.05] tracking-[-0.022em] sm:text-[56px]">
+              Encrypt everything.<br />
+              <span className="text-muted-foreground/60">Trust nothing.</span>
             </h1>
-            <p className="mx-auto mt-4 max-w-md text-[17px] leading-snug text-muted-foreground sm:text-[19px]">
-              Client-side encryption that never leaves your browser.{' '}
+            <p className="mx-auto mt-4 max-w-md text-[16px] leading-snug text-muted-foreground sm:text-[17px]">
+              Runs entirely in your browser — no accounts, no servers, no upload.{' '}
               <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="text-accent hover:underline">
                 Open source
               </a>
-              , forked from IttyBitz. No accounts. No servers.
+              , forked from IttyBitz.
             </p>
           </div>
 
+          {/* The workbench. On a desktop the form and the container pane sit
+              side by side — the Ledger split — and on anything narrower the
+              pane stacks below the form, where it stops being a companion
+              and becomes a receipt. Tools keeps the single column: dice and
+              print kits have no container to inspect. */}
+          <div
+            className={
+              mode === "tools"
+                ? undefined
+                : "lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:items-start lg:gap-6"
+            }
+          >
           {/* Card. 24px of padding either side of a 320px screen leaves 240px
               of usable width; p-5 buys back 16px where it is scarcest. */}
           <section className="glass-card rounded-[20px] p-5 sm:p-8">
@@ -3938,11 +4071,21 @@ export function EncryptorTool() {
             </TabsContent>
           </section>
 
+          {mode !== "tools" && (
+            <ContainerInspector
+              mode={mode}
+              plan={inspectorPlan}
+              peek={mode === "encrypt" ? sealedPeek : decryptPeek}
+              className="mt-6 lg:sticky lg:top-24 lg:mt-0"
+            />
+          )}
+          </div>
+
           {/* Feature cards */}
           <div className="mt-8 grid gap-3 sm:mt-10 sm:grid-cols-3">
             {FEATURE_CARDS.map(({ icon: Icon, title, description }) => (
               <div key={title} className="rounded-2xl border border-white/6 bg-white/2 p-5">
-                <div className="mb-2.5 grid h-8 w-8 place-items-center rounded-lg bg-accent/10 text-accent">
+                <div className="mb-2.5 grid h-8 w-8 place-items-center rounded-md border border-white/8 bg-white/3 text-muted-foreground">
                   <Icon className="h-4 w-4" />
                 </div>
                 <p className="text-[14px] font-semibold">{title}</p>
@@ -4204,7 +4347,7 @@ export function EncryptorTool() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <LifeBuoy className="h-4 w-4 text-accent" />
+              <LifeBuoy className="h-4 w-4 text-muted-foreground" />
               Recovery kit
             </DialogTitle>
             <DialogDescription>

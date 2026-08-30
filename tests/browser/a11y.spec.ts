@@ -200,8 +200,19 @@ test.describe("information that must not be carried by colour alone", () => {
         `"${label}" has no visible focus indicator (${ring.style} ${ring.width}px)`
       ).toBe(true);
       // A deliberate ring colour, not the inherited muted text colour it would
-      // fall back to if outline-accent silently failed to apply.
-      expect(ring.color, `"${label}" ring is not the accent colour`).toBe("rgb(193, 127, 47)");
+      // fall back to if outline-accent silently failed to apply. Resolved from
+      // the live --accent token rather than a hex literal: the literal broke
+      // the day the palette changed, while what this test actually protects —
+      // "the ring is painted on purpose" — did not change at all.
+      const accent = await page.evaluate(() => {
+        const probe = document.createElement("span");
+        probe.style.color = "hsl(var(--accent))";
+        document.body.appendChild(probe);
+        const rgb = getComputedStyle(probe).color;
+        probe.remove();
+        return rgb;
+      });
+      expect(ring.color, `"${label}" ring is not the accent colour`).toBe(accent);
     }
   });
 });
