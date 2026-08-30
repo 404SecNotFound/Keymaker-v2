@@ -120,9 +120,20 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   run and passed alone and in the next two full runs. It measures real device
   timing, so it is load-sensitive by construction. Not diagnosed, not
   "fixed" — recorded so the next person who sees it knows it is not new.
-- Open the Nightpaper PR. #116 is merged, so `main` currently ships the Linear
-  identity; this branch supersedes it visually and nothing on the live site
-  changes until it lands.
+- A second one, seen once and **diagnosed**: `passkey.spec.ts` › "a container
+  enrolled with a passkey opens with the passkey alone" failed as
+  `[0] != [0, 1]` — the sealed container carried a passphrase slot and no
+  passkey slot. That narrows to one cause rather than several: enrolment is
+  skipped when the toggle is off and *throws* when it is on and fails, so a
+  container that sealed successfully with one slot means the switch was never
+  turned on. `prepareEncrypt` clicked it once and assumed. It now polls until
+  `aria-checked` reports `true`, which is what the sibling helper
+  `enableShares` in the same file already did. Did not reproduce in the next
+  full run; the byte-level assertion stays, since it is the thing that would
+  catch a toggle that is on and does nothing.
+- Merge the Nightpaper PR (#117). #116 is merged, so `main` currently ships the
+  Linear identity; this branch supersedes it visually and nothing on the live
+  site changes until it lands.
 
 ## The browser job, and why it was red
 
@@ -142,6 +153,25 @@ Reproduce any of this locally by building the way CI does:
 
     KEYMAKER_BASE_PATH=/Keymaker-v2 npm run build
     KEYMAKER_BASE_PATH=/Keymaker-v2 npx playwright test --project=chromium
+
+## The ci job, and why it was red
+
+The palette gate needs a renderer, and `ci.yml` had never needed one: every
+other step in that job is pure Node, so no Playwright browser was installed and
+`chromium.launch()` failed with "Executable doesn't exist". A one-line install
+step fixes it — chromium only, because the audit asks what colour was painted
+and that answer does not vary by engine.
+
+It cannot simply move to `browser.yml`, which already has all three engines
+installed. That job builds with `KEYMAKER_BASE_PATH` set, so every asset is
+referenced at `/Keymaker-v2/…`, and `palette-audit.mjs` spawns
+`static-server.mjs` with no base path — the stylesheet would 404.
+
+That failure mode was checked rather than assumed: deleting the stylesheet from
+`out/` and re-running the audit **fails** with four offenders, three of which
+are unmistakably the browser's own defaults — `#0000ee` link blue and the
+`#767676` / `#777777` form-control borders. So an audit accidentally pointed at
+unstyled HTML reports a red build rather than a green one.
 
 ## Notes for whoever picks this up
 
