@@ -2,6 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
+import { WORST_CASE_PROBE_MS } from "../../src/lib/worker-probe-policy";
 
 /**
  * Crypto runs off the main thread.
@@ -322,17 +323,33 @@ test("a derivation that will freeze the tab says so before it starts", async ({ 
   await page.goto("/");
   await useTextMode(page);
   await maxOutArgon2id(page);
-  await page.waitForTimeout(2_000); // let the readiness probe fail
+  // Settle the form, nothing more. This does NOT wait for the readiness probe
+  // to fail: on an engine that takes the timeout path that needs
+  // WORST_CASE_PROBE_MS, and reading this line as "the probe has failed by now"
+  // is what produced the assertion deadline below being set to exactly the
+  // worst case.
+  await page.waitForTimeout(2_000);
 
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill("secret");
   await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
   const running = startOperation(page, /^Encrypt Text$/i);
 
+  // Derived, not chosen. This assertion cannot resolve until the readiness
+  // probe gives up, and that takes WORST_CASE_PROBE_MS when the worker script
+  // neither loads nor errors. The deadline used to be a hard-coded 20 s, which
+  // is exactly WORST_CASE_PROBE_MS: the test was racing the thing it was
+  // waiting for, and whichever side of the boundary a run landed on decided it.
+  // Chromium and WebKit never reach the timeout path — an aborted worker script
+  // fires an error event and they resolve in milliseconds — so only Firefox
+  // flaked, which reads like an engine bug and is not one.
+  //
+  // Hard-coding a bigger number would fix today's flake and re-arm the trap the
+  // next time either constant moves, so the deadline comes from the constants.
   await expect(
     page.getByText(/stop responding until it finishes/i).first(),
     "no warning before a derivation that blocks the event loop — the tab freezes " +
       "with no spinner and no Stop button, and nothing said it would"
-  ).toBeVisible({ timeout: 20_000 });
+  ).toBeVisible({ timeout: WORST_CASE_PROBE_MS + 15_000 });
 
   await running;
 });

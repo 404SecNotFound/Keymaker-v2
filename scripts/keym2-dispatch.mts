@@ -14,7 +14,7 @@
  * v1 container down the v2 path, or a truncated one down the legacy path.
  */
 import { webcrypto } from "node:crypto";
-import { MAX_PROBE_TIMEOUTS, ProbePolicy } from "../src/lib/worker-probe-policy.ts";
+import { MAX_PROBE_TIMEOUTS, PROBE_TIMEOUT_MS, WORST_CASE_PROBE_MS, ProbePolicy } from "../src/lib/worker-probe-policy.ts";
 import {
   CipherId,
   KdfId,
@@ -516,11 +516,17 @@ check(
     "a later, unrelated timeout gets its own retry rather than inheriting the old one",
     "without the reset, one hiccup per hour is indistinguishable from a dead worker");
 
-  // MAX_PROBE_TIMEOUTS is the bound the 20 s worst case is derived from, so a
-  // change to it is a change to a number quoted in the commit that added it.
+  // The worst case is no longer a number stated in prose. `WORST_CASE_PROBE_MS`
+  // is exported and the freeze-warning browser test derives its deadline from
+  // it, so these two lines are what keep that test from silently becoming a
+  // race again: it was flaky on Firefox precisely because its deadline was a
+  // hard-coded 20 s, equal to the worst case rather than clear of it.
   check(MAX_PROBE_TIMEOUTS === 2,
-    "the bound is still two, which is what the stated 20 s worst case assumes",
+    "the bound is still two, which is what the worst case assumes",
     `MAX_PROBE_TIMEOUTS is ${MAX_PROBE_TIMEOUTS}`);
+  check(WORST_CASE_PROBE_MS === PROBE_TIMEOUT_MS * MAX_PROBE_TIMEOUTS,
+    "the worst case is the product of the timeout and the bound, not a literal",
+    `WORST_CASE_PROBE_MS is ${WORST_CASE_PROBE_MS}`);
 }
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
