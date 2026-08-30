@@ -32,6 +32,7 @@
 
   --color-card: hsl(var(--card));
   --color-inset: hsl(var(--inset));
+  --color-raised: hsl(var(--raised));
 
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
@@ -116,6 +117,7 @@
     --foreground: 36 14% 7%;
     --card: 30 17% 95%;
     --inset: 30 17% 95%;
+    --raised: 30 15% 91%;
     --primary: 36 14% 7%;
     --primary-foreground: 30 17% 95%;
     --primary-hover: 36 14% 12%;
@@ -143,6 +145,11 @@
     --foreground: 30 17% 95%; /* ink         #F5F3F1 */
     --card: 36 12% 8%; /* card        #171512 */
     --inset: 30 12% 10%; /* inset       #1D1A17 */
+    /* The only surface above `inset`, and only ever a hover or active state:
+       a control already filled with `inset` has nowhere to go otherwise, and
+       lightening it by a fraction of white is the drift this palette exists
+       to prevent. Idle never uses it. */
+    --raised: 30 12% 13%; /* raised      #262320 */
 
     /* The primary action is the highest-contrast neutral, not a colour. */
     --primary: 30 17% 95%; /* #F5F3F1 fill */

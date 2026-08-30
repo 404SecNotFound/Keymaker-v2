@@ -533,6 +533,7 @@ npm run test:conformance  # cross-test vs the independent Python reference
 npm run test:conformance2 # ...and the same for v2/v3, byte for byte
 npm run test:keym2        # the Python reference against itself
 npm run test:recovery     # the documented recovery procedure, end to end
+npm run test:palette      # every painted colour is one the design system names (needs build)
 
 ```
 

@@ -63,7 +63,7 @@ const isCommit = /^[0-9a-f]{40}$/.test(COMMIT);
 
 function Command({ children }: { children: string }) {
   return (
-    <pre className="overflow-x-auto rounded-lg border border-white/10 bg-black/40 p-4 text-[12.5px] leading-relaxed text-foreground">
+    <pre className="overflow-x-auto rounded-lg border border-border bg-background p-4 text-[12.5px] leading-relaxed text-foreground">
       <code>{children}</code>
     </pre>
   );
@@ -104,7 +104,7 @@ export default function VerifyBuild() {
 
       <h2 className="mt-10 text-lg font-medium tracking-tight">What this build claims</h2>
 
-      <dl className="mt-4 divide-y divide-white/6 rounded-xl border border-white/10 bg-white/2">
+      <dl className="mt-4 divide-y divide-border rounded-xl border border-border">
         <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-baseline sm:gap-4">
           <dt className="w-40 shrink-0 text-[13px] text-muted-foreground">Application version</dt>
           <dd className="font-mono text-[13px]" data-testid="verify-app-version">
@@ -207,7 +207,7 @@ export default function VerifyBuild() {
         from anybody and still prints <span className="font-mono">Verified OK</span>.
       </p>
 
-      <p className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/6 p-3 text-[13px] leading-relaxed text-muted-foreground">
+      <p className="mt-3 rounded-lg border border-warning/25 bg-warning/6 p-3 text-[13px] leading-relaxed text-muted-foreground">
         <strong className="text-foreground">Get that identity from somewhere other than this page.</strong>{" "}
         It is the one value the whole check rests on, and it reached you from the origin you are
         checking. Sigstore signing is open to any GitHub repository, so a tampered copy of this page
@@ -291,7 +291,7 @@ export default function VerifyBuild() {
         </li>
       </ul>
 
-      <p className="mt-8 border-t border-white/8 pt-6 text-[13px] leading-relaxed text-muted-foreground">
+      <p className="mt-8 border-t border-border pt-6 text-[13px] leading-relaxed text-muted-foreground">
         Your encrypted files do not depend on any of this. A{" "}
         <span className="font-mono">.keym</span> container is decryptable with{" "}
         <a

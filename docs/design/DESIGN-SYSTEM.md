@@ -15,8 +15,21 @@ greys do not appear anywhere.
 | `canvas`       | `#0E0D0B` | the page                                       |
 | `card`         | `#171512` | panels, the workbench cards                    |
 | `inset`        | `#1D1A17` | fields, wells, segmented tracks                |
+| `raised`       | `#262320` | hover/active on an `inset` surface             |
 | `line`         | `#292521` | hairline borders (1px, everywhere)             |
 | `line-strong`  | `#3A342E` | hover borders, active hairlines                |
+
+`raised` exists because a control already filled with `inset` has nowhere to
+go on hover: the three grounds are absolute, so lightening one by a fraction
+of white is exactly the drift this palette forbids. One more named step is
+the honest fix. It is the only surface above `inset`, and nothing idle uses
+it — a `raised` fill on a resting control means the state is wrong.
+
+Two levels do all the work inside a card. A resting container or an
+unselected option carries **no fill at all** and is drawn by its hairline
+alone; a field, a well, a segmented track, or a selected option carries
+`inset`. That is the reference's "flat or barely elevated" rule stated as a
+choice between two values rather than a gradient of washes.
 
 Elevation is fill difference plus a 1px hairline — **no drop shadows,
 anywhere**. Cards: 20px radius, 32px padding (24px under 480px). Inputs and
@@ -44,8 +57,13 @@ the value lifted two lightness points rather than the floor bending.
 ## Actions
 
 The primary action is the highest-contrast **neutral**: `#F5F3F1` fill,
-`#14120F` text, 1px `rgba(255,255,255,0.18)` border, pill. Hover lifts the
-fill toward `#FDFCFC`. Secondary buttons: transparent or `inset` fill, `line`
+`#14120F` text, pill, and — because every button in this system carries one —
+a 1px border in `#FDFCFC`, the same tone its hover lifts the fill to. That
+border was `rgba(255,255,255,0.18)` when this file was first written, which
+is a translucent white wash: the exact thing the palette forbids everywhere
+else, written into the spec by hand. An opaque named tone keeps the
+silhouette rule without keeping the exception, and on an eggshell fill the
+two read the same. Secondary buttons: transparent or `inset` fill, `line`
 border, `body` text. Focus ring: 2px `#F5F3F1`, offset 2px — the ring is
 never a spark colour. Destructive confirmation buttons may use the semantic
 danger fill; nothing else is a coloured button.

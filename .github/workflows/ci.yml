@@ -119,6 +119,15 @@ jobs:
       - name: The documented verification recipe still works
         run: npm run test:verify-recipe
 
+      # Every painted colour in the built app, held to the palette in
+      # docs/design/DESIGN-SYSTEM.md. Reads the rendered page rather than the
+      # source, because the defect this catches — a wash or an inherited
+      # colour resolving to something off-system — is invisible in a class
+      # name and only exists once the browser has composited it. Needs
+      # `out/`, so it runs after the build alongside the recipe check.
+      - name: Every colour is one the design system names
+        run: npm run test:palette
+
   # Two clean builds of the same commit must produce identical bytes.
   #
   # This is what makes the signed manifest mean something a user can act on.

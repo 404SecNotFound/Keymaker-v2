@@ -84,6 +84,15 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   `scripts/capture-screenshots.mjs`. Seven of them had no generator at all
   and were still showing the pre-Nightpaper identity.
 
+- Piece 2, the workbench — and most of piece 3 with it, since the tools and
+  the dialogs live in the same file and took the same mapping. 122 `white/N`
+  washes and 38 default-palette `yellow`/`amber`/`red`/`zinc` classes became
+  tokens. Two levels do the work inside a card now: no fill plus a hairline
+  for anything resting, `inset` for a field or a selected option.
+- `npm run test:palette` — the gate that keeps it that way. It reads the
+  *rendered* page, not the source, because a wash only becomes a colour after
+  the browser composites it.
+
 ## Loose ends
 
 - **Satoshi is still not vendored.** It heads both text stacks in

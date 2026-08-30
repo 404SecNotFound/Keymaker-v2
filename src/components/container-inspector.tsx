@@ -137,7 +137,7 @@ function parsePeek(peek: Uint8Array): ParsedPeek | "legacy" | null {
 }
 
 const rowClasses =
-  "flex items-baseline gap-2.5 border-t border-white/6 px-4 py-2.5 text-[12.5px]";
+  "flex items-baseline gap-2.5 border-t border-border px-4 py-2.5 text-[12.5px]";
 
 function SlotList({ slots }: { slots: SlotRow[] }) {
   return (
@@ -203,11 +203,11 @@ export function ContainerInspector({
       <header className="flex items-center gap-2.5 px-4 py-3">
         <h2 className="text-[13px] font-medium">{title}</h2>
         {versionShown !== null && (
-          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-white/12 px-2.5 py-0.5 font-mono text-[12px] font-medium tracking-wide text-muted-foreground">
+          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 font-mono text-[12px] font-medium tracking-wide text-muted-foreground">
             <span
               className={cn(
                 "inline-block h-1.5 w-1.5 rounded-full",
-                versionShown === KEYM2_VERSION_V3 ? "bg-success" : "bg-yellow-400"
+                versionShown === KEYM2_VERSION_V3 ? "bg-success" : "bg-warning"
               )}
               aria-hidden="true"
             />
@@ -219,7 +219,7 @@ export function ContainerInspector({
       {/* ── The bytes ─────────────────────────────────────────────── */}
       {parsed && parsed !== "legacy" ? (
         <>
-          <div className="mx-4 overflow-x-auto rounded-md border border-white/8 bg-black/40 px-3 py-2 font-mono text-[12px] leading-relaxed">
+          <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
             <span className="mr-2 text-subtle-foreground">0000</span>
             {parsed.headHex.map((hex, i) => (
               <span
@@ -250,12 +250,12 @@ export function ContainerInspector({
           </p>
           <SlotList slots={parsed.slots} />
 
-          <div className="mt-auto space-y-1.5 border-t border-white/6 px-4 py-3">
+          <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
             <Check>Payload sealed with {parsed.cipherLabel}</Check>
             {parsed.version === KEYM2_VERSION_V3 ? (
               <Check>Slot table authenticated — a removed slot can&apos;t hide</Check>
             ) : (
-              <div className="flex items-center gap-2 text-[12px] text-yellow-400/90">
+              <div className="flex items-center gap-2 text-[12px] text-warning/90">
                 <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span>v2 slot table is not authenticated — v3 added that</span>
               </div>
@@ -279,7 +279,7 @@ export function ContainerInspector({
         </p>
       ) : mode === "encrypt" && plan ? (
         <>
-          <div className="mx-4 overflow-x-auto rounded-md border border-white/8 bg-black/40 px-3 py-2 font-mono text-[12px] leading-relaxed">
+          <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
             <span className="mr-2 text-subtle-foreground">0000</span>
             {["4B", "45", "59", "4D"].map((hex) => (
               <span key={hex} className="mr-1.5 font-medium text-foreground">
@@ -330,7 +330,7 @@ export function ContainerInspector({
             )}
           </div>
 
-          <div className="mt-auto space-y-1.5 border-t border-white/6 px-4 py-3">
+          <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
             <Check>Payload sealed with {plan.cipherLabel}</Check>
             <Check>Slot table authenticated — a removed slot can&apos;t hide</Check>
             <Check>
@@ -356,7 +356,7 @@ export function ContainerInspector({
       {/* Claims here are structural facts about the app, not live telemetry:
           the export has connect-src 'none', so "nothing leaves" is enforced
           by CSP rather than asserted by a status light. */}
-      <footer className="flex items-center gap-3 border-t border-white/6 px-4 py-2.5 font-mono text-[12px] text-subtle-foreground">
+      <footer className="flex items-center gap-3 border-t border-border px-4 py-2.5 font-mono text-[12px] text-subtle-foreground">
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
           runs in this tab
