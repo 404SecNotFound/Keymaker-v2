@@ -478,15 +478,28 @@ test.describe("U15b — the disabled primary is not a faded enabled one", () => 
     await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
     await expect(encrypt).toBeEnabled();
 
+    // Polled, not read once. The button carries `transition-colors`, so the
+    // fill animates in and the instant `disabled` clears the computed value is
+    // still the old one. Reading immediately raced that transition: chromium
+    // and firefox had settled by then, webkit had not, and the test failed
+    // claiming the two states paint the same background — which was true for a
+    // few frames and false by the time anyone could see it.
+    await expect
+      .poll(async () => encrypt.evaluate((el) => getComputedStyle(el).backgroundColor), {
+        timeout: 5_000,
+        message: "enabled and disabled paint the same background, so the state is invisible",
+      })
+      .not.toBe(disabledStyle.background);
+
     const enabledStyle = await encrypt.evaluate((el) => {
       const cs = getComputedStyle(el);
       return { background: cs.backgroundColor, opacity: cs.opacity };
     });
 
     expect(
-      enabledStyle.background,
-      "enabled and disabled paint the same background, so the state is invisible"
-    ).not.toBe(disabledStyle.background);
+      Number(enabledStyle.opacity),
+      "the available action is dimmed, which is the treatment reserved for the unavailable one"
+    ).toBe(1);
 
     // The available action is the filled pill; the unavailable one is not
     // filled at all. Anything else and they differ only by degree.
