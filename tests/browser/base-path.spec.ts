@@ -198,6 +198,18 @@ test("every URL the document declares is under the base path and resolves", asyn
   await page.goto(`${basePath}/`);
 
   const declared = await page.evaluate(() => {
+    // `preconnect` and `dns-prefetch` are deliberately not in this list. Both
+    // consume only the *origin* of their href — the browser opens a
+    // connection and never requests the path — so a root-absolute one cannot
+    // 404 the way a stylesheet or a script would, and flagging it is a false
+    // positive rather than a find.
+    //
+    // This matters because React emits exactly one: `<link rel="preconnect"
+    // href="/">`, injected at runtime once a stylesheet pulls in font files.
+    // It is not in the exported HTML, so it cannot be removed at build time —
+    // it appears during hydration. The three-engine failure it caused was the
+    // test describing a hint as a resource.
+    const HINT_RELS = new Set(["preconnect", "dns-prefetch"]);
     const attrs: Array<[string, string]> = [
       ["link[href]", "href"],
       ["script[src]", "src"],
@@ -210,6 +222,8 @@ test("every URL the document declares is under the base path and resolves", asyn
       for (const el of Array.from(document.querySelectorAll(selector))) {
         const raw = el.getAttribute(attr);
         if (!raw) continue;
+        const rel = (el.getAttribute("rel") ?? "").toLowerCase();
+        if (rel.split(/\s+/).some((r) => HINT_RELS.has(r))) continue;
         // Resolved against document.baseURI, which is what the browser does.
         // A relative URL is correct by construction; the interesting case is a
         // root-absolute one, which silently ignores the subdirectory.

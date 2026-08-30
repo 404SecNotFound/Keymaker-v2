@@ -124,6 +124,25 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   identity; this branch supersedes it visually and nothing on the live site
   changes until it lands.
 
+## The browser job, and why it was red
+
+`browser.yml` builds with `KEYMAKER_BASE_PATH` set; every local run does not.
+That is the only difference, and it is why three engines failed in CI while
+chromium passed here — the failure was in a layout no local run produces.
+
+It was a false positive. `base-path.spec.ts` collected every declared URL and
+required all of them under the base path, which is right for a stylesheet or
+a script and wrong for `rel="preconnect"`: a connection hint consumes only the
+*origin* of its href and never requests the path, so it cannot 404. React
+injects exactly one — `<link rel="preconnect" href="/">`, added during
+hydration once a stylesheet pulls in font files, which is why it arrived with
+the first vendored font and why it cannot be removed from the exported HTML.
+
+Reproduce any of this locally by building the way CI does:
+
+    KEYMAKER_BASE_PATH=/Keymaker-v2 npm run build
+    KEYMAKER_BASE_PATH=/Keymaker-v2 npx playwright test --project=chromium
+
 ## Notes for whoever picks this up
 
 The environment's network allowlist binds when a container is **provisioned**,
