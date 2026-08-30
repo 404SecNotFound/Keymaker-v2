@@ -1,26 +1,49 @@
 @import 'tailwindcss';
-@import '@fontsource-variable/inter/index.css';
+@import '@fontsource-variable/jetbrains-mono/index.css';
 
 @plugin 'tailwindcss-animate';
 
 @custom-variant dark (&:is(.dark *));
 
+/*
+  Satoshi Variable heads both text stacks but is not vendored yet: it is under
+  the ITF Free Font License, and the redistribution clause has to be read
+  before a binary lands in a public repository (docs/design/STATUS.md tracks
+  that). Until it does the stack falls through to the system UI face. No
+  @font-face block here deliberately — one pointing at a file we have not
+  committed is a 404 on every page load. The file plus one @font-face is the
+  whole drop-in.
+*/
 @theme {
+  --font-display:
+    'Satoshi Variable', 'Satoshi', ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif;
+
   --font-body:
-    'Inter Variable', system-ui, -apple-system, BlinkMacSystemFont, Segoe UI,
-    Roboto, Helvetica Neue, Arial, sans-serif;
+    'Satoshi Variable', 'Satoshi', ui-sans-serif, system-ui, -apple-system,
+    BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif;
+
+  --font-mono:
+    'JetBrains Mono Variable', ui-monospace, 'SFMono-Regular', Menlo, Consolas,
+    monospace;
 
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
 
+  --color-card: hsl(var(--card));
+  --color-inset: hsl(var(--inset));
+  --color-raised: hsl(var(--raised));
+
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-primary-hover: hsl(var(--primary-hover));
 
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
 
   --color-muted: hsl(var(--muted));
   --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-subtle-foreground: hsl(var(--subtle-foreground));
 
   --color-accent: hsl(var(--accent));
   --color-accent-foreground: hsl(var(--accent-foreground));
@@ -31,13 +54,19 @@
   --color-success: hsl(var(--success));
   --color-success-foreground: hsl(var(--success-foreground));
 
+  --color-warning: hsl(var(--warning));
+  --color-warning-foreground: hsl(var(--warning-foreground));
+
   --color-border: hsl(var(--border));
+  --color-border-strong: hsl(var(--border-strong));
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
+  /* Cards 20px, inputs and small controls 12px. Buttons are pills and carry
+     their own radius. */
   --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 6px);
-  --radius-sm: calc(var(--radius) - 8px);
+  --radius-md: calc(var(--radius) - 8px);
+  --radius-sm: calc(var(--radius) - 12px);
 }
 
 /*
@@ -54,61 +83,105 @@
   ::before,
   ::backdrop,
   ::file-selector-button {
-    border-color: var(--color-gray-200, currentcolor);
+    /* Tailwind's own gray-200 was the default here: a cool neutral, and the
+       one grey that could still reach a pseudo-element the `border-border`
+       rule below does not cover. Warm line instead. */
+    border-color: hsl(var(--border));
   }
 }
 
-@utility glass-card {
-  background: hsl(var(--muted));
+/*
+  Elevation is the fill difference against the canvas plus a 1px hairline, and
+  nothing else. Was `glass-card`: a blur, a translucent white wash and a
+  40px-blur drop shadow. The name went with them — there is no glass left, and
+  a drop shadow anywhere is a fail against docs/design/DESIGN-SYSTEM.md.
+*/
+@utility panel {
+  background: hsl(var(--card));
   border: 1px solid hsl(var(--border));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.04),
-    0 40px 80px -40px rgba(0, 0, 0, 0.8);
 }
 
-@utility hero-gradient-text {
-  color: hsl(var(--foreground));
-}
-
+/*
+  Nightpaper. Every ground shares one warm hue family (taupe, 30–40°); a cool
+  or neutral grey anywhere is the defect this palette exists to prevent, so
+  each triplet below carries a hue even where the saturation is almost nil.
+  Values are the hex table in docs/design/DESIGN-SYSTEM.md converted to HSL —
+  that file is normative, this one follows it.
+*/
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 240 10% 3.9%;
-    --primary: 0 0% 9%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 0 0% 96.1%;
-    --secondary-foreground: 0 0% 9%;
-    --muted: 0 0% 96.1%;
-    --muted-foreground: 0 0% 45.1%;
-    --accent: 64 65% 34%;
-    --accent-foreground: 0 0% 98%;
-    --destructive: 0 84.2% 60.2%;
-    --destructive-foreground: 0 0% 98%;
-    --success: 142.1 76.2% 36.3%;
-    --success-foreground: 0 0% 98%;
-    --border: 0 0% 89.8%;
-    --input: 0 0% 89.8%;
-    --ring: 220 9% 46%;
-    --radius: 0.75rem;
+    /* Light is the ElevenLabs original: the same notebook on eggshell paper.
+       The app ships `.dark` on <html>, so this branch is a coherent fallback
+       rather than a shipped theme. */
+    --background: 0 20% 99%;
+    --foreground: 36 14% 7%;
+    --card: 30 17% 95%;
+    --inset: 30 17% 95%;
+    --raised: 30 15% 91%;
+    --primary: 36 14% 7%;
+    --primary-foreground: 30 17% 95%;
+    --primary-hover: 36 14% 12%;
+    --secondary: 30 17% 95%;
+    --secondary-foreground: 36 14% 7%;
+    --muted: 30 17% 95%;
+    --muted-foreground: 34 6% 44%;
+    --subtle-foreground: 32 6% 56%;
+    --accent: 30 17% 95%;
+    --accent-foreground: 36 14% 7%;
+    --destructive: 8 74% 45%;
+    --destructive-foreground: 30 17% 95%;
+    --success: 147 39% 32%;
+    --success-foreground: 30 17% 95%;
+    --warning: 39 67% 36%;
+    --warning-foreground: 30 17% 95%;
+    --border: 30 15% 89%;
+    --border-strong: 30 12% 78%;
+    --input: 30 15% 89%;
+    --ring: 36 14% 7%;
+    --radius: 1.25rem;
   }
   .dark {
-    --background: 210 11% 4%;
-    --foreground: 180 7% 97%;
-    --primary: 64 89% 54%;
-    --primary-foreground: 66 84% 4%;
-    --secondary: 210 5% 8%;
-    --secondary-foreground: 180 7% 97%;
-    --muted: 210 6% 6%;
-    --muted-foreground: 220 6% 64%;
-    --accent: 64 89% 54%;
-    --accent-foreground: 66 84% 4%;
-    --destructive: 358 75% 59%;
-    --destructive-foreground: 0 0% 98%;
-    --success: 150 43% 51%;
-    --success-foreground: 210 11% 4%;
-    --border: 223 9% 15%;
-    --input: 223 9% 15%;
-    --ring: 220 9% 70%;
+    --background: 40 12% 5%; /* canvas      #0E0D0B */
+    --foreground: 30 17% 95%; /* ink         #F5F3F1 */
+    --card: 36 12% 8%; /* card        #171512 */
+    --inset: 30 12% 10%; /* inset       #1D1A17 */
+    /* The only surface above `inset`, and only ever a hover or active state:
+       a control already filled with `inset` has nowhere to go otherwise, and
+       lightening it by a fraction of white is the drift this palette exists
+       to prevent. Idle never uses it. */
+    --raised: 30 12% 13%; /* raised      #262320 */
+
+    /* The primary action is the highest-contrast neutral, not a colour. */
+    --primary: 30 17% 95%; /* #F5F3F1 fill */
+    --primary-foreground: 36 14% 7%; /* #14120F text */
+    --primary-hover: 0 20% 99%; /* #FDFCFC — hover lifts the fill */
+
+    --secondary: 30 12% 10%;
+    --secondary-foreground: 30 17% 95%;
+    --muted: 30 12% 10%; /* fields, wells, segmented tracks */
+    --muted-foreground: 32 8% 63%; /* body        #A9A29A — 7.7:1 on canvas */
+    /* #7E776F, the hex the system named for `muted`, lands at 4.40:1 on canvas
+       — under the 4.5:1 AA floor that DESIGN-SYSTEM.md says overrides it. Two
+       lightness points buy 4.99:1; the file records the lifted value. */
+    --subtle-foreground: 32 6% 50%; /* muted       #878078 — 5.0:1 on canvas */
+
+    /* Hover/open surface, not an accent colour — there is no accent colour. */
+    --accent: 30 12% 10%;
+    --accent-foreground: 30 17% 95%;
+
+    /* Semantic status is data, not decoration: warm-shifted, and dark-on-fill
+       so a filled danger button clears AA where white-on-fill would not. */
+    --destructive: 8 74% 60%; /* #E5624E */
+    --destructive-foreground: 36 14% 7%;
+    --success: 147 39% 51%; /* #53B37E */
+    --success-foreground: 36 14% 7%;
+    --warning: 39 67% 55%; /* #D9A23F */
+    --warning-foreground: 36 14% 7%;
+
+    --border: 30 11% 15%; /* line        #292521 */
+    --border-strong: 30 12% 20%; /* line-strong #3A342E */
+    --input: 30 11% 15%;
+    --ring: 30 17% 95%; /* focus is ink, never a spark */
   }
 }
 
@@ -123,15 +196,16 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-body);
     letter-spacing: -0.011em;
-    font-feature-settings: 'cv01' on, 'ss03' on, 'zero' on;
+    /* Flat canvas. The page-wide lime glow that used to sit here is gone with
+       the rest of that identity; atmosphere belongs to the hero plate only,
+       which fades to canvas before any form or text panel. */
     background-color: hsl(var(--background));
-    background-image:
-      radial-gradient(ellipse 55% 45% at 50% -8%, rgba(228, 242, 34, 0.05), transparent 65%);
-    background-attachment: fixed;
     min-height: 100vh;
   }
   h1, h2, h3, h4 {
+    font-family: var(--font-display);
     letter-spacing: -0.022em;
   }
 }

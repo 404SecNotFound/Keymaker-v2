@@ -119,6 +119,33 @@ jobs:
       - name: The documented verification recipe still works
         run: npm run test:verify-recipe
 
+      # Reading the composited page needs a real renderer, which this job
+      # otherwise has no use for — every other step here is pure Node. Chromium
+      # alone: the audit asks what colour was painted, and that answer does not
+      # vary by engine, so the three-engine matrix in browser.yml would buy
+      # nothing here and cost two more downloads.
+      #
+      # It stays here rather than joining the job that already has browsers.
+      # browser.yml builds with KEYMAKER_BASE_PATH set, so every asset is
+      # referenced at /Keymaker-v2/…, while the audit spawns static-server.mjs
+      # with no base path at all — the stylesheet would 404 and the audit would
+      # be grading unstyled HTML. (It fails loudly rather than passing when
+      # that happens: the browser's own defaults paint link blue and grey form
+      # borders, all four of which are off-system. Verified by deleting the
+      # stylesheet from out/ and re-running.) This job is where the
+      # root-relative build already exists.
+      - name: Install the browser the palette audit renders in
+        run: npx playwright install --with-deps chromium
+
+      # Every painted colour in the built app, held to the palette in
+      # docs/design/DESIGN-SYSTEM.md. Reads the rendered page rather than the
+      # source, because the defect this catches — a wash or an inherited
+      # colour resolving to something off-system — is invisible in a class
+      # name and only exists once the browser has composited it. Needs
+      # `out/`, so it runs after the build alongside the recipe check.
+      - name: Every colour is one the design system names
+        run: npm run test:palette
+
   # Two clean builds of the same commit must produce identical bytes.
   #
   # This is what makes the signed manifest mean something a user can act on.

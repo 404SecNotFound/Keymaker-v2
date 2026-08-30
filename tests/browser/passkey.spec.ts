@@ -66,7 +66,21 @@ async function prepareEncrypt(page: Page, withPasskey: boolean) {
       toggle,
       "the passkey control is missing — probePasskeySupport found no WebAuthn, so nothing below is being tested"
     ).toBeVisible();
-    await toggle.click();
+    // Clicked until it reports itself on, rather than once and assumed.
+    //
+    // A click that lands before the control is wired leaves the switch off,
+    // and nothing here notices: the seal succeeds, because enrolment is
+    // skipped rather than attempted, and the container comes back carrying a
+    // passphrase slot and nothing else. That surfaced once in a full parallel
+    // run as `[0] != [0, 1]` sixty lines below — a slot-type mismatch, which
+    // reads like a format defect and is a lost click. `enableShares` already
+    // carries this poll for the same reason.
+    await expect
+      .poll(async () => {
+        if ((await toggle.getAttribute("aria-checked")) !== "true") await toggle.click();
+        return toggle.getAttribute("aria-checked");
+      }, { timeout: 5_000 })
+      .toBe("true");
   }
 }
 

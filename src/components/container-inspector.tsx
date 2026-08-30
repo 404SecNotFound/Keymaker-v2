@@ -137,14 +137,14 @@ function parsePeek(peek: Uint8Array): ParsedPeek | "legacy" | null {
 }
 
 const rowClasses =
-  "flex items-baseline gap-2.5 border-t border-white/6 px-4 py-2.5 text-[12.5px]";
+  "flex items-baseline gap-2.5 border-t border-border px-4 py-2.5 text-[12.5px]";
 
 function SlotList({ slots }: { slots: SlotRow[] }) {
   return (
     <div>
       {slots.map((slot) => (
         <div key={slot.index} className={rowClasses} data-testid="inspector-slot-row">
-          <span className="w-4 shrink-0 font-mono text-[12px] text-muted-foreground/75">
+          <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">
             {slot.index}
           </span>
           <span className="font-medium text-foreground">{slot.label}</span>
@@ -196,18 +196,18 @@ export function ContainerInspector({
       aria-label="Container details"
       data-testid="container-inspector"
       className={cn(
-        "glass-card flex flex-col overflow-hidden rounded-[20px]",
+        "panel flex flex-col overflow-hidden rounded-[20px]",
         className
       )}
     >
       <header className="flex items-center gap-2.5 px-4 py-3">
-        <h2 className="text-[13px] font-semibold">{title}</h2>
+        <h2 className="text-[13px] font-medium">{title}</h2>
         {versionShown !== null && (
-          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-white/12 px-2.5 py-0.5 font-mono text-[12px] font-medium tracking-wide text-muted-foreground">
+          <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 font-mono text-[12px] font-medium tracking-wide text-muted-foreground">
             <span
               className={cn(
                 "inline-block h-1.5 w-1.5 rounded-full",
-                versionShown === KEYM2_VERSION_V3 ? "bg-success" : "bg-yellow-400"
+                versionShown === KEYM2_VERSION_V3 ? "bg-success" : "bg-warning"
               )}
               aria-hidden="true"
             />
@@ -219,43 +219,43 @@ export function ContainerInspector({
       {/* ── The bytes ─────────────────────────────────────────────── */}
       {parsed && parsed !== "legacy" ? (
         <>
-          <div className="mx-4 overflow-x-auto rounded-md border border-white/8 bg-black/40 px-3 py-2 font-mono text-[12px] leading-relaxed">
-            <span className="mr-2 text-muted-foreground/75">0000</span>
+          <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
+            <span className="mr-2 text-subtle-foreground">0000</span>
             {parsed.headHex.map((hex, i) => (
               <span
                 key={i}
                 className={cn(
                   "mr-1.5",
-                  i < 4 && "font-medium text-foreground",
-                  i === 4 && "font-medium text-accent",
-                  i > 4 && "text-muted-foreground/75"
+                  i < 4 && "font-medium text-muted-foreground",
+                  i === 4 && "font-medium text-foreground",
+                  i > 4 && "text-subtle-foreground"
                 )}
               >
                 {hex}
               </span>
             ))}
-            <span className="text-muted-foreground/75">…</span>
+            <span className="text-subtle-foreground">…</span>
           </div>
-          <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 pb-1 pt-2 font-mono text-[12px] text-muted-foreground/75">
+          <div className="flex flex-wrap gap-x-4 gap-y-1 px-4 pb-1 pt-2 font-mono text-[12px] text-subtle-foreground">
             <span>&quot;KEYM&quot; magic</span>
-            <span className="text-accent/80">version {parsed.version}</span>
+            <span className="text-foreground">version {parsed.version}</span>
             <span>
               slot count @ 0x{parsed.slotCountOffset.toString(16).toUpperCase().padStart(2, "0")}
             </span>
           </div>
 
           {/* ── The slot table, as parsed ───────────────────────── */}
-          <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-muted-foreground/75">
+          <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-subtle-foreground">
             {parsed.slotCount === 1 ? "1 slot" : `${parsed.slotCount} slots`} · ways in
           </p>
           <SlotList slots={parsed.slots} />
 
-          <div className="mt-auto space-y-1.5 border-t border-white/6 px-4 py-3">
+          <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
             <Check>Payload sealed with {parsed.cipherLabel}</Check>
             {parsed.version === KEYM2_VERSION_V3 ? (
               <Check>Slot table authenticated — a removed slot can&apos;t hide</Check>
             ) : (
-              <div className="flex items-center gap-2 text-[12px] text-yellow-400/90">
+              <div className="flex items-center gap-2 text-[12px] text-warning/90">
                 <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span>v2 slot table is not authenticated — v3 added that</span>
               </div>
@@ -279,28 +279,28 @@ export function ContainerInspector({
         </p>
       ) : mode === "encrypt" && plan ? (
         <>
-          <div className="mx-4 overflow-x-auto rounded-md border border-white/8 bg-black/40 px-3 py-2 font-mono text-[12px] leading-relaxed">
-            <span className="mr-2 text-muted-foreground/75">0000</span>
+          <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
+            <span className="mr-2 text-subtle-foreground">0000</span>
             {["4B", "45", "59", "4D"].map((hex) => (
               <span key={hex} className="mr-1.5 font-medium text-foreground">
                 {hex}
               </span>
             ))}
-            <span className="mr-1.5 font-medium text-accent">
+            <span className="mr-1.5 font-medium text-foreground">
               {KEYM2_VERSION.toString(16).padStart(2, "0").toUpperCase()}
             </span>
-            <span className="text-muted-foreground/75">…</span>
+            <span className="text-subtle-foreground">…</span>
           </div>
-          <p className="px-4 pb-1 pt-2 font-mono text-[12px] text-muted-foreground/75">
+          <p className="px-4 pb-1 pt-2 font-mono text-[12px] text-subtle-foreground">
             salts and nonces are drawn fresh at seal time
           </p>
 
-          <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-muted-foreground/75">
+          <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-subtle-foreground">
             ways in · as configured
           </p>
           <div>
             <div className={rowClasses}>
-              <span className="w-4 shrink-0 font-mono text-[12px] text-muted-foreground/75">0</span>
+              <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">0</span>
               <span className="font-medium text-foreground">
                 {plan.keyFile ? "Passphrase + key file" : "Passphrase"}
               </span>
@@ -310,7 +310,7 @@ export function ContainerInspector({
             </div>
             {plan.shares && (
               <div className={rowClasses}>
-                <span className="w-4 shrink-0 font-mono text-[12px] text-muted-foreground/75">1</span>
+                <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">1</span>
                 <span className="font-medium text-foreground">Share set</span>
                 <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
                   any {plan.shares.threshold} of {plan.shares.count}
@@ -319,7 +319,7 @@ export function ContainerInspector({
             )}
             {plan.passkey && (
               <div className={rowClasses}>
-                <span className="w-4 shrink-0 font-mono text-[12px] text-muted-foreground/75">
+                <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">
                   {plan.shares ? 2 : 1}
                 </span>
                 <span className="font-medium text-foreground">Passkey</span>
@@ -330,7 +330,7 @@ export function ContainerInspector({
             )}
           </div>
 
-          <div className="mt-auto space-y-1.5 border-t border-white/6 px-4 py-3">
+          <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
             <Check>Payload sealed with {plan.cipherLabel}</Check>
             <Check>Slot table authenticated — a removed slot can&apos;t hide</Check>
             <Check>
@@ -338,7 +338,7 @@ export function ContainerInspector({
               <span className="font-mono text-[12px]">keym2.py</span>
             </Check>
             {plan.inputBytes !== null && plan.inputBytes > 0 && (
-              <p className="pt-1 font-mono text-[12px] text-muted-foreground/75">
+              <p className="pt-1 font-mono text-[12px] text-subtle-foreground">
                 input · {plan.inputBytes.toLocaleString("en-US")} bytes
               </p>
             )}
@@ -356,7 +356,7 @@ export function ContainerInspector({
       {/* Claims here are structural facts about the app, not live telemetry:
           the export has connect-src 'none', so "nothing leaves" is enforced
           by CSP rather than asserted by a status light. */}
-      <footer className="flex items-center gap-3 border-t border-white/6 px-4 py-2.5 font-mono text-[12px] text-muted-foreground/75">
+      <footer className="flex items-center gap-3 border-t border-border px-4 py-2.5 font-mono text-[12px] text-subtle-foreground">
         <span className="flex items-center gap-1.5">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-success" aria-hidden="true" />
           runs in this tab

@@ -533,6 +533,11 @@ npm run test:conformance  # cross-test vs the independent Python reference
 npm run test:conformance2 # ...and the same for v2/v3, byte for byte
 npm run test:keym2        # the Python reference against itself
 npm run test:recovery     # the documented recovery procedure, end to end
+npm run test:palette      # every painted colour is one the design system names (needs build + a browser)
+
+# Regenerating brand artifacts (after a palette, logo or hero-plate change)
+node scripts/make-icons.mjs    # the PWA icons, from public/logo.svg
+node scripts/make-og-card.mjs  # the social card, from scripts/og-card-template.html
 
 ```
 

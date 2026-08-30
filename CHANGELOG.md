@@ -22,16 +22,45 @@ authority for that; this is the record of what changed.
   produce no rows at all.
 
 ### Changed
-- **The visual identity moved from amber glass to a hairline near-black
-  system** — `#08090a` ground, `0.5px`-feel borders instead of blur and
-  shadows, radii of 12px/6px, Inter (self-hosted, lockfile-pinned, the Latin
-  faces precached for offline) with tight display tracking, and a single
-  acid-lime accent reserved for the primary action. The KDF and cipher
-  option cards now carry `aria-pressed`, so selection is machine-readable
-  rather than a paint detail; the logo, PWA icons, theme colour and social
-  card follow, and the social card's source template lives in
-  `scripts/og-card-template.html` so it regenerates from the repository like
-  everything else.
+- **The visual identity moved from amber glass to "Nightpaper"** — one warm
+  taupe family printed on near-black: `#0E0D0B` ground, `#171512` cards,
+  `#1D1A17` fields, and elevation carried by a 1px hairline plus fill
+  difference rather than blur or shadow. There are no drop shadows anywhere,
+  and inside a card exactly two levels: a resting container has no fill and is
+  drawn by its hairline, a field or a selected option carries the inset tone.
+  Type is Satoshi for text and JetBrains Mono (self-hosted, lockfile-pinned,
+  precached for offline) on every data surface — hex bytes, armor, share
+  strings, KDF parameters. The hero carries a generated bokeh plate at 40%
+  behind a canvas scrim, dissolving to flat canvas before any form.
+
+  **The accent colour is gone rather than restyled.** The primary action is
+  the highest-contrast neutral — eggshell fill, near-black text, a pill with a
+  1px border — and the two spark colours are quarantined to imagery. Strip the
+  pictures from any screen and what is left is entirely warm monochrome.
+
+  Three documents make this checkable rather than a matter of taste:
+  `docs/design/BAR.md` (the mechanisms), `docs/design/DESIGN-SYSTEM.md` (the
+  binding tokens — a screen that disagrees with it is wrong) and
+  `docs/design/STATUS.md` (decisions and what is still open).
+
+  The KDF and cipher option cards now carry `aria-pressed`, so selection is
+  machine-readable rather than a paint detail; the logo, PWA icons, theme
+  colour and social card follow, and both brand artifacts regenerate from
+  source — `scripts/make-icons.mjs` from `public/logo.svg`,
+  `scripts/make-og-card.mjs` from `scripts/og-card-template.html` — each
+  reading its own output back and refusing to ship a frame that did not land
+  on the canvas.
+
+- **`npm run test:palette`, and it runs in CI.** The design system's core
+  claim — no cool or neutral greys anywhere — is trivial to write down and
+  impossible to keep by proofreading, because a translucent white over a warm
+  ground pulls it toward neutral and no one reading a class name would see it.
+  So the gate walks the *rendered* page across six views, resolves every
+  painted colour through a canvas (Tailwind v4 emits its default palette in
+  `oklch`, and an earlier version that parsed only `rgb()` let an injected
+  slate grey through a passing run), and fails on anything the design document
+  does not name. White and black are refused at any fraction. A colour it
+  cannot resolve is a failure, never a silent skip.
 
 - **Diceware passphrase generator.** Seven words drawn uniformly from the EFF
   Long Wordlist with rejection sampling — 90 bits, stated exactly. The wordlist

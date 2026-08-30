@@ -166,13 +166,13 @@ export function DiceEntropyTool() {
   const verdictUI = {
     below: {
       icon: ShieldAlert,
-      classes: "border-destructive/40 bg-destructive/10 text-red-400",
+      classes: "border-destructive/40 bg-destructive/10 text-destructive",
       title: "Below the 128-bit floor",
       body: `Keep rolling — ${remaining} more ${calc.validSides}-sided ${rollWord} to reach your ${targetBits}-bit target.`,
     },
     floor: {
       icon: CheckCircle2,
-      classes: "border-yellow-500/40 bg-yellow-500/10 text-yellow-400",
+      classes: "border-warning/40 bg-warning/10 text-warning",
       title: "128-bit floor cleared",
       body:
         targetBits === TARGET_BITS
@@ -192,11 +192,11 @@ export function DiceEntropyTool() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2.5">
-        <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent/10 text-accent">
+        <div className="grid h-9 w-9 place-items-center rounded-lg bg-inset text-foreground">
           <Dices className="h-4.5 w-4.5" />
         </div>
         <div>
-          <h2 className="text-[15px] font-semibold">Dice Entropy Calculator</h2>
+          <h2 className="text-[15px] font-medium">Dice Entropy Calculator</h2>
           <p className="text-[12px] text-muted-foreground">
             How many physical dice rolls for 128 / 256 bits of entropy?
           </p>
@@ -218,9 +218,9 @@ export function DiceEntropyTool() {
             aria-invalid={!calc.sidesValid}
             aria-describedby={calc.sidesValid ? undefined : "dice-sides-error"}
             className={cn(
-              "h-11 rounded-xl bg-white/4 text-[15px] focus-visible:ring-0",
+              "h-11 rounded-xl bg-inset text-[15px] focus-visible:ring-0",
               calc.sidesValid
-                ? "border-white/10 focus-visible:border-accent/50"
+                ? "border-border focus-visible:border-border-strong"
                 : "border-destructive/60 focus-visible:border-destructive"
             )}
           />
@@ -233,7 +233,7 @@ export function DiceEntropyTool() {
         </div>
         <div className="space-y-1.5">
           <Label className="text-[13px] font-medium text-muted-foreground">Target</Label>
-          <div className="flex gap-0.5 rounded-xl bg-white/4 p-1">
+          <div className="flex gap-0.5 rounded-xl bg-inset p-1">
             {[FLOOR_BITS, TARGET_BITS].map((bits) => (
               <button
                 key={bits}
@@ -242,7 +242,7 @@ export function DiceEntropyTool() {
                 className={cn(
                   "flex-1 cursor-pointer rounded-lg px-2 py-2 text-center text-[12px] font-medium transition-all",
                   targetBits === bits
-                    ? "bg-white/10 text-foreground shadow-xs"
+                    ? "border border-border-strong bg-inset text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
@@ -281,10 +281,10 @@ export function DiceEntropyTool() {
           aria-invalid={calc.manualRejected}
           aria-describedby={calc.manualRejected ? "manual-rolls-error" : undefined}
           className={cn(
-            "h-11 rounded-xl bg-white/4 text-[15px] focus-visible:ring-0 disabled:opacity-40",
+            "h-11 rounded-xl bg-inset text-[15px] focus-visible:ring-0 disabled:opacity-40",
             calc.manualRejected
               ? "border-destructive/60 focus-visible:border-destructive"
-              : "border-white/10 focus-visible:border-accent/50"
+              : "border-border focus-visible:border-border-strong"
           )}
         />
         {calc.manualRejected ? (
@@ -313,7 +313,7 @@ export function DiceEntropyTool() {
           type="button"
           onClick={() => setShowValidator((v) => !v)}
           aria-expanded={showValidator}
-          className="flex w-full items-center justify-between rounded-xl border border-white/10 bg-white/2 px-3 py-2.5 text-left text-[13px] transition-colors hover:border-white/20"
+          className="flex w-full items-center justify-between rounded-xl border border-border px-3 py-2.5 text-left text-[13px] transition-colors hover:border-border-strong"
         >
           <span className="font-medium">
             Check a roll log{" "}
@@ -323,8 +323,8 @@ export function DiceEntropyTool() {
         </button>
 
         {showValidator && (
-          <div className="animate-in fade-in-50 space-y-2 rounded-xl border border-yellow-500/30 bg-yellow-500/5 p-3">
-            <p className="text-[12px] leading-snug text-yellow-400">
+          <div className="animate-in fade-in-50 space-y-2 rounded-xl border border-warning/30 bg-warning/5 p-3">
+            <p className="text-[12px] leading-snug text-warning">
               <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
               The sequence you paste here <strong>is</strong> your entropy. It stays on this
               device — nothing is sent anywhere — but it will exist in browser memory and
@@ -341,7 +341,7 @@ export function DiceEntropyTool() {
               autoCorrect="off"
               autoCapitalize="none"
               autoComplete="off"
-              className="rounded-xl border-white/10 bg-white/4 focus-visible:border-accent/50 focus-visible:ring-0"
+              className="rounded-xl border-border bg-inset focus-visible:border-border-strong focus-visible:ring-0"
             />
             {rollLog.trim().length > 0 && (
               <button
@@ -357,7 +357,7 @@ export function DiceEntropyTool() {
       </div>
 
       {/* Results */}
-      <div className="space-y-3 rounded-xl border border-white/8 bg-white/2 p-4">
+      <div className="space-y-3 rounded-xl border border-border p-4">
         {/*
           min-w-0 on each cell, because a grid track's default min-width is
           auto — it refuses to shrink below its content, so one long number
@@ -370,21 +370,21 @@ export function DiceEntropyTool() {
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-4">
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Bits / roll</p>
-            <p className="truncate font-semibold tabular-nums">{calc.bitsPerRoll.toFixed(2)}</p>
+            <p className="truncate font-medium tabular-nums">{calc.bitsPerRoll.toFixed(2)}</p>
           </div>
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Rolls counted</p>
-            <p className="truncate font-semibold tabular-nums">{calc.rolls.toLocaleString()}</p>
+            <p className="truncate font-medium tabular-nums">{calc.rolls.toLocaleString()}</p>
           </div>
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Total entropy</p>
-            <p className="truncate font-semibold tabular-nums">
+            <p className="truncate font-medium tabular-nums">
               {calc.totalBits.toFixed(1)} bits
             </p>
           </div>
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Rolls needed</p>
-            <p className="truncate font-semibold tabular-nums">
+            <p className="truncate font-medium tabular-nums">
               {calc.rollsFor128} <span className="text-muted-foreground">/128</span>
               {" · "}
               {calc.rollsFor256} <span className="text-muted-foreground">/256</span>
@@ -397,7 +397,7 @@ export function DiceEntropyTool() {
             role="alert"
             className="animate-in fade-in-50 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-[12px] text-destructive"
           >
-            <p className="font-semibold">
+            <p className="font-medium">
               {calc.invalidEntries.length} entr{calc.invalidEntries.length === 1 ? "y" : "ies"} ignored —
               not a possible result for a {calc.validSides}-sided die
             </p>
@@ -417,21 +417,21 @@ export function DiceEntropyTool() {
             <span>0</span>
             <span>{targetBits}-bit target</span>
           </div>
-          <div className="h-2.5 w-full overflow-hidden rounded-full bg-white/8">
+          <div className="h-2.5 w-full overflow-hidden rounded-full bg-inset">
             <div
               className={cn(
                 "h-full rounded-full transition-all duration-300",
                 calc.verdict === "target"
                   ? "bg-success"
                   : calc.verdict === "floor"
-                    ? "bg-yellow-500"
-                    : "bg-accent"
+                    ? "bg-warning"
+                    : "bg-destructive"
               )}
               style={{ width: `${(calc.progress * 100).toFixed(1)}%` }}
             />
           </div>
           <div className="mt-1 flex justify-between text-[12px] text-muted-foreground">
-            <span className={cn(calc.totalBits >= FLOOR_BITS && "text-yellow-400")}>128-bit floor @ {calc.rollsFor128} rolls</span>
+            <span className={cn(calc.totalBits >= FLOOR_BITS && "text-warning")}>128-bit floor @ {calc.rollsFor128} rolls</span>
             <span>{calc.progress >= 1 ? "100%" : `${Math.floor(calc.progress * 100)}%`}</span>
           </div>
         </div>
@@ -439,16 +439,16 @@ export function DiceEntropyTool() {
         <div className={cn("flex items-start gap-2.5 rounded-lg border px-3 py-2.5", verdictUI.classes)}>
           <VerdictIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <p className="text-[13px] font-semibold">{verdictUI.title}</p>
-            <p className="mt-0.5 text-[12px] opacity-90">{verdictUI.body}</p>
+            <p className="text-[13px] font-medium">{verdictUI.title}</p>
+            <p className="mt-0.5 text-[12px]">{verdictUI.body}</p>
           </div>
         </div>
       </div>
 
       {/* Educational context (from Morpheus) */}
-      <div className="space-y-2.5 rounded-xl border border-white/6 bg-white/2 p-4 text-[12px] leading-relaxed text-muted-foreground">
+      <div className="space-y-2.5 rounded-xl border border-border p-4 text-[12px] leading-relaxed text-muted-foreground">
         <p className="flex items-start gap-2">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground" />
           <span>
             <span className="font-medium text-foreground">Why physical dice?</span> Hardware and
             software random-number generators have failed in the real world — the COLDCARD hardware
@@ -458,7 +458,7 @@ export function DiceEntropyTool() {
           </span>
         </p>
         <p className="flex items-start gap-2">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-yellow-400" />
+          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <span>
             Rolls only count if they are <span className="font-medium text-foreground">fair</span> (no
             loaded dice), <span className="font-medium text-foreground">independent</span> (shake well,

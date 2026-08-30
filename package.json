@@ -22,13 +22,14 @@
     "test:wordlist": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-wordlist.mjs",
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:verify-recipe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-recipe-test.mjs",
+    "test:palette": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/palette-audit.mjs",
     "analyze": "ANALYZE=true next build --webpack",
     "build:worker": "node scripts/build-crypto-worker.mjs",
     "verify:reproducible": "node scripts/verify-reproducible.mjs",
     "verify:manifest": "node scripts/verify-manifest.mjs"
   },
   "dependencies": {
-    "@fontsource-variable/inter": "5.2.8",
+    "@fontsource-variable/jetbrains-mono": "5.3.0",
     "@noble/ciphers": "^2.3.0",
     "@radix-ui/react-dialog": "^1.1.23",
     "@radix-ui/react-label": "^2.1.0",

@@ -101,6 +101,128 @@ try {
   await page.screenshot({ path: join(SHOTS, '10-passphrase-generator.png') });
   console.log('captured 10-passphrase-generator.png');
 
+  // ---- README panels ----
+  //
+  // Seven shots the README leans on that this script did not cover. It
+  // regenerated 01 and 10 and left the rest to be taken by hand, which is the
+  // failure the header warns about: they were still showing the previous
+  // visual identity months after the app stopped looking like that. A shot
+  // nothing regenerates is a shot that goes stale silently.
+
+  // The canonical all-zeros BIP-39 vector, so nothing here is a real wallet.
+  const SEED =
+    'abandon abandon abandon abandon abandon abandon ' +
+    'abandon abandon abandon abandon abandon about';
+
+  // ---- 02: BIP-39 detection. The README's point is that the field reports
+  // what it found through its border rather than announcing "valid seed
+  // phrase" in words, so the shot is the field itself. ----
+  await page.setViewportSize({ width: 1180, height: 1340 });
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await visible(page.getByRole('button', { name: 'Text', exact: true })).click();
+  const seedField = visible(page.getByPlaceholder('Enter text to encrypt'));
+  await seedField.fill(SEED);
+  await settle();
+  await shotRegion(seedField, seedField, join(SHOTS, '02-seed-detection.png'), 28);
+  console.log('captured 02-seed-detection.png');
+
+  // ---- 08: the SeedQR dialog, captured before Reveal — the reveal step is
+  // the feature, and a shot of an exposed QR would undercut the thing the
+  // dialog exists to make deliberate.
+  //
+  // This needs a full round trip: the SeedQR offer hangs off the *decrypted*
+  // output (decryptedQrStatus), not off typing a seed into the encrypt box.
+  // An earlier draft of this shot reached for the button on the encrypt side
+  // and timed out, because there is no button there to find.
+  const SEED_PASSWORD = 'Ridge-Blender-Oakwood-Marina-72!';
+  await visible(page.getByPlaceholder('Enter a strong password')).fill(SEED_PASSWORD);
+  await visible(page.getByRole('button', { name: /^Encrypt Text$/i })).click();
+  await page.waitForFunction(
+    () => {
+      const el = document.querySelector('#output-text');
+      return !!el && el.value.startsWith('keym2:');
+    },
+    null,
+    { timeout: 90_000 }
+  );
+  const seedContainer = await page.evaluate(() => document.querySelector('#output-text').value);
+
+  await visible(page.getByRole('tab', { name: 'Decrypt' })).click();
+  await visible(page.getByRole('button', { name: 'Text', exact: true })).click();
+  await visible(page.getByPlaceholder('Enter text to decrypt')).fill(seedContainer);
+  await visible(page.getByPlaceholder('Enter decryption password')).fill(SEED_PASSWORD);
+  await visible(page.getByRole('button', { name: /^Decrypt Text$/i })).click();
+  await page.waitForFunction(
+    (s) => {
+      const el = document.querySelector('#output-text');
+      return !!el && el.value === s;
+    },
+    SEED,
+    { timeout: 90_000 }
+  );
+  const seedQr = visible(page.getByTitle(/Show SeedQR/i));
+  await seedQr.waitFor({ timeout: 30_000 });
+  await seedQr.click();
+  await visible(page.getByRole('button', { name: /^Reveal QR$/ })).waitFor({ timeout: 30_000 });
+  await settle();
+  await page.locator('[role="dialog"]').first().screenshot({ path: join(SHOTS, '08-seedqr.png') });
+  console.log('captured 08-seedqr.png');
+  await page.keyboard.press('Escape');
+
+  // ---- 05, 03, 04: the Advanced panel whole, then the two decisions inside
+  // it the README spends the most words on. ----
+  await page.setViewportSize({ width: 1180, height: 1800 });
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await visible(page.getByRole('button', { name: 'Text', exact: true })).click();
+  await visible(page.getByPlaceholder('Enter text to encrypt')).fill(
+    'Safe deposit box 447, Nationwide, Cheapside branch. Spare key with Rachel.'
+  );
+  await visible(page.getByRole('button', { name: /^Advanced/ })).click();
+  await visible(page.getByRole('button').filter({ hasText: 'Argon2id' })).click();
+  await settle();
+  await shotRegion(
+    visible(page.getByText('Key derivation', { exact: true })),
+    visible(page.getByText(/^Effective configuration:/)),
+    join(SHOTS, '05-advanced-panel.png')
+  );
+  console.log('captured 05-advanced-panel.png');
+
+  await shotRegion(
+    visible(page.getByText('Key derivation', { exact: true })),
+    visible(page.getByLabel('Argon2id parallelism')),
+    join(SHOTS, '03-kdf-argon2id.png')
+  );
+  console.log('captured 03-kdf-argon2id.png');
+
+  await visible(page.getByRole('button').filter({ hasText: 'AES \u2192 ChaCha (chained)' })).click();
+  await settle();
+  await shotRegion(
+    visible(page.getByText('Cipher', { exact: true })),
+    visible(page.getByText(/^Effective configuration:/)),
+    join(SHOTS, '04-cipher-chained.png')
+  );
+  console.log('captured 04-cipher-chained.png');
+
+  // ---- 09: the dice calculator, mid-count rather than finished — the README
+  // asks "how many rolls for 128 or 256 bits", so the shot should be showing
+  // the answer accumulating. ----
+  await page.setViewportSize({ width: 1180, height: 1340 });
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await visible(page.getByRole('tab', { name: 'Tools' })).click();
+  await visible(page.getByLabel('Dice sides')).fill('6');
+  await visible(page.getByLabel('Rolls completed')).fill('60');
+  await settle();
+  // Anchored below the progress bar, not on /bit target/: that matched the
+  // target *button*, which sits on the same row as the sides input, and the
+  // shot came out a single row tall.
+  await shotRegion(
+    visible(page.getByText('Dice sides', { exact: true })),
+    visible(page.getByText(/^128-bit floor @/)),
+    join(SHOTS, '09-dice-entropy.png'),
+    28
+  );
+  console.log('captured 09-dice-entropy.png');
+
   // ---- docs/WALKTHROUGH.md ----
   //
   // Four shots, in the order the walkthrough tells the story. Captured here
@@ -175,6 +297,18 @@ try {
   await visible(page.getByRole('button', { name: 'Text', exact: true })).click();
   await visible(page.getByPlaceholder('Enter text to decrypt')).fill(container);
   await visible(page.getByPlaceholder('Enter decryption password')).fill(WT_PASSWORD);
+
+  // ---- 07: what the app reads back out of a container it has been handed,
+  // before it has been given the chance to open it. Captured here rather than
+  // in its own pass because it needs a real container, and the walkthrough has
+  // just made one — a second Argon2id encryption to photograph the same panel
+  // would cost a minute of CI for nothing.
+  await settle();
+  await page
+    .getByTestId('container-inspector')
+    .screenshot({ path: join(SHOTS, '07-decrypt-detection.png') });
+  console.log('captured 07-decrypt-detection.png');
+
   await visible(page.getByLabel(/Verify only/i)).click();
   await visible(page.getByRole('button', { name: /^Verify Text$/i })).click();
   // The result panel, not any text containing "opens" — the toggle's own

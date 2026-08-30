@@ -70,27 +70,43 @@ if (!sw.includes(ASSETS_PLACEHOLDER)) {
 // Every JS/CSS chunk the export emitted, as request paths. Content-hashed and
 // therefore immutable, which is what makes precaching them safe.
 //
-// The two Latin Inter files ride along for the same reason the chunks do:
-// they are content-hashed, and without them the first offline visit renders
-// in the fallback stack — the app works, but looks different offline, which
-// is exactly the kind of quiet inconsistency the precache exists to prevent.
-// Only Latin: the other subsets are fetched on demand for text that uses
-// them, and precaching every script would quadruple the font bytes for
-// glyphs the UI never draws.
+// The two Latin font files ride along for the same reason the chunks do: they
+// are content-hashed, and without them the first offline visit renders in the
+// fallback stack — the app works, but looks different offline, which is
+// exactly the kind of quiet inconsistency the precache exists to prevent.
+// Only Latin: the other subsets are fetched on demand for text that uses them,
+// and precaching every script would quadruple the font bytes for glyphs the UI
+// never draws.
+//
+// The pattern names the family, so it went stale silently when the UI moved
+// from Inter to JetBrains Mono — it matched nothing, and the only symptom was
+// an offline first visit in the fallback face. The count assertion below is
+// what turns that back into a build failure rather than a thing someone
+// notices six months later.
+const FONT_PRECACHE = /jetbrains-mono-latin(-ext)?-wght-normal[^/]*\.woff2$/;
+const wanted = (f) => /\.(js|css)$/.test(f) || FONT_PRECACHE.test(f);
+
 const staticDir = join(OUT_DIR, '_next', 'static');
-const precache = walk(staticDir)
-  .filter((f) => /\.(js|css)$/.test(f) || /inter-latin(-ext)?-wght-normal[^/]*\.woff2$/.test(f))
-  .map((f) => `${BASE}${f.slice(OUT_DIR.length)}`)
-  .sort();
+const staticFiles = walk(staticDir).filter(wanted);
+
+const fontCount = staticFiles.filter((f) => FONT_PRECACHE.test(f)).length;
+if (fontCount === 0) {
+  console.error(
+    'build-id: ERROR — no font files matched the precache pattern. The UI font ' +
+      'was renamed or replaced and FONT_PRECACHE was not updated, so the first ' +
+      'offline visit would render in the fallback stack.'
+  );
+  process.exit(1);
+}
+
+const precache = staticFiles.map((f) => `${BASE}${f.slice(OUT_DIR.length)}`).sort();
 
 if (precache.length === 0) {
   console.error('build-id: ERROR — no static chunks found to precache. Did the export run?');
   process.exit(1);
 }
 
-const precacheBytes = walk(staticDir)
-  .filter((f) => /\.(js|css)$/.test(f) || /inter-latin(-ext)?-wght-normal[^/]*\.woff2$/.test(f))
-  .reduce((n, f) => n + readFileSync(f).length, 0);
+const precacheBytes = staticFiles.reduce((n, f) => n + readFileSync(f).length, 0);
 
 // Hash every emitted file except the worker itself, whose content is about to
 // depend on the hash. Paths are included so a pure rename still counts.
