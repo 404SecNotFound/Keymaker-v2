@@ -18,12 +18,36 @@ the binding tokens. This file holds the choices and the loose ends.
   committing the font binaries to this public repository** (self-hosting on
   the deployed site is fine either way). Download:
   `https://api.fontshare.com/v2/fonts/download/satoshi`
-- **Hero background**: concept 4, "Deep Field" — sparse blue/ember bokeh
-  drifting in a diagonal band over warm charcoal. 2752×1536 PNG:
-  `https://d8j0ntlcm91z4.cloudfront.net/user_3IcKP9J7tAl1kmrRAIwI2f3BcKm/hf_20260830_043937_4363414e-1dd6-4027-aacc-8e3345744aec.png`
-  Runners-up, if a re-pick is ever wanted (same host, same prefix
-  `hf_20260830_043937_`): bloom `e3bbdfdb-c345-4eb3-9fc0-48702cdd3f2a`,
-  ribbon `205a5da0-bc6c-4198-aab0-826b14257d1b`, topography
+- **Hero background**: "Deep Field" — sparse blue/ember bokeh drifting in a
+  diagonal band over warm charcoal. **Shipped** as
+  `public/hero-deep-field.webp` (1400×781, 7.5 KB).
+
+  It is a regeneration of the concept, not the plate originally chosen. The
+  first pick was a 2752×1536 PNG on the Higgsfield CDN, and that host is
+  refused by the network policy of a sealed container — generating a new one
+  through the MCP server worked, but its result URL is on the same blocked
+  host, so the bytes came back through the Higgsfield sandbox rather than by
+  fetching them here. Prompt and settings, so it can be reproduced or
+  re-rolled: `nano_banana_pro`, 16:9, 4k, the brief in
+  `DESIGN-SYSTEM.md § Imagery` written out longhand — warm near-black ground
+  with a taupe undertone, twenty to thirty widely spaced bokeh points on a
+  lower-left to upper-right diagonal, a handful `#0447FF`, a handful
+  `#FF4704`, the rest dim warm grey, darkest at the left/right/bottom edges,
+  no text or subject of any kind.
+
+  Downscaled to 1400px and WebP q60 deliberately: the plate is soft bokeh with
+  no fine detail, so it survives the compression intact and 22 MB of PNG in a
+  repository that promises reproducible builds would be 22 MB nobody can
+  diff. Mounted behind the hero only, at 40% with a radial canvas scrim under
+  the text and a gradient to flat canvas before the workbench. Worst measured
+  contrast over it, per glyph run: 15.2:1 for the headline, 4.8:1 for the
+  dimmed second line (large text, needs 3), 7.0:1 for the body.
+
+  Runners-up from the original set, if a re-pick is ever wanted (host
+  `d8j0ntlcm91z4.cloudfront.net`, path prefix
+  `user_3IcKP9J7tAl1kmrRAIwI2f3BcKm/hf_20260830_043937_`): bloom
+  `e3bbdfdb-c345-4eb3-9fc0-48702cdd3f2a`, ribbon
+  `205a5da0-bc6c-4198-aab0-826b14257d1b`, topography
   `b3753996-971c-4e3b-af3b-bc8539c37462`, aurora
   `de2734f5-805c-4e1c-a1fd-a38728e6b681`.
 - **Generated assets**: Recraft V4.1 `vector` mode for icons-as-art and
@@ -48,14 +72,51 @@ screenshots). All existing suites stay green throughout — the browser suite,
 the 12px floor, AA contrast, and the container-inspector spec are part of
 "pass".
 
+## Done since this file was written
+
+- Piece 1 of the loop, the shell: the token layer, the fonts, the header, the
+  hero with its plate, and the primary action. The accent colour was retired
+  outright rather than restyled — see the commit for why the system has no
+  emphasis colour and what replaced it.
+- JetBrains Mono is vendored (npm, OFL, no licence question).
+- The Deep Field plate is generated, downscaled and shipped; see above.
+- All thirteen README and walkthrough screenshots regenerate from
+  `scripts/capture-screenshots.mjs`. Seven of them had no generator at all
+  and were still showing the pre-Nightpaper identity.
+
 ## Loose ends
 
-- Fetch Satoshi and the Deep Field plate once the environment's network
-  allowlist applies (fontshare.com, api/cdn.fontshare.com,
-  styles.refero.design, images.refero.design, the cloudfront host above,
-  cdn.jsdelivr.net, elevenlabs.io).
-- Read the ITF FFL text and record the vendoring decision here.
+- **Satoshi is still not vendored.** It heads both text stacks in
+  `globals.css` and falls through to the system UI face until the binary
+  lands, so the display weight is approximated rather than drawn: the
+  whispered 300 is the single most visible thing still missing. Needs
+  fontshare.com / api.fontshare.com reachable, *and* the ITF FFL
+  redistribution clause read before a binary goes into a public repository.
+  Download: `https://api.fontshare.com/v2/fonts/download/satoshi`. The drop-in
+  is one file in `public/` plus one `@font-face` — `globals.css` says where.
 - Grab reference screenshots (images.refero.design and elevenlabs.io) so the
-  craft review can compare pixels, not just mechanisms.
+  craft review can compare pixels, not just mechanisms. Still blocked in a
+  sealed container; both hosts are refused at the proxy.
+- Pieces 2–4 of the loop: the workbench, the tools, and verify/social. The
+  most concrete piece-2 item is the `bg-white/N` and `border-white/N` washes
+  through `encryptor-tool.tsx` — they predate the token layer and produce
+  desaturated surfaces off-system rather than reading from `inset`/`line`.
+  Piece 4 owns `scripts/og-card-template.html`, which still carries the lime
+  gradient, and the PWA icons.
 - Decide the fate of PR #116: supersede with one Nightpaper PR from this
   branch, or land #116 first and diff the restyle on top.
+
+## Notes for whoever picks this up
+
+The environment's network allowlist binds when a container is **provisioned**,
+not when it is edited — a running session cannot be opened up by changing the
+setting, it has to be a new session. What is reachable from a sealed one:
+`registry.npmjs.org` and `files.pythonhosted.org` (which is how JetBrains Mono
+and Pillow got here), and the Higgsfield MCP server, whose sandbox has its own
+internet access and can be used to move bytes that the local proxy refuses.
+
+Firefox and WebKit binaries are not installed in the sealed container and
+`playwright install` cannot reach its CDN, so only `--project=chromium` is
+verifiable locally; CI covers the other two. A bare `npm run test:browser`
+reports ~320 failures that are all "Executable doesn't exist" — do not read
+that as a regression.

@@ -55,6 +55,12 @@ const APP_SHELL = [
   `${BASE}/recovery/keym.py`,
   `${BASE}/recovery/keym2.py`,
   `${BASE}/logo.svg`,
+  // The hero background plate. Named here rather than left to runtime caching
+  // for the same reason as everything else in this list: isCacheableAsset()
+  // below is an allowlist, so an asset that is precached but not listed is
+  // still fetched from the network by the fetch handler — which offline means
+  // a failed request on the first screen the user sees.
+  `${BASE}/hero-deep-field.webp`,
   `${BASE}/favicon.ico`,
   `${BASE}/manifest.json`,
   `${BASE}/apple-touch-icon.png`,

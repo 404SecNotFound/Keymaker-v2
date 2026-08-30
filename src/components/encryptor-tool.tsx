@@ -3986,18 +3986,62 @@ export function EncryptorTool() {
           )}
         >
           {/* Hero */}
-          <div className="mb-10 text-center sm:mb-14">
-            <p className="font-mono text-[12px] uppercase tracking-[0.14em] text-muted-foreground">
+          <div className="relative mb-10 text-center sm:mb-14">
+            {/*
+              The Deep Field plate. Two rules from DESIGN-SYSTEM.md shape how it
+              is mounted, and both are in the classes rather than in the image:
+
+              it sits behind the hero *only*, so the wrapper is clipped and a
+              scrim takes it to flat canvas before the workbench begins — the
+              system does not allow atmosphere behind a form or a text panel;
+
+              and the sparks live in imagery, nowhere else. This is the one
+              element on the page allowed to be blue or ember, which is exactly
+              why it is an <img> and not a border, a glow or a gradient on
+              something functional.
+
+              Prefixed with BASE_PATH like every other hand-authored URL here:
+              Next rewrites its own asset paths but not ours, and a bare
+              "/hero-deep-field.webp" is a 404 on the project-site deploy.
+
+              -z-10 rather than z-0: an absolutely positioned box paints above
+              static in-flow content whatever the document order, so at z-0 the
+              plate washed over the top-left corner of the workbench card below
+              it. Negative pulls it behind the flow while still leaving it above
+              the page background.
+            */}
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[620px] w-screen -translate-x-1/2 -translate-y-[165px] overflow-hidden"
+            >
+              <img
+                src={`${BASE_PATH}/hero-deep-field.webp`}
+                alt=""
+                aria-hidden="true"
+                decoding="async"
+                className="h-full w-full object-cover opacity-40 [mask-image:radial-gradient(106%_68%_at_50%_36%,#000_22%,transparent_70%)]"
+              />
+              {/* A canvas scrim under the words themselves. The plate's bokeh
+                  band runs diagonally through the middle of the frame, which is
+                  where the headline sits — without this the brightest orbs land
+                  under "Encrypt everything." and the contrast is whatever the
+                  image happens to be doing that day. */}
+              <div className="absolute inset-0 bg-[radial-gradient(52%_46%_at_50%_52%,hsl(var(--background))_0%,hsl(var(--background)/0.78)_42%,transparent_100%)]" />
+              {/* Down to flat canvas before anything reads on top of it. */}
+              <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-b from-transparent to-background" />
+            </div>
+
+            <p className="relative z-10 font-mono text-[12px] uppercase tracking-[0.14em] text-muted-foreground">
               Client-side · Offline · Open source
             </p>
             {/* The second line dims rather than the whole block fading through
                 a gradient: the thesis stays paper-white, the counterweight
                 steps back, and the contrast between them is the design. */}
-            <h1 className="mt-4 text-[44px] font-[300] leading-[1.05] tracking-[-0.02em] text-foreground sm:text-[56px]">
+            <h1 className="relative z-10 mt-4 text-[44px] font-[300] leading-[1.05] tracking-[-0.02em] text-foreground sm:text-[56px]">
               Encrypt everything.<br />
               <span className="text-subtle-foreground">Trust nothing.</span>
             </h1>
-            <p className="mx-auto mt-4 max-w-md text-[16px] leading-snug text-muted-foreground sm:text-[17px]">
+            <p className="relative z-10 mx-auto mt-4 max-w-md text-[16px] leading-snug text-muted-foreground sm:text-[17px]">
               Runs entirely in your browser — no accounts, no servers, no upload.{' '}
               <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="text-foreground underline underline-offset-4 decoration-1">
                 Open source
