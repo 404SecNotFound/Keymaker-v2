@@ -11,13 +11,12 @@ the binding tokens. This file holds the choices and the loose ends.
   (site: elevenlabs.io). The earlier Linear direction (PR #116) is
   superseded visually; its workbench layout, container inspector, fonts
   infrastructure, and test additions carry forward unchanged.
-- **Type**: Satoshi Variable (UI + display) and JetBrains Mono (data), both
-  from Fontshare. JetBrains Mono is OFL and also ships on npm
-  (`@fontsource-variable/jetbrains-mono`). Satoshi is ITF Free Font License —
-  free for commercial use; **verify the FFL's redistribution clause before
-  committing the font binaries to this public repository** (self-hosting on
-  the deployed site is fine either way). Download:
-  `https://api.fontshare.com/v2/fonts/download/satoshi`
+- **Type**: Plus Jakarta Sans Variable (UI + display) and JetBrains Mono
+  (data), both OFL-1.1 and both vendored from npm — in the lockfile, content
+  hashed into the bundle, precached for offline, and legal to redistribute in
+  a public repository. That last clause is the requirement, not a bonus: it is
+  what Satoshi failed. See "Loose ends" for the licence reasoning, and
+  `DESIGN-SYSTEM.md § Type` for the test any future face has to pass.
 - **Hero background**: "Deep Field" — sparse blue/ember bokeh drifting in a
   diagonal band over warm charcoal. **Shipped** as
   `public/hero-deep-field.webp` (1400×781, 7.5 KB).
@@ -104,14 +103,18 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
 
 ## Loose ends
 
-- **Satoshi is still not vendored.** It heads both text stacks in
-  `globals.css` and falls through to the system UI face until the binary
-  lands, so the display weight is approximated rather than drawn: the
-  whispered 300 is the single most visible thing still missing. Needs
-  fontshare.com / api.fontshare.com reachable, *and* the ITF FFL
-  redistribution clause read before a binary goes into a public repository.
-  Download: `https://api.fontshare.com/v2/fonts/download/satoshi`. The drop-in
-  is one file in `public/` plus one `@font-face` — `globals.css` says where.
+- **Satoshi is not being vendored, and the question is closed.** It headed both
+  text stacks and was never once drawn: the ITF Free Font License §02 forbids
+  distributing the binary through a "repository" or "publicly accessible
+  servers" and requires third parties to obtain their own copy from Fontshare,
+  so it could not live in this public repo, and the stack fell through to
+  whatever system UI face the reader had. §01 does permit self-hosting on the
+  deployed site — but a font that may not be in the source while it must be in
+  the deployment breaks the reproducible-build promise, and a build-time fetch
+  would put an external server inside a build that currently has no network at
+  all. Replaced with **Plus Jakarta Sans** (OFL-1.1, npm, in the lockfile,
+  precached). ITF invite exception requests under §09 if the face is ever
+  wanted badly enough to ask.
 - Grab reference screenshots (images.refero.design and elevenlabs.io) so the
   craft review can compare pixels, not just mechanisms. Still blocked in a
   sealed container; both hosts are refused at the proxy.

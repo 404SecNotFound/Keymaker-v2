@@ -78,26 +78,38 @@ if (!sw.includes(ASSETS_PLACEHOLDER)) {
 // and precaching every script would quadruple the font bytes for glyphs the UI
 // never draws.
 //
-// The pattern names the family, so it went stale silently when the UI moved
-// from Inter to JetBrains Mono — it matched nothing, and the only symptom was
-// an offline first visit in the fallback face. The count assertion below is
-// what turns that back into a build failure rather than a thing someone
-// notices six months later.
-const FONT_PRECACHE = /jetbrains-mono-latin(-ext)?-wght-normal[^/]*\.woff2$/;
-const wanted = (f) => /\.(js|css)$/.test(f) || FONT_PRECACHE.test(f);
+// The patterns name the families, so they go stale silently when the UI moves
+// — which has now happened twice: once when the identity left Inter, and again
+// when the text face left Satoshi for Plus Jakarta Sans. Both times the only
+// symptom was an offline first visit in the fallback face. The assertions
+// below turn that back into a build failure.
+//
+// One entry per family, each asserted separately. A single combined count is
+// the version of this check that cannot fail for the reason it exists: with
+// two families and one total, the mono face alone keeps the number above zero
+// while the text face — the one that sets the whole page — is quietly absent.
+const FONT_PRECACHE = [
+  { family: 'Plus Jakarta Sans (text and display)', re: /plus-jakarta-sans-latin(-ext)?-wght-normal[^/]*\.woff2$/ },
+  { family: 'JetBrains Mono (data surfaces)', re: /jetbrains-mono-latin(-ext)?-wght-normal[^/]*\.woff2$/ },
+];
+const isPrecachedFont = (f) => FONT_PRECACHE.some(({ re }) => re.test(f));
+const wanted = (f) => /\.(js|css)$/.test(f) || isPrecachedFont(f);
 
 const staticDir = join(OUT_DIR, '_next', 'static');
 const staticFiles = walk(staticDir).filter(wanted);
 
-const fontCount = staticFiles.filter((f) => FONT_PRECACHE.test(f)).length;
-if (fontCount === 0) {
-  console.error(
-    'build-id: ERROR — no font files matched the precache pattern. The UI font ' +
-      'was renamed or replaced and FONT_PRECACHE was not updated, so the first ' +
-      'offline visit would render in the fallback stack.'
-  );
+const missing = FONT_PRECACHE.filter(({ re }) => !staticFiles.some((f) => re.test(f)));
+if (missing.length) {
+  for (const { family } of missing) {
+    console.error(
+      `build-id: ERROR — no font files matched the precache pattern for ${family}. ` +
+        'It was renamed or replaced and FONT_PRECACHE was not updated, so the first ' +
+        'offline visit would render it in the fallback stack.'
+    );
+  }
   process.exit(1);
 }
+const fontCount = staticFiles.filter(isPrecachedFont).length;
 
 const precache = staticFiles.map((f) => `${BASE}${f.slice(OUT_DIR.length)}`).sort();
 

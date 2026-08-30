@@ -28,9 +28,12 @@ authority for that; this is the record of what changed.
   difference rather than blur or shadow. There are no drop shadows anywhere,
   and inside a card exactly two levels: a resting container has no fill and is
   drawn by its hairline, a field or a selected option carries the inset tone.
-  Type is Satoshi for text and JetBrains Mono (self-hosted, lockfile-pinned,
-  precached for offline) on every data surface — hex bytes, armor, share
-  strings, KDF parameters. The hero carries a generated bokeh plate at 40%
+  Type is Plus Jakarta Sans for text and JetBrains Mono on every data surface —
+  hex bytes, armor, share strings, KDF parameters — both OFL, self-hosted,
+  lockfile-pinned and precached for offline. (v2.1.0 itself shipped with
+  Satoshi at the head of the text stack and no binary behind it, so its display
+  weight fell through to the system UI face; the licence forbids vendoring it
+  and the replacement landed after that tag.) The hero carries a generated bokeh plate at 40%
   behind a canvas scrim, dissolving to flat canvas before any form.
 
   **The accent colour is gone rather than restyled.** The primary action is

@@ -53,8 +53,11 @@ Every mechanism below is checkable by looking at a rendered screen.
 
 ## Our concrete deviations from the reference (deliberate, not drift)
 
-- Waldenburg → **Satoshi** (display 300, UI 400/500); Inter's role is
-  absorbed by Satoshi. Geist Mono's role → **JetBrains Mono**.
+- Waldenburg → **Plus Jakarta Sans** (display 300, UI 400/500); Inter's role
+  is absorbed by it. Geist Mono's role → **JetBrains Mono**. Both are OFL and
+  vendored; a face whose licence forbids it living in this public repository is
+  not a candidate, however well it reads — the reference's own Waldenburg is
+  licensed, and Satoshi was tried and failed exactly that test.
 - The reference is a marketing site; ours is an instrument. Density may be
   one notch higher in the workbench pane, but every mechanism above still
   binds — including the shadow ban and the accent quarantine.
