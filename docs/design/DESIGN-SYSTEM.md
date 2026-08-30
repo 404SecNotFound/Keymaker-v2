@@ -106,6 +106,29 @@ contrast displays, and a glance.
 Disabled text is exempt from the AA floor (WCAG 1.4.3), and `muted` clears it
 anyway at 5.7:1 on `canvas`. The exemption is not the reason for the choice.
 
+## Anticipation
+
+A panel that describes something the user has not made yet shows a **summary,
+not the full record**. The itemised form is available on request and arrives on
+its own once the thing is real.
+
+The container inspector was the case that produced this rule. On first load,
+before a single character is typed, it painted a header hex row, a slot table,
+and three green ticks — a complete description of a file that does not exist.
+Everything in it was true and none of it was answering a question anyone had
+yet, so the pane read as a wall and the one line worth reading, *which format
+this writes*, was buried in it.
+
+Volume is the failure, not detail. The fix is never to delete what the panel
+knows or to soften it into vagueness: the summary states the same facts in one
+line, the disclosure is labelled with what it will reveal rather than "more",
+and the moment there is real input the detail opens by itself — the user should
+not have to ask twice for a description of something they have now made.
+
+Applies to any surface that speaks in the future tense. A panel describing
+bytes that exist is not anticipating anything, and this rule has nothing to say
+about it.
+
 ## The sparks — quarantined
 
 `#0447FF` (electric blue) and `#FF4704` (ember) exist **only** inside

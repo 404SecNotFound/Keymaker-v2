@@ -18,7 +18,7 @@
  * here would mean that constant is wrong, and keym2-dispatch.mts pins it.
  */
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { CheckCircle2, TriangleAlert } from "lucide-react";
 import { CipherId, KdfId } from "@/lib/keymaker-crypto";
 import {
@@ -179,6 +179,20 @@ export function ContainerInspector({
 }) {
   const parsed = useMemo(() => (peek ? parsePeek(peek) : null), [peek]);
 
+  /**
+   * §"Anticipation": before there is input, the encrypt side is describing a
+   * file nobody has made yet, so it summarises instead of itemising. Real
+   * input opens the detail on its own — having just supplied the thing, the
+   * user should not have to ask to see it described. `asked` only survives
+   * the empty state; once `hasInput` is true it stops being consulted.
+   */
+  const hasInput = plan !== null && plan.inputBytes !== null && plan.inputBytes > 0;
+  const [asked, setAsked] = useState(false);
+  const showPlanDetail = hasInput || asked;
+
+  /** Slot 0 is always the passphrase; §6 appends the optional ones in this order. */
+  const waysIn = plan ? 1 + (plan.shares ? 1 : 0) + (plan.passkey ? 1 : 0) : 0;
+
   const title =
     parsed && parsed !== "legacy"
       ? mode === "encrypt"
@@ -277,6 +291,24 @@ export function ContainerInspector({
           way — the unlock explains what it finds. This pane itemises only
           KEYM v2 and v3 headers.
         </p>
+      ) : mode === "encrypt" && plan && !showPlanDetail ? (
+        <div className="px-4 pb-3" data-testid="inspector-plan-summary">
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+            Type or drop something in and this pane itemises the container it
+            will write, header byte by header byte.
+          </p>
+          <p className="pt-2 font-mono text-[12px] text-subtle-foreground">
+            {plan.cipherLabel} · {waysIn === 1 ? "1 way in" : `${waysIn} ways in`}
+          </p>
+          <button
+            type="button"
+            onClick={() => setAsked(true)}
+            aria-expanded={false}
+            className="mt-3 rounded-full border border-border px-3 py-1 font-mono text-[12px] text-muted-foreground transition-colors hover:bg-inset hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+          >
+            Show the header it will write
+          </button>
+        </div>
       ) : mode === "encrypt" && plan ? (
         <>
           <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
