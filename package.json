@@ -1,6 +1,6 @@
 {
   "name": "keymaker",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "private": true,
   "scripts": {
     "dev": "node scripts/build-crypto-worker.mjs && next dev -p 9002",
@@ -42,7 +42,7 @@
     "clsx": "^2.1.1",
     "hash-wasm": "^4.12.0",
     "lucide-react": "^1.33.0",
-    "next": "^16.3.1",
+    "next": "^16.3.2",
     "qrcode.react": "^4.2.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
@@ -51,12 +51,12 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.13.0",
-    "@next/bundle-analyzer": "^16.3.1",
+    "@next/bundle-analyzer": "^16.3.2",
     "@playwright/test": "1.56.1",
     "@tailwindcss/postcss": "^4.3.3",
     "@types/node": "^26.2.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.3",
+    "@types/react-dom": "^19.2.5",
     "esbuild": "^0.28.2",
     "postcss": "^8.5.26",
     "sigstore": "^5.0.0",

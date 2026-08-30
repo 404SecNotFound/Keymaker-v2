@@ -1948,6 +1948,17 @@ export interface Keym2UnlockCost {
   /** Total declared work over the passphrase slots, as a multiple of one
    *  default unlock. 1 for an ordinary single-slot container. */
   multipleOfNormal: number;
+  /**
+   * Passphrase slots using Argon2id.
+   *
+   * Separate from the ratio because it answers a different question. Argon2id
+   * runs in hash-wasm, synchronously, so on a page with no Worker it blocks the
+   * event loop for the whole derivation — the tab freezes and the Stop button
+   * never renders. PBKDF2 goes through WebCrypto, which stays off-thread even
+   * in the fallback. A container can therefore be cheap by the ratio and still
+   * freeze the tab, or expensive and stay responsive.
+   */
+  argon2Slots: number;
 }
 
 /** One default unlock: Argon2id at 64 MiB, t=3. The denominator of the ratio. */
@@ -1980,6 +1991,7 @@ export function keym2UnlockCost(data: Uint8Array): Keym2UnlockCost | null {
 
     let passphraseSlots = 0;
     let hkdfSlots = 0;
+    let argon2Slots = 0;
     let units = 0;
     for (let i = 0; i < slotCount; i++) {
       const at = table + i * width;
@@ -1993,6 +2005,7 @@ export function keym2UnlockCost(data: Uint8Array): Keym2UnlockCost | null {
         continue;
       }
       passphraseSlots++;
+      if (slot.kdf.kdf === KdfId.ARGON2ID) argon2Slots++;
       units +=
         slot.kdf.kdf === KdfId.PBKDF2
           ? slot.kdf.params.iterations / PBKDF2_ITERS_PER_NORMAL_UNIT
@@ -2003,6 +2016,7 @@ export function keym2UnlockCost(data: Uint8Array): Keym2UnlockCost | null {
       passphraseSlots,
       hkdfSlots,
       multipleOfNormal: Math.round(units * 10) / 10,
+      argon2Slots,
     };
   } catch {
     return null;

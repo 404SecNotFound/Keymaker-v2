@@ -2121,6 +2121,31 @@ export function EncryptorTool() {
               }
             : { kdf: KdfId.PBKDF2, params: { iterations: 1_000_000 } };
 
+        // A main-thread Argon2id derivation freezes the tab.
+        //
+        // hash-wasm derives synchronously, so with no Worker it blocks the
+        // event loop for the whole run — the spinner does not animate and the
+        // Stop button never renders, because React cannot paint. The work is
+        // not lost and the container is identical; the tab is simply gone for
+        // the duration, which at the §6 ceiling is minutes.
+        //
+        // Said beforehand rather than fixed by quietly lowering the cost. The
+        // KDF and its parameters are the user's choice, and silently writing a
+        // weaker backup than the one they asked for is the trade this project
+        // does not make. PBKDF2 needs no warning: WebCrypto keeps it
+        // off-thread even in the fallback.
+        if (kdf.kdf === KdfId.ARGON2ID) {
+          const { workerWillBeUsed } = await import("@/lib/crypto-client");
+          if (!(await workerWillBeUsed()) && !isStale()) {
+            setUnlockCostNotice(
+              "This browser could not start the background worker, so Argon2id will run " +
+                "on the page's own thread. The tab will stop responding until it finishes — " +
+                "there is no Stop button while that happens. Nothing is wrong and nothing " +
+                "is lost; it will come back on its own."
+            );
+          }
+        }
+
         const encoder = new TextEncoder();
         const inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
         // §4.7. The authenticator has to be asked *here*, on the main thread,
@@ -2266,8 +2291,26 @@ export function EncryptorTool() {
         // is that this runs first.
         {
           const { keym2UnlockCost, describeUnlockCost } = await import("@/lib/keym-v2");
-          const notice = describeUnlockCost(keym2UnlockCost(headerPeek));
-          if (notice && !isStale()) setUnlockCostNotice(notice);
+          const cost = keym2UnlockCost(headerPeek);
+          const notice = describeUnlockCost(cost);
+          // Same freeze, arriving from the other direction: here the KDF is the
+          // container's choice rather than the user's, so the warning is driven
+          // by what the header declares. A container can be cheap by the cost
+          // ratio and still freeze the tab, so this is asked independently of
+          // `notice` rather than folded into it.
+          let freeze: string | null = null;
+          if (cost !== null && cost.argon2Slots > 0) {
+            const { workerWillBeUsed } = await import("@/lib/crypto-client");
+            if (!(await workerWillBeUsed())) {
+              freeze =
+                "This browser could not start the background worker, so Argon2id will run " +
+                "on the page's own thread. The tab will stop responding until it finishes — " +
+                "there is no Stop button while that happens. Nothing is wrong and nothing " +
+                "is lost; it will come back on its own.";
+            }
+          }
+          const combined = [notice, freeze].filter(Boolean).join(" ");
+          if (combined && !isStale()) setUnlockCostNotice(combined);
         }
 
         // §4.7. A passkey unlock reads before it asks. The PRF salt derives

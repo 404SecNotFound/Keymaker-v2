@@ -14,6 +14,7 @@
  * v1 container down the v2 path, or a truncated one down the legacy path.
  */
 import { webcrypto } from "node:crypto";
+import { MAX_PROBE_TIMEOUTS, ProbePolicy } from "../src/lib/worker-probe-policy.ts";
 import {
   CipherId,
   KdfId,
@@ -481,6 +482,45 @@ check(
     "the header peek is still a prefix rather than the whole container",
     `${KEYM2_HEADER_PEEK_BYTES} bytes`
   );
+}
+
+// ---------------------------------------------------------------------------
+// The worker probe retry policy
+// ---------------------------------------------------------------------------
+//
+// RT-1: `ready()` cached a probe timeout as a permanent verdict, so one slow
+// script fetch pushed every later derivation onto the main thread. With
+// Argon2id that means a frozen tab and no Stop button, because hash-wasm
+// derives synchronously.
+//
+// These pin the *decision*, not the wiring. Driving a real timeout from
+// Playwright defeated four attempts and one written test passed with the fix
+// reverted; the account is in `ready()` and in worker-probe-policy.ts. Saying
+// so here rather than letting the section imply more coverage than it has.
+{
+  const first = new ProbePolicy();
+  check(first.onTimeout() === "retry",
+    "one timeout is a slow link, not a verdict — the next call tries again",
+    "a cold cache must not cost every later derivation a frozen tab");
+  check(first.onTimeout() === "give-up",
+    "two unanswered timeouts give up for the session",
+    "a worker that never answers must not cost 10 s of every operation");
+
+  // The reset is the half that is easy to leave out, and leaving it out turns
+  // two unrelated hiccups an hour apart into a permanent fallback.
+  const recovering = new ProbePolicy();
+  check(recovering.onTimeout() === "retry", "a first timeout on a fresh session retries");
+  recovering.onAnswer();
+  check(recovering.unanswered === 0, "an answered probe clears the tally");
+  check(recovering.onTimeout() === "retry",
+    "a later, unrelated timeout gets its own retry rather than inheriting the old one",
+    "without the reset, one hiccup per hour is indistinguishable from a dead worker");
+
+  // MAX_PROBE_TIMEOUTS is the bound the 20 s worst case is derived from, so a
+  // change to it is a change to a number quoted in the commit that added it.
+  check(MAX_PROBE_TIMEOUTS === 2,
+    "the bound is still two, which is what the stated 20 s worst case assumes",
+    `MAX_PROBE_TIMEOUTS is ${MAX_PROBE_TIMEOUTS}`);
 }
 
 console.log(`\n${passed} passed, ${failures.length} failed`);
