@@ -85,6 +85,27 @@ border, `body` text. Focus ring: 2px `#F5F3F1`, offset 2px — the ring is
 never a spark colour. Destructive confirmation buttons may use the semantic
 danger fill; nothing else is a coloured button.
 
+## Disabled
+
+A disabled control is a **named state built from the tokens**, never a fraction
+of the enabled one. `disabled:opacity-50` is the same defect as `text-body/60`,
+one level up: it dims the whole element rather than choosing a tone, so nobody
+decides what the result looks like and nobody can name it.
+
+On the filled primary it is actively misleading. `#F5F3F1` at 40% over `canvas`
+composites to a mid grey pill — which reads as *an ordinary button*, not as an
+unavailable one. The single most important control in the app was announcing
+itself in the one treatment reserved for nothing at all.
+
+So a disabled control **stops being filled**: no background, `line` border,
+`muted` label, `not-allowed` cursor. The filled eggshell pill then means one
+thing only — this action is available now. Enabled and disabled differ in fill,
+border and text tone together, so the distinction survives greyscale, low
+contrast displays, and a glance.
+
+Disabled text is exempt from the AA floor (WCAG 1.4.3), and `muted` clears it
+anyway at 5.7:1 on `canvas`. The exemption is not the reason for the choice.
+
 ## The sparks — quarantined
 
 `#0447FF` (electric blue) and `#FF4704` (ember) exist **only** inside

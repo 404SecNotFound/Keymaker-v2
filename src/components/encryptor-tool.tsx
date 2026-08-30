@@ -3185,6 +3185,28 @@ export function EncryptorTool() {
                 */}
                 <div className="min-h-0 overflow-hidden" inert={!isAdvancedOpen || undefined}>
                   <div className="space-y-4 border-t border-border px-4 pb-4 pt-4">
+                    {/*
+                      Two columns from lg up, because expanded this was one vertical stack of
+                      cards, sliders and toggles roughly a screen and a half long — everything
+                      equally weighted and nothing to scan by.
+                    
+                      The split is by question, not by length: the left column is how the key is
+                      derived from what you type, the right is what the sealed container ends up
+                      carrying. `items-start` so the two columns size independently — the left
+                      grows when Argon2id exposes its sliders, the right when a share set is
+                      enabled, and neither should stretch the other.
+                    
+                      One column below lg. Two columns of this density on a phone would be worse
+                      than the wall.
+                    */}
+                    <div className="grid gap-4 lg:grid-cols-2 lg:items-start lg:gap-x-6">
+                      <section aria-labelledby="adv-derivation" className="space-y-4">
+                        <h3
+                          id="adv-derivation"
+                          className="text-[12px] font-medium uppercase tracking-[0.08em] text-subtle-foreground"
+                        >
+                          Key derivation
+                        </h3>
                     {/* KDF choice */}
                     <div className="space-y-2">
                       <Label className="text-[13px] font-medium text-muted-foreground">Key derivation</Label>
@@ -3215,7 +3237,8 @@ export function EncryptorTool() {
                             kdfChoice === "argon2id"
                               ? "border-border-strong bg-inset"
                               : "border-border hover:border-border-strong",
-                            argon2Available === false && "cursor-not-allowed opacity-40 hover:border-border"
+                            argon2Available === false &&
+                              "cursor-not-allowed border-border text-subtle-foreground hover:border-border"
                           )}
                         >
                           <p className="text-[13px] font-medium">
@@ -3279,7 +3302,7 @@ export function EncryptorTool() {
                                 "w-full rounded-lg border px-3 py-2 text-[12px] font-medium transition-colors",
                                 "border-border hover:border-border-strong",
                                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                                "disabled:cursor-not-allowed disabled:opacity-50"
+                                "disabled:cursor-not-allowed disabled:border-border disabled:text-subtle-foreground"
                               )}
                             >
                               {calibrating ? "Measuring this device…" : "Calibrate for this device"}
@@ -3300,6 +3323,15 @@ export function EncryptorTool() {
                       )}
                     </div>
 
+                      </section>
+
+                      <section aria-labelledby="adv-container" className="space-y-4">
+                        <h3
+                          id="adv-container"
+                          className="text-[12px] font-medium uppercase tracking-[0.08em] text-subtle-foreground"
+                        >
+                          What the container carries
+                        </h3>
                     {/* Cipher choice */}
                     <div className="space-y-2">
                       <Label className="text-[13px] font-medium text-muted-foreground">Cipher</Label>
@@ -3496,6 +3528,9 @@ export function EncryptorTool() {
                         )}
                       </div>
                     )}
+
+                      </section>
+                    </div>
 
                     {/* Security summary */}
                     <p className="rounded-lg border border-border px-3 py-2 text-[12px] text-muted-foreground">
@@ -3848,10 +3883,14 @@ export function EncryptorTool() {
         </div>
       )}
 
+      {/* No disabled override here. The base button draws disabled as an
+          unfilled pill; the `disabled:opacity-40` that used to be on this
+          className made the app's primary action a mid grey block, reading as
+          an ordinary button rather than an unavailable one. */}
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}
-        className="mt-2 h-auto w-full py-3.5 text-[15px] font-medium disabled:opacity-40"
+        className="mt-2 h-auto w-full py-3.5 text-[15px] font-medium"
       >
         {isLoading ? (
           <Loader2 className="mr-2 h-5 w-5 animate-spin" />

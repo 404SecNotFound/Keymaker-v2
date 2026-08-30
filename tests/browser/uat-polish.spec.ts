@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { visible, useTextMode, selectCrypto } from "./helpers";
+import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 
 /**
  * UAT-2026-08-14, the correctness-and-polish set: U15, U16, U18, U21, U22,
@@ -436,5 +436,63 @@ test.describe("U24 — the password ceiling is disclosed", () => {
     // The number comes from the crypto core's own constant, so this fails if
     // the copy and the enforcement ever disagree.
     await expect(page.getByText(/Maximum 1,024 characters/i).first()).toBeVisible();
+  });
+});
+
+/**
+ * U15b — disabled and enabled are different objects, not the same one faded.
+ *
+ * The primary action used to carry `disabled:opacity-40`. On the filled
+ * eggshell pill that composites to a mid grey block over the near-black
+ * canvas — which reads as an ordinary button, so the single most important
+ * control in the app announced itself in the treatment reserved for controls
+ * you cannot use. A design review caught it from a screenshot; nothing in the
+ * suite could, because opacity is not a colour and the palette gate reads
+ * colours.
+ *
+ * So this asserts the property directly: the two states differ in *fill*, and
+ * the disabled one is not merely a dimmed copy.
+ */
+test.describe("U15b — the disabled primary is not a faded enabled one", () => {
+  test("fill, and element opacity, both say which state it is in", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+
+    const encrypt = visible(page.getByRole("button", { name: /^Encrypt Text$/i }));
+    await expect(encrypt, "the CTA should start disabled with no input").toBeDisabled();
+
+    const disabledStyle = await encrypt.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { background: cs.backgroundColor, opacity: cs.opacity, color: cs.color };
+    });
+
+    // Dimming the whole element is the defect this replaced. A disabled control
+    // is drawn, not faded.
+    expect(
+      Number(disabledStyle.opacity),
+      "the disabled control is dimmed rather than drawn — that is the treatment that made it read as an ordinary button"
+    ).toBe(1);
+
+    // Now make it available and compare the fills.
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill("something to seal");
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+    await expect(encrypt).toBeEnabled();
+
+    const enabledStyle = await encrypt.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { background: cs.backgroundColor, opacity: cs.opacity };
+    });
+
+    expect(
+      enabledStyle.background,
+      "enabled and disabled paint the same background, so the state is invisible"
+    ).not.toBe(disabledStyle.background);
+
+    // The available action is the filled pill; the unavailable one is not
+    // filled at all. Anything else and they differ only by degree.
+    expect(
+      disabledStyle.background,
+      "the disabled control still carries a fill, so it still reads as a button you can press"
+    ).toMatch(/rgba?\(0, 0, 0, 0\)|transparent/);
   });
 });
