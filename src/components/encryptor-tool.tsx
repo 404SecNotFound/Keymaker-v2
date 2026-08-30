@@ -3114,7 +3114,7 @@ export function EncryptorTool() {
                               : "border-white/10 bg-white/2 hover:border-white/20"
                           )}
                         >
-                          <p className="text-[13px] font-semibold">PBKDF2</p>
+                          <p className="text-[13px] font-medium">PBKDF2</p>
                           <p className="mt-0.5 text-[12px] leading-snug text-muted-foreground">
                             Fastest and most compatible. 1M iterations of SHA-256.
                           </p>
@@ -3132,7 +3132,7 @@ export function EncryptorTool() {
                             argon2Available === false && "cursor-not-allowed opacity-40 hover:border-white/10"
                           )}
                         >
-                          <p className="text-[13px] font-semibold">
+                          <p className="text-[13px] font-medium">
                             Argon2id{" "}
                             <span className="text-foreground">
                               {argon2Available === false ? "· unavailable" : "· recommended · default"}
@@ -3232,7 +3232,7 @@ export function EncryptorTool() {
                             )}
                           >
                             <span className="mt-0.5 flex-1">
-                              <span className="block text-[13px] font-semibold">{name}</span>
+                              <span className="block text-[13px] font-medium">{name}</span>
                               <span className="mt-0.5 block text-[12px] leading-snug text-muted-foreground">{blurb}</span>
                             </span>
                           </button>
@@ -3443,7 +3443,7 @@ export function EncryptorTool() {
           role="status"
           className="animate-in fade-in-50 rounded-xl border border-success/40 bg-success/10 px-4 py-3"
         >
-          <p className="flex items-center gap-2 text-[13px] font-semibold text-success">
+          <p className="flex items-center gap-2 text-[13px] font-medium text-success">
             <ShieldCheck className="h-4 w-4 shrink-0" />
             The backup opens with this password
           </p>
@@ -3477,7 +3477,7 @@ export function EncryptorTool() {
           className="mt-2 animate-in fade-in-50 rounded-xl border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200"
           data-testid="slot-table-warning"
         >
-          <p className="flex items-start gap-2 font-semibold">
+          <p className="flex items-start gap-2 font-medium">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             This backup&apos;s list of unlock methods has changed since it was created.
           </p>
@@ -3958,7 +3958,7 @@ export function EncryptorTool() {
                 locally. The overflow sweep in platform.spec.ts runs 375px and
                 393px — either side of this line — in all three engines, so CI
                 is what actually proves it. */}
-            <span className="hidden text-[16px] font-semibold tracking-tight min-[390px]:inline sm:text-[17px]">
+            <span className="hidden text-[16px] font-medium tracking-tight min-[390px]:inline sm:text-[17px]">
               Keymaker
             </span>
           </div>
@@ -3993,7 +3993,7 @@ export function EncryptorTool() {
             {/* The second line dims rather than the whole block fading through
                 a gradient: the thesis stays paper-white, the counterweight
                 steps back, and the contrast between them is the design. */}
-            <h1 className="hero-gradient-text mt-4 text-[44px] font-[510] leading-[1.05] tracking-[-0.022em] sm:text-[56px]">
+            <h1 className="mt-4 text-[44px] font-[300] leading-[1.05] tracking-[-0.02em] text-foreground sm:text-[56px]">
               Encrypt everything.<br />
               <span className="text-subtle-foreground">Trust nothing.</span>
             </h1>
@@ -4090,7 +4090,7 @@ export function EncryptorTool() {
                 <div className="mb-2.5 grid h-8 w-8 place-items-center rounded-md border border-white/8 bg-white/3 text-muted-foreground">
                   <Icon className="h-4 w-4" />
                 </div>
-                <p className="text-[14px] font-semibold">{title}</p>
+                <p className="text-[14px] font-medium">{title}</p>
                 <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
                   {description}
                 </p>

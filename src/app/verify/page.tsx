@@ -84,7 +84,7 @@ export default function VerifyBuild() {
         </a>
       </p>
 
-      <h1 className="mt-6 text-2xl font-semibold tracking-tight sm:text-3xl">Verify this build</h1>
+      <h1 className="mt-6 text-2xl font-normal tracking-tight sm:text-3xl">Verify this build</h1>
 
       <p className="mt-4 text-[15px] leading-relaxed text-muted-foreground">
         Keymaker runs entirely in your browser, which means{" "}
@@ -102,7 +102,7 @@ export default function VerifyBuild() {
 
       {/* ---- What this build says it is ---- */}
 
-      <h2 className="mt-10 text-lg font-semibold tracking-tight">What this build claims</h2>
+      <h2 className="mt-10 text-lg font-medium tracking-tight">What this build claims</h2>
 
       <dl className="mt-4 divide-y divide-white/6 rounded-xl border border-white/10 bg-white/2">
         <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-baseline sm:gap-4">
@@ -160,7 +160,7 @@ export default function VerifyBuild() {
 
       {/* ---- Check 1 ---- */}
 
-      <h2 className="mt-10 text-lg font-semibold tracking-tight">
+      <h2 className="mt-10 text-lg font-medium tracking-tight">
         1. Are these the files CI produced?
       </h2>
 
@@ -186,7 +186,7 @@ export default function VerifyBuild() {
         about.
       </p>
 
-      <h2 className="mt-10 text-lg font-semibold tracking-tight">
+      <h2 className="mt-10 text-lg font-medium tracking-tight">
         2. Who signed that manifest?
       </h2>
 
@@ -228,7 +228,7 @@ export default function VerifyBuild() {
 
       {/* ---- Check 3 ---- */}
 
-      <h2 className="mt-10 text-lg font-semibold tracking-tight">
+      <h2 className="mt-10 text-lg font-medium tracking-tight">
         3. Does that artifact match the source?
       </h2>
 
@@ -257,7 +257,7 @@ export default function VerifyBuild() {
 
       {/* ---- The honest limits ---- */}
 
-      <h2 className="mt-10 text-lg font-semibold tracking-tight">What none of this proves</h2>
+      <h2 className="mt-10 text-lg font-medium tracking-tight">What none of this proves</h2>
 
       <ul className="mt-3 space-y-2 text-[14px] leading-relaxed text-muted-foreground">
         <li>

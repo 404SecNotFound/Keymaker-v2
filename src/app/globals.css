@@ -100,10 +100,6 @@
   border: 1px solid hsl(var(--border));
 }
 
-@utility hero-gradient-text {
-  color: hsl(var(--foreground));
-}
-
 /*
   Nightpaper. Every ground shares one warm hue family (taupe, 30–40°); a cool
   or neutral grey anywhere is the defect this palette exists to prevent, so

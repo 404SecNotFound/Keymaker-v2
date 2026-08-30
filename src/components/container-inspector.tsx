@@ -201,7 +201,7 @@ export function ContainerInspector({
       )}
     >
       <header className="flex items-center gap-2.5 px-4 py-3">
-        <h2 className="text-[13px] font-semibold">{title}</h2>
+        <h2 className="text-[13px] font-medium">{title}</h2>
         {versionShown !== null && (
           <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-white/12 px-2.5 py-0.5 font-mono text-[12px] font-medium tracking-wide text-muted-foreground">
             <span

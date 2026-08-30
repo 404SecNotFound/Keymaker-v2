@@ -196,7 +196,7 @@ export function DiceEntropyTool() {
           <Dices className="h-4.5 w-4.5" />
         </div>
         <div>
-          <h2 className="text-[15px] font-semibold">Dice Entropy Calculator</h2>
+          <h2 className="text-[15px] font-medium">Dice Entropy Calculator</h2>
           <p className="text-[12px] text-muted-foreground">
             How many physical dice rolls for 128 / 256 bits of entropy?
           </p>
@@ -370,21 +370,21 @@ export function DiceEntropyTool() {
         <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-4">
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Bits / roll</p>
-            <p className="truncate font-semibold tabular-nums">{calc.bitsPerRoll.toFixed(2)}</p>
+            <p className="truncate font-medium tabular-nums">{calc.bitsPerRoll.toFixed(2)}</p>
           </div>
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Rolls counted</p>
-            <p className="truncate font-semibold tabular-nums">{calc.rolls.toLocaleString()}</p>
+            <p className="truncate font-medium tabular-nums">{calc.rolls.toLocaleString()}</p>
           </div>
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Total entropy</p>
-            <p className="truncate font-semibold tabular-nums">
+            <p className="truncate font-medium tabular-nums">
               {calc.totalBits.toFixed(1)} bits
             </p>
           </div>
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Rolls needed</p>
-            <p className="truncate font-semibold tabular-nums">
+            <p className="truncate font-medium tabular-nums">
               {calc.rollsFor128} <span className="text-muted-foreground">/128</span>
               {" · "}
               {calc.rollsFor256} <span className="text-muted-foreground">/256</span>
@@ -397,7 +397,7 @@ export function DiceEntropyTool() {
             role="alert"
             className="animate-in fade-in-50 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-[12px] text-destructive"
           >
-            <p className="font-semibold">
+            <p className="font-medium">
               {calc.invalidEntries.length} entr{calc.invalidEntries.length === 1 ? "y" : "ies"} ignored —
               not a possible result for a {calc.validSides}-sided die
             </p>
@@ -431,7 +431,7 @@ export function DiceEntropyTool() {
             />
           </div>
           <div className="mt-1 flex justify-between text-[12px] text-muted-foreground">
-            <span className={cn(calc.totalBits >= FLOOR_BITS && "text-yellow-400")}>128-bit floor @ {calc.rollsFor128} rolls</span>
+            <span className={cn(calc.totalBits >= FLOOR_BITS && "text-warning")}>128-bit floor @ {calc.rollsFor128} rolls</span>
             <span>{calc.progress >= 1 ? "100%" : `${Math.floor(calc.progress * 100)}%`}</span>
           </div>
         </div>
@@ -439,7 +439,7 @@ export function DiceEntropyTool() {
         <div className={cn("flex items-start gap-2.5 rounded-lg border px-3 py-2.5", verdictUI.classes)}>
           <VerdictIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <p className="text-[13px] font-semibold">{verdictUI.title}</p>
+            <p className="text-[13px] font-medium">{verdictUI.title}</p>
             <p className="mt-0.5 text-[12px] opacity-90">{verdictUI.body}</p>
           </div>
         </div>
