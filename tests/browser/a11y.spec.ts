@@ -200,19 +200,24 @@ test.describe("information that must not be carried by colour alone", () => {
         `"${label}" has no visible focus indicator (${ring.style} ${ring.width}px)`
       ).toBe(true);
       // A deliberate ring colour, not the inherited muted text colour it would
-      // fall back to if outline-accent silently failed to apply. Resolved from
-      // the live --accent token rather than a hex literal: the literal broke
+      // fall back to if the outline utility silently failed to apply. Resolved
+      // from the live focus token rather than a hex literal: the literal broke
       // the day the palette changed, while what this test actually protects —
       // "the ring is painted on purpose" — did not change at all.
-      const accent = await page.evaluate(() => {
+      //
+      // That token is --ring. It was --accent until Nightpaper retired the
+      // accent colour outright; the focus ring is now ink and is specified to
+      // never be a spark. The assertion is the same one, pointed at the token
+      // that currently means "the colour focus is painted in".
+      const ringToken = await page.evaluate(() => {
         const probe = document.createElement("span");
-        probe.style.color = "hsl(var(--accent))";
+        probe.style.color = "hsl(var(--ring))";
         document.body.appendChild(probe);
         const rgb = getComputedStyle(probe).color;
         probe.remove();
         return rgb;
       });
-      expect(ring.color, `"${label}" ring is not the accent colour`).toBe(accent);
+      expect(ring.color, `"${label}" ring is not the focus colour`).toBe(ringToken);
     }
   });
 });

@@ -25,11 +25,21 @@ including the filled primary.
 
 ## Text
 
-| token     | value     | use                                              |
-| --------- | --------- | ------------------------------------------------ |
-| `ink`     | `#F5F3F1` | headlines, primary labels — never pure `#FFFFFF` |
-| `body`    | `#A9A29A` | body copy, secondary labels                      |
-| `muted`   | `#7E776F` | captions, hints — 12px minimum, nothing smaller  |
+| token     | value     | on canvas | use                                              |
+| --------- | --------- | --------- | ------------------------------------------------ |
+| `ink`     | `#F5F3F1` | 17.4:1    | headlines, primary labels — never pure `#FFFFFF` |
+| `body`    | `#A9A29A` | 7.7:1     | body copy, secondary labels                      |
+| `muted`   | `#878078` | 5.0:1     | captions, hints — 12px minimum, nothing smaller  |
+
+These three are the whole text scale. Opacity modifiers on top of them
+(`text-body/60` and the like) are not part of it: they were how the old
+palette drifted under the contrast floor without anyone deciding to, so a
+tone that needs to be quieter uses the next token down, not a fraction of the
+one above.
+
+`muted` was `#7E776F` when this file was first written, which measures 4.40:1
+on `canvas` — under the 4.5:1 AA floor. The floor overrides the palette, so
+the value lifted two lightness points rather than the floor bending.
 
 ## Actions
 

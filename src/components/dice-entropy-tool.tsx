@@ -192,7 +192,7 @@ export function DiceEntropyTool() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2.5">
-        <div className="grid h-9 w-9 place-items-center rounded-lg bg-accent/10 text-accent">
+        <div className="grid h-9 w-9 place-items-center rounded-lg bg-inset text-foreground">
           <Dices className="h-4.5 w-4.5" />
         </div>
         <div>
@@ -220,7 +220,7 @@ export function DiceEntropyTool() {
             className={cn(
               "h-11 rounded-xl bg-white/4 text-[15px] focus-visible:ring-0",
               calc.sidesValid
-                ? "border-white/10 focus-visible:border-accent/50"
+                ? "border-white/10 focus-visible:border-border-strong"
                 : "border-destructive/60 focus-visible:border-destructive"
             )}
           />
@@ -242,7 +242,7 @@ export function DiceEntropyTool() {
                 className={cn(
                   "flex-1 cursor-pointer rounded-lg px-2 py-2 text-center text-[12px] font-medium transition-all",
                   targetBits === bits
-                    ? "bg-white/10 text-foreground shadow-xs"
+                    ? "border border-border-strong bg-inset text-foreground"
                     : "text-muted-foreground hover:text-foreground"
                 )}
               >
@@ -284,7 +284,7 @@ export function DiceEntropyTool() {
             "h-11 rounded-xl bg-white/4 text-[15px] focus-visible:ring-0 disabled:opacity-40",
             calc.manualRejected
               ? "border-destructive/60 focus-visible:border-destructive"
-              : "border-white/10 focus-visible:border-accent/50"
+              : "border-white/10 focus-visible:border-border-strong"
           )}
         />
         {calc.manualRejected ? (
@@ -341,7 +341,7 @@ export function DiceEntropyTool() {
               autoCorrect="off"
               autoCapitalize="none"
               autoComplete="off"
-              className="rounded-xl border-white/10 bg-white/4 focus-visible:border-accent/50 focus-visible:ring-0"
+              className="rounded-xl border-white/10 bg-white/4 focus-visible:border-border-strong focus-visible:ring-0"
             />
             {rollLog.trim().length > 0 && (
               <button
@@ -424,8 +424,8 @@ export function DiceEntropyTool() {
                 calc.verdict === "target"
                   ? "bg-success"
                   : calc.verdict === "floor"
-                    ? "bg-yellow-500"
-                    : "bg-accent"
+                    ? "bg-warning"
+                    : "bg-destructive"
               )}
               style={{ width: `${(calc.progress * 100).toFixed(1)}%` }}
             />
@@ -448,7 +448,7 @@ export function DiceEntropyTool() {
       {/* Educational context (from Morpheus) */}
       <div className="space-y-2.5 rounded-xl border border-white/6 bg-white/2 p-4 text-[12px] leading-relaxed text-muted-foreground">
         <p className="flex items-start gap-2">
-          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-accent" />
+          <Info className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground" />
           <span>
             <span className="font-medium text-foreground">Why physical dice?</span> Hardware and
             software random-number generators have failed in the real world — the COLDCARD hardware

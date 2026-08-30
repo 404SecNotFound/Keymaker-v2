@@ -135,7 +135,7 @@ export default function RootLayout({
                   banner.id = 'sw-update-banner';
                   banner.type = 'button';
                   banner.setAttribute('role', 'alert');
-                  banner.style.cssText = 'position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:9999;background:#e4f222;color:#0d0e02;padding:0.75rem 1.25rem;border:0;border-radius:0.5rem;font:inherit;font-size:0.875rem;font-weight:600;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.3);';
+                  banner.style.cssText = 'position:fixed;bottom:1rem;left:50%;transform:translateX(-50%);z-index:9999;background:#F5F3F1;color:#14120F;padding:0.75rem 1.25rem;border:1px solid rgba(255,255,255,0.18);border-radius:9999px;font:inherit;font-size:0.875rem;font-weight:500;cursor:pointer;';
                   banner.textContent = 'A new version of Keymaker is ready — tap to reload';
                   banner.onclick = function() {
                     // Nothing swaps until this click. Promoting the waiting
