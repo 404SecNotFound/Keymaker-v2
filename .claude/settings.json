@@ -1,0 +1,11 @@
+{
+  "sandbox": {
+    "network": {
+      "allowedDomains": [
+        "mcp.higgsfield.ai",
+        "higgsfield.ai",
+        "*.higgsfield.ai"
+      ]
+    }
+  }
+}
