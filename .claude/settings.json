@@ -4,7 +4,8 @@
       "allowedDomains": [
         "mcp.higgsfield.ai",
         "higgsfield.ai",
-        "*.higgsfield.ai"
+        "*.higgsfield.ai",
+        "d8j0ntlcm91z4.cloudfront.net"
       ]
     }
   }
