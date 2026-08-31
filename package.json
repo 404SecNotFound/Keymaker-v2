@@ -24,6 +24,7 @@
     "test:verify-recipe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-recipe-test.mjs",
     "test:palette": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/palette-audit.mjs",
     "test:icons": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/icon-audit.mjs",
+    "test:screenshots": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/screenshot-audit.mjs",
     "analyze": "ANALYZE=true next build --webpack",
     "build:worker": "node scripts/build-crypto-worker.mjs",
     "verify:reproducible": "node scripts/verify-reproducible.mjs",

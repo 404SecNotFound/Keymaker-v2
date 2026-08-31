@@ -234,7 +234,7 @@ On decryption, a recovered seed can be exported as a **Standard SeedQR** for dir
 import into Coldcard, SeedSigner, Sparrow, Specter, Krux, Keystone, or Jade.
 
 <p align="center">
-  <img alt="Standard SeedQR export dialog, with the QR hidden behind an explicit reveal step" src="docs/screenshots/08-seedqr.png" width="520" />
+  <img alt="Standard SeedQR export dialog, with the QR hidden behind an explicit reveal step" src="docs/screenshots/08-seedqr.png" width="620" />
 </p>
 
 Note what this dialog does *not* do: the QR is not rendered until you press Reveal.

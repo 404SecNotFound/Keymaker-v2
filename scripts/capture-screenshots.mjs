@@ -165,7 +165,16 @@ try {
   await seedQr.click();
   await visible(page.getByRole('button', { name: /^Reveal QR$/ })).waitFor({ timeout: 30_000 });
   await settle();
-  await page.locator('[role="dialog"]').first().screenshot({ path: join(SHOTS, '08-seedqr.png') });
+  // Viewport-width band, not an element capture: the dialog is fixed and
+  // centred, so shotRegion frames it on its scrim at the same 2360px width as
+  // every other shot. An element .screenshot() here produced a 1024px-wide
+  // edge-to-edge crop that read as ragged beside the full-width panels.
+  await shotRegion(
+    visible(page.locator('[role="dialog"]')),
+    visible(page.locator('[role="dialog"]')),
+    join(SHOTS, '08-seedqr.png'),
+    28
+  );
   console.log('captured 08-seedqr.png');
   await page.keyboard.press('Escape');
 
@@ -304,9 +313,15 @@ try {
   // just made one — a second Argon2id encryption to photograph the same panel
   // would cost a minute of CI for nothing.
   await settle();
-  await page
-    .getByTestId('container-inspector')
-    .screenshot({ path: join(SHOTS, '07-decrypt-detection.png') });
+  // Viewport-width band, not an element capture, so this matches the other
+  // panel shots at 2360px wide with even padding rather than the 960px
+  // edge-to-edge crop the element .screenshot() produced.
+  await shotRegion(
+    visible(page.getByTestId('container-inspector')),
+    visible(page.getByTestId('container-inspector')),
+    join(SHOTS, '07-decrypt-detection.png'),
+    28
+  );
   console.log('captured 07-decrypt-detection.png');
 
   await visible(page.getByLabel(/Verify only/i)).click();

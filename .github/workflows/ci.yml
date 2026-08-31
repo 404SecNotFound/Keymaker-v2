@@ -48,6 +48,14 @@ jobs:
       - name: EFF wordlist integrity
         run: npm run test:wordlist
 
+      # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
+      # § Screenshots). It reads the committed PNG headers, so it needs
+      # neither a build nor a browser and belongs in this cheap job. Nothing
+      # caught the drift for months because nothing looked: two shots were
+      # element captures at their own width while the rest were full bands.
+      - name: Screenshots are all one width
+        run: npm run test:screenshots
+
       # The release notes are generated from docs/VERIFYING.md so that one copy
       # of the verification commands exists rather than two. This is what keeps
       # them from drifting, and it runs on every PR rather than only at release
