@@ -17,84 +17,79 @@ the binding tokens. This file holds the choices and the loose ends.
   a public repository. That last clause is the requirement, not a bonus: it is
   what Satoshi failed. See "Loose ends" for the licence reasoning, and
   `DESIGN-SYSTEM.md § Type` for the test any future face has to pass.
-- **Hero background**: "Filament Field" — fine blue/ember light filaments and
-  particle trails on a lower-left to upper-right diagonal over warm charcoal,
-  with the upper left and centre dark and open. **Shipped** as
-  `public/hero-cipher-field.webp` (1400x781, 42 KB). The filename is unchanged
-  on purpose: it is referenced by the component, the screenshot generator and
-  the walkthrough, and none of those get churn for a rename.
+- **Hero background**: "Deep Field II" — layered blue/ember bokeh receding
+  into haze along a lower-left to upper-right diagonal band over warm charcoal.
+  **Shipped** as `public/hero-cipher-field.webp` (1400x781, 19 KB). The
+  filename is unchanged on purpose: it is referenced by the component, the
+  screenshot generator and the walkthrough, and none of those get churn for a
+  rename.
 
-  It replaces the original "Deep Field" bokeh plate, which was generated to a
-  brief asking for "twenty to thirty widely spaced bokeh points". That brief
-  was the problem. Rendered at the hero's size the points read as faint
-  diagonal scratches, and the plate had almost nothing to say — the model was
-  never the limit, and re-running the same brief on the same model would have
-  produced the same thing again.
+  It replaces the first Deep Field plate, which was generated to a brief asking
+  for "twenty to thirty widely spaced bokeh points". That brief was the
+  problem. Rendered at the hero's size the points read as faint diagonal
+  scratches, and the plate had almost nothing to say — the model was never the
+  limit, and re-running the same brief on the same model would have produced
+  the same thing again. The replacement keeps the concept and rewrites the
+  brief: many more points, across five or six depth layers, with real
+  atmospheric perspective instead of a scatter on a flat ground.
 
   Prompt and settings, so it can be reproduced or re-rolled: `nano_banana_pro`,
-  16:9, `resolution: 4k`, the brief in `DESIGN-SYSTEM.md` § Imagery written out
-  longhand — long fine light filaments and streaking particle trails sweeping
-  lower-left to upper-right through warm dark air, soft bokeh at varying depths
-  along them, illumination limited to `#0447FF` / `#FF4704` / dim warm grey,
-  warm amber haze only, upper middle left dark and open, deep vignette, and an
-  explicit negative list: no horizon, no ground plane, no grid floor, no
-  wireframe mesh, no subject, no text.
-
-  That negative list is most of the work. Three earlier generations failed on
-  exactly the things it now names: a wireframe mesh resolved into a terrain
-  floor with a horizon (the brief had said "no horizon" in one variant and
-  omitted it in the one that needed it), and two others grew a neutral grey
-  smoke plume — § Surfaces drift entering through the imagery door.
+  16:9, `resolution: 4k`, source 5504x3072 — a deep field of drifting light
+  particles receding into fog along a lower-left to upper-right diagonal, five
+  or six depth layers, sharp bright points nearest and progressively softer
+  dimmer bokeh behind, warm amber-taupe haze, a handful of particles at
+  `#0447FF` and a handful at `#FF4704` among dim warm grey, vignetted to
+  near-black at all four edges, and an explicit negative list: no horizon, no
+  ground plane, no terrain, no subject, no text.
 
   **The submitted model id and the reported one differ.** Every job was
   submitted as `nano_banana_pro` and came back reporting `model:
   nano_banana_2`. Recorded rather than explained; if a future re-roll looks
   unlike this plate, that discrepancy is the first thing to check.
 
+  **Known defect, accepted knowingly.** The haze in the upper right renders as
+  a pale *neutral grey* rather than the warm amber the brief asked for — the §
+  Surfaces drift arriving through the imagery door, and the same fault that
+  sent two other candidates back. It was accepted on this plate because the
+  plate was chosen on its merits and the exception stops at the imagery layer.
+  First thing to fix on a re-roll; not a precedent.
+
   WebP q80 rather than the q60 the previous plate used, and the reason is a
   property of the image rather than a preference: q60 was justified in this
   file by the plate being "soft bokeh with no fine detail, so it survives the
-  compression intact". Filaments are fine detail, so that justification does
-  not transfer. 31 KB against the old 16 KB, still small enough to diff.
+  compression intact". This plate carries fine particle detail against haze, so
+  that justification does not transfer. 19 KB against the old 16 KB.
 
-  Two post-processing steps are applied to the generation before it ships, and
-  both were derived from the gate rather than from taste:
-
-  **Flipped vertically.** As generated, the plate was dark across the top and
-  bright at the lower right. That failed `hero-plate.spec.ts` at `peakLift
-  4.92` against a floor of 6.5 — the visibility band is sampled at `y 40–150`,
-  which is *above* the headline and lands mid-plate, so briefing "keep the
-  middle dark to protect the headline" put the quiet region exactly where the
-  gate looks for detail. The flip puts the filaments across the top and leaves
-  the lower centre calm, which satisfies both halves at once. Worth keeping in
-  mind for any re-roll: the intuitive brief is the wrong way up.
-
-  **Brightness 0.65** (`sharp().modulate({brightness: 0.65})`). At full
-  strength the plate passed both gates but left the headline at 4.91:1 against
-  a 4.5 floor, where the previous plate had 9.0:1. That is a gate passing on
-  the last 0.4 of its margin, and § Voice does not describe an interface that
-  loud. The peak surplus paid for it — the measured sweep:
+  **Brightness 0.60** (`sharp().modulate({brightness: 0.60})`), and this is not
+  a preference either — as generated the plate **failed** `hero-plate.spec.ts`,
+  putting the headline at 4.08:1 against a 4.5 floor, because the bright haze
+  falls exactly where the words sit. Visibility had enormous surplus to pay
+  with. The measured sweep:
 
   | brightness | meanLift (≥1.85) | peakLift (≥6.5) | headline (≥4.5) |
   | --- | --- | --- | --- |
-  | 1.00 | 9.20 | 64.98 | 4.91:1 |
-  | 0.80 | 6.31 | 38.68 | 5.83:1 |
-  | **0.65 (shipped)** | **4.64** | **24.96** | **6.75:1** |
-  | 0.55 | 3.73 | 18.07 | 7.51:1 |
+  | 1.00 | 12.30 | 39.82 | **4.08:1 FAIL** |
+  | 0.75 | 7.41 | 21.86 | 5.03:1 |
+  | **0.60 (shipped)** | **5.26** | **14.14** | **6.08:1** |
+  | 0.50 | 4.10 | 10.30 | 6.82:1 |
+  | 0.42 | 3.33 | 7.77 | 7.43:1 |
 
-  0.65 restores real headline headroom while still leaving the plate twice as
-  present as the 2.32 meanLift the previous one shipped at. This is not the
-  `opacity-40` mistake returning: that was three CSS suppressors stacked on an
-  already-quiet image, taking it to a lift of two values out of 255. This is
-  one adjustment baked into the art, chosen against measurements, on an image
-  that was four times brighter than anything the system had shipped.
+  0.60 is the balance point rather than the calmest row: it leaves 1.6 of
+  headline headroom while keeping the visibility half at 2.2x its floor. 0.42
+  reads quieter but leaves that half only 1.3 above failing, which is the wrong
+  side to run thin on given the plate exists to be seen.
+
+  This is not the `opacity-40` mistake returning. That was three CSS
+  suppressors stacked on an already-quiet image, taking it to a lift of two
+  values out of 255. This is one adjustment baked into the art, chosen against
+  measurements, on an image that started at five times the meanLift the
+  previous plate shipped at and failed a gate at full strength.
 
   Rejected, with reasons, so they are not re-tried: a geometric lattice (read
-  as a stock tech terrain floor); a warm particle field (too bright across the
-  headline zone, plus a baked-in frame vignette artifact); a cyan/indigo neon
-  plate (breaks the warm-monochrome rule and the spark quarantine outright,
-  and its headline contrast only cleared AA at all because of a composite the
-  code no longer applies).
+  as a stock tech terrain floor); a filament/light-trail plate (shipped briefly
+  and measured well at 0.65 brightness, but the bokeh field was preferred); a
+  cyan/indigo neon plate (breaks the warm-monochrome rule and the spark
+  quarantine outright).
 - **Generated assets**: Recraft V4.1 `vector` mode for icons-as-art and
   illustrative objects (takes exact hex palettes and background colour);
   the nano-banana image model for atmospheric plates. UI glyphs stay the

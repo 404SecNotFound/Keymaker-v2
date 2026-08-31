@@ -230,28 +230,35 @@ is not a candidate however well it reads.
 
 ## Imagery
 
-- **Hero background**: the "Filament Field" plate (see `STATUS.md` for
-  source) — fine blue/ember light filaments and particle trails sweeping on an
-  upper-left to lower-right diagonal over warm charcoal, brightest across the
-  top and right, with the left third and the lower centre dark and open. It
-  sits behind the hero only, fades to flat `canvas` before any form or text
-  panel, and carries its sparks at full strength, because imagery is the one
-  place they are allowed.
+- **Hero background**: the "Deep Field" plate (see `STATUS.md` for source) —
+  layered blue/ember bokeh receding into warm haze along a lower-left to
+  upper-right diagonal band, with the upper left dark and the band passing
+  below and around the headline. It sits behind the hero only, fades to flat
+  `canvas` before any form or text panel, and carries its sparks at full
+  strength, because imagery is the one place they are allowed.
 
   The composition is load-bearing rather than a matter of taste, and the two
   regions that matter are not the ones intuition suggests. `hero-plate.spec.ts`
   samples a band at `y 40–150` for visibility — that is *above* the headline,
   and it lands on the middle of the plate once the wrapper's `-165px` offset is
   applied — while the contrast half samples the headline's own bounding box
-  below it. So the plate has to be **bright where it is sampled for visibility
-  and quiet where the words actually sit**, which means energy high and right,
-  calm low and centre-left. A plate briefed the obvious way round — dark in the
-  middle to protect the headline — fails the visibility half outright; that is
-  how the first accepted candidate failed, at `peakLift 4.92` against a floor
-  of 6.5.
+  below it. So a plate has to be **bright where it is sampled for visibility
+  and quiet where the words actually sit**. A plate briefed the obvious way
+  round — dark through the middle to protect the headline — fails the
+  visibility half outright, measured at `peakLift 4.92` against a floor of 6.5
+  on a candidate that was otherwise fine.
 
   Neither "looks good" nor "safely dim" is the standard, because both halves
   are asserted.
+
+  **This plate carries a known exception, recorded rather than hidden.** Its
+  haze is a pale neutral grey rather than the warm amber this section asks for,
+  and § Surfaces says cool or neutral greys do not appear anywhere. The rule is
+  not being retired: it still binds every ground, border, and text tone, and
+  the exception reaches no further than the imagery layer, which is the one
+  place the system already tolerates colour it forbids elsewhere. It was
+  accepted deliberately, on a chosen plate, and it is the first thing to fix on
+  any re-roll — not a precedent for grey arriving anywhere a token is named.
 
   Haze is warm — amber or taupe tinted. A neutral grey or white smoke plume
   is the § Surfaces drift arriving through the one door this system leaves
