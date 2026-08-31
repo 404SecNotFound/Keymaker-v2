@@ -29,7 +29,7 @@ import {
   UserX,
   Dices,
   ChevronDown,
-  AlertTriangle,
+  TriangleAlert,
   ShieldCheck,
   ShieldAlert,
   LifeBuoy,
@@ -133,7 +133,7 @@ function LockWarning({
       className="flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-[12px]"
     >
       <span className="flex min-w-0 items-center gap-1.5 text-warning">
-        <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+        <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">
           Locking in <span className="tabular-nums font-medium">{secondsLeft}s</span> — secrets will be cleared
         </span>
@@ -2681,7 +2681,7 @@ export function EncryptorTool() {
             onFileChange={(e) => handleFileChange(e, setKeyFile)}
             onClear={() => setKeyFile(null)}
             selectedFile={keyFile}
-            icon={<KeyRound size={22} />}
+            icon={<KeyRound className="h-5 w-5" />}
             label="Select key file"
             description="Drag & drop or click to select an existing file"
           />
@@ -2738,7 +2738,7 @@ export function EncryptorTool() {
             }
             onClear={() => setFile(null)}
             selectedFile={file}
-            icon={<FileText size={22} />}
+            icon={<FileText className="h-5 w-5" />}
             label="Drop a file here"
             description={`or click to browse · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`}
           />
@@ -2781,7 +2781,7 @@ export function EncryptorTool() {
                   {textSecretSeedStatus === 'valid' ? (
                     <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
                   ) : (
-                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                    <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
                   )}
                   {textSecretSeedStatus === 'valid'
                     ? 'All words recognised'
@@ -3258,7 +3258,7 @@ export function EncryptorTool() {
                           role="status"
                           className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning"
                         >
-                          <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
+                          <TriangleAlert className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
                           WebAssembly is unavailable in this browser, so Argon2id cannot run.
                           Falling back to PBKDF2 at 1,000,000 iterations — still strong, but
                           not memory-hard. Files you encrypt here stay fully readable everywhere.
@@ -3599,7 +3599,7 @@ export function EncryptorTool() {
           data-testid="slot-table-warning"
         >
           <p className="flex items-start gap-2 font-medium">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             This backup&apos;s list of unlock methods has changed since it was created.
           </p>
           <p className="mt-1.5 leading-snug">
@@ -3639,7 +3639,7 @@ export function EncryptorTool() {
                   {decryptedQrStatus.kind === 'seed' ? (
                     <ShieldCheck className="h-3.5 w-3.5" aria-hidden="true" />
                   ) : (
-                    <AlertTriangle className="h-3.5 w-3.5" aria-hidden="true" />
+                    <TriangleAlert className="h-3.5 w-3.5" aria-hidden="true" />
                   )}
                   {decryptedQrStatus.kind === 'seed'
                     ? 'All words recognised'
@@ -3893,13 +3893,13 @@ export function EncryptorTool() {
         className="mt-2 h-auto w-full py-3.5 text-[15px] font-medium"
       >
         {isLoading ? (
-          <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
         ) : currentMode === 'encrypt' ? (
-          <Lock className="mr-2 h-5 w-5" />
+          <Lock className="mr-2 h-4 w-4" />
         ) : verifyOnly ? (
-          <ShieldCheck className="mr-2 h-5 w-5" />
+          <ShieldCheck className="mr-2 h-4 w-4" />
         ) : (
-          <Unlock className="mr-2 h-5 w-5" />
+          <Unlock className="mr-2 h-4 w-4" />
         )}
         {currentMode === 'encrypt'
           ? `Encrypt ${inputType === 'file' ? 'File' : 'Text'}`
@@ -4273,7 +4273,7 @@ export function EncryptorTool() {
       <footer className="w-full border-t border-border">
         <div className="mx-auto flex max-w-5xl flex-col items-center gap-2 px-4 py-5 text-xs text-muted-foreground sm:flex-row sm:justify-between sm:px-6">
           <div className="flex items-center gap-1.5">
-            <Heart className="h-3 w-3 text-subtle-foreground" />
+            <Heart className="h-3.5 w-3.5 text-subtle-foreground" />
             <span>
               Keymaker is a fork of{' '}
               <a href="https://github.com/seQRets/ittybitz" target="_blank" rel="noopener noreferrer" className="text-foreground underline underline-offset-4 decoration-1">
@@ -4551,7 +4551,7 @@ export function EncryptorTool() {
                     download
                     className="shrink-0 rounded-lg border border-border px-2.5 py-1 text-[12px] font-medium text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
                   >
-                    <Download className="mr-1 inline h-3 w-3 align-[-1px]" />
+                    <Download className="mr-1 inline h-3.5 w-3.5 align-[-2px]" />
                     Save
                   </a>
                 </div>

@@ -146,6 +146,14 @@ jobs:
       - name: Every colour is one the design system names
         run: npm run test:palette
 
+      # The same idea for § Icons: three sizes, one stroke. It reads the
+      # rendered box rather than the JSX because the button base's
+      # `[&_svg]:size-4` outranks the `h-*` on the icon itself, so the source
+      # says one number and the browser paints another. Reuses the chromium
+      # installed for the palette gate.
+      - name: Every icon is a size the design system names
+        run: npm run test:icons
+
   # Two clean builds of the same commit must produce identical bytes.
   #
   # This is what makes the signed manifest mean something a user can act on.

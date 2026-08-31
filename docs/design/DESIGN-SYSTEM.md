@@ -129,6 +129,46 @@ Applies to any surface that speaks in the future tense. A panel describing
 bytes that exist is not anticipating anything, and this rule has nothing to say
 about it.
 
+## Icons
+
+One family — lucide — at **three sizes, each with a job**:
+
+| class | paints | for |
+| --- | --- | --- |
+| `h-3.5 w-3.5` | 14px | inline, sitting in a run of text |
+| `h-4 w-4` | 16px | standalone, and inside any control |
+| `h-5 w-5` | 20px | display: empty states, and nothing else |
+
+Stroke weight is never set. Lucide draws a 2-unit stroke on a 24 grid, so the
+painted line follows the size — 1.17px, 1.33px, 1.67px. That is the whole
+reason the sizes are rationed: the apparent weight of an icon is a function of
+its height, so five sizes is five line weights in one family, and *that* is
+what reads as inconsistent long before anyone notices a glyph. The audit that
+produced this rule found no `strokeWidth` prop anywhere. There was never a
+stroke problem to fix.
+
+Before this, six sizes were in use — 12, 14, 16, 18, 20 and 22px — expressed
+three different ways: a `h-*` class, a `size={22}` prop, and nothing at all.
+
+**Inside a control the size class is decoration.** The button base carries
+`[&_svg]:size-4`, a class-plus-type selector, which outranks the `.h-5` on the
+icon itself. Measured, not assumed: an icon written `h-5 w-5` in a button
+computes to 16×16, one written `h-3.5 w-3.5` in a button also computes to
+16×16, and the same `h-5 w-5` icon outside a button computes to 20×20. So the
+encrypt button's `Lock` was authored at 20 and had been painting 16 since the
+button was written. Author `h-4 w-4` on icons in controls — matching what the
+control will paint anyway — rather than a number the cascade discards.
+
+**One name per icon.** `AlertTriangle` and `TriangleAlert` are the same export
+object; the first is lucide's deprecated alias. Two names for one glyph means a
+search for one usage silently misses the other half, so only the current name
+is used.
+
+`scripts/icon-audit.mjs` enforces the sizes against the rendered page, the same
+way the palette gate does, because the override above is exactly the kind of
+thing that is invisible in the source and obvious in the pixels. The logo is
+not a lucide icon and is not covered — it is a fill-based mark on its own grid.
+
 ## The sparks — quarantined
 
 `#0447FF` (electric blue) and `#FF4704` (ember) exist **only** inside

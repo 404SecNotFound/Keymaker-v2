@@ -13,7 +13,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Dices, Info, AlertTriangle, CheckCircle2, ShieldAlert, ChevronDown } from "lucide-react";
+import { Dices, Info, TriangleAlert, CheckCircle2, ShieldAlert, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
@@ -193,7 +193,7 @@ export function DiceEntropyTool() {
     <div className="space-y-5">
       <div className="flex items-center gap-2.5">
         <div className="grid h-9 w-9 place-items-center rounded-lg bg-inset text-foreground">
-          <Dices className="h-4.5 w-4.5" />
+          <Dices className="h-4 w-4" />
         </div>
         <div>
           <h2 className="text-[15px] font-medium">Dice Entropy Calculator</h2>
@@ -325,7 +325,7 @@ export function DiceEntropyTool() {
         {showValidator && (
           <div className="animate-in fade-in-50 space-y-2 rounded-xl border border-warning/30 bg-warning/5 p-3">
             <p className="text-[12px] leading-snug text-warning">
-              <AlertTriangle className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
+              <TriangleAlert className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
               The sequence you paste here <strong>is</strong> your entropy. It stays on this
               device — nothing is sent anywhere — but it will exist in browser memory and
               may be retained by your keyboard or clipboard. Prefer the count above unless
@@ -458,7 +458,7 @@ export function DiceEntropyTool() {
           </span>
         </p>
         <p className="flex items-start gap-2">
-          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
           <span>
             Rolls only count if they are <span className="font-medium text-foreground">fair</span> (no
             loaded dice), <span className="font-medium text-foreground">independent</span> (shake well,

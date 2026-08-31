@@ -134,9 +134,6 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   `enableShares` in the same file already did. Did not reproduce in the next
   full run; the byte-level assertion stays, since it is the thing that would
   catch a toggle that is on and does nothing.
-- **Iconography is inconsistent, and it is not the stroke weight.** Measured,
-  not guessed — see "The icon audit" below. Waiting on a screenshot to say
-  which of the five sizes looks wrong before anything is changed.
 
 ## The icon audit
 
@@ -177,8 +174,22 @@ everything else imports the alias. Invisible to a user, but it means a search
 for one usage misses half of them. `Check` and `CheckCircle2` are separately
 both used for the "ok" state.
 
-Nothing here has been changed. The diagnosis does not need the screenshot; the
-decision about which sizes survive does.
+**Resolved.** Six sizes were in use once the rendered page was measured rather
+than the source read — 12, 14, 16, 18, 20 and 22px, expressed three ways: an
+`h-*` class, a `size={22}` prop, and nothing at all. They are now three, each
+with a job, written into § Icons: 14px inline, 16px standalone and in controls,
+20px display. `AlertTriangle` is gone in favour of `TriangleAlert`.
+
+The screenshot turned out not to be needed. The question it was meant to answer
+— which size looks wrong — dissolved once the sizes were counted: the answer is
+that having six of them is what looks wrong, whichever one you happen to be
+staring at.
+
+`scripts/icon-audit.mjs` now holds the line, walking the rendered page the way
+the palette gate does. Three sabotages, three distinct failures: a banned size
+names the icon and its authored class, a hand-set `strokeWidth` names the
+weight, and a scan that matches nothing fails on its own floor rather than
+reporting success over zero icons.
 
 ## The browser job, and why it was red
 
