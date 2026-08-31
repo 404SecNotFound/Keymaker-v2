@@ -1,5 +1,55 @@
 # Changelog
 
+## Keymaker v2.2.0
+
+A design release. Nothing about the container format, the ciphers or the key
+derivation changed — v2.2.0 reads and writes exactly what v2.1.0 did, and the
+fixture corpus in CI is what says so. What changed is what the app looks like,
+and how much of that is now checked by a machine rather than by eye.
+
+### Added
+- **The container inspector summarises before it itemises.** Encrypting with an
+  empty form, the right-hand pane no longer paints a header hex row, a slot
+  table and three green ticks describing a file nobody has made yet. It states
+  the cipher and how many ways in, with the itemisation behind a button that
+  says what it will show. Real input opens the detail on its own, and closes it
+  again if the input goes away.
+- **Three design gates in CI, each sabotaged and shown to fail.**
+  `test:icons` holds every rendered lucide icon to a size the design system
+  names; `hero-plate.spec.ts` reads composited pixels and holds the hero plate
+  to being both visible and safe to read over; and `apply-build-id.mjs` now
+  fails the build when the service worker precaches a file the export does not
+  contain. All three read what the browser painted rather than what the source
+  says, because each of the defects they catch was invisible in the source.
+
+### Changed
+- **The display face is Plus Jakarta Sans** (OFL-1.1, vendored, precached).
+  The stacks previously led with Satoshi, which was never vendored and so was
+  never actually drawn — the ITF Free Font License forbids distributing the
+  binary through a public repository.
+- **Disabled controls are drawn rather than dimmed.** A disabled button loses
+  its fill and takes a `line` border with a `muted` label, instead of the whole
+  element being held at 50% opacity. On the filled primary the old treatment
+  composited to a mid-grey pill that read as an ordinary, available button.
+- **The Advanced panel asks two questions instead of presenting one wall** —
+  key derivation on one side, what the container carries on the other.
+- **A cipher-field plate sits behind the hero**, replacing the deep-field one,
+  and is actually visible: it had been held under three suppressors at once and
+  was lifting the canvas by about two values out of 255.
+- **Icons are rationed to three sizes**, each with a job: 14px inline, 16px
+  standalone and in controls, 20px display. Six were in use, expressed three
+  different ways.
+
+### Fixed
+- **The freeze warning now precedes the freeze**, and its test establishes its
+  own premise instead of assuming it. The test had been red on `main` in
+  firefox through three merges, reporting the app as failing to warn when the
+  app was right not to.
+- **Release notes read the container version out of the source** instead of
+  restating it, so they cannot drift from what the app writes. The published
+  v2.1.0 notes said "KEYM v2" while the app wrote v3, and the test that should
+  have caught it asserted the same literal the generator hard-coded.
+
 ## Keymaker v2.1.0
 
 Everything below shipped between v1.0.0 and v2.1.0. There is no separate
