@@ -230,11 +230,37 @@ is not a candidate however well it reads.
 
 ## Imagery
 
-- **Hero background**: the "Deep Field" plate (see `STATUS.md` for source) —
-  sparse blue/ember bokeh over warm charcoal. It sits behind the hero only,
-  fades to flat `canvas` before any form or text panel, and text over it
-  always has ≥ AA contrast against the darkest local region or sits on a
-  `canvas` scrim.
+- **Hero background**: the "Filament Field" plate (see `STATUS.md` for
+  source) — fine blue/ember light filaments and particle trails sweeping on an
+  upper-left to lower-right diagonal over warm charcoal, brightest across the
+  top and right, with the left third and the lower centre dark and open. It
+  sits behind the hero only, fades to flat `canvas` before any form or text
+  panel, and carries its sparks at full strength, because imagery is the one
+  place they are allowed.
+
+  The composition is load-bearing rather than a matter of taste, and the two
+  regions that matter are not the ones intuition suggests. `hero-plate.spec.ts`
+  samples a band at `y 40–150` for visibility — that is *above* the headline,
+  and it lands on the middle of the plate once the wrapper's `-165px` offset is
+  applied — while the contrast half samples the headline's own bounding box
+  below it. So the plate has to be **bright where it is sampled for visibility
+  and quiet where the words actually sit**, which means energy high and right,
+  calm low and centre-left. A plate briefed the obvious way round — dark in the
+  middle to protect the headline — fails the visibility half outright; that is
+  how the first accepted candidate failed, at `peakLift 4.92` against a floor
+  of 6.5.
+
+  Neither "looks good" nor "safely dim" is the standard, because both halves
+  are asserted.
+
+  Haze is warm — amber or taupe tinted. A neutral grey or white smoke plume
+  is the § Surfaces drift arriving through the one door this system leaves
+  open, and it is the specific fault that sent the first generations back.
+
+  The plate is no longer dimmed on mount. The `opacity-40` and the canvas
+  scrim that once guarded the headline are gone — they cost a third of the
+  image's visibility to buy 0.3:1 on a floor of 4.5 — and the guarantee they
+  were meant to provide is measured in `hero-plate.spec.ts` instead.
 - **Illustrative objects and icons-as-art** (empty states, tool cards,
   social imagery): generated in the spark palette on `canvas` grounds,
   vector-style, no text baked in.

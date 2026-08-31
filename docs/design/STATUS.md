@@ -17,38 +17,84 @@ the binding tokens. This file holds the choices and the loose ends.
   a public repository. That last clause is the requirement, not a bonus: it is
   what Satoshi failed. See "Loose ends" for the licence reasoning, and
   `DESIGN-SYSTEM.md § Type` for the test any future face has to pass.
-- **Hero background**: "Deep Field" — sparse blue/ember bokeh drifting in a
-  diagonal band over warm charcoal. **Shipped** as
-  `public/hero-cipher-field.webp` (1400×781, 16 KB).
+- **Hero background**: "Filament Field" — fine blue/ember light filaments and
+  particle trails on a lower-left to upper-right diagonal over warm charcoal,
+  with the upper left and centre dark and open. **Shipped** as
+  `public/hero-cipher-field.webp` (1400x781, 42 KB). The filename is unchanged
+  on purpose: it is referenced by the component, the screenshot generator and
+  the walkthrough, and none of those get churn for a rename.
 
-  It is a regeneration of the concept, not the plate originally chosen. The
-  first pick was a 2752×1536 PNG on the Higgsfield CDN, and that host is
-  refused by the network policy of a sealed container — generating a new one
-  through the MCP server worked, but its result URL is on the same blocked
-  host, so the bytes came back through the Higgsfield sandbox rather than by
-  fetching them here. Prompt and settings, so it can be reproduced or
-  re-rolled: `nano_banana_pro`, 16:9, 4k, the brief in
-  `DESIGN-SYSTEM.md § Imagery` written out longhand — warm near-black ground
-  with a taupe undertone, twenty to thirty widely spaced bokeh points on a
-  lower-left to upper-right diagonal, a handful `#0447FF`, a handful
-  `#FF4704`, the rest dim warm grey, darkest at the left/right/bottom edges,
-  no text or subject of any kind.
+  It replaces the original "Deep Field" bokeh plate, which was generated to a
+  brief asking for "twenty to thirty widely spaced bokeh points". That brief
+  was the problem. Rendered at the hero's size the points read as faint
+  diagonal scratches, and the plate had almost nothing to say — the model was
+  never the limit, and re-running the same brief on the same model would have
+  produced the same thing again.
 
-  Downscaled to 1400px and WebP q60 deliberately: the plate is soft bokeh with
-  no fine detail, so it survives the compression intact and 22 MB of PNG in a
-  repository that promises reproducible builds would be 22 MB nobody can
-  diff. Mounted behind the hero only, at 40% with a radial canvas scrim under
-  the text and a gradient to flat canvas before the workbench. Worst measured
-  contrast over it, per glyph run: 15.2:1 for the headline, 4.8:1 for the
-  dimmed second line (large text, needs 3), 7.0:1 for the body.
+  Prompt and settings, so it can be reproduced or re-rolled: `nano_banana_pro`,
+  16:9, `resolution: 4k`, the brief in `DESIGN-SYSTEM.md` § Imagery written out
+  longhand — long fine light filaments and streaking particle trails sweeping
+  lower-left to upper-right through warm dark air, soft bokeh at varying depths
+  along them, illumination limited to `#0447FF` / `#FF4704` / dim warm grey,
+  warm amber haze only, upper middle left dark and open, deep vignette, and an
+  explicit negative list: no horizon, no ground plane, no grid floor, no
+  wireframe mesh, no subject, no text.
 
-  Runners-up from the original set, if a re-pick is ever wanted (host
-  `d8j0ntlcm91z4.cloudfront.net`, path prefix
-  `user_3IcKP9J7tAl1kmrRAIwI2f3BcKm/hf_20260830_043937_`): bloom
-  `e3bbdfdb-c345-4eb3-9fc0-48702cdd3f2a`, ribbon
-  `205a5da0-bc6c-4198-aab0-826b14257d1b`, topography
-  `b3753996-971c-4e3b-af3b-bc8539c37462`, aurora
-  `de2734f5-805c-4e1c-a1fd-a38728e6b681`.
+  That negative list is most of the work. Three earlier generations failed on
+  exactly the things it now names: a wireframe mesh resolved into a terrain
+  floor with a horizon (the brief had said "no horizon" in one variant and
+  omitted it in the one that needed it), and two others grew a neutral grey
+  smoke plume — § Surfaces drift entering through the imagery door.
+
+  **The submitted model id and the reported one differ.** Every job was
+  submitted as `nano_banana_pro` and came back reporting `model:
+  nano_banana_2`. Recorded rather than explained; if a future re-roll looks
+  unlike this plate, that discrepancy is the first thing to check.
+
+  WebP q80 rather than the q60 the previous plate used, and the reason is a
+  property of the image rather than a preference: q60 was justified in this
+  file by the plate being "soft bokeh with no fine detail, so it survives the
+  compression intact". Filaments are fine detail, so that justification does
+  not transfer. 31 KB against the old 16 KB, still small enough to diff.
+
+  Two post-processing steps are applied to the generation before it ships, and
+  both were derived from the gate rather than from taste:
+
+  **Flipped vertically.** As generated, the plate was dark across the top and
+  bright at the lower right. That failed `hero-plate.spec.ts` at `peakLift
+  4.92` against a floor of 6.5 — the visibility band is sampled at `y 40–150`,
+  which is *above* the headline and lands mid-plate, so briefing "keep the
+  middle dark to protect the headline" put the quiet region exactly where the
+  gate looks for detail. The flip puts the filaments across the top and leaves
+  the lower centre calm, which satisfies both halves at once. Worth keeping in
+  mind for any re-roll: the intuitive brief is the wrong way up.
+
+  **Brightness 0.65** (`sharp().modulate({brightness: 0.65})`). At full
+  strength the plate passed both gates but left the headline at 4.91:1 against
+  a 4.5 floor, where the previous plate had 9.0:1. That is a gate passing on
+  the last 0.4 of its margin, and § Voice does not describe an interface that
+  loud. The peak surplus paid for it — the measured sweep:
+
+  | brightness | meanLift (≥1.85) | peakLift (≥6.5) | headline (≥4.5) |
+  | --- | --- | --- | --- |
+  | 1.00 | 9.20 | 64.98 | 4.91:1 |
+  | 0.80 | 6.31 | 38.68 | 5.83:1 |
+  | **0.65 (shipped)** | **4.64** | **24.96** | **6.75:1** |
+  | 0.55 | 3.73 | 18.07 | 7.51:1 |
+
+  0.65 restores real headline headroom while still leaving the plate twice as
+  present as the 2.32 meanLift the previous one shipped at. This is not the
+  `opacity-40` mistake returning: that was three CSS suppressors stacked on an
+  already-quiet image, taking it to a lift of two values out of 255. This is
+  one adjustment baked into the art, chosen against measurements, on an image
+  that was four times brighter than anything the system had shipped.
+
+  Rejected, with reasons, so they are not re-tried: a geometric lattice (read
+  as a stock tech terrain floor); a warm particle field (too bright across the
+  headline zone, plus a baked-in frame vignette artifact); a cyan/indigo neon
+  plate (breaks the warm-monochrome rule and the spark quarantine outright,
+  and its headline contrast only cleared AA at all because of a composite the
+  code no longer applies).
 - **Generated assets**: Recraft V4.1 `vector` mode for icons-as-art and
   illustrative objects (takes exact hex palettes and background colour);
   the nano-banana image model for atmospheric plates. UI glyphs stay the
@@ -115,9 +161,11 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   all. Replaced with **Plus Jakarta Sans** (OFL-1.1, npm, in the lockfile,
   precached). ITF invite exception requests under §09 if the face is ever
   wanted badly enough to ask.
-- Grab reference screenshots (images.refero.design and elevenlabs.io) so the
-  craft review can compare pixels, not just mechanisms. Still blocked in a
-  sealed container; both hosts are refused at the proxy.
+- Grab reference screenshots so the craft review can compare pixels, not just
+  mechanisms. **No longer blocked**: `styles.refero.design` and `elevenlabs.io`
+  both answer 200 from a session provisioned after the allowlist widened
+  (`images.refero.design` still returns 403 and was not disambiguated). Not
+  done yet — the hosts are open, the screenshots have not been taken.
 - One flaky browser test, seen once and not reproduced: `calibration.spec.ts`
   › "reports the estimate as measured rather than typical" failed in a full
   run and passed alone and in the next two full runs. It measures real device
@@ -233,13 +281,37 @@ unstyled HTML reports a red build rather than a green one.
 
 The environment's network allowlist binds when a container is **provisioned**,
 not when it is edited — a running session cannot be opened up by changing the
-setting, it has to be a new session. What is reachable from a sealed one:
-`registry.npmjs.org` and `files.pythonhosted.org` (which is how JetBrains Mono
-and Pillow got here), and the Higgsfield MCP server, whose sandbox has its own
-internet access and can be used to move bytes that the local proxy refuses.
+setting, it has to be a new session. A session started after the allowlist was
+widened measured the following, and the results are worth stating precisely
+because two of them contradict what this file used to say:
 
-Firefox and WebKit binaries are not installed in the sealed container and
-`playwright install` cannot reach its CDN, so only `--project=chromium` is
-verifiable locally; CI covers the other two. A bare `npm run test:browser`
-reports ~320 failures that are all "Executable doesn't exist" — do not read
-that as a regression.
+| host | result |
+| --- | --- |
+| `registry.npmjs.org`, `files.pythonhosted.org` | reachable |
+| `d8j0ntlcm91z4.cloudfront.net` (Higgsfield results) | **reachable** — generated bytes can now be pulled straight down with `curl`, no sandbox relay |
+| `styles.refero.design`, `elevenlabs.io` | **reachable** — the reference-screenshot loose end is open |
+| `playwright.download.prss.microsoft.com` | reachable, but see below |
+| `cdn.playwright.dev`, `ppa.launchpadcontent.net` | refused at CONNECT |
+
+**Reachable is not the same as downloadable, and a bare status code will not
+tell you which you have.** A policy denial is the gateway answering `403` *to
+the CONNECT*, with no tunnel and no TLS. A CDN answering `403` or `404` to a
+pathless `GET` has already completed CONNECT and a TLS handshake, and is
+reachable. Both print the same three digits from `curl -o /dev/null -w
+'%{http_code}'`. Read `curl -v` for `CONNECT tunnel established`, or the
+proxy's own `recentRelayFailures` at `$HTTPS_PROXY/__agentproxy/status`, which
+names the host and the reason.
+
+So `playwright install --with-deps firefox webkit` still fails here, but one
+step later than it used to: the Microsoft CDN is reachable and the transfer
+then dies mid-stream ("server closed connection" on the Firefox zip), while
+`cdn.playwright.dev` and the apt PPA are refused outright. Only
+`--project=chromium` is verifiable locally; CI covers the other two. A bare
+`npm run test:browser` reports ~320 failures that are all "Executable doesn't
+exist" — do not read that as a regression.
+
+Chromium also cannot reach the network *through* the relay even where `curl`
+can: its TLS handshake gets ~39 bytes back and the tunnel closes
+(`ws_closed_mid_exchange`). To screenshot a live URL, intercept with
+`page.route` and fulfil each request from a `curl` subprocess. That renders
+the real deployed bytes and is how the live hero shot was taken.
