@@ -21,7 +21,7 @@
  * silently shipping an unversioned worker.
  */
 import { createHash } from 'node:crypto';
-import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const OUT_DIR = new URL('../out', import.meta.url).pathname;
@@ -119,6 +119,43 @@ if (precache.length === 0) {
 }
 
 const precacheBytes = staticFiles.reduce((n, f) => n + readFileSync(f).length, 0);
+
+// Every hand-written entry in the worker's own precache list must exist in the
+// export. That list is maintained by hand — the chunks are injected below, but
+// the app shell, the recovery kit, the icons and the hero plate are typed out —
+// so renaming one of those files anywhere else in the tree leaves a path here
+// pointing at nothing.
+//
+// The consequence is out of all proportion to the typo. `cache.addAll()` is
+// atomic: one 404 rejects the whole call, so install fails, no worker ever takes
+// control, and everything that depends on one fails at once — offline first use,
+// precache coverage, cache isolation, update semantics, the base-path suite.
+// That is exactly what a renamed hero plate did: 29 red tests across all three
+// engines, not one of whose names mentions the asset, while the build and the
+// palette audit both stayed green.
+//
+// Checked against the export rather than the repo, because the export is what
+// the worker will actually fetch.
+const listed = [...sw.matchAll(/`\$\{BASE\}(\/[^`]*)`/g)].map((m) => m[1]);
+if (listed.length === 0) {
+  console.error(
+    'build-id: ERROR — found no `${BASE}/…` entries in the service worker. The ' +
+      'precache list changed shape, so this check is no longer reading it and would ' +
+      'pass whatever the list said. Update the pattern rather than deleting the check.'
+  );
+  process.exit(1);
+}
+const unresolved = listed.filter((p) => !existsSync(join(OUT_DIR, p)));
+if (unresolved.length) {
+  for (const p of unresolved) {
+    console.error(
+      `build-id: ERROR — the service worker precaches ${p}, which the export does not ` +
+        'contain. cache.addAll() is atomic, so this one 404 fails install and every ' +
+        'service-worker test with it. Fix the path in public/sw.js.'
+    );
+  }
+  process.exit(1);
+}
 
 // Hash every emitted file except the worker itself, whose content is about to
 // depend on the hash. Paths are included so a pure rename still counts.

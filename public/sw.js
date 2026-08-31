@@ -60,7 +60,7 @@ const APP_SHELL = [
   // below is an allowlist, so an asset that is precached but not listed is
   // still fetched from the network by the fetch handler — which offline means
   // a failed request on the first screen the user sees.
-  `${BASE}/hero-deep-field.webp`,
+  `${BASE}/hero-cipher-field.webp`,
   `${BASE}/favicon.ico`,
   `${BASE}/manifest.json`,
   `${BASE}/apple-touch-icon.png`,
