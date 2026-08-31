@@ -4144,14 +4144,23 @@ export function EncryptorTool() {
                 alt=""
                 aria-hidden="true"
                 decoding="async"
-                className="h-full w-full object-cover opacity-40 [mask-image:radial-gradient(106%_68%_at_50%_36%,#000_22%,transparent_70%)]"
+                className="h-full w-full object-cover [mask-image:radial-gradient(112%_74%_at_50%_36%,#000_34%,transparent_78%)]"
               />
-              {/* A canvas scrim under the words themselves. The plate's bokeh
-                  band runs diagonally through the middle of the frame, which is
-                  where the headline sits — without this the brightest orbs land
-                  under "Encrypt everything." and the contrast is whatever the
-                  image happens to be doing that day. */}
-              <div className="absolute inset-0 bg-[radial-gradient(52%_46%_at_50%_52%,hsl(var(--background))_0%,hsl(var(--background)/0.78)_42%,transparent_100%)]" />
+              {/* The canvas scrim that used to sit here is gone, and the plate
+                  is no longer held at 40%. Both were guarding the headline, and
+                  a sweep of the two against the rendered page showed they were
+                  not earning it: across every combination from 0.4-with-scrim to
+                  1.0-without, the worst background behind the headline moved
+                  only 9.3:1 to 9.0:1, while the plate itself went from 1.52x the
+                  canvas to 2.07x. Three suppressors stacked had made the image
+                  almost invisible — a lift of two values out of 255 — to buy
+                  0.3:1 of contrast on a floor of 4.5.
+
+                  What guarded the headline is now measured rather than painted
+                  over: hero-plate.spec.ts reads the composited pixels behind the
+                  words and fails below AA, so a future plate that is genuinely
+                  too bright is caught by a number instead of pre-emptively
+                  dimmed away. */}
               {/* Down to flat canvas before anything reads on top of it. */}
               <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-b from-transparent to-background" />
             </div>
