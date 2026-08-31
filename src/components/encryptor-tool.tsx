@@ -4127,7 +4127,7 @@ export function EncryptorTool() {
 
               Prefixed with BASE_PATH like every other hand-authored URL here:
               Next rewrites its own asset paths but not ours, and a bare
-              "/hero-deep-field.webp" is a 404 on the project-site deploy.
+              "/hero-cipher-field.webp" is a 404 on the project-site deploy.
 
               -z-10 rather than z-0: an absolutely positioned box paints above
               static in-flow content whatever the document order, so at z-0 the
@@ -4140,7 +4140,7 @@ export function EncryptorTool() {
               className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[620px] w-screen -translate-x-1/2 -translate-y-[165px] overflow-hidden"
             >
               <img
-                src={`${BASE_PATH}/hero-deep-field.webp`}
+                src={`${BASE_PATH}/hero-cipher-field.webp`}
                 alt=""
                 aria-hidden="true"
                 decoding="async"

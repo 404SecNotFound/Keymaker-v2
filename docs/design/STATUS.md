@@ -19,7 +19,7 @@ the binding tokens. This file holds the choices and the loose ends.
   `DESIGN-SYSTEM.md § Type` for the test any future face has to pass.
 - **Hero background**: "Deep Field" — sparse blue/ember bokeh drifting in a
   diagonal band over warm charcoal. **Shipped** as
-  `public/hero-deep-field.webp` (1400×781, 7.5 KB).
+  `public/hero-cipher-field.webp` (1400×781, 16 KB).
 
   It is a regeneration of the concept, not the plate originally chosen. The
   first pick was a 2752×1536 PNG on the Higgsfield CDN, and that host is
