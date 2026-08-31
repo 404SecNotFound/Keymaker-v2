@@ -251,23 +251,28 @@ is not a candidate however well it reads.
   Neither "looks good" nor "safely dim" is the standard, because both halves
   are asserted.
 
-  **This plate carries a known exception, recorded rather than hidden.** Its
-  haze is a pale neutral grey rather than the warm amber this section asks for,
-  and § Surfaces says cool or neutral greys do not appear anywhere. The rule is
-  not being retired: it still binds every ground, border, and text tone, and
-  the exception reaches no further than the imagery layer, which is the one
-  place the system already tolerates colour it forbids elsewhere. It was
-  accepted deliberately, on a chosen plate, and it is the first thing to fix on
-  any re-roll — not a precedent for grey arriving anywhere a token is named.
+  **Haze is warm** — amber or taupe tinted. A neutral grey or white smoke
+  plume is the § Surfaces drift arriving through the one door this system
+  leaves open, and it is the fault that sent two candidate generations back.
 
-  Haze is warm — amber or taupe tinted. A neutral grey or white smoke plume
-  is the § Surfaces drift arriving through the one door this system leaves
-  open, and it is the specific fault that sent the first generations back.
+  **The shipped plate breaks that rule, and the exception is recorded rather
+  than hidden.** Its haze in the upper right renders pale neutral grey, not the
+  warm amber the paragraph above requires. It was accepted knowingly, on a
+  plate chosen for its other qualities, and it is the first thing to fix on any
+  re-roll. The rule is not retired by it: § Surfaces still binds every ground,
+  border and text tone without exception, and this one reaches no further than
+  the imagery layer — the single place the system already tolerates colour it
+  forbids everywhere else. It is a debt, not a precedent.
 
-  The plate is no longer dimmed on mount. The `opacity-40` and the canvas
-  scrim that once guarded the headline are gone — they cost a third of the
-  image's visibility to buy 0.3:1 on a floor of 4.5 — and the guarantee they
-  were meant to provide is measured in `hero-plate.spec.ts` instead.
+  **Dimming is done in the art, never on mount.** The `opacity-40` and the
+  canvas scrim that once guarded the headline are gone — three suppressors
+  stacked cost a third of the image's visibility to buy 0.3:1 on a floor of
+  4.5, and what they guarded is measured in `hero-plate.spec.ts` instead. A
+  plate that is too bright for the headline is therefore corrected *before* it
+  ships, by baking the reduction into the file (the current one at
+  `brightness: 0.60`, see `STATUS.md`), so what the repository holds is what
+  the browser paints. Re-adding a CSS opacity or a scrim over the plate is the
+  mistake this rule exists to prevent.
 - **Illustrative objects and icons-as-art** (empty states, tool cards,
   social imagery): generated in the spark palette on `canvas` grounds,
   vector-style, no text baked in.
