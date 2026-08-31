@@ -4134,6 +4134,16 @@ export function EncryptorTool() {
               plate washed over the top-left corner of the workbench card below
               it. Negative pulls it behind the flow while still leaving it above
               the page background.
+
+              opacity-20, not the 40 the bokeh plate ran at. This plate states
+              its key schedule as crisp lines rather than soft bokeh, so its
+              peak luminance under the headline is nearly double (0.86 against
+              0.48) even though it is fractionally darker on average — and
+              contrast is set by the brightest pixel behind a glyph, not the
+              mean. At 40 the worst case fell to 1.84:1 on "Trust nothing",
+              under the 3:1 that large text needs. 20 puts every run back at or
+              above where the bokeh plate measured. Re-measure before raising
+              it; the mean is not the number that matters here.
             */}
             <div
               aria-hidden="true"
@@ -4144,7 +4154,7 @@ export function EncryptorTool() {
                 alt=""
                 aria-hidden="true"
                 decoding="async"
-                className="h-full w-full object-cover opacity-40 [mask-image:radial-gradient(106%_68%_at_50%_36%,#000_22%,transparent_70%)]"
+                className="h-full w-full object-cover opacity-20 [mask-image:radial-gradient(106%_68%_at_50%_36%,#000_22%,transparent_70%)]"
               />
               {/* A canvas scrim under the words themselves. The plate's bokeh
                   band runs diagonally through the middle of the frame, which is

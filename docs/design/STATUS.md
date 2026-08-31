@@ -17,30 +17,46 @@ the binding tokens. This file holds the choices and the loose ends.
   a public repository. That last clause is the requirement, not a bonus: it is
   what Satoshi failed. See "Loose ends" for the licence reasoning, and
   `DESIGN-SYSTEM.md § Type` for the test any future face has to pass.
-- **Hero background**: "Deep Field" — sparse blue/ember bokeh drifting in a
-  diagonal band over warm charcoal. **Shipped** as
-  `public/hero-deep-field.webp` (1400×781, 7.5 KB).
+- **Hero background**: "Deep Field" — a sparse field of fine luminous line
+  runs, like rows of a cipher block, stacked along a lower-left to upper-right
+  diagonal over warm charcoal, with blue and ember nodes. **Shipped** as
+  `public/hero-deep-field.webp` (1400×781, 9.0 KB).
 
-  It is a regeneration of the concept, not the plate originally chosen. The
-  first pick was a 2752×1536 PNG on the Higgsfield CDN, and that host is
-  refused by the network policy of a sealed container — generating a new one
-  through the MCP server worked, but its result URL is on the same blocked
-  host, so the bytes came back through the Higgsfield sandbox rather than by
-  fetching them here. Prompt and settings, so it can be reproduced or
-  re-rolled: `nano_banana_pro`, 16:9, 4k, the brief in
+  It replaces the bokeh plate that held this slot, and states the concept as a
+  key schedule rather than as drifting points. Reaching it took two passes: the
+  first read as formless and let a haze bloom off the right edge, and the
+  correction for that overshot into crisp corner-to-corner geometry. The
+  shipped plate is the second pass. Prompt and settings, so it can be
+  reproduced or re-rolled: `nano_banana_pro`, 16:9, 4k, the brief in
   `DESIGN-SYSTEM.md § Imagery` written out longhand — warm near-black ground
-  with a taupe undertone, twenty to thirty widely spaced bokeh points on a
-  lower-left to upper-right diagonal, a handful `#0447FF`, a handful
-  `#FF4704`, the rest dim warm grey, darkest at the left/right/bottom edges,
-  no text or subject of any kind.
+  with a taupe undertone, fine horizontal runs of varying length stacked on a
+  lower-left to upper-right diagonal band, a handful of nodes `#0447FF`, a
+  handful `#FF4704`, the rest dim cool-neutral grey, darkest at the
+  left/right/bottom edges, no text or subject of any kind.
 
-  Downscaled to 1400px and WebP q60 deliberately: the plate is soft bokeh with
-  no fine detail, so it survives the compression intact and 22 MB of PNG in a
-  repository that promises reproducible builds would be 22 MB nobody can
-  diff. Mounted behind the hero only, at 40% with a radial canvas scrim under
-  the text and a gradient to flat canvas before the workbench. Worst measured
-  contrast over it, per glyph run: 15.2:1 for the headline, 4.8:1 for the
-  dimmed second line (large text, needs 3), 7.0:1 for the body.
+  The Higgsfield CDN host (`d8j0ntlcm91z4.cloudfront.net`) is still refused by
+  the network policy of a sealed container, so the bytes cannot be fetched from
+  a session; they arrived as a chat attachment and were converted here.
+  `.claude/settings.json` allowlists the host for the sandbox, which does not
+  by itself lift the egress policy above it.
+
+  Downscaled to 1400px and WebP q60 deliberately: 22 MB of PNG in a repository
+  that promises reproducible builds would be 22 MB nobody can diff. Mounted
+  behind the hero only, at **20%** with a radial canvas scrim under the text
+  and a gradient to flat canvas before the workbench.
+
+  The opacity is not the 40% the bokeh plate ran at, and the reason is the
+  reason this plate is different: crisp lines peak far brighter than soft
+  bokeh. In the headline zone this plate is fractionally *darker* on average
+  (mean L 0.179 against 0.194) but its peak is nearly double (0.857 against
+  0.480), and contrast is set by the brightest pixel behind a glyph, not the
+  mean. Composited at 40% over canvas the worst case fell to 5.67:1 headline,
+  1.84:1 dimmed second line, 2.48:1 body — the second line under the 3:1 that
+  large text requires. At 20% every run is back at or above where the bokeh
+  plate sat: 10.82:1, 3.52:1, 4.75:1 against its 9.86 / 3.20 / 4.32. Those
+  figures are the conservative bound — text over plate-over-canvas with the
+  scrim discounted entirely — so the on-page numbers are better. Re-measure
+  before raising the opacity; the mean is not the number that matters.
 
   Runners-up from the original set, if a re-pick is ever wanted (host
   `d8j0ntlcm91z4.cloudfront.net`, path prefix
