@@ -101,6 +101,16 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
 - `playwright.config.ts` drops engines whose binaries are missing — locally
   only. In CI every project stays, so a broken install step still fails.
 
+- Every screenshot is one width now. `07-decrypt-detection` and `08-seedqr`
+  were element `.screenshot()` captures — 960 and 1024px wide against the
+  2360px of every other shot — which read as ragged in the folder and the
+  README. Both are viewport-width bands now (the inspector in its decrypt
+  column; the SeedQR dialog centred on its scrim), the README shows every
+  non-hero shot at one display width, and `scripts/screenshot-audit.mjs`
+  (`npm run test:screenshots`, wired into `ci.yml`) holds every shot at
+  2360px so the next stray element capture fails CI instead of shipping.
+  The standard is written down in `DESIGN-SYSTEM.md § Screenshots`.
+
 ## Loose ends
 
 - **Satoshi is not being vendored, and the question is closed.** It headed both

@@ -241,6 +241,27 @@ is not a candidate however well it reads.
 - **UI glyphs** (buttons, rows, nav): remain the stroke icon set, coloured
   by the text tokens like any other glyph — never spark-coloured.
 
+## Screenshots
+
+The README and walkthrough images (`docs/screenshots/`) are one set, captured
+by `scripts/capture-screenshots.mjs` — never by hand, for the reason its
+header gives: a shot nothing regenerates goes stale silently.
+
+- **One width.** Every shot is captured at the viewport width — 1180 CSS at
+  DPR 2, so **2360px** intrinsic — whether it frames a full-width band of the
+  centred layout or a modal centred on its scrim. Uniform intrinsic width is
+  what keeps the folder listing and the rendered README from reading as
+  ragged; a shot narrower than its neighbours announces itself as an
+  afterthought.
+- **Even padding, never an edge-to-edge crop.** Capture through `shotRegion`
+  (a viewport-width vertical-band clip carrying a `pad` margin) or a full
+  `page.screenshot`. An element `.screenshot()` frames its target with zero
+  surrounding margin, jammed against the image edge — the tell of the two
+  shots this rule brought back into line.
+- **Height follows content.** The band is only as tall as the panel it frames
+  plus the padding, so heights differ from shot to shot and that is correct.
+  Width is the axis that must not.
+
 ## Motion
 
 150–250ms, ease-out, opacity/transform only. The existing
