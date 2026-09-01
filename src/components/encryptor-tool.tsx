@@ -38,6 +38,7 @@ import {
   Timer,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { CommandBar, type CommandBarItem } from "@/components/command-bar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1017,6 +1018,41 @@ export function EncryptorTool() {
   // Recovery kit modal — see the footer.
   const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
 
+  /**
+   * The command bar (⌘K / Ctrl+K).
+   *
+   * Every entry calls a handler that already exists on the page — the bar adds
+   * reach, never capability, which is what keeps it out of the security
+   * argument entirely. The list itself is built beside the render, where the
+   * handlers it names are in scope; see `commandBarCommands`.
+   */
+  const [isCommandBarOpen, setIsCommandBarOpen] = useState(false);
+  /**
+   * Which modifier the hint in the header advertises. Resolved after mount:
+   * the export is static HTML, so the server render has no platform to ask,
+   * and "Ctrl K" is the honest default for the first paint — it is also
+   * accepted everywhere, ⌘ being the alias rather than the rule.
+   */
+  const [isApplePlatform, setIsApplePlatform] = useState(false);
+
+  useEffect(() => {
+    setIsApplePlatform(/Mac|iPhone|iPad/.test(navigator.platform));
+  }, []);
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === "k") {
+        // Both browsers put something on Ctrl+K (search-from-address-bar);
+        // while this page has focus the palette wins, which is the trade
+        // every ⌘K app makes.
+        e.preventDefault();
+        setIsCommandBarOpen((open) => !open);
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
   const clipboardTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /**
    * Wall-clock instant the clipboard is due to be overwritten, or null.
@@ -1646,6 +1682,20 @@ export function EncryptorTool() {
     clearSensitiveState();
     setInputType('file');
   }, [clearSensitiveState]);
+
+  /**
+   * The panic wipe, as one named action. It had one caller (the "Wipe now"
+   * link under the form); the command bar is the second, and the toast copy
+   * must not fork between them — two surfaces describing the same wipe
+   * differently is how someone comes to believe there are two wipes.
+   */
+  const wipeNow = useCallback(() => {
+    clearSensitiveState();
+    toast({
+      title: "Wiped",
+      description: "Password, inputs and any decrypted output were cleared. Your settings are unchanged.",
+    });
+  }, [clearSensitiveState, toast]);
 
   /**
    * Is there anything on screen worth locking?
@@ -3950,13 +4000,7 @@ export function EncryptorTool() {
       {hasSecretsOnScreen && (
         <button
           type="button"
-          onClick={() => {
-            clearSensitiveState();
-            toast({
-              title: "Wiped",
-              description: "Password, inputs and any decrypted output were cleared. Your settings are unchanged.",
-            });
-          }}
+          onClick={wipeNow}
           className="mx-auto flex cursor-pointer items-center gap-1.5 text-[12px] text-muted-foreground underline underline-offset-2 transition-colors hover:text-destructive"
         >
           <Trash2 className="h-3.5 w-3.5" />
@@ -4054,6 +4098,105 @@ export function EncryptorTool() {
     shamirCount, usePasskey, inputType, file, textSecret,
   ]);
 
+  /**
+   * What the command bar offers, and when.
+   *
+   * Contextual on purpose, the way the page itself is: the generators exist
+   * only where a password field does, and the wipe only while there is
+   * something to wipe — a command that would do nothing is not listed rather
+   * than listed grey. Mode switches go through `handleModeChange`, so they
+   * reset state exactly as clicking the tab does; a switch to the mode
+   * already showing is filtered out instead of resetting a form for nothing.
+   */
+  const commandBarCommands = useMemo<CommandBarItem[]>(() => {
+    const items: CommandBarItem[] = [];
+    if (mode !== "encrypt") {
+      items.push({
+        id: "go-encrypt", group: "Go to", label: "Encrypt", icon: Lock,
+        keywords: "seal file text mode tab",
+        run: () => handleModeChange("encrypt"),
+      });
+    }
+    if (mode !== "decrypt") {
+      items.push({
+        id: "go-decrypt", group: "Go to", label: "Decrypt", icon: Unlock,
+        keywords: "open unlock container mode tab",
+        run: () => handleModeChange("decrypt"),
+      });
+    }
+    if (mode !== "tools") {
+      items.push({
+        id: "go-tools", group: "Go to", label: "Tools", icon: Dices,
+        keywords: "dice entropy mode tab",
+        run: () => handleModeChange("tools"),
+      });
+    }
+    if (mode === "encrypt") {
+      items.push({
+        id: "generate-password", group: "Encrypt", label: "Generate a random password",
+        hint: `${PASSWORD_ENTROPY_BITS} bits`, icon: RefreshCw,
+        keywords: "strong csprng",
+        run: generatePassword,
+      });
+      items.push({
+        id: "generate-passphrase", group: "Encrypt", label: "Generate a passphrase",
+        hint: `${PASSPHRASE_ENTROPY_BITS} bits`, icon: Dices,
+        keywords: "diceware words eff wordlist",
+        run: generatePassphrase,
+      });
+      items.push({
+        id: "generate-key-file", group: "Encrypt", label: "Generate a key file",
+        hint: "64 bytes", icon: KeyRound,
+        keywords: "second factor download",
+        run: generateKeyFile,
+      });
+      items.push({
+        id: "calibrate", group: "Encrypt", label: "Calibrate Argon2id for this device",
+        hint: "~1s target", icon: Timer,
+        keywords: "kdf memory benchmark measure advanced",
+        // Open Advanced first: the calibration note renders there, and a
+        // measurement whose result lands somewhere closed is a button that
+        // appears to do nothing.
+        run: () => {
+          setIsAdvancedOpen(true);
+          void runCalibration();
+        },
+      });
+    }
+    if (hasSecretsOnScreen) {
+      items.push({
+        id: "wipe-now", group: "Session", label: "Wipe now — clear secrets",
+        icon: Trash2,
+        keywords: "lock panic clear password",
+        run: wipeNow,
+      });
+    }
+    items.push({
+      id: "recovery-kit", group: "Reference", label: "Open the recovery kit",
+      icon: LifeBuoy,
+      keywords: "offline python keym2.py heirs",
+      run: () => setIsRecoveryOpen(true),
+    });
+    items.push({
+      id: "verify-build", group: "Reference", label: "Verify this build",
+      hint: "verify.html", icon: ShieldCheck,
+      keywords: "manifest reproducible signature",
+      // Same-tab, like the footer link it restates — and `.html` for the
+      // reason the footer comment gives: the export has no /verify index.
+      run: () => window.location.assign(`${BASE_PATH}/verify.html`),
+    });
+    items.push({
+      id: "github", group: "Reference", label: "Open the source on GitHub",
+      icon: Globe,
+      keywords: "repository code issues",
+      run: () => window.open(KEYMAKER_REPO, "_blank", "noopener,noreferrer"),
+    });
+    return items;
+  }, [
+    mode, hasSecretsOnScreen, handleModeChange, generatePassword,
+    generatePassphrase, generateKeyFile, runCalibration, wipeNow,
+  ]);
+
   const tabTriggerClasses = "rounded-md border border-transparent px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors sm:px-4 data-[state=active]:border-border-strong data-[state=active]:bg-inset data-[state=active]:text-foreground";
 
   return (
@@ -4092,18 +4235,36 @@ export function EncryptorTool() {
               Keymaker
             </span>
           </div>
-          <TabsList className="h-auto bg-inset p-0.5">
-            <TabsTrigger value="encrypt" className={tabTriggerClasses}>
-              Encrypt
-            </TabsTrigger>
-            <TabsTrigger value="decrypt" className={tabTriggerClasses}>
-              Decrypt
-            </TabsTrigger>
-            <TabsTrigger value="tools" className={tabTriggerClasses}>
-              <Dices className="mr-1.5 h-3.5 w-3.5" />
-              Tools
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            {/*
+              The ⌘K affordance. A pill like every button here, and hidden on
+              narrow screens twice over: the header row is the tightest space
+              in the app (see the wordmark note above), and the shortcut it
+              advertises does not exist on a touch keyboard. Everything it
+              reaches is still on the page itself.
+            */}
+            <button
+              type="button"
+              onClick={() => setIsCommandBarOpen(true)}
+              aria-label="Open the command menu"
+              data-testid="command-bar-hint"
+              className="hidden cursor-pointer items-center rounded-full border border-border px-3 py-1.5 font-mono text-[12px] leading-none text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:flex"
+            >
+              {isApplePlatform ? "⌘" : "Ctrl"}&nbsp;K
+            </button>
+            <TabsList className="h-auto bg-inset p-0.5">
+              <TabsTrigger value="encrypt" className={tabTriggerClasses}>
+                Encrypt
+              </TabsTrigger>
+              <TabsTrigger value="decrypt" className={tabTriggerClasses}>
+                Decrypt
+              </TabsTrigger>
+              <TabsTrigger value="tools" className={tabTriggerClasses}>
+                <Dices className="mr-1.5 h-3.5 w-3.5" />
+                Tools
+              </TabsTrigger>
+            </TabsList>
+          </div>
         </div>
       </header>
 
@@ -4115,8 +4276,11 @@ export function EncryptorTool() {
             mode === "tools" ? "max-w-[680px]" : "max-w-[680px] lg:max-w-[1152px]"
           )}
         >
-          {/* Hero */}
-          <div className="relative mb-10 text-center sm:mb-14">
+          {/* Hero. The margin below it is generous on purpose: the plate has
+              to finish fading to flat canvas, and the workbench reads calmer
+              arriving after a beat of empty paper than pressed against the
+              headline's atmosphere. */}
+          <div className="relative mb-12 text-center sm:mb-16">
             {/*
               The Deep Field plate. Two rules from DESIGN-SYSTEM.md shape how it
               is mounted, and both are in the classes rather than in the image:
@@ -4142,14 +4306,32 @@ export function EncryptorTool() {
             */}
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[620px] w-screen -translate-x-1/2 -translate-y-[165px] overflow-hidden"
+              className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[560px] w-screen -translate-x-1/2 -translate-y-[165px] overflow-hidden"
             >
+              {/*
+                brightness(1.3): the plate reads at 3.23x the canvas mean where
+                it used to read 2.32x — the asset itself is deliberately dim,
+                so once opacity was already 1.0 the remaining lever was the
+                filter. 1.3 rather than 1.5 because of the eyebrow: measured on
+                glyph-free strips at its own height, the worst ground under it
+                is 5.50:1 against `body` at 1.3 and 4.99:1 at 1.5, and an 11%
+                margin over a 4.5 floor is not one to ship across three
+                engines. hero-plate.spec.ts's floors moved up with this, so
+                quietly reverting the filter fails the build the same way
+                re-dimming the opacity always has.
+
+                The height came down 60px in the same change: at 1.3 the
+                residue where the bottom gradient had not quite finished
+                stopped being invisible, and "fades to flat canvas before any
+                form" is a rule, so the fade now completes a clear margin
+                above the workbench card instead of at its top edge.
+              */}
               <img
                 src={`${BASE_PATH}/hero-cipher-field.webp`}
                 alt=""
                 aria-hidden="true"
                 decoding="async"
-                className="h-full w-full object-cover [mask-image:radial-gradient(112%_74%_at_50%_36%,#000_34%,transparent_78%)]"
+                className="h-full w-full object-cover brightness-[1.3] saturate-[1.2] [mask-image:radial-gradient(112%_74%_at_50%_36%,#000_34%,transparent_78%)]"
               />
               {/* The canvas scrim that used to sit here is gone, and the plate
                   is no longer held at 40%. Both were guarding the headline, and
@@ -4198,7 +4380,7 @@ export function EncryptorTool() {
             className={
               mode === "tools"
                 ? undefined
-                : "lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:items-start lg:gap-6"
+                : "lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:items-start lg:gap-8"
             }
           >
           {/* Card. 24px of padding either side of a 320px screen leaves 240px
@@ -4267,7 +4449,7 @@ export function EncryptorTool() {
           </div>
 
           {/* Feature cards */}
-          <div className="mt-8 grid gap-3 sm:mt-10 sm:grid-cols-3">
+          <div className="mt-10 grid gap-3 sm:mt-14 sm:grid-cols-3">
             {FEATURE_CARDS.map(({ icon: Icon, title, description }) => (
               <div key={title} className="rounded-2xl border border-border bg-card p-5">
                 <div className="mb-2.5 grid h-8 w-8 place-items-center rounded-md border border-border bg-inset text-muted-foreground">
@@ -4383,6 +4565,12 @@ export function EncryptorTool() {
         not a limitation of this dialog, and the copy says so plainly rather
         than letting someone discover it by closing the window.
       */}
+      <CommandBar
+        open={isCommandBarOpen}
+        onOpenChange={setIsCommandBarOpen}
+        commands={commandBarCommands}
+      />
+
       <Dialog
         open={issuedShares !== null}
         onOpenChange={(open) => {

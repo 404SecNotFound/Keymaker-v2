@@ -137,7 +137,7 @@ function parsePeek(peek: Uint8Array): ParsedPeek | "legacy" | null {
 }
 
 const rowClasses =
-  "flex items-baseline gap-2.5 border-t border-border px-4 py-2.5 text-[12.5px]";
+  "flex items-baseline gap-2.5 border-t border-border px-4 py-2 text-[12.5px]";
 
 function SlotList({ slots }: { slots: SlotRow[] }) {
   return (

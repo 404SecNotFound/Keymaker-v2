@@ -259,7 +259,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const VIEWS = 6;
+const VIEWS = 7;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -295,6 +295,15 @@ try {
   await page.getByRole('dialog').waitFor({ state: 'visible', timeout: 15_000 });
   await page.waitForTimeout(400);
   collect(await scan(page, 'recovery dialog'));
+  await page.keyboard.press('Escape');
+
+  // The command bar is a portal too, and a younger one — the same reasoning
+  // that added the recovery dialog adds it: a restyle of this surface would
+  // otherwise be invisible to every view above.
+  await page.keyboard.press('Control+k');
+  await page.getByRole('dialog', { name: 'Command menu' }).waitFor({ state: 'visible', timeout: 15_000 });
+  await page.waitForTimeout(400);
+  collect(await scan(page, 'command bar'));
   await page.keyboard.press('Escape');
 
   await page.goto(`${BASE}/verify.html`, { waitUntil: 'networkidle' });

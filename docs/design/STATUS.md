@@ -101,6 +101,45 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
 - `playwright.config.ts` drops engines whose binaries are missing — locally
   only. In CI every project stays, so a broken install step still fails.
 
+- The three borrows from the UI review (`UI-REVIEW.md`), each inside the
+  existing gates — no new colour, no shadow, no cool grey:
+  - **The command bar** (⌘K / Ctrl+K), the Linear borrow. A new
+    `command-bar.tsx` on the Radix dialog primitives — hand-rolled rather than
+    `cmdk`, because the supply chain stays small and a substring filter is one
+    whose misses a user can predict. Every command calls a handler a button
+    already calls (mode switches, the generators, calibration, the recovery
+    kit, the panic wipe), so the bar adds reach, never capability. Contextual
+    on purpose: the wipe is listed only while there is something to wipe.
+    `command-bar.spec.ts` pins it — including that commands act on real state —
+    and was sabotaged (listener disabled, rebuild confirmed compiling, six of
+    seven failed, the header-click survivor being the path the sabotage left
+    alive). Both audits gained the bar as a seventh view, counts rising
+    1871→2368 colours and 82→110 icons — the evidence the view is scanned.
+  - **Micro-motion**, the other Linear borrow: the arriving tab panel fades
+    and rises 8px over 200ms, and buttons ease to 0.985 scale on press. All
+    opacity/transform, inside the reduced-motion global.
+  - **Rhythm**, the AuthKit borrow: more air under the hero (the plate
+    finishes fading before the workbench arrives), a wider Ledger-split gap,
+    and the feature cards pushed a step further from the forms. The Warp
+    borrow needed almost nothing — the container inspector already *is* the
+    terminal-register data surface; its rows tightened two points and the new
+    command bar carries the same mono voice (group labels, kbd chips, hints).
+
+- The plate is brighter, and the gate moved with it. `brightness(1.3)
+  saturate(1.2)` on the hero img lifts it from 2.32x the canvas mean to 3.23x
+  (peak 10.2x → 16.7x) — once opacity was already 1.0, the filter was the
+  lever left, and a sweep showed widening the mask moved the measured band
+  not at all (2.32x → 2.37x). 1.5 was measured and declined: the worst
+  glyph-free ground beside the eyebrow reads 4.99:1 against `body` there, an
+  11% margin over the 4.5 floor that three engines' compositing could eat;
+  at 1.3 it reads 5.50:1. The wrapper also came down 620px → 560px, because
+  at 1.3 the residue where the bottom gradient had not quite finished
+  stopped being invisible against "fades to flat canvas before any form" —
+  the fade now completes a clear margin above the workbench card.
+  `hero-plate.spec.ts`'s floors rose to 2.5x/12x (~25% under shipped, same
+  policy), so the old look now *fails* — sabotage-verified by rebuilding
+  with the filter removed: compiled, failed on the mean-lift floor, restored.
+
 - Every screenshot is one width now. `07-decrypt-detection` and `08-seedqr`
   were element `.screenshot()` captures — 960 and 1024px wide against the
   2360px of every other shot — which read as ragged in the folder and the
