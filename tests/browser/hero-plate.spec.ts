@@ -99,21 +99,25 @@ test("the hero plate is actually visible against the canvas", async ({ page }) =
   const meanLift = lums.reduce((a, c) => a + c, 0) / lums.length / canvasL;
   const peakLift = nth(lums, 0.99) / canvasL;
 
-  // As shipped: 2.32x mean, 10.24x peak. The floors are set from a measured
-  // sweep of the thing they exist to catch rather than picked to look safe —
-  // the first draft used 1.5x and 6.5x/3x, and re-dimming the plate to the
-  // `opacity-40` it shipped with for weeks sailed straight through both.
+  // As shipped: 3.23x mean, 16.66x peak — `brightness(1.3) saturate(1.2)` on
+  // the img. Once opacity was already 1.0, the filter was the lever left:
+  // the asset itself is deliberately dim, and a sweep of the rendered page
+  // showed brightness moving the mean where widening the mask moved it not
+  // at all (2.32x → 2.37x). 1.5 was measured and declined — under it the
+  // worst glyph-free ground beside the eyebrow reads 4.99:1 against `body`,
+  // an 11% margin over the 4.5 floor that three engines' compositing
+  // differences could eat. At 1.3 that ground reads 5.50:1.
   //
-  //   opacity 1.0 (shipped)  2.32x mean  10.24x peak   pass
-  //   opacity 0.8            2.04x        8.44x        pass
-  //   opacity 0.6            1.83x        6.01x        FAIL
-  //   opacity 0.4 (the bug)  1.66x        4.92x        FAIL
+  //   filter none            2.32x mean  10.24x peak   FAIL (the old look)
+  //   brightness 1.3 (ships) 3.23x       16.66x        pass
+  //   brightness 1.5         3.93x       22.13x        pass, declined above
   //
-  // The gap between shipped and the floor is ~25%, which is headroom for a
-  // different plate and for the other two engines compositing slightly
-  // differently, without letting a genuinely washed-out one through.
-  expect(meanLift, "the plate is washed out — check opacity, the mask, and any scrim over it").toBeGreaterThan(1.85);
-  expect(peakLift, "the plate has no bright detail left; its sparks have been suppressed away").toBeGreaterThan(6.5);
+  // The floors sit ~25% under shipped, same policy as before: headroom for a
+  // different plate and for engine compositing drift, without letting the
+  // old, near-invisible look back through. Reverting the filter now fails
+  // here the same way re-dimming the opacity always has.
+  expect(meanLift, "the plate is washed out — check the brightness filter, opacity, the mask, and any scrim over it").toBeGreaterThan(2.5);
+  expect(peakLift, "the plate has no bright detail left; its sparks have been suppressed away").toBeGreaterThan(12);
 });
 
 test("the headline still clears AA over the plate", async ({ page }) => {
@@ -135,7 +139,7 @@ test("the headline still clears AA over the plate", async ({ page }) => {
   const ratio = contrast(INK, worst);
 
   // WCAG AA for large text is 3:1 and 4.5:1 for body; the headline is large but
-  // held to the stricter floor. Measured at 9.0:1.
+  // held to the stricter floor. Measured at 8.10:1 under brightness(1.3).
   expect(
     ratio,
     `the brightest ground behind the headline is rgb(${worst.r}, ${worst.g}, ${worst.b}), ` +

@@ -125,6 +125,21 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
     terminal-register data surface; its rows tightened two points and the new
     command bar carries the same mono voice (group labels, kbd chips, hints).
 
+- The plate is brighter, and the gate moved with it. `brightness(1.3)
+  saturate(1.2)` on the hero img lifts it from 2.32x the canvas mean to 3.23x
+  (peak 10.2x → 16.7x) — once opacity was already 1.0, the filter was the
+  lever left, and a sweep showed widening the mask moved the measured band
+  not at all (2.32x → 2.37x). 1.5 was measured and declined: the worst
+  glyph-free ground beside the eyebrow reads 4.99:1 against `body` there, an
+  11% margin over the 4.5 floor that three engines' compositing could eat;
+  at 1.3 it reads 5.50:1. The wrapper also came down 620px → 560px, because
+  at 1.3 the residue where the bottom gradient had not quite finished
+  stopped being invisible against "fades to flat canvas before any form" —
+  the fade now completes a clear margin above the workbench card.
+  `hero-plate.spec.ts`'s floors rose to 2.5x/12x (~25% under shipped, same
+  policy), so the old look now *fails* — sabotage-verified by rebuilding
+  with the filter removed: compiled, failed on the mean-lift floor, restored.
+
 - Every screenshot is one width now. `07-decrypt-detection` and `08-seedqr`
   were element `.screenshot()` captures — 960 and 1024px wide against the
   2360px of every other shot — which read as ragged in the folder and the

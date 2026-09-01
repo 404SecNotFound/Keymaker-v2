@@ -4306,14 +4306,32 @@ export function EncryptorTool() {
             */}
             <div
               aria-hidden="true"
-              className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[620px] w-screen -translate-x-1/2 -translate-y-[165px] overflow-hidden"
+              className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[560px] w-screen -translate-x-1/2 -translate-y-[165px] overflow-hidden"
             >
+              {/*
+                brightness(1.3): the plate reads at 3.23x the canvas mean where
+                it used to read 2.32x — the asset itself is deliberately dim,
+                so once opacity was already 1.0 the remaining lever was the
+                filter. 1.3 rather than 1.5 because of the eyebrow: measured on
+                glyph-free strips at its own height, the worst ground under it
+                is 5.50:1 against `body` at 1.3 and 4.99:1 at 1.5, and an 11%
+                margin over a 4.5 floor is not one to ship across three
+                engines. hero-plate.spec.ts's floors moved up with this, so
+                quietly reverting the filter fails the build the same way
+                re-dimming the opacity always has.
+
+                The height came down 60px in the same change: at 1.3 the
+                residue where the bottom gradient had not quite finished
+                stopped being invisible, and "fades to flat canvas before any
+                form" is a rule, so the fade now completes a clear margin
+                above the workbench card instead of at its top edge.
+              */}
               <img
                 src={`${BASE_PATH}/hero-cipher-field.webp`}
                 alt=""
                 aria-hidden="true"
                 decoding="async"
-                className="h-full w-full object-cover [mask-image:radial-gradient(112%_74%_at_50%_36%,#000_34%,transparent_78%)]"
+                className="h-full w-full object-cover brightness-[1.3] saturate-[1.2] [mask-image:radial-gradient(112%_74%_at_50%_36%,#000_34%,transparent_78%)]"
               />
               {/* The canvas scrim that used to sit here is gone, and the plate
                   is no longer held at 40%. Both were guarding the headline, and
