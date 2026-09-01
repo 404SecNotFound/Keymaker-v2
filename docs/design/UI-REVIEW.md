@@ -116,9 +116,13 @@ Items 1–3 of the list above landed together — the command bar, the
 monospace-register data surfaces (which the inspector already mostly was), the
 rhythm pass, and the micro-motion. `STATUS.md` records the details, including
 the sabotage run that proved `command-bar.spec.ts` bites and the seventh view
-both audits gained. Item 4, spending the sparks once in the inspector, is
-deliberately still open: it is the one item that adds colour to chrome-adjacent
-territory, and it deserves its own change with the palette gate watching.
+both audits gained.
+
+Item 4 landed separately, as intended: the inspector's byte map spends the
+spark cuts on segment marks whose widths are the parsed byte extents, the
+palette gate learned the two colours and the view that shows them, and both
+the map and the gate were shown to fail when sabotaged. `STATUS.md` has the
+particulars. The list is complete.
 
 ## Method and caveats
 

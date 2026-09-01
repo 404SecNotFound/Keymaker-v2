@@ -4082,6 +4082,7 @@ export function EncryptorTool() {
           : cipherChoice === CipherId.CHACHA20_POLY1305
             ? "ChaCha20-Poly1305"
             : "AES-256-GCM + ChaCha20-Poly1305",
+      cipherId: cipherChoice,
       keyFile: useKeyFile && keyFile !== null,
       shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
       passkey: usePasskey,

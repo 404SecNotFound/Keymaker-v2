@@ -24,6 +24,12 @@ const SECRET = "abandon ability able about above absent absorb abstract";
 
 const inspector = (page: Page) => page.getByTestId("container-inspector");
 const slotRows = (page: Page) => page.getByTestId("inspector-slot-row");
+// The byte map's slot segments answer to the same authority as the rows: the
+// slot-count byte. A map that drew a fixed picture instead of the parse would
+// fail every count below.
+const byteMap = (page: Page) => page.getByTestId("inspector-byte-map");
+const byteMapSlots = (page: Page) =>
+  page.locator('[data-testid="inspector-byte-map"] [data-kind="slot"]');
 
 /** The slot-count byte of an armored container, read the way §5 defines it. */
 function slotCountByte(armored: string): number {
@@ -71,6 +77,9 @@ test("encrypt: with no input the pane summarises instead of itemising", async ({
   await expect(pane).not.toContainText("Argon2id");
   await expect(pane).not.toContainText("ways in · as configured");
   await expect(slotRows(page)).toHaveCount(0);
+  // The byte map is itemisation too — a summary with a diagram is a wall
+  // with a picture on it.
+  await expect(byteMap(page)).toHaveCount(0);
 });
 
 test("encrypt: the itemisation is one click away, and still restates the form", async ({ page }) => {
@@ -84,6 +93,10 @@ test("encrypt: the itemisation is one click away, and still restates the form", 
   await expect(page.getByTestId("inspector-plan-summary")).toHaveCount(0);
   // Still a declared plan, not a parsed container.
   await expect(slotRows(page)).toHaveCount(0);
+  // The plan-side byte map draws the declared layout: one way in, one slot
+  // segment.
+  await expect(byteMap(page)).toBeVisible();
+  await expect(byteMapSlots(page)).toHaveCount(1);
 });
 
 test("encrypt: real input opens the itemisation without being asked", async ({ page }) => {
@@ -119,6 +132,8 @@ test("encrypt: after sealing, the pane shows what the bytes say", async ({ page 
   await expect(slotRows(page)).toHaveCount(trueCount);
   await expect(slotRows(page).first()).toContainText("Passphrase");
   await expect(slotRows(page).first()).toContainText("Argon2id");
+  // The map's slot segments agree with the same byte the rows answer to.
+  await expect(byteMapSlots(page)).toHaveCount(trueCount);
 });
 
 test("encrypt with shares: the second slot the worker enrolled is itemised", async ({ page }) => {
@@ -141,6 +156,9 @@ test("encrypt with shares: the second slot the worker enrolled is itemised", asy
   await expect(pane).not.toContainText("1 slot ·");
   await expect(slotRows(page)).toHaveCount(trueCount);
   await expect(slotRows(page).nth(1)).toContainText("Share set");
+  // Two slots in the byte, two segments in the map — the map grows with the
+  // container, or it is a logo.
+  await expect(byteMapSlots(page)).toHaveCount(trueCount);
 });
 
 test("decrypt: a loaded container is itemised before any unlock is attempted", async ({ page }) => {
@@ -158,6 +176,7 @@ test("decrypt: a loaded container is itemised before any unlock is attempted", a
   await expect(pane).toContainText("KEYM v3");
   await expect(slotRows(page)).toHaveCount(1);
   await expect(slotRows(page).first()).toContainText("Argon2id");
+  await expect(byteMapSlots(page)).toHaveCount(1);
   await expect(visible(page.getByPlaceholder("Enter decryption password"))).toHaveValue("");
 
   // And the unlock it previews still works — the pane is a reading, not a
@@ -187,4 +206,7 @@ test("negative control: a version no parser accepts produces no rows", async ({ 
   await expect(slotRows(page)).toHaveCount(0);
   await expect(pane).not.toContainText("What you loaded — KEYM");
   await expect(pane).not.toContainText("slots · ways in");
+  // No parse, no map: the same control that keeps the rows honest keeps the
+  // picture honest.
+  await expect(byteMap(page)).toHaveCount(0);
 });
