@@ -49,6 +49,12 @@ const ALLOWED = new Set(
     '#fdfcfc', '#14120f',
     // Semantic status — data, not decoration
     '#53b37e', '#d9a23f', '#e5624e',
+    // The spark cuts § "The sparks — quarantined" permits for data-viz
+    // strokes on dark grounds. Membership is what this gate can check; the
+    // "viz only" clause — marks, never text, never chrome — is the reviewer's
+    // to hold, and the container inspector's byte map is the one sanctioned
+    // user today.
+    '#5c7fff', '#ff7a47',
     // Absolutes that are always legitimate
     '#000000', '#ffffff',
   ].map((h) => h.toLowerCase())
@@ -259,7 +265,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const VIEWS = 7;
+const VIEWS = 8;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -273,6 +279,17 @@ const samples = [];
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   collect(await scan(page, 'encrypt'));
+
+  // The itemised plan — behind the anticipation disclosure — is where the
+  // byte map paints the spark cuts, so the sweep has to open it or the only
+  // sanctioned use of those colours ships unaudited.
+  await page
+    .getByRole('button', { name: 'Show the header it will write' })
+    .locator('visible=true')
+    .first()
+    .click();
+  await page.waitForTimeout(400);
+  collect(await scan(page, 'encrypt · plan detail'));
 
   const advanced = page.getByRole('button', { name: /^Advanced/ }).locator('visible=true').first();
   await advanced.click();

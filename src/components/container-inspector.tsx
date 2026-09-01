@@ -42,10 +42,92 @@ import { cn } from "@/lib/utils";
 export interface InspectorPlan {
   kdfLabel: string;
   cipherLabel: string;
+  /** The cipher as an id, so the byte map can size slots the way §6 does. */
+  cipherId: CipherId;
   keyFile: boolean;
   shares: { threshold: number; count: number } | null;
   passkey: boolean;
   inputBytes: number | null;
+}
+
+/* ── The byte map ─────────────────────────────────────────────────────────
+ *
+ * The one place the sparks are spent. § "The sparks — quarantined" permits
+ * the lifted cuts #5C7FFF / #FF7A47 in data visualisation and nowhere else,
+ * and this strip is data, not decoration: each segment's width is the byte
+ * extent it describes, computed from the same offsets the parser (or the
+ * plan) uses, so more slots draw a longer table and a chained cipher draws
+ * wider slots. Nothing here is invented, which is this pane's standing rule.
+ *
+ * Marks only — the type rule stands: a byte in a spark colour is a defect,
+ * so the sparks live in the segments and the legend dots while every glyph
+ * stays in the warm text scale. The whole block is aria-hidden because it
+ * restates what the annotation line and the slot rows already say in text;
+ * a screen reader loses nothing.
+ *
+ * `flexBasis: 3` is the honesty floor: the 5-byte stamp against a 300-byte
+ * header would otherwise round to nothing, and a map whose first landmark
+ * is invisible explains nothing. Below 3px the strip is schematic and the
+ * caption's byte count is the exact figure.
+ */
+interface ByteSpan {
+  key: string;
+  kind: "stamp" | "fields" | "slot";
+  bytes: number;
+}
+
+const SPAN_FILL: Record<ByteSpan["kind"], string> = {
+  stamp: "bg-[#FF7A47]",
+  fields: "bg-border-strong",
+  slot: "bg-[#5C7FFF]",
+};
+
+function byteMapSpans(version: number, cipher: number, slotCount: number): ByteSpan[] {
+  const table = keym2SlotTableOffset(version);
+  const width = keym2SlotLen(cipher);
+  return [
+    { key: "stamp", kind: "stamp", bytes: 5 },
+    { key: "fields", kind: "fields", bytes: table - 5 },
+    ...Array.from({ length: slotCount }, (_, i): ByteSpan => ({
+      key: `slot-${i}`,
+      kind: "slot",
+      bytes: width,
+    })),
+  ];
+}
+
+function ByteMap({ spans }: { spans: ByteSpan[] }) {
+  const total = spans.reduce((sum, s) => sum + s.bytes, 0);
+  const slots = spans.filter((s) => s.kind === "slot").length;
+  return (
+    <div aria-hidden="true" data-testid="inspector-byte-map" className="px-4 pt-3">
+      <div className="flex h-1.5 gap-px overflow-hidden rounded-full">
+        {spans.map((span) => (
+          <span
+            key={span.key}
+            data-kind={span.kind}
+            className={cn("h-full", SPAN_FILL[span.kind])}
+            style={{ flexGrow: span.bytes, flexBasis: 3 }}
+          />
+        ))}
+      </div>
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1.5 font-mono text-[12px] text-subtle-foreground">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#FF7A47]" />
+          magic+ver
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-border-strong" />
+          header fields
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#5C7FFF]" />
+          {slots === 1 ? "1 slot" : `${slots} slots`}
+        </span>
+        <span className="ml-auto">{total} B → payload</span>
+      </p>
+    </div>
+  );
 }
 
 interface SlotRow {
@@ -56,6 +138,8 @@ interface SlotRow {
 
 interface ParsedPeek {
   version: number;
+  /** Kept as the id beside the label: the byte map sizes slots from it. */
+  cipher: number;
   cipherLabel: string;
   slotCount: number;
   slots: SlotRow[];
@@ -122,6 +206,7 @@ function parsePeek(peek: Uint8Array): ParsedPeek | "legacy" | null {
 
     return {
       version: core.version,
+      cipher: core.cipher,
       cipherLabel: cipherLabelOf(core.cipher),
       slotCount,
       slots,
@@ -258,6 +343,12 @@ export function ContainerInspector({
             </span>
           </div>
 
+          {/* Widths from the parsed offsets, so the map cannot disagree with
+              the rows below it. `slots.length` rather than the count byte: a
+              truncated peek itemises fewer rows, and the map draws what the
+              pane actually shows. */}
+          <ByteMap spans={byteMapSpans(parsed.version, parsed.cipher, parsed.slots.length)} />
+
           {/* ── The slot table, as parsed ───────────────────────── */}
           <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-subtle-foreground">
             {parsed.slotCount === 1 ? "1 slot" : `${parsed.slotCount} slots`} · ways in
@@ -326,6 +417,11 @@ export function ContainerInspector({
           <p className="px-4 pb-1 pt-2 font-mono text-[12px] text-subtle-foreground">
             salts and nonces are drawn fresh at seal time
           </p>
+
+          {/* The plan side of the same map: version is what this app writes,
+              slot count is the ways-in the form has declared. Restated, not
+              predicted — every input comes from a control on screen. */}
+          <ByteMap spans={byteMapSpans(KEYM2_VERSION, plan.cipherId, waysIn)} />
 
           <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-subtle-foreground">
             ways in · as configured

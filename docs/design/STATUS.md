@@ -125,6 +125,22 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
     terminal-register data surface; its rows tightened two points and the new
     command bar carries the same mono voice (group labels, kbd chips, hints).
 
+- The sparks are spent, once, where UI-REVIEW.md item 4 said they were owed:
+  the container inspector's **byte map**, a strip under the hex readout whose
+  segment widths are the byte extents the parser (or the plan) computes —
+  ember for the 5-byte magic+version stamp, `border-strong` for the header
+  fields, `#5C7FFF` per slot, so more slots draw a longer table and a chained
+  cipher draws wider slots. Marks only; every glyph stays in the warm text
+  scale, and the block is aria-hidden because the annotation line and the
+  slot rows already say all of it in text. It renders in the parsed branch
+  and the itemised plan branch, never the summary — the anticipation rule
+  counts a diagram as itemisation. The lifted cuts joined the palette gate's
+  ALLOWED list (they were named in § sparks all along, used nowhere), the
+  audit gained the plan-detail view as its eighth so the one sanctioned use
+  is actually scanned, and both sides were sabotage-verified: a map hardcoded
+  to one slot failed the two-slot container's segment count, and removing
+  `#5c7fff` from ALLOWED failed the audit naming the strip's own spans.
+
 - The plate is brighter, and the gate moved with it. `brightness(1.3)
   saturate(1.2)` on the hero img lifts it from 2.32x the canvas mean to 3.23x
   (peak 10.2x → 16.7x) — once opacity was already 1.0, the filter was the
