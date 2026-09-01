@@ -102,6 +102,13 @@ try {
   icons.push(...(await scan(page, 'recovery dialog')));
   await page.keyboard.press('Escape');
 
+  // The command bar portals like the recovery dialog and gets the same walk.
+  await page.keyboard.press('Control+k');
+  await page.getByRole('dialog', { name: 'Command menu' }).waitFor({ state: 'visible', timeout: 15_000 });
+  await page.waitForTimeout(400);
+  icons.push(...(await scan(page, 'command bar')));
+  await page.keyboard.press('Escape');
+
   await page.goto(`${BASE}/verify.html`, { waitUntil: 'networkidle' });
   icons.push(...(await scan(page, 'verify')));
 } finally {
@@ -149,5 +156,5 @@ if (badSize.length || badStroke.length) {
 const histogram = [...SIZES.keys()]
   .map((px) => `${icons.filter((i) => i.w === px).length}×${px}px`)
   .join(', ');
-console.log(`icon-audit: ${icons.length} lucide icons across 6 views — ${histogram}\n`);
+console.log(`icon-audit: ${icons.length} lucide icons across 7 views — ${histogram}\n`);
 console.log(`All icons are a size docs/design/DESIGN-SYSTEM.md names, at stroke ${STROKE}.`);

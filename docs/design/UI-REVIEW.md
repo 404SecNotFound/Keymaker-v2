@@ -110,6 +110,16 @@ Each of these is a separate, scoped change. None of them touches the palette
 tokens, the shadow rule, or the warm-only discipline — which is the point. The
 system is worth protecting; the work is behaviour, not repaint.
 
+## Implemented
+
+Items 1–3 of the list above landed together — the command bar, the
+monospace-register data surfaces (which the inspector already mostly was), the
+rhythm pass, and the micro-motion. `STATUS.md` records the details, including
+the sabotage run that proved `command-bar.spec.ts` bites and the seventh view
+both audits gained. Item 4, spending the sparks once in the inspector, is
+deliberately still open: it is the one item that adds colour to chrome-adjacent
+territory, and it deserves its own change with the palette gate watching.
+
 ## Method and caveats
 
 Grounded in `DESIGN-SYSTEM.md`, `STATUS.md` and the rendered implementation, which

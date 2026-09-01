@@ -21,7 +21,11 @@ import { cn } from "@/lib/utils"
 // `muted` label. Fill, border and text move together, so the difference
 // survives greyscale and a glance. See DESIGN-SYSTEM.md § Disabled.
 const buttonVariants = cva(
-  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full border text-sm font-medium ring-offset-background transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:cursor-not-allowed disabled:border-border disabled:bg-transparent disabled:text-subtle-foreground [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
+  // `transition-colors` grew two entries: `scale`, so the press state below
+  // eases instead of snapping, and nothing else — the press is the one
+  // transform a button owns. 0.985 is deliberate: at pill sizes a deeper
+  // squash reads as wobble, and this is feedback, not theatre.
+  "inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-full border text-sm font-medium ring-offset-background transition-[color,background-color,border-color,scale] active:scale-[0.985] focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none disabled:cursor-not-allowed disabled:border-border disabled:bg-transparent disabled:text-subtle-foreground [&_svg]:pointer-events-none [&_svg]:size-4 [&_svg]:shrink-0",
   {
     variants: {
       variant: {

@@ -44,7 +44,12 @@ const TabsContent = React.forwardRef<
   <TabsPrimitive.Content
     ref={ref}
     className={cn(
-      "mt-2 ring-offset-background focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
+      // The mode switch announces itself: a 200ms fade-and-rise on the
+      // arriving panel, opacity/transform only, same register as the dialogs.
+      // The reduced-motion global in globals.css flattens it like everything
+      // else. Transform lives on the panel for 200ms only — nothing sticky or
+      // fixed renders inside a TabsContent, so no containing-block surprise.
+      "mt-2 ring-offset-background focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 duration-200 data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:slide-in-from-bottom-2",
       className
     )}
     {...props}
