@@ -126,13 +126,27 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   precached). ITF invite exception requests under §09 if the face is ever
   wanted badly enough to ask.
 - Grab reference screenshots (images.refero.design and elevenlabs.io) so the
-  craft review can compare pixels, not just mechanisms. Still blocked in a
-  sealed container; both hosts are refused at the proxy.
-- One flaky browser test, seen once and not reproduced: `calibration.spec.ts`
-  › "reports the estimate as measured rather than typical" failed in a full
-  run and passed alone and in the next two full runs. It measures real device
-  timing, so it is load-sensitive by construction. Not diagnosed, not
-  "fixed" — recorded so the next person who sees it knows it is not new.
+  craft review can compare pixels, not just mechanisms. Both hosts were added
+  to the environment's network allowlist, but a session that was provisioned
+  before that change cannot see it — the policy binds when the container is
+  built. So this is a task for a **fresh session**: confirm reachability with
+  `curl -sS -o /dev/null -w "%{http_code}" https://images.refero.design/`, and
+  if it is not `000`/`403`, screenshot both references and drop them beside the
+  craft notes. Still blocked from the session this note was written in.
+- The one flaky browser test is **fixed**. `calibration.spec.ts` ›
+  "reports the estimate as measured rather than typical" failed once in a full
+  parallel run and never alone. Diagnosed: the `calibrate()` helper returned as
+  soon as any `[role="status"]` was non-empty, which includes the two honest
+  failure notes ("did not finish" / "needs a Web Worker") that `runCalibration`
+  writes when the worker loses its CPU slice inside the 1 s budget under load,
+  leaving `deviceFit` null. The caller then asserted a measured-this-device
+  outcome that had correctly not happened. The helper now targets the note by
+  `data-testid="calibration-note"` (not "the first status on a page that has a
+  dozen"), classifies success versus the two failures, and retries the
+  transient ones, throwing with the last status if calibration never lands —
+  so a genuinely broken calibration still fails, loudly. Sabotaged by forcing
+  the did-not-finish path: the helper retried three times and threw
+  `calibration did not run in 3 attempts`, rather than passing or hanging.
 - A second one, seen once and **diagnosed**: `passkey.spec.ts` › "a container
   enrolled with a passkey opens with the passkey alone" failed as
   `[0] != [0, 1]` — the sealed container carried a passphrase slot and no

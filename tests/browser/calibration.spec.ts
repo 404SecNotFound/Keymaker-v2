@@ -35,46 +35,71 @@ async function memoryMiB(page: Page): Promise<number> {
 }
 
 /**
- * Wait for calibration to have *happened*, not for the button to look idle.
+ * Run a calibration and wait for it to have *succeeded*, retrying a transient
+ * environment failure rather than asserting a measured outcome on top of one.
  *
- * The previous version waited for `getByRole("button", { name: /Calibrate for
- * this device/ })` to be enabled, on the reasoning that the button is disabled
- * while measuring. It is — but it is also renamed:
+ * `runCalibration` ends in three ways. A measurement lands and `setDeviceFit`
+ * flips the wording to "measured on this device". Or the worker never came up
+ * (`result` is null) and the note reads "needs a Web Worker". Or the worker op
+ * did not finish inside the 1 s budget, throws, and the note reads "did not
+ * finish". Both failures leave `deviceFit` null and the wording unchanged, and
+ * both are honest: the app reports it could not measure and keeps your
+ * settings. But the note is non-empty either way.
  *
- *     disabled={calibrating || isLoading}
- *     {calibrating ? "Measuring this device…" : "Calibrate for this device"}
+ * The previous helper waited only for "the status line said something", so it
+ * returned on those two failure notes exactly as it did on a real measurement.
+ * A caller that then asserted the measured-this-device outcome failed on a
+ * calibration that had correctly reported it could not run. That is the one
+ * flake this file ever produced: seen once in a full parallel run, never alone,
+ * because the worker only loses its slice of the CPU inside the budget when the
+ * machine is already saturated.
  *
- * so during the run that locator matches nothing at all, and the wait could
- * only ever be satisfied by a render in which calibration was not running.
- * Either the one after it finished, which is what was intended, or the one
- * still on screen from before the click, which is not. Measured here, the old
- * name stays matchable for about 35ms after the click while React flushes, and
- * inside that window the helper returned with calibration not yet started —
- * whereupon the caller read a memory slider nothing had moved. A loaded CI
- * runner flushes later and widens the window, which is why this failed there
- * and never here.
+ * So this classifies the note and retries the two transient failures. It is not
+ * a way of hiding a real regression: if calibration never succeeds across the
+ * attempts, the helper throws with the last note it saw, so a worker that has
+ * genuinely stopped calibrating still fails the run, loudly and specifically.
  *
- * (It also explains why the obvious repair does not work: waiting for the
- * button to be *disabled* first waits on a locator that matches nothing while
- * it is disabled, and times out every time.)
- *
- * So wait on the outcome instead. There is exactly one `[role="status"]` on
- * the page; it is empty until a run completes and non-empty afterwards, which
- * is an edge no stale render can be on the wrong side of.
+ * It also targets the calibration note by testid rather than "the first
+ * non-empty [role=status] on the page". There are a dozen status regions here;
+ * `.first()` matching some unrelated one was a second way this could mislead.
  */
-async function calibrate(page: Page) {
-  await visible(page.getByRole("button", { name: /Calibrate for this device/ })).click();
+const CALIBRATION_FAILED = /did not finish|needs a Web Worker/i;
 
-  await expect(
-    page.locator('[role="status"]').filter({ hasText: /\S/ }).first(),
-    "calibration finished without saying anything, or never ran"
-  ).toBeVisible({ timeout: 120_000 });
+async function calibrate(page: Page, attempts = 3) {
+  const note = page.getByTestId("calibration-note");
+  const runButton = page.getByRole("button", { name: /Calibrate for this device/ });
 
-  // And the component is idle again rather than mid-run, so callers that go
-  // straight on to click something else are not racing the next render.
-  await expect(
-    page.getByRole("button", { name: /Calibrate for this device/ })
-  ).toBeEnabled({ timeout: 120_000 });
+  for (let attempt = 1; ; attempt++) {
+    await visible(runButton).click();
+
+    // The button renames to "Measuring this device…" while `calibrating` is
+    // true, and `runCalibration` clears the note in the same render. Waiting for
+    // that label confirms this attempt actually started and, on a retry, that
+    // the note we read below is the fresh one and not the previous failure still
+    // on screen.
+    await expect(
+      page.getByRole("button", { name: /Measuring this device/ }),
+      "the Calibrate button never entered its measuring state"
+    ).toBeVisible({ timeout: 30_000 });
+
+    await expect(
+      note.filter({ hasText: /\S/ }),
+      "calibration finished without saying anything, or never ran"
+    ).toBeVisible({ timeout: 120_000 });
+
+    // Idle again, so a caller that clicks something next is not racing a render.
+    await expect(runButton).toBeEnabled({ timeout: 120_000 });
+
+    const text = (await note.textContent()) ?? "";
+    if (!CALIBRATION_FAILED.test(text)) return; // a real measurement landed
+
+    if (attempt >= attempts) {
+      throw new Error(
+        `calibration did not run in ${attempts} attempts; last status: ${text.trim()}`
+      );
+    }
+    // Transient worker starvation under parallel load. Measure again.
+  }
 }
 
 test.describe("Argon2id calibration", () => {
