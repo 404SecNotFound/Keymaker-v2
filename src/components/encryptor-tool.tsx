@@ -3315,7 +3315,12 @@ export function EncryptorTool() {
                             {/* Announced, because the result is the whole point
                                 of pressing the button and a sighted user sees
                                 the memory slider jump. */}
-                            <p className="text-[12px] text-muted-foreground" role="status" aria-live="polite">
+                            <p
+                              className="text-[12px] text-muted-foreground"
+                              role="status"
+                              aria-live="polite"
+                              data-testid="calibration-note"
+                            >
                               {calibrationNote ?? ""}
                             </p>
                           </div>
