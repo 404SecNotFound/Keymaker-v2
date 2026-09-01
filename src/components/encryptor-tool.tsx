@@ -29,6 +29,7 @@ import {
   UserX,
   Dices,
   ChevronDown,
+  Search,
   TriangleAlert,
   ShieldCheck,
   ShieldAlert,
@@ -4238,20 +4239,31 @@ export function EncryptorTool() {
           </div>
           <div className="flex items-center gap-2.5 sm:gap-3">
             {/*
-              The ⌘K affordance. A pill like every button here, and hidden on
-              narrow screens twice over: the header row is the tightest space
-              in the app (see the wordmark note above), and the shortcut it
-              advertises does not exist on a touch keyboard. Everything it
-              reaches is still on the page itself.
+              The command-menu affordance. A pill like every button here, on
+              every width — it shipped `hidden sm:flex` first, on the theory
+              that a shortcut hint is dead weight where no keyboard exists,
+              but the button is a *button*: a tap opens the same menu, and
+              hiding it made the bar unreachable on exactly the devices where
+              hunting through the page costs the most.
+
+              What stays responsive is the label, not the existence. Below
+              `sm` the header is the tightest space in the app (see the
+              wordmark note above) and "Ctrl K" is a claim about a keyboard
+              the device does not have, so the pill shrinks to the same
+              search glyph the menu opens with — 16px, the standalone size,
+              and a 32px target so WCAG 2.5.8 is met without moving the row.
             */}
             <button
               type="button"
               onClick={() => setIsCommandBarOpen(true)}
               aria-label="Open the command menu"
               data-testid="command-bar-hint"
-              className="hidden cursor-pointer items-center rounded-full border border-border px-3 py-1.5 font-mono text-[12px] leading-none text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:flex"
+              className="flex cursor-pointer items-center rounded-full border border-border p-2 font-mono text-[12px] leading-none text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:px-3 sm:py-1.5"
             >
-              {isApplePlatform ? "⌘" : "Ctrl"}&nbsp;K
+              <Search className="h-4 w-4 sm:hidden" aria-hidden="true" />
+              <span className="hidden sm:inline">
+                {isApplePlatform ? "⌘" : "Ctrl"}&nbsp;K
+              </span>
             </button>
             <TabsList className="h-auto bg-inset p-0.5">
               <TabsTrigger value="encrypt" className={tabTriggerClasses}>

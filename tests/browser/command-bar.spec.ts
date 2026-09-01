@@ -49,6 +49,28 @@ test("the header hint opens it with a click", async ({ page }) => {
   await expect(page.getByRole("dialog", { name: "Command menu" })).toBeVisible();
 });
 
+test("on a phone the pill is a tap target, and a command runs by touch alone", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+
+  const hint = page.getByTestId("command-bar-hint");
+  await expect(hint).toBeVisible();
+  // The label is the responsive part, not the existence: "Ctrl K" is a claim
+  // about a keyboard this width does not have, so only the glyph shows.
+  // Visibility assertions, not toContainText — that matcher reads
+  // textContent, which includes display:none spans, and would report the
+  // correctly-hidden label as present.
+  await expect(hint.locator("span")).toBeHidden();
+  await expect(hint.locator("svg")).toBeVisible();
+
+  await hint.click();
+  await expect(page.getByRole("dialog", { name: "Command menu" })).toBeVisible();
+
+  // The whole round trip without a key press — the reason the pill exists
+  // here at all.
+  await page.getByRole("option", { name: "Decrypt" }).click();
+  await expect(page.getByRole("tab", { name: "Decrypt" })).toHaveAttribute("aria-selected", "true");
+});
+
 test("typing filters and Enter runs the first match — switching to Decrypt", async ({ page }) => {
   await expect(page.getByRole("tab", { name: "Encrypt" })).toHaveAttribute("aria-selected", "true");
 
