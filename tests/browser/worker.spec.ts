@@ -2,7 +2,7 @@ import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
-import { WORST_CASE_PROBE_MS } from "../../src/lib/worker-probe-policy";
+import { PROBE_TIMEOUT_MS, WORST_CASE_PROBE_MS } from "../../src/lib/worker-probe-policy";
 
 /**
  * Crypto runs off the main thread.
@@ -415,4 +415,108 @@ test("the Stop button is absent when nothing is running", async ({ page }) => {
   await page.goto("/");
   await useTextMode(page);
   await expect(page.getByTestId("cancel-operation")).toHaveCount(0);
+});
+
+/**
+ * Stop, pressed while the readiness probe is still out, ends the operation
+ * rather than moving it onto the main thread.
+ *
+ * The probe is a ping the client sends a fresh worker before trusting it with
+ * the only copy of a buffer. Cancelling failed every pending request, the
+ * probe's included, and the probe's failure handler translated any failure
+ * into "no worker", so the operation waiting on it woke with `false`, took the
+ * in-thread branch and derived the key there. For Argon2id that is the frozen
+ * tab the worker exists to prevent, arriving one second after a toast said
+ * "Stopped", with no Stop button because nothing can render.
+ *
+ * The window is real on the slow first load the retry policy exists for: the
+ * script can take seconds to land, the warm-up probe stays out until it does,
+ * and an Unlock pressed in that time waits on the same probe.
+ *
+ * The freeze does not come at once. The cancelled operation first wakes in
+ * the freeze-notice check, which asked the same probe; told "no worker", it
+ * skips the notice (it is stale) and carries on into the unlock, which spawns
+ * a fresh worker and waits on a fresh probe. The script is still held, so that
+ * probe times out, and *then* the derivation lands on the main thread, one
+ * probe timeout after Stop. Sampling has to reach past that, which is why the
+ * window below is derived from PROBE_TIMEOUT_MS rather than chosen, and the
+ * container is sealed at the maximum cost so that the stall is seconds rather
+ * than a fraction of one. Two earlier versions of this test passed against the
+ * unfixed build: one sampled for eight seconds and never reached the stall,
+ * the other used a cheaper container whose stall was 1.6 s, under the ceiling.
+ *
+ * Service workers are blocked in this context so `page.route` sees the worker
+ * script on the second load too; a registered worker would serve it from the
+ * precache and the probe would answer before anything could be pressed.
+ */
+test("Stop during the readiness probe ends the operation instead of freezing the tab", async ({
+  browser,
+  browserName,
+}) => {
+  test.skip(browserName !== "chromium", "window timings measured on Chromium only");
+  const context = await browser.newContext({ serviceWorkers: "block" });
+  const page = await context.newPage();
+  let releaseScript: () => void = () => {};
+  try {
+    // A container whose derivation would visibly freeze the tab if it ran on
+    // the main thread. Written with the worker, while the script still loads
+    // normally.
+    await page.goto("/");
+    await useTextMode(page);
+    await maxOutArgon2id(page);
+    await page.waitForTimeout(1_500);
+    const armor = await encryptText(page, "probe", STRONG_PASSWORD);
+
+    // Now hold the worker script, so the warm-up probe on the next load stays
+    // out for as long as this test needs it to.
+    const held = new Promise<void>((resolve) => {
+      releaseScript = resolve;
+    });
+    await page.route("**/crypto-worker.js", async (route) => {
+      await held;
+      await route.continue();
+    });
+    await page.goto("/");
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armor);
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
+    const running = startOperation(page, /^Decrypt Text$/i);
+    await confirmInFlight(page);
+
+    // Well inside the probe's timeout, so the operation is waiting on the
+    // probe and not already in the fallback the timeout legitimately chooses.
+    await visible(page.getByTestId("cancel-operation")).click();
+    await expect(page.getByText(/^The unlock was cancelled/).first()).toBeVisible({
+      timeout: 15_000,
+    });
+
+    // The assertion: nothing is deriving anywhere, so the main thread answers.
+    // Sampled continuously, as the responsiveness test above explains: a
+    // single check after a sleep measured an idle thread and proved nothing.
+    // And sampled for longer than the probe the stale operation would
+    // otherwise wait on, for the reason in the header.
+    const SAMPLE_FOR_MS = PROBE_TIMEOUT_MS + 8_000;
+    const deadline = Date.now() + SAMPLE_FOR_MS;
+    let previous = Date.now();
+    let worstGapMs = 0;
+    while (Date.now() < deadline) {
+      await page.evaluate(() => Date.now());
+      const now = Date.now();
+      worstGapMs = Math.max(worstGapMs, now - previous);
+      previous = now;
+      await page.waitForTimeout(100);
+    }
+    expect(
+      worstGapMs,
+      `the main thread stalled for ${worstGapMs} ms after Stop: the derivation moved in-thread instead of ending`
+    ).toBeLessThan(2_000);
+    await expect(page.locator(".animate-spin")).toHaveCount(0);
+
+    await running;
+  } finally {
+    releaseScript();
+    await context.close();
+  }
 });

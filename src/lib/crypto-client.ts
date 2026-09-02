@@ -66,6 +66,21 @@ let readiness: Promise<boolean> | null = null;
 let nextId = 1;
 const pending = new Map<number, Pending>();
 
+/**
+ * What every in-flight operation is failed with when the user stops the work.
+ *
+ * A class rather than a message, because the readiness probe has to tell a
+ * cancellation apart from every other reason its request can fail. A worker
+ * that dies fails the probe too, and *that* must resolve to "no worker" so the
+ * operation falls back in-thread; a cancellation must not. See `ready()`.
+ */
+export class CryptoCancelled extends Error {
+  constructor() {
+    super("Cancelled.");
+    this.name = "CryptoCancelled";
+  }
+}
+
 /** True when the last operation ran off the main thread. Exposed for tests. */
 export let lastRunUsedWorker = false;
 
@@ -203,7 +218,7 @@ function ready(): Promise<boolean> {
     return readiness;
   }
   const id = nextId++;
-  readiness = new Promise<boolean>((resolve) => {
+  readiness = new Promise<boolean>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
       if (probes.onTimeout() === "give-up") {
@@ -227,9 +242,18 @@ function ready(): Promise<boolean> {
         probes.onAnswer();
         resolve(true);
       }) as unknown as (v: never) => void,
-      reject: () => {
+      reject: (reason) => {
         clearTimeout(timer);
-        resolve(false);
+        // Stop, pressed while the probe was still out, used to land here as
+        // "the worker is unavailable": the operation awaiting this promise
+        // woke with `false`, took the no-worker branch and ran the whole
+        // derivation on the main thread, uncancellable, with the UI having
+        // just said "Stopped". A cancellation is not a verdict on the worker;
+        // it is the end of the operation, so it is thrown to whoever was
+        // waiting. Every other failure (the script erroring) still resolves
+        // to "no worker", which is what the in-thread fallback is for.
+        if (reason instanceof CryptoCancelled) reject(reason);
+        else resolve(false);
       },
     });
     w.postMessage({ id, op: "ping" } satisfies CryptoRequest);
@@ -268,7 +292,7 @@ function terminate() {
  */
 export function cancelAllCryptoWork(): boolean {
   if (!worker) return false;
-  failAllPending(new Error("Cancelled."));
+  failAllPending(new CryptoCancelled());
   terminate();
   // The next call spawns a fresh worker, which has to prove itself again.
   readiness = null;
@@ -495,5 +519,7 @@ export async function decryptViaWorker(
  * Encrypt.
  */
 export function warmCryptoWorker(): void {
-  void ready();
+  // A Stop pressed during the warm-up probe rejects it; nobody is waiting on
+  // this one, so there is nothing to tell.
+  void ready().catch(() => {});
 }
