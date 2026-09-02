@@ -274,6 +274,38 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   neither document describes the sheet's layout. Full chromium suite:
   209 passed on the restored build, typecheck and production build clean.
 
+- PR 3 of the plan — Bet 2, the **rehearsal**. Shares were shown once with a
+  strong warning, then gone, and the first time anyone learned whether they
+  worked was the day they were needed. *Rehearse now*, on the one-time shares
+  dialog, walks the owner through the heir's path while the strips are still
+  on screen: paste any k of them, exactly as an heir would — comment lines
+  dropped, the same size gate as the decrypt box — and the backup is opened
+  with them alone, no password, through the same worker call the verify-only
+  unlock uses. What comes back is "Opened in 1.2 s with strips 1 and 3 — 75
+  bytes, kept hidden": the strips are named in strip order whichever order
+  they were pasted, the byte count is the one fact about the contents that is
+  reported, and the buffer is zeroed on arrival — nothing reaches the DOM, the
+  clipboard, a Blob or a file. A wrong strip fails loudly, in words, and
+  stamps nothing; fewer than k is refused before any attempt, with the count
+  so far. The pasted strips are wiped with everything else and the moment the
+  dialog closes; the outcome is not a secret and is not kept either — it goes
+  onto the next paper vault as ink ("☑ Rehearsed on 2026-09-02 with strips 1
+  and 3 · rehearse again by 2027-09-02", the same day next year) and is
+  discarded with the rest. A result that lands after a wipe or a lock has
+  moved the operation counter is discarded like any other, and the dialog's
+  own lock warning covers the whole exercise.
+
+  `rehearsal.spec.ts` seals 2-of-3 and asserts two things at once: that the
+  strips open the backup — seconds, strip numbers, and a byte count checked
+  against the secret the test sealed — and that the plaintext went nowhere:
+  absent from every text node and every field on the page, with the Result
+  box still holding the container. A corrupted strip fails by name and the
+  printed box stays blank; one strip is refused with "1 of 2 strips pasted";
+  and the following print carries the filled stamp with next year's date.
+  Sabotage: the unlock replaced with a fake success; typecheck and build clean, then the wrong-strip test failed by name — "Opened in 0.0 s with strips 1 — 340 bytes, kept hidden" where "did not open the backup" was expected — and the hidden-contents test failed on its byte count (the fake reported the container's length, not the secret's). The last two tests of that run never reached the page: the test server dropped mid-run with a connection refused, which says nothing either way and is recorded here rather than tidied away. Restored, rebuilt. Both audits and the axe sweep gained the dialog
+  in its rehearsal state — a seal with a share set inside the audit, PBKDF2
+  so it is quick — palette 3747→4376 colours across 9→10 views, icons 156→193 across 8→9. Full chromium suite: 214 passed on the restored build, typecheck and production build clean.
+
 ## Loose ends
 
 - **Satoshi is not being vendored, and the question is closed.** It headed both

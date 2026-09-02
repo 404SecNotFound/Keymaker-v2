@@ -92,6 +92,31 @@ test.describe("axe", () => {
         await visible(page.getByRole("button", { name: /Recovery kit/i })).click();
       },
     ],
+    [
+      // The one-time shares dialog with the rehearsal open: a labelled
+      // textarea, a live count, and a disclosure button, all inside a modal.
+      "shares dialog with the rehearsal open",
+      async (page) => {
+        await useTextMode(page);
+        const advanced = visible(page.getByRole("button", { name: /^Advanced/ }));
+        await advanced.click();
+        await visible(page.getByRole("button").filter({ hasText: "PBKDF2" })).click();
+        const sharesSwitch = visible(page.getByRole("switch", { name: "Recovery shares" }));
+        await expect(async () => {
+          if ((await sharesSwitch.getAttribute("aria-checked")) !== "true") await sharesSwitch.click();
+          await expect(sharesSwitch).toHaveAttribute("aria-checked", "true", { timeout: 1_000 });
+        }).toPass({ timeout: 20_000 });
+        await visible(page.getByPlaceholder("Enter text to encrypt")).fill("for the scan");
+        await visible(page.getByPlaceholder("Enter a strong password")).fill(
+          "correct-horse-battery-staple-9271!X"
+        );
+        await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+        const dialog = page.getByRole("dialog");
+        await expect(dialog.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+        await dialog.getByRole("button", { name: /Rehearse now/ }).click();
+        await expect(dialog.getByLabel("Strips to rehearse with")).toBeVisible();
+      },
+    ],
   ];
 
   for (const [name, setup] of views) {

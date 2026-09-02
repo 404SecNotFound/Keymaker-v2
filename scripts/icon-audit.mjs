@@ -103,6 +103,33 @@ try {
   await page.waitForTimeout(400);
   icons.push(...(await scan(page, 'encrypt · seed grid')));
 
+  // The shares dialog in its rehearsal state. Reachable only by sealing with
+  // a share set and opening the result again with two of them, and worth the
+  // seal: it is where a success wash, a form and the dialog chrome meet, and
+  // nothing above ever paints it. PBKDF2, because the KDF is not what is
+  // being painted.
+  await page.getByRole('button', { name: 'Text', exact: true }).locator('visible=true').first().click();
+  await page.getByPlaceholder('Enter text to encrypt').locator('visible=true').first().fill('for the audit');
+  await page.getByRole('button').filter({ hasText: 'PBKDF2' }).locator('visible=true').first().click();
+  const sharesSwitch = page.getByRole('switch', { name: 'Recovery shares' }).locator('visible=true').first();
+  if ((await sharesSwitch.getAttribute('aria-checked')) !== 'true') await sharesSwitch.click();
+  await page
+    .getByPlaceholder('Enter a strong password')
+    .locator('visible=true')
+    .first()
+    .fill('correct-horse-battery-staple-9271!X');
+  await page.getByRole('button', { name: /^Encrypt Text$/i }).locator('visible=true').first().click();
+  const sharesDialog = page.getByRole('dialog');
+  await sharesDialog.getByText(/Save these 3 shares now/).waitFor({ timeout: 90_000 });
+  await sharesDialog.getByRole('button', { name: /Rehearse now/ }).click();
+  const issued = await sharesDialog.getByText(/^KMSHARE1:/).allTextContents();
+  await sharesDialog.getByLabel('Strips to rehearse with').fill(`${issued[0]}\n${issued[1]}`);
+  await sharesDialog.getByRole('button', { name: /^Open with these strips$/ }).click();
+  await sharesDialog.getByTestId('rehearsal-result').waitFor({ timeout: 60_000 });
+  await page.waitForTimeout(400);
+  icons.push(...(await scan(page, 'shares dialog · rehearsal')));
+  await page.keyboard.press('Escape');
+
   for (const tab of ['Decrypt', 'Tools']) {
     await page.getByRole('tab', { name: tab }).locator('visible=true').first().click();
     await page.waitForTimeout(400);
@@ -171,5 +198,5 @@ if (badSize.length || badStroke.length) {
 const histogram = [...SIZES.keys()]
   .map((px) => `${icons.filter((i) => i.w === px).length}×${px}px`)
   .join(', ');
-console.log(`icon-audit: ${icons.length} lucide icons across 8 views — ${histogram}\n`);
+console.log(`icon-audit: ${icons.length} lucide icons across 9 views — ${histogram}\n`);
 console.log(`All icons are a size docs/design/DESIGN-SYSTEM.md names, at stroke ${STROKE}.`);

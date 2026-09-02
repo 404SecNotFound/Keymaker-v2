@@ -86,6 +86,11 @@ export interface PaperVaultProps {
   label?: string | undefined;
   /** Fixed by the caller so a re-render cannot change what "printed on" says. */
   printedOn: string;
+  /**
+   * A rehearsal that succeeded this session: the date and the strips it used.
+   * Written into the box as ink would be. Absent, the box prints blank.
+   */
+  rehearsal?: { on: string; strips: readonly number[] } | undefined;
 }
 
 const CAPACITY = paperCapacity(PAPER_QR_MAX_BYTES);
@@ -108,13 +113,22 @@ function containerLayout(
   }
 }
 
+/** "a", "a and b", "a, b and c". */
+const listOf = (items: readonly string[]): string =>
+  items.length <= 1
+    ? (items[0] ?? "")
+    : `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
+
 /** "____", "____ and ____", "____, ____ and ____" — one blank per strip a rehearsal needs. */
-const stripBlanks = (k: number): string => {
-  const blanks = Array.from({ length: k }, () => "______");
-  return blanks.length <= 1
-    ? (blanks[0] ?? "")
-    : `${blanks.slice(0, -1).join(", ")} and ${blanks[blanks.length - 1]}`;
-};
+const stripBlanks = (k: number): string => listOf(Array.from({ length: k }, () => "______"));
+
+/** The same day next year, the honest default for "rehearse again by". */
+function aYearAfter(isoDate: string): string {
+  const d = new Date(`${isoDate}T00:00:00Z`);
+  if (Number.isNaN(d.getTime())) return "______________";
+  d.setUTCFullYear(d.getUTCFullYear() + 1);
+  return d.toISOString().slice(0, 10);
+}
 
 export function PaperVault({
   container,
@@ -122,6 +136,7 @@ export function PaperVault({
   threshold,
   label,
   printedOn,
+  rehearsal,
 }: PaperVaultProps) {
   let parts: string[] = [];
   let tooLarge = false;
@@ -307,11 +322,21 @@ export function PaperVault({
           and write the date here. Do it again after any move, and at least once a
           year.
         </p>
-        <p className="pv-rehearsal-line">
-          &#9744; Rehearsed on ______________
-          {hasStrips ? <> with strips {stripBlanks(k)}</> : null} &middot; rehearse again
-          by ______________
-        </p>
+        {rehearsal ? (
+          <p className="pv-rehearsal-line">
+            &#9745; Rehearsed on {rehearsal.on}
+            {rehearsal.strips.length > 0 ? (
+              <> with strips {listOf(rehearsal.strips.map(String))}</>
+            ) : null}{" "}
+            &middot; rehearse again by {aYearAfter(rehearsal.on)}
+          </p>
+        ) : (
+          <p className="pv-rehearsal-line">
+            &#9744; Rehearsed on ______________
+            {hasStrips ? <> with strips {stripBlanks(k)}</> : null} &middot; rehearse again
+            by ______________
+          </p>
+        )}
       </section>
 
       {hasStrips ? (
