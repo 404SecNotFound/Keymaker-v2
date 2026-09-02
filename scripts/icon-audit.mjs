@@ -88,6 +88,21 @@ try {
   await page.waitForTimeout(400);
   icons.push(...(await scan(page, 'encrypt · advanced')));
 
+  // Seed Phrase mode with a word flagged: the status line's glyph and the
+  // reveal toggle are icons no other view paints.
+  await page.getByRole('button', { name: 'Seed phrase', exact: true }).locator('visible=true').first().click();
+  const seedWords = 'legal winner thank year wave sausage wotrh useful legal winner thank yellow'.split(' ');
+  for (const [i, w] of seedWords.entries()) {
+    await page
+      .getByRole('combobox', { name: `Word ${i + 1}`, exact: true })
+      .locator('visible=true')
+      .first()
+      .fill(w);
+  }
+  await page.getByRole('combobox', { name: 'Word 12', exact: true }).locator('visible=true').first().blur();
+  await page.waitForTimeout(400);
+  icons.push(...(await scan(page, 'encrypt · seed grid')));
+
   for (const tab of ['Decrypt', 'Tools']) {
     await page.getByRole('tab', { name: tab }).locator('visible=true').first().click();
     await page.waitForTimeout(400);
@@ -156,5 +171,5 @@ if (badSize.length || badStroke.length) {
 const histogram = [...SIZES.keys()]
   .map((px) => `${icons.filter((i) => i.w === px).length}×${px}px`)
   .join(', ');
-console.log(`icon-audit: ${icons.length} lucide icons across 7 views — ${histogram}\n`);
+console.log(`icon-audit: ${icons.length} lucide icons across 8 views — ${histogram}\n`);
 console.log(`All icons are a size docs/design/DESIGN-SYSTEM.md names, at stroke ${STROKE}.`);

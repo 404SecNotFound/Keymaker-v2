@@ -178,6 +178,65 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   2360px so the next stray element capture fails CI instead of shipping.
   The standard is written down in `DESIGN-SYSTEM.md § Screenshots`.
 
+- The 10× plan's first bet (`TEN-X-PLAN.md`, PR 1 — Bet 3): three **doors**
+  under the hero and a real **Seed Phrase mode**. The page's first question
+  used to be the system's — Encrypt, Decrypt, Tools — and the user's own
+  question ("I have a seed phrase to put somewhere safe") had to be
+  translated into it. The doors ask the user's: *Back up a seed phrase ·
+  Encrypt a file · Open a backup*. Each one configures the form that already
+  exists rather than growing a second one — mode, input, and the defaults a
+  passport scan and a 24-word phrase had been sharing. The seed door turns
+  recovery shares on, the file door turns them off, the tabs stay for anyone
+  who thinks in the system's terms, and the command bar lists the doors under
+  *Start*. Pressing the door already pressed is a no-op, so a stray click
+  never resets a form in progress.
+
+  Seed Phrase mode is the third pill above the text box, and it is an
+  *editor*, not an input type: a 12/15/18/21/24-cell grid whose every change
+  writes the joined words back into `textSecret`, so the size gate, the
+  inspector's byte count and the encrypt call never learned that a second
+  field existed. Each cell is a combobox on the command bar's pattern —
+  aria-activedescendant, arrow keys, Enter takes the highlight; Space and Tab
+  take it only when it is the sole candidate or the user moved it, and
+  nothing is ever completed from a prefix that could be several words. Four
+  letters name every word on the list, so the honest case is also the common
+  one. A word is judged when it is *left*, not while it is typed, and the
+  verdict is a sentence with a position in it: "Word 7 is not on the list —
+  did you mean worth?" The suggestion is optimal-string-alignment distance
+  ≤ 2, ties broken by the longest shared opening: "yelow" is one edit from
+  both "below" and "yellow", and only one of those was meant. Repeated words
+  are not an error. A wrong checksum is reported, not enforced — a phrase
+  from a wallet that never followed the standard is its owner's to seal — and
+  the only thing the button waits for is every cell holding a listed word. A
+  whole phrase pasted into any cell fills the grid and grows it to fit,
+  numbering and all. Only the focused cell is readable; the rest blur as the
+  textarea does, and the same reveal toggle lifts them together. `bip39.ts`
+  gained `isBip39Word`, `bip39Completions` (a binary search over the list,
+  which is now checked to be sorted at load) and `suggestBip39Word`; the
+  module stays lazy, so the grid takes input before the list lands and says
+  so in the status line.
+
+  `seed-mode.spec.ts` pins eleven things against the list and against the
+  bytes, never against the grid's own claims: the doors and their defaults
+  (the inspector's "2 ways in" is the witness that the seed door changed what
+  will be written), a phrase typed with spaces landing word by word, the
+  misspelling named by position with its suggestion and the button withheld
+  until it is fixed, the incomplete-word wording, autocomplete completing a
+  unique prefix and refusing to guess between eight, a paste that grows a
+  12-grid to 24, the round trip — sealed from the grid, opened with
+  `decryptText`, equal to the words joined by single spaces — the checksum
+  reported but not enforced, the blur rule read from the computed `filter`,
+  the textarea and the grid editing one secret, and Wipe now emptying the
+  cells. Sabotage: `isBip39Word` made to pass every word; typecheck and build
+  confirmed clean, then 3 of 11 failed — the misspelling test by name, its status reading "All 12 words are on the list, but the checksum does not match" where "Word 7 is not on the list" was expected, and with it the incomplete-word and autocomplete tests, since a list that knows every word has nothing to complete; restored, rebuilt.
+
+  Both audits gained the grid — a word flagged, a completion list open — as a
+  view: palette 3126→3747 colours across 8→9 views, icons 130→156 across 7→8.
+  The axe sweep gained the same state. Every screenshot regenerated, plus a
+  fourteenth, `11-seed-mode.png`, for the README's seed section, which no
+  longer claims the field speaks in colour alone. Full chromium suite:
+  205 passed. The first run was 204 of 205: `command-bar.spec.ts`'s "second Go-to entry is Tools" test, because the doors had gone in at the top of the command list. *Start* now follows *Go to*, so the palette still opens on the mode switches that test pins, and the re-run was clean.
+
 ## Loose ends
 
 - **Satoshi is not being vendored, and the question is closed.** It headed both

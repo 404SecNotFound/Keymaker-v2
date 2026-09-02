@@ -37,9 +37,13 @@ import {
   Printer,
   Trash2,
   Timer,
+  Sprout,
+  FileLock,
+  FolderOpen,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommandBar, type CommandBarItem } from "@/components/command-bar";
+import { SeedGrid, emptySeedWords, seedWordsFromText } from "@/components/seed-grid";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -88,6 +92,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 
 type Mode = "encrypt" | "decrypt" | "tools";
 type InputType = "file" | "text";
+/**
+ * What the input pills offer. "seed" is not a third InputType: it is the text
+ * input with the grid as its editor, and everything downstream still sees
+ * `inputType === "text"` and one `textSecret`.
+ */
+type InputChoice = InputType | "seed";
 
 // The BIP-39 module embeds the full English wordlist (~13 KB), so it is
 // loaded lazily to keep it out of the initial bundle. It is warmed in the
@@ -880,6 +890,42 @@ const CIPHER_OPTIONS = [
   },
 ] as const;
 
+/**
+ * The doors under the hero.
+ *
+ * The first decision the page used to ask was the system's — Encrypt, Decrypt,
+ * Tools — and the user's own question ("I have a seed phrase to put
+ * somewhere safe") had to be translated into it. A door is that question,
+ * answered: it sets the mode, the input, and the defaults a passport scan and
+ * a 24-word phrase should never have shared. It configures and nothing more —
+ * the form is the same form, arriving with the right things already set. The
+ * tabs stay for anyone who thinks in the system's terms.
+ */
+const DOORS = [
+  {
+    id: "seed",
+    icon: Sprout,
+    title: "Back up a seed phrase",
+    blurb: "Each word checked as you type. Recovery shares suggested.",
+    keywords: "bip39 wallet mnemonic recovery words",
+  },
+  {
+    id: "file",
+    icon: FileLock,
+    title: "Encrypt a file",
+    blurb: "Any file, sealed into a .keym you keep.",
+    keywords: "document scan photo seal",
+  },
+  {
+    id: "open",
+    icon: FolderOpen,
+    title: "Open a backup",
+    blurb: "A .keym file, pasted text, or paper shares.",
+    keywords: "decrypt unlock heir recover restore",
+  },
+] as const;
+type Door = (typeof DOORS)[number]["id"];
+
 const FEATURE_CARDS = [
   {
     icon: Shield,
@@ -901,6 +947,20 @@ const FEATURE_CARDS = [
 export function EncryptorTool() {
   const [mode, setMode] = useState<Mode>("encrypt");
   const [inputType, setInputType] = useState<InputType>('file');
+  /**
+   * Seed Phrase mode — the grid editor for the text input.
+   *
+   * Not a third input type. `textSecret` stays the plaintext the crypto path
+   * seals, and the grid is another editor for it: every change to the cells
+   * writes the joined words back, so nothing downstream — the size gate, the
+   * inspector's byte count, the encrypt call — has a second field to know
+   * about. `seedWords` is the same secret in its own shape and is wiped with
+   * it; its length is the phrase length, a layout choice that stays.
+   */
+  const [seedMode, setSeedMode] = useState(false);
+  const [seedWords, setSeedWords] = useState<string[]>(() => emptySeedWords(12));
+  /** The lazily loaded wordlist, held as state so the grid re-renders when it lands. */
+  const [bip39, setBip39] = useState<Bip39Module | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [textSecret, setTextSecret] = useState('');
   const [outputText, setOutputText] = useState('');
@@ -1373,9 +1433,11 @@ export function EncryptorTool() {
   // initial bundle, but fetching it now means the service worker caches it
   // while the user is still online, so offline seed detection keeps working.
   useEffect(() => {
-    loadBip39().catch(() => {
-      // Ignored — processData retries the import and degrades gracefully.
-    });
+    loadBip39()
+      .then((m) => setBip39(m))
+      .catch(() => {
+        // Ignored — processData retries the import and degrades gracefully.
+      });
   }, []);
 
   // Debounced BIP-39 check on the encrypt-side secret text, so a typo'd
@@ -1383,7 +1445,8 @@ export function EncryptorTool() {
   // Deliberately color-only (border tint) — no text badge that would tell a
   // shoulder-surfer the blurred field holds a seed phrase.
   useEffect(() => {
-    if (mode !== "encrypt" || inputType !== "text" || !textSecret.trim()) {
+    // The grid reports per word and never needs this whole-phrase verdict.
+    if (mode !== "encrypt" || inputType !== "text" || seedMode || !textSecret.trim()) {
       setTextSecretSeedStatus("none");
       return;
     }
@@ -1404,7 +1467,7 @@ export function EncryptorTool() {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [textSecret, mode, inputType]);
+  }, [textSecret, mode, inputType, seedMode]);
 
   /**
    * Gate the text field before its contents reach React state or the DOM.
@@ -1629,6 +1692,9 @@ export function EncryptorTool() {
     // plaintext: the auto-lock treated a loaded document as nothing at all.
     setFile(null);
     setTextSecret('');
+    // The grid's cells are the same secret in another shape. The count is a
+    // layout choice and stays.
+    setSeedWords((w) => w.map(() => ""));
     setTextInputRejected(null);
     setShowTextSecret(false);
     setTextSecretSeedStatus("none");
@@ -1682,6 +1748,7 @@ export function EncryptorTool() {
   const resetState = useCallback(() => {
     clearSensitiveState();
     setInputType('file');
+    setSeedMode(false);
   }, [clearSensitiveState]);
 
   /**
@@ -1709,6 +1776,10 @@ export function EncryptorTool() {
   const hasSecretsOnScreen =
     password.length > 0 ||
     textSecret.length > 0 ||
+    // Mirrored into `textSecret` on every change, so this clause is never the
+    // one that fires — it is here so the list stays the same list as the one
+    // in `clearSensitiveState`, by construction rather than by remembering.
+    seedWords.some(Boolean) ||
     outputText.length > 0 ||
     // KM-R03. Share-only decryption is the case this predicate missed: an heir
     // has no password and may have decrypted a *file*, so all three of the
@@ -1796,7 +1867,7 @@ export function EncryptorTool() {
     }
   }, [resetState]);
   
-  const handleInputTypeChange = useCallback((newType: string) => {
+  const handleInputTypeChange = useCallback((newType: InputChoice) => {
       // Same reasoning as resetState: an operation started against File mode
       // must not deliver its result into Text mode. This was the reproducible
       // half of the bug — switch input type mid-derivation and the finished
@@ -1804,7 +1875,15 @@ export function EncryptorTool() {
       opSeqRef.current++;
       cancelAllCryptoWork();
       setIsLoading(false);
-      setInputType(newType as InputType);
+      setInputType(newType === 'file' ? 'file' : 'text');
+      // Seed Phrase mode is the text input in another editor. Entering it
+      // takes whatever the textarea held into the cells — the two edit the
+      // same `textSecret`, so a phrase typed in one is not lost by switching
+      // to the other. Leaving it needs nothing: the cells wrote the joined
+      // words back on every change.
+      const seed = newType === 'seed';
+      setSeedMode(seed);
+      if (seed) setSeedWords(seedWordsFromText(textSecret));
       // Clear any previous result when the input type changes. The blur and
       // reveal controls on the decrypted output are scoped to text mode, so
       // carrying outputText across the switch would render a decrypted
@@ -1817,7 +1896,65 @@ export function EncryptorTool() {
       setIsDecryptedQrModalOpen(false);
       setIsDecryptedQrRevealed(false);
       setDecryptedQrStatus({ kind: "idle" });
+  }, [textSecret]);
+
+  /**
+   * The grid's one write path. The cells are the source of truth while the
+   * grid is showing; `textSecret` follows them so the encrypt path never has
+   * to know which editor was used.
+   */
+  const handleSeedWordsChange = useCallback((words: string[]) => {
+    setSeedWords(words);
+    setTextSecret(words.filter(Boolean).join(" "));
+    setTextInputRejected(null);
   }, []);
+
+  /**
+   * Which door, if any, describes the form as it stands. Plain text mode is
+   * behind no door — it is the power user's path, reached from the pills.
+   */
+  const currentDoor: Door | null =
+    mode === "decrypt"
+      ? "open"
+      : mode === "encrypt" && inputType === "file"
+        ? "file"
+        : mode === "encrypt" && inputType === "text" && seedMode
+          ? "seed"
+          : null;
+
+  /**
+   * A door configures; it does not pre-render a form (the anticipation rule).
+   * Where the mode changes it goes through `handleModeChange`, so the reset
+   * is exactly the reset a tab click does; where only the input changes it
+   * goes through `handleInputTypeChange`, likewise. The defaults are the
+   * point: a seed phrase suggests shares, because it is the one thing people
+   * seal for someone else; a file does not. Pressing the door already pressed
+   * is a no-op, so a form in progress is never reset by a stray click.
+   */
+  const openDoor = useCallback((door: Door) => {
+    if (door === currentDoor) return;
+    if (door === "open") {
+      if (mode !== "decrypt") handleModeChange("decrypt");
+      else if (inputType !== "file") handleInputTypeChange("file");
+      return;
+    }
+    const changingMode = mode !== "encrypt";
+    if (changingMode) handleModeChange("encrypt");
+    if (door === "seed") {
+      if (changingMode) {
+        // resetState has just queued the file default; these land after it.
+        setInputType("text");
+        setSeedMode(true);
+        setSeedWords(emptySeedWords(12));
+      } else {
+        handleInputTypeChange("seed");
+      }
+      setShamirEnabled(true);
+    } else {
+      if (!changingMode) handleInputTypeChange("file");
+      setShamirEnabled(false);
+    }
+  }, [currentDoor, mode, inputType, handleModeChange, handleInputTypeChange]);
 
   /**
    * @param maxBytes Ceiling for this particular picker. Encrypting caps the
@@ -2307,6 +2444,8 @@ export function EncryptorTool() {
             const { armorKeym2 } = await import("@/lib/keym-v2");
             setOutputText(armorKeym2(new Uint8Array(resultBuffer)));
             setTextSecret('');
+            // The grid's cells hold the same plaintext; sealed means gone.
+            setSeedWords((w) => w.map(() => ""));
         }
 
       } else { // Decrypt — the KEYM container is self-describing, and legacy
@@ -2678,6 +2817,18 @@ export function EncryptorTool() {
   const isProcessButtonDisabled = () => {
     if (isLoading || !isCryptoAvailable) return true;
     const hasInput = inputType === 'file' ? !!file : !!textSecret;
+    // Seed Phrase mode seals only a phrase it has finished checking: every
+    // cell holding a word the list knows. The checksum is reported, not
+    // enforced — see the grid's header comment — so a mismatch does not
+    // withhold the button.
+    if (
+      mode === 'encrypt' &&
+      inputType === 'text' &&
+      seedMode &&
+      !(bip39 !== null && seedWords.every((w) => w !== "" && bip39.isBip39Word(w)))
+    ) {
+      return true;
+    }
     // §4.6. An heir holds shares and no password, so shares are a credential
     // in their own right — requiring a password here would leave the one flow
     // this feature exists for permanently unreachable.
@@ -2768,10 +2919,27 @@ export function EncryptorTool() {
           <button
             type="button"
             onClick={() => handleInputTypeChange('text')}
-            className={inputTypePillClasses(inputType === 'text')}
+            className={inputTypePillClasses(inputType === 'text' && !(currentMode === 'encrypt' && seedMode))}
           >
             Text
           </button>
+          {/*
+            Seed Phrase mode. Encrypt only: a phrase is something you seal,
+            and what you open is a container. Pressing it while it is already
+            showing does nothing — re-entering would re-seed the grid from
+            `textSecret` and could resize it under a phrase in progress.
+          */}
+          {currentMode === 'encrypt' && (
+            <button
+              type="button"
+              onClick={() => {
+                if (!(inputType === 'text' && seedMode)) handleInputTypeChange('seed');
+              }}
+              className={inputTypePillClasses(inputType === 'text' && seedMode)}
+            >
+              Seed phrase
+            </button>
+          )}
         </div>
 
         {inputType === 'file' ? (
@@ -2792,6 +2960,14 @@ export function EncryptorTool() {
             icon={<FileText className="h-5 w-5" />}
             label="Drop a file here"
             description={`or click to browse · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`}
+          />
+        ) : currentMode === 'encrypt' && seedMode ? (
+          <SeedGrid
+            words={seedWords}
+            onChange={handleSeedWordsChange}
+            revealed={showTextSecret}
+            onRevealedChange={setShowTextSecret}
+            bip39={bip39}
           />
         ) : (
           <div className="space-y-2">
@@ -4133,6 +4309,17 @@ export function EncryptorTool() {
         run: () => handleModeChange("tools"),
       });
     }
+    // The doors, reachable from the keyboard. After "Go to", so the list
+    // still opens on the mode switches command-bar.spec.ts pins; the one
+    // already pressed is left out for the same reason the current mode is.
+    for (const door of DOORS) {
+      if (door.id === currentDoor) continue;
+      items.push({
+        id: `door-${door.id}`, group: "Start", label: door.title, icon: door.icon,
+        keywords: door.keywords,
+        run: () => openDoor(door.id),
+      });
+    }
     if (mode === "encrypt") {
       items.push({
         id: "generate-password", group: "Encrypt", label: "Generate a random password",
@@ -4195,8 +4382,9 @@ export function EncryptorTool() {
     });
     return items;
   }, [
-    mode, hasSecretsOnScreen, handleModeChange, generatePassword,
-    generatePassphrase, generateKeyFile, runCalibration, wipeNow,
+    mode, currentDoor, openDoor, hasSecretsOnScreen, handleModeChange,
+    generatePassword, generatePassphrase, generateKeyFile, runCalibration,
+    wipeNow,
   ]);
 
   const tabTriggerClasses = "rounded-md border border-transparent px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors sm:px-4 data-[state=active]:border-border-strong data-[state=active]:bg-inset data-[state=active]:text-foreground";
@@ -4382,6 +4570,45 @@ export function EncryptorTool() {
               </a>
               , forked from IttyBitz.
             </p>
+          </div>
+
+          {/*
+            The doors — see DOORS. Three buttons, not three forms: the one
+            pressed is the one the form below already answers to, and the
+            same option treatment the KDF and cipher cards use says so —
+            hairline alone at rest, `inset` fill plus the strong hairline
+            when selected. The description hides below `sm`, where three
+            columns of 12px prose would cost more than they say.
+          */}
+          <div
+            role="group"
+            aria-label="Start with"
+            data-testid="intent-doors"
+            className="mb-8 grid grid-cols-3 gap-2 sm:mb-10 sm:gap-3"
+          >
+            {DOORS.map(({ id, icon: Icon, title, blurb }) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => openDoor(id)}
+                aria-pressed={currentDoor === id}
+                data-testid={`door-${id}`}
+                className={cn(
+                  "flex min-w-0 cursor-pointer flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors sm:p-4",
+                  currentDoor === id
+                    ? "border-border-strong bg-inset"
+                    : "border-border hover:border-border-strong"
+                )}
+              >
+                <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                <span className="text-[13px] font-medium leading-snug text-foreground sm:text-[14px]">
+                  {title}
+                </span>
+                <span className="hidden text-[12px] leading-snug text-muted-foreground sm:block">
+                  {blurb}
+                </span>
+              </button>
+            ))}
           </div>
 
           {/* The workbench. On a desktop the form and the container pane sit

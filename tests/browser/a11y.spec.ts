@@ -61,6 +61,20 @@ test.describe("axe", () => {
       },
     ],
     [
+      // With a word flagged and a completion list open: the combobox wiring,
+      // the live status and the danger wash are the parts axe can judge.
+      "encrypt in seed mode",
+      async (page) => {
+        await visible(page.getByRole("button", { name: "Seed phrase", exact: true })).click();
+        const words = "legal winner thank year wave sausage wotrh useful legal winner thank yellow".split(" ");
+        for (const [i, w] of words.entries()) {
+          await visible(page.getByRole("combobox", { name: `Word ${i + 1}`, exact: true })).fill(w);
+        }
+        await visible(page.getByRole("combobox", { name: "Word 12", exact: true })).fill("ye");
+        await expect(page.getByRole("listbox", { name: "Completions for word 12" })).toBeVisible();
+      },
+    ],
+    [
       "decrypt",
       async (page) => {
         await visible(page.getByRole("tab", { name: "Decrypt" })).click();

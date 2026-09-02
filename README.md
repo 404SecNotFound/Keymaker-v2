@@ -120,7 +120,7 @@ the algorithm a choice, and writes that choice into the file.
 | Tamper protection | ciphertext only | **entire header authenticated as AAD** |
 | Unicode passwords | no normalization | **NFC-normalized** before derivation |
 | Filenames | leaked in plaintext | optional **filename obscuring** |
-| Seed phrases | BIP-39 validity hint | validity hint plus **Standard SeedQR export** |
+| Seed phrases | BIP-39 validity hint | **Seed Phrase mode** — word-by-word check, completion, checksum in words — plus **Standard SeedQR export** |
 | Entropy tooling | none | **dice entropy calculator** |
 | Reading old files | n/a | **decrypts IBTZ v0 and v1 transparently** |
 
@@ -218,16 +218,30 @@ See [`docs/FORMAT.md`](docs/FORMAT.md) for the byte-level specification and
 
 ## Seed-phrase awareness
 
-Keymaker recognizes BIP-39 seed phrases and signals validity through border color
-alone — never with a label. A shoulder-surfer sees a green outline, not the words
-"valid seed phrase", so the screen does not announce that it is holding a wallet.
+**Seed Phrase mode** — the first door under the hero, or the third pill above the
+text box — gives every word of a 12- to 24-word phrase its own cell. Each word is
+checked against the BIP-39 list as it is typed; a prefix completes from the list
+(four letters name every word on it); and once the phrase is whole, the checksum is
+reported in a sentence. A mistake is named by position and by what it was probably
+meant to be — *"Word 7 is not on the list — did you mean worth?"* — never by colour
+alone. Only the cell being typed into is readable; the rest stay blurred until you
+choose to reveal them.
 
 <p align="center">
-  <img alt="Secret text field showing BIP-39 validity through border color only" src="docs/screenshots/02-seed-detection.png" width="620" />
+  <img alt="Seed Phrase mode: a twelve-cell grid with word 7 flagged, and the status line naming the position and the word meant" src="docs/screenshots/11-seed-mode.png" width="620" />
 </p>
 
-A phrase that is seed-shaped but fails its checksum turns red *before* you encrypt it,
-catching a transcription error while it is still fixable, rather than after a bad
+The plain text box still recognizes a phrase pasted into it, and says what it found
+through its border and a short status — "All words recognised" or "A word isn't
+recognised". The wording is kept generic on purpose: a spellcheck result, not an
+announcement that the screen is holding a wallet.
+
+<p align="center">
+  <img alt="Secret text field reporting BIP-39 validity through its border and a short status" src="docs/screenshots/02-seed-detection.png" width="620" />
+</p>
+
+A phrase that is seed-shaped but fails its checksum is reported *before* you encrypt
+it, catching a transcription error while it is still fixable, rather than after a bad
 backup has been sealed and stored.
 
 On decryption, a recovered seed can be exported as a **Standard SeedQR** for direct

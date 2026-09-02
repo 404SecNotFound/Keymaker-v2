@@ -242,7 +242,8 @@ form.
   not around", and it is its own flow.
 - **Key files**, which add a second factor that is a file rather than something
   you remember.
-- **Seed phrases**, which get their own handling: BIP-39 detection, and SeedQR
+- **Seed phrases**, which get their own handling: a Seed Phrase mode that checks
+  each word as you type it, BIP-39 detection in the plain text box, and SeedQR
   export for getting one onto paper without a camera or a network.
 - **Whether the app you used was the real one.** Nothing above establishes that;
   [VERIFYING.md](VERIFYING.md) and the in-app
