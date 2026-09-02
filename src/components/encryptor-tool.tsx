@@ -1972,13 +1972,23 @@ export function EncryptorTool() {
       setIsLoading(false);
       setInputType(newType === 'file' ? 'file' : 'text');
       // Seed Phrase mode is the text input in another editor. Entering it
-      // takes whatever the textarea held into the cells — the two edit the
-      // same `textSecret`, so a phrase typed in one is not lost by switching
-      // to the other. Leaving it needs nothing: the cells wrote the joined
+      // takes whatever the textarea held into the cells, and writes the
+      // cleaned words back to `textSecret` at once, the same write the grid
+      // makes on every edit. The cells are what the user sees and the status
+      // line vouches for; `textSecret` is what gets sealed. Deriving one
+      // without rewriting the other left a phrase pasted with stray
+      // whitespace, newlines or numbering showing a clean grid and a matching
+      // checksum while the raw string went into the container. An empty
+      // textarea yields empty cells and an empty secret, so nothing is
+      // invented. Leaving seed mode needs nothing: the cells wrote the joined
       // words back on every change.
       const seed = newType === 'seed';
       setSeedMode(seed);
-      if (seed) setSeedWords(seedWordsFromText(textSecret));
+      if (seed) {
+        const words = seedWordsFromText(textSecret);
+        setSeedWords(words);
+        setTextSecret(words.filter(Boolean).join(' '));
+      }
       // Clear any previous result when the input type changes. The blur and
       // reveal controls on the decrypted output are scoped to text mode, so
       // carrying outputText across the switch would render a decrypted
