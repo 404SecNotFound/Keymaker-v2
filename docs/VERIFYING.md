@@ -113,10 +113,16 @@ KEYMAKER_CERT_IDENTITY='https://github.com/404SecNotFound/Keymaker-v2/.github/wo
   node scripts/verify-manifest.mjs ./keymaker-v2.0.0
 ```
 
-A release is built with the Pages base path, so its manifest is directly
-comparable to the deployment's — that is what the artifact is for, and it is
-also why it is not a drop-in for hosting somewhere else. Section 2 below
-rebuilds it unchanged.
+A release is built with the Pages base path, which is why it is not a drop-in
+for hosting somewhere else, and it is labelled as the tagged release: the
+footer says `v2.0.0` rather than `v2.0.0-dev`. That label is compiled in, so a
+release is **not** byte-identical to a deployment of the same commit: the
+chunk that carries the label, the HTML and router payloads that reference that
+chunk by its content hash, and the service worker's precache list all differ.
+Every other file is the same bytes. Rebuilding a release therefore sets one
+more variable than rebuilding the deployment; [section 2](#2-rebuild-it-yourself)
+gives both commands, and `scripts/release-recipe-test.mjs` fails the build if
+the release one stops matching what `release.yml` actually sets.
 
 ### What the signature actually asserts
 
@@ -208,6 +214,22 @@ diff out/SHA256SUMS ../site/SHA256SUMS && echo "identical"
 If those manifests match, the deployed artifact was built from exactly the
 source you just read.
 
+A tagged release is rebuilt the same way with one more variable. `release.yml`
+sets `KEYMAKER_RELEASE_TAG` to the tag it is building, which is what labels the
+artifact as the release rather than a rolling build of `main`; leave it unset
+and six files come out different, for the reason given in
+[section 1](#the-same-check-against-a-tagged-release). Substitute the tag:
+
+```bash
+git checkout <tag>
+npm ci
+
+# The same two variables release.yml builds with, and nothing else.
+KEYMAKER_RELEASE_TAG=<tag> KEYMAKER_BASE_PATH=/Keymaker-v2 npm run build
+
+diff out/SHA256SUMS ../keymaker-<tag>/SHA256SUMS && echo "identical"
+```
+
 ### What makes this possible
 
 Next generates a random build id per build, which appears in
@@ -223,7 +245,7 @@ assume more than was measured. Two things run on every change:
 
 | Gate | What it varies | What it therefore proves |
 |---|---|---|
-| `npm run verify:reproducible` | Nothing but the clock, the locale and `HOME`, on one runner | The build is a function of its source, not of when it ran. Catches a `Date.now()` in a bundle on the change that introduces it. |
+| `npm run verify:reproducible` | Nothing but the clock, the locale and `HOME`, on one runner, once as a rolling build and once labelled as the release since the label is compiled in | The build is a function of its source, not of when it ran, on both channels. Catches a `Date.now()` in a bundle on the change that introduces it. |
 | `reproducible-elsewhere` (ci.yml) | A different runner per leg, a different checkout path, a different Node major (22 and 24) | A *different machine* building the same commit gets the same bytes — which is the claim this page asks you to act on. |
 
 Both build with `KEYMAKER_BASE_PATH=/Keymaker-v2`, so what is compared is the

@@ -9,9 +9,13 @@ name: Release
 # verification story in docs/VERIFYING.md had nothing a stranger could download
 # and check against.
 #
-# The artifact is built with the Pages base path on purpose, so it is
-# byte-comparable to the deployment. Its job is making the live site checkable,
-# not being a portable build.
+# The artifact is built with the Pages base path on purpose, and labelled as
+# the release. Its job is making the live site checkable, not being a portable
+# build. It is not byte-identical to a deployment of the same commit: the label
+# is compiled in (next.config.js reads KEYMAKER_RELEASE_TAG), so the files that
+# carry it differ and the rest match. docs/VERIFYING.md says which variables
+# reproduce which artifact, and scripts/release-recipe-test.mjs holds that
+# document to the env: block of the build step below.
 #
 # Cutting a release is `git tag -a v2.0.0 && git push origin v2.0.0`. Use an
 # *annotated* tag: its message becomes the "What changed" section, and the
