@@ -48,6 +48,7 @@
 import {
   CipherId,
   describeWeakKdf,
+  isUserFacingError,
   KdfId,
   KeymakerError,
   loadHashWasm,
@@ -1036,6 +1037,12 @@ async function open(
   blob: Uint8Array,
   aad: Uint8Array
 ): Promise<Uint8Array | null> {
+  // Loaded outside the catch. Everything inside it is "this key does not open
+  // this blob", which the caller turns into a wrong-password verdict; a cipher
+  // that could not be *loaded* is not that, and swallowing it here made an
+  // unreachable chunk report as an incorrect password. loadNoble() throws a
+  // typed KeymakerError for that case, and it has to reach the user intact.
+  const noble = cipher === CipherId.AES_256_GCM ? null : await loadNoble();
   try {
     if (cipher === CipherId.AES_256_GCM) {
       const out = await crypto.subtle.decrypt(
@@ -1045,7 +1052,7 @@ async function open(
       );
       return new Uint8Array(out);
     }
-    const { chacha20poly1305 } = await loadNoble();
+    const { chacha20poly1305 } = noble!;
     if (cipher === CipherId.CHACHA20_POLY1305) {
       return chacha20poly1305(keys.chachaKey!, nonce, aad).decrypt(blob);
     }
@@ -1209,8 +1216,15 @@ async function* unwrapCandidates(
     let slotKey: Uint8Array;
     try {
       slotKey = await deriveSlotKey(slotSecret, slot.salt, slot.kdf);
-    } catch {
+    } catch (error) {
       secureErase(slotSecret);
+      // One exception to the skip rule: the Argon2id library failing to
+      // *load* is not a property of the slot, and skipping every Argon2id
+      // slot on its account exhausts the walk and reports a wrong password
+      // for a container that was never tried. loadHashWasm() marks that case
+      // with a typed error; everything else here is hash-wasm refusing the
+      // slot's own parameters, which is the slot's problem alone.
+      if (isUserFacingError(error)) throw error;
       continue;
     }
     // Unconditional. This was guarded on Shamir-or-passkey, which left the one
