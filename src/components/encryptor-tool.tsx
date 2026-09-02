@@ -1933,6 +1933,16 @@ export function EncryptorTool() {
     const id = setInterval(() => {
       const left = Math.ceil((AUTO_LOCK_MS - (Date.now() - lastActivityRef.current)) / 1000);
       if (left <= 0) {
+        // Re-arm before wiping. When issued shares are spared the secrets stay
+        // on screen, this effect does not re-run, and the interval keeps
+        // sampling, so without this line every following tick was another
+        // lock: a fresh toast, another cancelAllCryptoWork, another re-render,
+        // once a second, aimed at the person copying one-time shares onto
+        // paper. Moving the activity mark here makes the lock fire once per
+        // idle period and re-arm naturally if a password is typed later while
+        // the shares remain. Clearing the interval instead would leave that
+        // later password unprotected, because nothing would restart the clock.
+        lastActivityRef.current = Date.now();
         setLockSecondsLeft(null);
         const sparedShares = issuedSharesRef.current !== null;
         clearSensitiveState({ sparingIssuedShares: true });
