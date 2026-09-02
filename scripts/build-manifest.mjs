@@ -46,6 +46,19 @@ const MANIFEST = join(OUT_DIR, 'SHA256SUMS');
 /** Names that must never appear in the manifest. */
 const SELF = new Set(['SHA256SUMS', 'SHA256SUMS.sigstore', 'SHA256SUMS.sigstore.json']);
 
+/**
+ * Deploy-control files: consumed by the host, never served by it.
+ *
+ * `.nojekyll` tells GitHub Pages to publish `_next/` as-is instead of handing
+ * the tree to Jekyll, which drops underscore-prefixed directories. Pages reads
+ * the file and then answers 404 for it, so a manifest that listed it could
+ * never verify against the live site, every reader following VERIFYING.md
+ * got `.nojekyll: FAILED open or read` on an honest deployment. It is part of
+ * the upload, not part of the artifact a browser can receive, and the manifest
+ * is a promise about the latter.
+ */
+const DEPLOY_CONTROL = new Set(['.nojekyll']);
+
 function walk(dir) {
   const found = [];
   for (const name of readdirSync(dir).sort()) {
@@ -68,7 +81,7 @@ const entries = files
   // Posix separators, so a manifest built on Windows compares equal to one
   // built on Linux. A path separator difference would look like tampering.
   .map((f) => ({ abs: f, rel: relative(OUT_DIR, f).split(sep).join('/') }))
-  .filter((e) => !SELF.has(e.rel))
+  .filter((e) => !SELF.has(e.rel) && !DEPLOY_CONTROL.has(e.rel))
   .sort((a, b) => (a.rel < b.rel ? -1 : a.rel > b.rel ? 1 : 0));
 
 if (entries.length === 0) {

@@ -3,12 +3,12 @@
  * Execute docs/VERIFYING.md's mirroring recipe against a local copy of `out/`.
  *
  * The recipe was `wget -r`, and it did not work. A crawler follows links, and a
- * deployment contains files nothing links to — `.nojekyll`, the error page, and
- * the router payloads the app fetches at runtime. On the build this was written
- * against, **23 of 58 manifest entries were unreachable that way**, so the
- * documented procedure reported a third of an honest deployment as FAILED. A
- * verification step that cries wolf is worse than none: the first thing it
- * teaches is to ignore it.
+ * deployment contains files nothing links to, the error page, the service
+ * worker, and the router payloads the app fetches at runtime. On the build this
+ * was written against, **23 of 58 manifest entries were unreachable that way**,
+ * so the documented procedure reported a third of an honest deployment as
+ * FAILED. A verification step that cries wolf is worse than none: the first
+ * thing it teaches is to ignore it.
  *
  * It is replaced by reading the manifest and fetching exactly what it names,
  * and this runs that block rather than a re-typed copy of it — the same reason

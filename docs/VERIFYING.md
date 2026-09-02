@@ -53,12 +53,12 @@ sha256sum -c SHA256SUMS
 ```
 
 **Why this fetches a list instead of crawling.** `wget -r` follows links, and a
-deployment contains files nothing links to: `.nojekyll`, the error page, and the
-router payloads the app requests at runtime. Measured on the current build, **23
-of 58 manifest entries are unreachable by link-following** — a mirror made that
-way is missing a third of the artifact, and `sha256sum -c` reports every one as
-a failure. That is a recipe which cries wolf on an honest deployment, and the
-first thing it teaches is to ignore it.
+deployment contains files nothing links to: the error page, the service worker,
+and the router payloads the app requests at runtime. Measured on the current
+build, **23 of 58 manifest entries are unreachable by link-following**, a
+mirror made that way is missing a third of the artifact, and `sha256sum -c`
+reports every one as a failure. That is a recipe which cries wolf on an honest
+deployment, and the first thing it teaches is to ignore it.
 
 The manifest is the file list. Reading it is also the stronger check: a crawler
 can only find what the site chooses to link, whereas every signed file appears
