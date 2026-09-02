@@ -340,6 +340,67 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   palette 4376→4891 colours across 10→11 views, icons 193→226 across 9→10 — and the axe sweep gained the opened panel. Full chromium
   suite: 219 passed on the final build, typecheck and production build clean; six screenshots regenerated (every band that frames the inspector footer), all fourteen still 2360px.
 
+- PR 5 of the plan — Bet 6, **the seal as a ceremony, and a receipt instead
+  of a toast**. The rule came first: `DESIGN-SYSTEM.md § Motion` keeps
+  150–250ms for everything and adds one scoped allowance — a *moment of
+  completion*, a seal or a wipe, may run 400–600ms, still opacity/transform
+  only, still flattened by the reduced-motion global — with the reason
+  written in: motion is information, and its length should match what it
+  says; 200ms says "something flickered" where 500ms says "this happened".
+  It is an allowance, not a range: nothing that is not completing something
+  is entitled to it. That amendment is the only spec change in the whole
+  plan.
+
+  Then the code. **While a seal runs, the inspector's byte map sweeps** left
+  to right — each segment revealed over the share of 500ms its bytes occupy,
+  after the ones before it: stamp, fields, then slots — and the slots breathe
+  until the worker returns, when the finished container draws its own map
+  from the bytes with no sweep at all. Phases, not telemetry: the worker
+  reports no progress, and what the sweep depicts is the order the header is
+  written in, which the widths already state. **A receipt replaces the
+  success toast** on the encrypt side: *Sealed.* — what was written (name →
+  name.keym, or text → a container on screen), how it is protected in the
+  inspector's own words from the inspector's own label functions, the ways
+  in, "left this device: nothing", and three real buttons — *Print paper
+  vault* (the standalone print button moved here), *Rehearse recovery*, and
+  *Download .keym*. *Rehearse recovery* is the heir's route from paper: the
+  Decrypt tab with the container filled in, verify-only on and the strip
+  box open, so the owner pastes strips from the printed sheet exactly as an
+  heir would; the on-screen rehearsal in the shares dialog is the same
+  exercise from the strings. The receipt arrives in 500ms, under the
+  allowance. **The wipe gets the same treatment**: an acknowledgment in
+  place — *Wiped* — that stays until the next thing appears on screen,
+  rather than a toast that is gone before it is read. A decrypt keeps its
+  toast; `async-guard.spec.ts`'s announcement reader now reads the receipt
+  as well as the toast region, so a receipt delivered into a panel that has
+  moved on counts as the leak a stale toast always did.
+
+  `receipt.spec.ts` holds the receipt to the **parsed** pane — not the plan
+  pane, which shares its label functions and could agree by construction,
+  but the rows read from the bytes the worker wrote: the receipt's KDF must
+  equal the slot row's detail verbatim, its cipher must appear in the pane's
+  "Payload sealed with" line. Its buttons are exercised for real: a download
+  event with the app's own container name, a print with the sheet mounted at
+  the instant of printing, and the rehearsal route landing on Decrypt with
+  the container, verify-only and the strip box set. The sweep is read from
+  computed style during a slow Argon2id seal in two contexts — 500ms-scale
+  durations without the preference, under a millisecond with it — and the
+  receipt appears either way. The wipe acknowledgment is asserted in place,
+  absent from the toast region, and gone at the next keystroke. Sabotage:
+  the receipt's KDF row hardcoded to "PBKDF2 · 1 iteration"; typecheck and build clean, then the authority test failed by name — expected the parsed pane's "PBKDF2 · 1,000,000 iterations", received the lie — and the other three passed; restored, rebuilt. Both audits gained the receipt as a view — palette 4891→5502 colours across 11→12 views, icons 226→261 across 10→11.
+  Full chromium suite: 223 passed on the restored build, typecheck and
+  production build clean. Screenshots recaptured: one changed by design —
+  walkthrough-3, now framed from the receipt down to the container, and
+  `capture-screenshots.mjs` scrolls a band's anchor to the top of the
+  viewport before clipping, because the receipt, arriving above the
+  result, had pushed the container's last lines off the bottom of the old
+  frame; the walkthrough caption says what the shot now shows. Eight came
+  back byte-identical. Five differed only in what differs between any two
+  captures — a fresh passphrase, a fresh container's bytes, a button's
+  hover state, the scrim's scroll offset behind the SeedQR dialog — and are
+  left as committed, so the diff carries the one real change. All fourteen
+  still 2360px.
+
 ## Loose ends
 
 - **Satoshi is not being vendored, and the question is closed.** It headed both

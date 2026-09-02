@@ -872,6 +872,30 @@ function randomFilenameSuffix(): string {
 
 type KdfChoice = "pbkdf2" | "argon2id";
 
+/**
+ * The KDF and cipher as the inspector names them — one function each, used
+ * by the plan pane *and* the receipt, so the two cannot drift. The parsed
+ * pane derives the same strings from the bytes, which is what the receipt
+ * spec compares them to.
+ */
+function kdfLabelOf(
+  choice: KdfChoice,
+  memoryMiB: number,
+  timeCost: number,
+  parallelism: number
+): string {
+  return choice === "argon2id"
+    ? `Argon2id · ${memoryMiB} MiB · t=${timeCost} · p=${parallelism}`
+    : "PBKDF2 · 1,000,000 iterations";
+}
+function cipherLabelOf(cipher: CipherId): string {
+  return cipher === CipherId.AES_256_GCM
+    ? "AES-256-GCM"
+    : cipher === CipherId.CHACHA20_POLY1305
+      ? "ChaCha20-Poly1305"
+      : "AES-256-GCM + ChaCha20-Poly1305";
+}
+
 const CIPHER_OPTIONS = [
   {
     id: CipherId.AES_256_GCM,
@@ -1255,6 +1279,37 @@ export function EncryptorTool() {
    * describes the user's backup, so it is wiped with everything else.
    */
   const [sealedPeek, setSealedPeek] = useState<Uint8Array | null>(null);
+  /**
+   * The receipt — the seal as a ceremony (10× plan, Bet 6).
+   *
+   * Press Encrypt, spinner, toast, output: correct and forgettable, and the
+   * next steps — download, print, issue shares, rehearse — were scattered
+   * across the form and the footer. The moment of completion is the one
+   * moment the owner is certain to be paying attention, so it gets a receipt
+   * instead of a toast: what was written, how it is protected (in the same
+   * words the inspector uses, from the same function), the ways in, what left
+   * this device (nothing), and the three real next steps as buttons. It is
+   * state, not a secret — it names no key material — and it is cleared with
+   * the output it describes.
+   */
+  type Receipt = {
+    from: string;
+    to: string;
+    kdf: string;
+    cipher: string;
+    waysIn: string[];
+    bytes: number;
+    /** The container is on screen as armored text: printable, downloadable, rehearsable. */
+    onScreen: boolean;
+    shares: { threshold: number; count: number } | null;
+  };
+  const [receipt, setReceipt] = useState<Receipt | null>(null);
+  /**
+   * The wipe's acknowledgment, in place of a toast. A wipe is a deliberate
+   * act, and a toast that fades in a few seconds is not an acknowledgment of
+   * one; this stays until the next thing appears on screen.
+   */
+  const [wipeAck, setWipeAck] = useState(false);
   /** Decrypt-side twin: read live off the loaded input, before any unlock. */
   const [decryptPeek, setDecryptPeek] = useState<Uint8Array | null>(null);
   /**
@@ -1735,6 +1790,7 @@ export function EncryptorTool() {
     setSlotTableWarning(false);
     setVerifyResult(null);
     setSealedPeek(null);
+    setReceipt(null);
 
     // Anything rendering a secret.
     setIsQrModalOpen(false);
@@ -1787,6 +1843,7 @@ export function EncryptorTool() {
     clearSensitiveState();
     setInputType('file');
     setSeedMode(false);
+    setWipeAck(false);
   }, [clearSensitiveState]);
 
   /**
@@ -1797,11 +1854,10 @@ export function EncryptorTool() {
    */
   const wipeNow = useCallback(() => {
     clearSensitiveState();
-    toast({
-      title: "Wiped",
-      description: "Password, inputs and any decrypted output were cleared. Your settings are unchanged.",
-    });
-  }, [clearSensitiveState, toast]);
+    // Acknowledged where the wipe happened, and for as long as the screen
+    // stays empty — not in a toast that is gone before it is read.
+    setWipeAck(true);
+  }, [clearSensitiveState]);
 
   /**
    * Is there anything on screen worth locking?
@@ -1935,6 +1991,8 @@ export function EncryptorTool() {
       setIsDecryptedQrModalOpen(false);
       setIsDecryptedQrRevealed(false);
       setDecryptedQrStatus({ kind: "idle" });
+      setReceipt(null);
+      setWipeAck(false);
   }, [textSecret]);
 
   /**
@@ -2297,7 +2355,8 @@ export function EncryptorTool() {
      */
     const finishOperation = (
       buffer: ArrayBuffer,
-      notice: { title: string; description: string }
+      // null on the encrypt side: the receipt is the announcement there.
+      notice: { title: string; description: string } | null
     ) => {
       // Best-effort erase now that the contents have been handed off: Blob
       // construction copies the bytes, and the decoded string and base64
@@ -2310,7 +2369,7 @@ export function EncryptorTool() {
       // ours either way; everything below touches UI the user may have
       // refilled since.
       if (isStale()) return;
-      toast(notice);
+      if (notice) toast(notice);
 
       // §4.6. Shares that have done their job are still password-equivalent,
       // and an heir who has just recovered a container has no reason to leave
@@ -2465,6 +2524,24 @@ export function EncryptorTool() {
         // after the await and before touching state, the way the text branch
         // does.
 
+        // What the receipt says about protection comes from the same
+        // functions the inspector's plan pane uses; the parsed pane says it
+        // again from the bytes, and receipt.spec.ts holds the two together.
+        const receiptOf = (from: string, to: string, onScreen: boolean): Receipt => ({
+          from,
+          to,
+          kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
+          cipher: cipherLabelOf(cipherChoice),
+          waysIn: [
+            useKeyFile && keyFile ? "Passphrase + key file" : "Passphrase",
+            ...(shamirEnabled ? [`${shamirThreshold}-of-${shamirCount} recovery shares`] : []),
+            ...(passkeyEnabled ? ["passkey"] : []),
+          ],
+          bytes: resultBuffer.byteLength,
+          onScreen,
+          shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
+        });
+
         if (inputType === 'file') {
             const blob = new Blob([resultBuffer]);
             const outName = obscureFilename
@@ -2472,6 +2549,7 @@ export function EncryptorTool() {
               : `${file!.name}.keym`;
             if (isStale()) return;
             triggerDownload(blob, outName);
+            setReceipt(receiptOf(file!.name, outName, false));
             setFile(null);
         } else {
             if (isStale()) return;
@@ -2482,6 +2560,7 @@ export function EncryptorTool() {
             // crypto core imports it that way.
             const { armorKeym2 } = await import("@/lib/keym-v2");
             setOutputText(armorKeym2(new Uint8Array(resultBuffer)));
+            setReceipt(receiptOf("text", "keym2: container, on screen", true));
             setTextSecret('');
             // The grid's cells hold the same plaintext; sealed means gone.
             setSeedWords((w) => w.map(() => ""));
@@ -2776,12 +2855,19 @@ export function EncryptorTool() {
       // `finishOperation`, which the verify-only and non-text paths call too.
       // That is the point: three exits, one definition of "cleaned up".
       const done = `Your ${inputType} has been successfully ${mode === 'encrypt' ? 'encrypted' : 'decrypted'}.`;
-      finishOperation(resultBuffer, {
-        title: legacyNotice ? "Decrypted — legacy container" : "Success!",
-        description: legacyNotice
-          ? `${done} This was a legacy IttyBitz file; consider re-encrypting it in Keymaker format.`
-          : done,
-      });
+      finishOperation(
+        resultBuffer,
+        // A seal is announced by its receipt, in the form, where the owner is
+        // looking; a decrypt keeps the toast.
+        mode === 'encrypt'
+          ? null
+          : {
+              title: legacyNotice ? "Decrypted — legacy container" : "Success!",
+              description: legacyNotice
+                ? `${done} This was a legacy IttyBitz file; consider re-encrypting it in Keymaker format.`
+                : done,
+            }
+      );
     } catch (error: unknown) {
         // Which failures may be shown verbatim is decided by the crypto core's
         // error *type*, not by matching its message text here.
@@ -3884,6 +3970,70 @@ export function EncryptorTool() {
         </div>
       )}
 
+      {/*
+        The receipt. 500ms in, not 200: DESIGN-SYSTEM.md § Motion's completion
+        allowance, for the one moment the owner is certain to be watching.
+        Opacity and transform only; the reduced-motion global flattens it.
+      */}
+      {currentMode === 'encrypt' && receipt && (
+        <section
+          role="status"
+          aria-labelledby="receipt-title"
+          data-testid="seal-receipt"
+          className="animate-in fade-in-0 slide-in-from-bottom-2 space-y-3 rounded-xl border border-border p-4 duration-500"
+        >
+          <div className="flex items-center gap-2">
+            <ShieldCheck className="h-4 w-4 text-success" aria-hidden="true" />
+            <h3 id="receipt-title" className="text-[15px] font-medium text-foreground">
+              Sealed.
+            </h3>
+          </div>
+          <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[12.5px] leading-snug">
+            <dt className="text-muted-foreground">Written</dt>
+            <dd data-testid="receipt-written" className="min-w-0 break-all font-mono text-[12px] text-foreground">
+              {receipt.from} → {receipt.to}
+            </dd>
+            <dt className="text-muted-foreground">Protected by</dt>
+            <dd className="min-w-0 font-mono text-[12px] text-foreground">
+              <span data-testid="receipt-kdf">{receipt.kdf}</span>
+              {" · "}
+              <span data-testid="receipt-cipher">{receipt.cipher}</span>
+            </dd>
+            <dt className="text-muted-foreground">Ways in</dt>
+            <dd data-testid="receipt-ways" className="min-w-0 text-foreground">
+              {receipt.waysIn.join(" · ")}
+            </dd>
+            <dt className="text-muted-foreground">Left this device</dt>
+            <dd data-testid="receipt-left" className="text-foreground">
+              nothing
+            </dd>
+          </dl>
+          {receipt.onScreen ? (
+            <div className="flex flex-wrap gap-2">
+              <Button type="button" variant="secondary" size="sm" onClick={() => void printPaperVault()} className="rounded-lg">
+                <Printer className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Print paper vault
+              </Button>
+              {receipt.shares && (
+                <Button type="button" variant="secondary" size="sm" onClick={rehearseFromPaper} className="rounded-lg">
+                  <Timer className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                  Rehearse recovery
+                </Button>
+              )}
+              <Button type="button" variant="secondary" size="sm" onClick={() => void downloadContainer()} className="rounded-lg">
+                <Download className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                Download .keym
+              </Button>
+            </div>
+          ) : (
+            <p className="text-[12px] leading-snug text-muted-foreground">
+              The file was downloaded as it was sealed; nothing else of it is kept here.
+              To print a paper vault or rehearse from paper, seal in Text mode.
+            </p>
+          )}
+        </section>
+      )}
+
       {outputText && (
         <div className="animate-in fade-in-50 space-y-2">
           <div className="flex items-center justify-between gap-3">
@@ -4064,31 +4214,11 @@ export function EncryptorTool() {
       )}
 
       {/*
-        4.2. The paper route out of the app.
-
-        Offered on the encrypt side only, and only for a v2 container, because
-        that is the only thing §7.1's paper parts describe. Deliberately beside
-        the result rather than buried in a menu: the moment someone is looking
-        at a container they just made is the moment printing it is on their
-        mind, and any later is a moment they have closed the tab.
+        4.2. The paper route out of the app lives on the receipt now — see
+        it above the result — for the reason it used to sit here: the moment
+        someone is looking at a container they just made is the moment
+        printing it is on their mind.
       */}
-      {currentMode === 'encrypt' && outputText.startsWith('keym2:') && (
-        <button
-          type="button"
-          onClick={async () => {
-            const { dearmorKeym2 } = await import("@/lib/keym-v2");
-            setPaperVault({
-              container: dearmorKeym2(outputText),
-              printedOn: new Date().toISOString().slice(0, 10),
-              rehearsal: rehearsalStamp,
-            });
-          }}
-          className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
-        >
-          <Printer className="h-3.5 w-3.5" />
-          Print paper vault — scannable backup and the procedure to open it
-        </button>
-      )}
 
       {/*
         4.3. The self-extracting page (§7.2).
@@ -4214,6 +4344,23 @@ export function EncryptorTool() {
         for "someone just walked over", which is the case the five-minute timer
         is too slow for.
       */}
+      {wipeAck && !hasSecretsOnScreen && (
+        <section
+          role="status"
+          data-testid="wipe-ack"
+          className="animate-in fade-in-0 slide-in-from-bottom-2 rounded-xl border border-border p-4 duration-500"
+        >
+          <p className="flex items-center gap-2 text-[15px] font-medium text-foreground">
+            <Trash2 className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+            Wiped
+          </p>
+          <p className="mt-1 text-[12.5px] leading-snug text-muted-foreground">
+            Password, inputs and any decrypted output were cleared. Your settings are
+            unchanged.
+          </p>
+        </section>
+      )}
+
       {hasSecretsOnScreen && (
         <button
           type="button"
@@ -4289,16 +4436,8 @@ export function EncryptorTool() {
   const inspectorPlan: InspectorPlan | null = useMemo(() => {
     if (mode !== "encrypt") return null;
     return {
-      kdfLabel:
-        kdfChoice === "argon2id"
-          ? `Argon2id · ${argonMemoryMiB} MiB · t=${argonTimeCost} · p=${argonParallelism}`
-          : "PBKDF2 · 1,000,000 iterations",
-      cipherLabel:
-        cipherChoice === CipherId.AES_256_GCM
-          ? "AES-256-GCM"
-          : cipherChoice === CipherId.CHACHA20_POLY1305
-            ? "ChaCha20-Poly1305"
-            : "AES-256-GCM + ChaCha20-Poly1305",
+      kdfLabel: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
+      cipherLabel: cipherLabelOf(cipherChoice),
       cipherId: cipherChoice,
       keyFile: useKeyFile && keyFile !== null,
       shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
@@ -4319,6 +4458,50 @@ export function EncryptorTool() {
   /** What the next printed sheet says about rehearsal, or nothing yet. */
   const rehearsalStamp =
     rehearsal.kind === "ok" ? { on: rehearsal.on, strips: rehearsal.strips } : undefined;
+
+  /**
+   * The receipt's three buttons. Each calls what a control already called:
+   * the paper vault's print path, the container's bytes to a download, and —
+   * for a seal that issued strips — the heir's own route on the Decrypt tab
+   * with the container filled in, verify-only on and the strip box open, so
+   * the owner rehearses from the printed sheet exactly as an heir would. The
+   * on-screen rehearsal in the shares dialog is the same exercise from the
+   * strings; this is the one from paper.
+   */
+  const printPaperVault = useCallback(async () => {
+    if (!outputText.startsWith("keym2:")) return;
+    const { dearmorKeym2 } = await import("@/lib/keym-v2");
+    setPaperVault({
+      container: dearmorKeym2(outputText),
+      printedOn: new Date().toISOString().slice(0, 10),
+      rehearsal: rehearsalStamp,
+    });
+  }, [outputText, rehearsalStamp]);
+
+  const downloadContainer = useCallback(async () => {
+    if (!outputText.startsWith("keym2:")) return;
+    const { dearmorKeym2 } = await import("@/lib/keym-v2");
+    triggerDownload(
+      new Blob([dearmorKeym2(outputText).slice()]),
+      `keymaker-${randomFilenameSuffix()}.keym`
+    );
+  }, [outputText]);
+
+  const rehearseFromPaper = useCallback(() => {
+    const armored = outputText;
+    if (!armored.startsWith("keym2:")) return;
+    // The mode change resets the form; everything below lands after it.
+    handleModeChange("decrypt");
+    setInputType("text");
+    setTextSecret(armored);
+    setUseShares(true);
+    setVerifyOnly(true);
+  }, [outputText, handleModeChange]);
+
+  // The wipe's acknowledgment yields to the next thing on screen.
+  useEffect(() => {
+    if (hasSecretsOnScreen) setWipeAck(false);
+  }, [hasSecretsOnScreen]);
 
   const handleRehearsalInputChange = useCallback((next: string) => {
     // The same bounds as the decrypt-side share box, for the same reason:
@@ -4790,6 +4973,7 @@ export function EncryptorTool() {
               mode={mode}
               plan={inspectorPlan}
               peek={mode === "encrypt" ? sealedPeek : decryptPeek}
+              sealing={isLoading && mode === "encrypt"}
               className="mt-6 lg:sticky lg:top-24 lg:mt-0"
             />
           )}

@@ -265,7 +265,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const VIEWS = 11;
+const VIEWS = 12;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -364,6 +364,11 @@ try {
   await page.waitForTimeout(400);
   collect(await scan(page, 'shares dialog · rehearsal'));
   await page.keyboard.press('Escape');
+
+  // The receipt the seal left behind, now that the dialog is out of the way.
+  await page.getByTestId('seal-receipt').waitFor({ timeout: 15_000 });
+  await page.waitForTimeout(400);
+  collect(await scan(page, 'encrypt · receipt'));
 
   for (const tab of ['Decrypt', 'Tools']) {
     await page.getByRole('tab', { name: tab }).locator('visible=true').first().click();

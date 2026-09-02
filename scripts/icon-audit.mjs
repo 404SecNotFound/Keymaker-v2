@@ -153,6 +153,11 @@ try {
   icons.push(...(await scan(page, 'shares dialog · rehearsal')));
   await page.keyboard.press('Escape');
 
+  // The receipt the seal left behind, now that the dialog is out of the way.
+  await page.getByTestId('seal-receipt').waitFor({ timeout: 15_000 });
+  await page.waitForTimeout(400);
+  icons.push(...(await scan(page, 'encrypt · receipt')));
+
   for (const tab of ['Decrypt', 'Tools']) {
     await page.getByRole('tab', { name: tab }).locator('visible=true').first().click();
     await page.waitForTimeout(400);
@@ -221,5 +226,5 @@ if (badSize.length || badStroke.length) {
 const histogram = [...SIZES.keys()]
   .map((px) => `${icons.filter((i) => i.w === px).length}×${px}px`)
   .join(', ');
-console.log(`icon-audit: ${icons.length} lucide icons across 10 views — ${histogram}\n`);
+console.log(`icon-audit: ${icons.length} lucide icons across 11 views — ${histogram}\n`);
 console.log(`All icons are a size docs/design/DESIGN-SYSTEM.md names, at stroke ${STROKE}.`);
