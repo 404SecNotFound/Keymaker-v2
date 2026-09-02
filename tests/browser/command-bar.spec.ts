@@ -100,9 +100,11 @@ test("a command reaches the real handler — the passphrase generator fills the 
 
   // Seven words from the EFF list, space-separated. Asserting the shape of
   // the value, not just non-emptiness: a handler that ran but wrote the
-  // wrong thing should not pass.
+  // wrong thing should not pass. The list carries three hyphenated words
+  // (drop-down, felt-tip, t-shirt), so a hyphen is part of the shape; the
+  // pattern that forbade it failed whenever one of them was drawn.
   const password = visible(page.getByPlaceholder("Enter a strong password"));
-  await expect(password).toHaveValue(/^[a-z]+( [a-z]+){6}$/);
+  await expect(password).toHaveValue(/^[a-z-]+( [a-z-]+){6}$/);
 });
 
 test("Wipe now is offered only while something needs wiping, and it wipes", async ({ page }) => {
