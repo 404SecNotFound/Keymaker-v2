@@ -292,4 +292,77 @@ test.describe("auto-lock and clipboard", () => {
       "the clipboard still held the secret after its stated lifetime"
     ).toBe("");
   });
+
+  test("a clear refused in the background stays armed and lands on return", async ({
+    page,
+    context,
+    browserName,
+  }) => {
+    test.skip(browserName !== "chromium", "clipboard permissions are Chromium-only here");
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.clock.install();
+    await page.goto("/");
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await decryptPassword(page).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Copy$/i })).click();
+    await expect(page.getByText(/Clipboard clears in/i)).toBeVisible();
+
+    // Chromium rejects `navigator.clipboard.writeText` with
+    // `NotAllowedError: Document is not focused` whenever the tab is not the
+    // active one, and "copied the secret, switched away to paste it" is the
+    // normal state of affairs when the sixty seconds run out.
+    //
+    // Headless Chromium cannot produce that refusal for real: every page it
+    // opens keeps an always-focused document, so a second tab in front, focus
+    // emulation off, even a headed run under Xvfb, all leave `writeText`
+    // succeeding. So the refusal is reproduced at the API boundary instead:
+    // the exact exception Chromium throws, from `navigator.clipboard` itself,
+    // for as long as the tab is "in the background". Every other call goes
+    // through to the real clipboard, which is what page 2 then reads. What
+    // this proves is the page's handling of the refusal and the retry on
+    // return; what it cannot prove is the browser's own focus bookkeeping.
+    await page.evaluate(() => {
+      const real = navigator.clipboard.writeText.bind(navigator.clipboard);
+      const w = window as unknown as { __tabInBackground?: boolean };
+      w.__tabInBackground = true;
+      navigator.clipboard.writeText = (text: string) =>
+        w.__tabInBackground
+          ? Promise.reject(new DOMException("Document is not focused.", "NotAllowedError"))
+          : real(text);
+    });
+    const page2 = await context.newPage();
+    await page2.goto("/");
+    await page2.bringToFront();
+
+    await page.clock.runFor("01:05");
+
+    // The deadline passed and the overwrite was refused. The old code dropped
+    // the countdown and the promise with it: banner gone, secret still there.
+    await expect(
+      page.getByText(/could not be cleared while this tab was in the background/i),
+      "no notice that the clear was refused, the banner just vanished"
+    ).toBeVisible();
+    await expect(page.getByRole("button", { name: /Clear now/i })).toBeVisible();
+    expect(
+      await page2.evaluate(() => navigator.clipboard.readText()),
+      "the clipboard should still hold the secret while the tab is unfocused"
+    ).toBe(STRONG_PASSWORD);
+
+    // The user comes back. A real return raises `focus` on the window; the
+    // stand-in stops refusing and the pending clear must go through on that
+    // event alone, no click, no keypress.
+    await page.bringToFront();
+    await page.evaluate(() => {
+      (window as unknown as { __tabInBackground?: boolean }).__tabInBackground = false;
+      window.dispatchEvent(new Event("focus"));
+    });
+    await expect
+      .poll(() => page2.evaluate(() => navigator.clipboard.readText()), {
+        message: "the clipboard was never cleared after the tab regained focus",
+      })
+      .toBe("");
+    await expect(page.getByText(/could not be cleared/i)).toHaveCount(0);
+    await expect(page.getByText(/Clipboard clears in/i)).toHaveCount(0);
+  });
 });

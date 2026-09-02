@@ -1147,6 +1147,19 @@ export function EncryptorTool() {
    */
   const [clipboardDeadline, setClipboardDeadline] = useState<number | null>(null);
   const [clipboardSecondsLeft, setClipboardSecondsLeft] = useState<number | null>(null);
+  /**
+   * The deadline passed but the browser refused the overwrite.
+   *
+   * Chromium rejects `navigator.clipboard.writeText` with
+   * `NotAllowedError: Document is not focused` whenever the tab is not the
+   * active one, and "copied the secret, switched to another app to paste it"
+   * is the normal state of affairs at the sixty-second mark. Dropping the
+   * countdown on that rejection left the secret in the clipboard with the UI
+   * implying it had gone: the same promise-we-cannot-keep as the old
+   * read-and-compare, one layer down. While this is set the clear stays armed
+   * and is retried the moment the page is in a position to succeed.
+   */
+  const [clipboardClearPending, setClipboardClearPending] = useState(false);
 
   // Auto-lock. lastActivityRef is a ref because it is written on every pointer
   // and key event: as state it would re-render the whole tool on mouse-down.
@@ -1490,7 +1503,11 @@ export function EncryptorTool() {
         setClipboardSecondsLeft(null);
         // Unconditional. See CLIPBOARD_CLEAR_SECONDS for why the old
         // read-and-compare could not do this job.
-        navigator.clipboard.writeText('').catch(() => {});
+        //
+        // A refusal is not the end of it. The write needs document focus,
+        // and a background tab does not have it, so the clear is kept armed
+        // and retried on return rather than silently abandoned.
+        navigator.clipboard.writeText('').catch(() => setClipboardClearPending(true));
         return;
       }
       setClipboardSecondsLeft(left);
@@ -1502,6 +1519,39 @@ export function EncryptorTool() {
       clearInterval(id);
     };
   }, [clipboardDeadline]);
+
+  /**
+   * Retry a refused clipboard clear as soon as the page can plausibly succeed.
+   *
+   * `focus` and `visibilitychange` are the events that mark a return to the
+   * tab; `pointerdown` and `keydown` are belt and braces for a browser that
+   * delivers neither (or delivers them before it considers the document
+   * focused). A retry that is refused again costs nothing and keeps the
+   * notice up; only a write that resolves stands the clear down.
+   */
+  useEffect(() => {
+    if (!clipboardClearPending) return;
+    let cancelled = false;
+    const retry = () => {
+      navigator.clipboard
+        .writeText('')
+        .then(() => {
+          if (!cancelled) setClipboardClearPending(false);
+        })
+        .catch(() => {});
+    };
+    window.addEventListener("focus", retry);
+    document.addEventListener("visibilitychange", retry);
+    window.addEventListener("pointerdown", retry);
+    window.addEventListener("keydown", retry);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", retry);
+      document.removeEventListener("visibilitychange", retry);
+      window.removeEventListener("pointerdown", retry);
+      window.removeEventListener("keydown", retry);
+    };
+  }, [clipboardClearPending]);
 
   useEffect(() => {
     if (!window.crypto || !window.crypto.subtle || !window.crypto.getRandomValues) {
@@ -2182,9 +2232,12 @@ export function EncryptorTool() {
     setClipboardDeadline(null);
     try {
       await navigator.clipboard.writeText('');
+      setClipboardClearPending(false);
     } catch {
-      // Writing needs document focus. Nothing useful to say here — the
-      // countdown is already gone and the user asked for this explicitly.
+      // Writing needs document focus. A click normally brings that with it,
+      // but if the write is refused anyway the clear stays armed and the
+      // notice says so, rather than the button appearing to have worked.
+      setClipboardClearPending(true);
     }
   }, []);
 
@@ -2209,6 +2262,9 @@ export function EncryptorTool() {
           `system keeps clipboard history — Windows Win+V, a clipboard manager, ` +
           `phone keyboard history — it keeps its own copy, and no website can clear that.`,
       });
+      // A fresh copy supersedes any clear still pending from the last one:
+      // otherwise the next keystroke would wipe the secret just copied.
+      setClipboardClearPending(false);
       setClipboardDeadline(Date.now() + CLIPBOARD_CLEAR_SECONDS * 1000);
     }).catch(() => {
        toast({ title: "Failed to copy", variant: "destructive" });
@@ -4247,16 +4303,31 @@ export function EncryptorTool() {
         still holds your seed phrase, and a lock warning you missed is not a
         warning. Each carries the control that answers it.
       */}
-      {clipboardSecondsLeft !== null && (
+      {(clipboardSecondsLeft !== null || clipboardClearPending) && (
         <div
           role="status"
           className="flex items-center justify-between gap-3 rounded-xl border border-border bg-inset px-3 py-2 text-[12px]"
         >
           <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
-            <Timer className="h-3.5 w-3.5 shrink-0" />
-            <span className="truncate">
-              Clipboard clears in <span className="tabular-nums font-medium text-foreground">{clipboardSecondsLeft}s</span>
-            </span>
+            {clipboardClearPending ? (
+              // The countdown ran out while the tab was in the background and
+              // the browser refused the overwrite. Saying so beats the banner
+              // vanishing as though the secret had gone.
+              <>
+                <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
+                <span>
+                  The clipboard could not be cleared while this tab was in the
+                  background. It will be cleared when you return.
+                </span>
+              </>
+            ) : (
+              <>
+                <Timer className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">
+                  Clipboard clears in <span className="tabular-nums font-medium text-foreground">{clipboardSecondsLeft}s</span>
+                </span>
+              </>
+            )}
           </span>
           <button
             type="button"
