@@ -1219,6 +1219,35 @@ export function EncryptorTool() {
   const [shamirCount, setShamirCount] = useState(3);
   const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
   /**
+   * The rehearsal — test the backup before you trust it.
+   *
+   * Shares are shown once with a strong warning, then gone, and the first
+   * time anyone learns whether they work is the day they are needed. This
+   * walks the owner through the heir's path while the strips are still on
+   * screen: paste any k of them, exactly as an heir would, and the container
+   * is opened with them alone — no password — through the same worker call
+   * the verify-only unlock uses, and closed again without a byte reaching
+   * the DOM, the clipboard, or a Blob. What is reported is that it opened,
+   * how long it took, and which strips did it; the plaintext exists in the
+   * worker for the length of one call and is zeroed on arrival.
+   *
+   * The pasted strips are secrets (any k of them are the password) and are
+   * wiped with everything else. The outcome is not a secret, and it is not
+   * kept either: it goes onto the next paper vault as ink and is discarded
+   * with the rest, because the app stores nothing and the sheet in the
+   * drawer is where a rehearsal record belongs.
+   */
+  type RehearsalState =
+    | { kind: "idle" }
+    | { kind: "running" }
+    | { kind: "ok"; on: string; strips: number[]; seconds: number; bytes: number }
+    | { kind: "failed"; message: string };
+  const [rehearsalOpen, setRehearsalOpen] = useState(false);
+  const [rehearsalInput, setRehearsalInput] = useState("");
+  const [rehearsalInputRejected, setRehearsalInputRejected] = useState<string | null>(null);
+  const [rehearsal, setRehearsal] = useState<RehearsalState>({ kind: "idle" });
+  const rehearsalLines = useMemo(() => parseShareLines(rehearsalInput), [rehearsalInput]);
+  /**
    * The workbench pane's copy of the opening bytes of the last container this
    * session wrote — captured before the download hands the only full copy to
    * the browser, because a file encrypt keeps nothing else around to parse.
@@ -1252,6 +1281,8 @@ export function EncryptorTool() {
     shares?: string[];
     threshold?: number;
     printedOn: string;
+    /** A rehearsal that succeeded this session, to be written on the sheet. */
+    rehearsal?: { on: string; strips: number[] } | undefined;
   } | null>(null);
   /*
     4.2. Print after the sheet is in the DOM, not from the click handler.
@@ -1719,6 +1750,13 @@ export function EncryptorTool() {
     setShareInput('');
     setShareInputRejected(null);
     setPaperVault(null);
+    // The rehearsal's pasted strips are k shares in a textarea — the
+    // password, in effect. Its outcome is discarded with them: the record
+    // is the ink on the printed sheet, never state.
+    setRehearsalOpen(false);
+    setRehearsalInput("");
+    setRehearsalInputRejected(null);
+    setRehearsal({ kind: "idle" });
 
     // `issuedShares` is the one thing here that cannot be got back.
     //
@@ -1788,6 +1826,7 @@ export function EncryptorTool() {
     // rendered — on the one flow where the person at the keyboard is least
     // likely to be at their own desk.
     shareInput.length > 0 ||
+    rehearsalInput.length > 0 ||
     issuedShares !== null ||
     paperVault !== null ||
     // A chosen file *is* the secret, and this predicate did not think so. Load
@@ -4041,6 +4080,7 @@ export function EncryptorTool() {
             setPaperVault({
               container: dearmorKeym2(outputText),
               printedOn: new Date().toISOString().slice(0, 10),
+              rehearsal: rehearsalStamp,
             });
           }}
           className="flex w-full cursor-pointer items-center justify-center gap-1.5 rounded-xl border border-border px-3 py-2 text-[12px] text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground"
@@ -4275,6 +4315,73 @@ export function EncryptorTool() {
     cipherChoice, useKeyFile, keyFile, shamirEnabled, shamirThreshold,
     shamirCount, usePasskey, inputType, file, textSecret,
   ]);
+
+  /** What the next printed sheet says about rehearsal, or nothing yet. */
+  const rehearsalStamp =
+    rehearsal.kind === "ok" ? { on: rehearsal.on, strips: rehearsal.strips } : undefined;
+
+  const handleRehearsalInputChange = useCallback((next: string) => {
+    // The same bounds as the decrypt-side share box, for the same reason:
+    // this is a share set or it is a paste into the wrong box.
+    const rejection = shareInputRejection(next);
+    if (rejection) {
+      setRehearsalInputRejected(rejection);
+      return;
+    }
+    setRehearsalInputRejected(null);
+    setRehearsalInput(next);
+    // A new paste is a new attempt; the last verdict no longer describes it.
+    setRehearsal((r) => (r.kind === "failed" ? { kind: "idle" } : r));
+  }, []);
+
+  /**
+   * The rehearsal itself. Identical to the heir's unlock — the worker, the
+   * shares, no password — and different from every other decrypt in what
+   * happens next: nothing. The buffer is zeroed on arrival and its length is
+   * the only thing that survives. A result that lands after a wipe or a lock
+   * has moved the operation counter is discarded, like any other.
+   */
+  const runRehearsal = useCallback(async () => {
+    if (!issuedShares || !outputText.startsWith("keym2:")) return;
+    const strips = parseShareLines(rehearsalInput);
+    if (strips.length < issuedShares.threshold) return;
+    const seq = opSeqRef.current;
+    const isStale = () => opSeqRef.current !== seq;
+    setRehearsal({ kind: "running" });
+    const started = performance.now();
+    try {
+      const { dearmorKeym2 } = await import("@/lib/keym-v2");
+      // A copy: the worker takes ownership of the buffer it is handed.
+      const container = dearmorKeym2(outputText).slice();
+      const result = await decryptViaWorker(container.buffer as ArrayBuffer, "", null, strips);
+      // The plaintext exists on this thread for exactly this long.
+      const bytes = result.data.byteLength;
+      new Uint8Array(result.data).fill(0);
+      if (isStale()) return;
+      const used = strips
+        .map((s) => issuedShares.shares.indexOf(s) + 1)
+        .filter((i) => i > 0)
+        .sort((a, b) => a - b);
+      setRehearsal({
+        kind: "ok",
+        on: new Date().toISOString().slice(0, 10),
+        strips: used,
+        seconds: (performance.now() - started) / 1000,
+        bytes,
+      });
+      // The pasted strips have done their job; the ones above are still there.
+      setRehearsalInput("");
+    } catch {
+      if (isStale()) return;
+      setRehearsal({
+        kind: "failed",
+        message:
+          `These strips did not open the backup. Check each one against the sheet ` +
+          `— a single wrong character is enough — and that at least ` +
+          `${issuedShares.threshold} of the ${issuedShares.shares.length} are here.`,
+      });
+    }
+  }, [issuedShares, outputText, rehearsalInput]);
 
   /**
    * What the command bar offers, and when.
@@ -4814,7 +4921,16 @@ export function EncryptorTool() {
       <Dialog
         open={issuedShares !== null}
         onOpenChange={(open) => {
-          if (!open) setIssuedShares(null);
+          if (!open) {
+            setIssuedShares(null);
+            // The rehearsal box held k strips — the password, in effect —
+            // and it unmounts with the dialog; the state behind it must not
+            // outlive it. The outcome stays: it is ink for the next print,
+            // and the encrypt-side Print button is still on the page.
+            setRehearsalOpen(false);
+            setRehearsalInput("");
+            setRehearsalInputRejected(null);
+          }
         }}
       >
         <DialogContent className="max-w-lg">
@@ -4911,6 +5027,7 @@ export function EncryptorTool() {
                     shares: issuedShares.shares,
                     threshold: issuedShares.threshold,
                     printedOn: new Date().toISOString().slice(0, 10),
+                    rehearsal: rehearsalStamp,
                   });
                 } catch {
                   // Belt and braces behind the gate above. An unhandled
@@ -4930,15 +5047,136 @@ export function EncryptorTool() {
               <Printer className="mr-2 h-3.5 w-3.5" />
               Print paper vault
             </Button>
+            {/*
+              The rehearsal, opened here and nowhere else for now: the strips
+              are on screen exactly once, and this is the moment to find out
+              whether they work. Gated like the print button, and for the
+              same reason — a file container is not here to open.
+            */}
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              disabled={!outputText.startsWith("keym2:")}
+              aria-expanded={rehearsalOpen}
+              aria-controls="rehearsal-panel"
+              onClick={() => setRehearsalOpen((v) => !v)}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Timer className="mr-2 h-3.5 w-3.5" />
+              Rehearse now
+            </Button>
             {!outputText.startsWith("keym2:") && (
               <p className="w-full text-[12px] leading-snug text-muted-foreground">
                 The paper vault prints the container beside the shares, and a file
                 container is downloaded rather than kept on screen — so it is not
-                here to print. Copy these shares now; to print a paper vault
-                instead, encrypt in Text mode.
+                here to print, or to rehearse with. Copy these shares now; to print
+                a paper vault or rehearse instead, encrypt in Text mode.
               </p>
             )}
           </div>
+
+          {rehearsalOpen && (
+            <section
+              id="rehearsal-panel"
+              aria-labelledby="rehearsal-title"
+              data-testid="rehearsal"
+              className="animate-in fade-in-50 space-y-2.5 rounded-xl border border-border p-3"
+            >
+              <h3 id="rehearsal-title" className="text-[13px] font-medium text-foreground">
+                Rehearse the recovery
+              </h3>
+              <p className="text-[12px] leading-snug text-muted-foreground">
+                Do what an heir would do: pick any {issuedShares?.threshold} of the{" "}
+                {issuedShares?.shares.length} strips above and paste them here, one per
+                line. The backup is opened with them alone — no password — and closed
+                again without showing anything.
+              </p>
+              <Textarea
+                id="rehearsal-input"
+                value={rehearsalInput}
+                onChange={(e) => handleRehearsalInputChange(e.target.value)}
+                placeholder={"KMSHARE1:...\nKMSHARE1:...\nOne strip per line"}
+                rows={3}
+                spellCheck={false}
+                autoCorrect="off"
+                autoCapitalize="off"
+                aria-label="Strips to rehearse with"
+                aria-describedby={
+                  [
+                    "rehearsal-count",
+                    rehearsalInputRejected ? "rehearsal-size-error" : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ")
+                }
+                aria-invalid={rehearsalInputRejected ? true : undefined}
+                className="min-h-[72px] rounded-xl border-border bg-inset font-mono text-[12px]"
+              />
+              {rehearsalInputRejected && (
+                <p
+                  id="rehearsal-size-error"
+                  role="alert"
+                  className="text-[12px] leading-snug text-destructive"
+                >
+                  {rehearsalInputRejected} Nothing was pasted, so what you already had is
+                  still there.
+                </p>
+              )}
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => void runRehearsal()}
+                  disabled={
+                    rehearsal.kind === "running" ||
+                    rehearsalLines.length < (issuedShares?.threshold ?? 1)
+                  }
+                  className="rounded-lg"
+                >
+                  {rehearsal.kind === "running" ? (
+                    <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Unlock className="mr-2 h-3.5 w-3.5" />
+                  )}
+                  {rehearsal.kind === "running" ? "Opening…" : "Open with these strips"}
+                </Button>
+                <p id="rehearsal-count" role="status" className="text-[12px] text-muted-foreground">
+                  {rehearsalLines.length} of {issuedShares?.threshold} strips pasted
+                </p>
+              </div>
+              {rehearsal.kind === "ok" && (
+                <p
+                  role="status"
+                  data-testid="rehearsal-result"
+                  className="flex items-start gap-2 rounded-lg border border-success/40 bg-success/10 px-3 py-2 text-[12px] leading-snug text-success"
+                >
+                  <ShieldCheck className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>
+                    {/* A share unlock is HKDF, not a KDF: often under a tenth
+                        of a second, which "0.0 s" reports as nothing at all. */}
+                    Opened in {rehearsal.seconds < 1 ? "under a second" : `${rehearsal.seconds.toFixed(1)} s`} with{" "}
+                    {rehearsal.strips.length > 0
+                      ? `strips ${rehearsal.strips.length === 1 ? rehearsal.strips[0] : `${rehearsal.strips.slice(0, -1).join(", ")} and ${rehearsal.strips[rehearsal.strips.length - 1]}`}`
+                      : "the strips pasted"}{" "}
+                    — {rehearsal.bytes.toLocaleString("en-US")} bytes, kept hidden. The next
+                    paper vault records this as a rehearsal.
+                  </span>
+                </p>
+              )}
+              {rehearsal.kind === "failed" && (
+                <p
+                  role="alert"
+                  data-testid="rehearsal-result"
+                  className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12px] leading-snug text-destructive"
+                >
+                  <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  <span>{rehearsal.message}</span>
+                </p>
+              )}
+            </section>
+          )}
         </DialogContent>
       </Dialog>
 
@@ -4953,6 +5191,7 @@ export function EncryptorTool() {
           shares={paperVault.shares}
           threshold={paperVault.threshold}
           printedOn={paperVault.printedOn}
+          rehearsal={paperVault.rehearsal}
         />
       ) : null}
 
