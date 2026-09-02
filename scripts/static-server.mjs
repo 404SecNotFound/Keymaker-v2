@@ -12,11 +12,17 @@
  * Node's standard library is enough here: serve files from a directory, guess
  * a content type, refuse to escape the root. No dependencies, nothing to pin.
  *
+ * Dotfiles are refused with 404, because that is what GitHub Pages does. It
+ * consumes `.nojekyll` as a deploy-control file and never serves it, so a
+ * manifest that listed it verified here and failed on the live site. The
+ * server has to model the host it stands in for, or the recipe gate in
+ * scripts/verify-recipe-test.mjs is checking a deployment that does not exist.
+ *
  *   node scripts/static-server.mjs <dir> <port> [basePath]
  */
 import { createServer } from 'node:http';
 import { createReadStream, statSync } from 'node:fs';
-import { join, normalize, extname, resolve, sep } from 'node:path';
+import { join, normalize, extname, relative, resolve, sep } from 'node:path';
 
 const [, , dirArg = 'out', portArg = '4321', basePathArg = ''] = process.argv;
 const ROOT = resolve(dirArg);
@@ -78,6 +84,14 @@ const server = createServer((req, res) => {
   let filePath = join(ROOT, normalize(pathname));
   if (filePath !== ROOT && !filePath.startsWith(ROOT + sep)) {
     res.writeHead(403).end('Forbidden');
+    return;
+  }
+
+  // Any segment beginning with `.` is a dotfile as far as Pages is concerned;
+  // checked on the resolved path so an encoded or `..`-laden spelling of the
+  // same file gets the same answer.
+  if (relative(ROOT, filePath).split(sep).some((s) => s.startsWith('.'))) {
+    res.writeHead(404).end('Not found');
     return;
   }
 

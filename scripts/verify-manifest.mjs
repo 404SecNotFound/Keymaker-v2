@@ -53,6 +53,12 @@ const EXPECTED_IDENTITY =
 
 const SELF = new Set(['SHA256SUMS', 'SHA256SUMS.sigstore']);
 
+// Deploy-control files the manifest deliberately omits (see
+// build-manifest.mjs). A mirror of the live site never has `.nojekyll`:
+// Pages consumes it and serves 404 for it, but the release tarball and a
+// local out/ legitimately do, and neither is "unsigned" for carrying it.
+const DEPLOY_CONTROL = new Set(['.nojekyll']);
+
 function walk(dir) {
   const out = [];
   for (const name of readdirSync(dir).sort()) {
@@ -88,7 +94,7 @@ for (const line of manifestBytes.toString('utf8').split('\n')) {
 const present = new Map();
 for (const abs of walk(DIR)) {
   const rel = relative(DIR, abs).split(sep).join('/');
-  if (SELF.has(rel)) continue;
+  if (SELF.has(rel) || DEPLOY_CONTROL.has(rel)) continue;
   present.set(rel, createHash('sha256').update(readFileSync(abs)).digest('hex'));
 }
 
