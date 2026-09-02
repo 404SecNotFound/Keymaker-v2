@@ -265,7 +265,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const VIEWS = 8;
+const VIEWS = 9;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -295,6 +295,25 @@ try {
   await advanced.click();
   await page.waitForTimeout(400);
   collect(await scan(page, 'encrypt · advanced'));
+
+  // Seed Phrase mode, with one word flagged and a completion list open. The
+  // grid is the one surface that paints the danger token as a *field* border
+  // rather than as text, its flagged status is a wash nothing above composes,
+  // and the listbox is a card on a card — none of it is reached by any other
+  // view, so the mode would otherwise ship unaudited.
+  await page.getByRole('button', { name: 'Seed phrase', exact: true }).locator('visible=true').first().click();
+  const seedWords = 'legal winner thank year wave sausage wotrh useful legal winner thank yellow'.split(' ');
+  for (const [i, w] of seedWords.entries()) {
+    await page
+      .getByRole('combobox', { name: `Word ${i + 1}`, exact: true })
+      .locator('visible=true')
+      .first()
+      .fill(w);
+  }
+  await page.getByRole('combobox', { name: 'Word 12', exact: true }).locator('visible=true').first().fill('ye');
+  await page.getByRole('listbox', { name: 'Completions for word 12' }).waitFor({ state: 'visible', timeout: 15_000 });
+  await page.waitForTimeout(400);
+  collect(await scan(page, 'encrypt · seed grid'));
 
   for (const tab of ['Decrypt', 'Tools']) {
     await page.getByRole('tab', { name: tab }).locator('visible=true').first().click();

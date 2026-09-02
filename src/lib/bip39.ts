@@ -37,6 +37,17 @@ if (BIP39_WORDLIST.length !== 2048) {
     `[bip39] expected 2048 words in BIP-0039 English wordlist, got ${BIP39_WORDLIST.length}`
   );
 }
+// The list is alphabetical, and `bip39Completions` below relies on that to
+// find a prefix's run by binary search. A list that stopped being sorted would
+// make completion silently miss words rather than fail, so it is checked here
+// beside the count.
+for (let i = 1; i < BIP39_WORDLIST.length; i++) {
+  if (BIP39_WORDLIST[i - 1]! >= BIP39_WORDLIST[i]!) {
+    // eslint-disable-next-line no-console
+    console.error(`[bip39] wordlist is not sorted at index ${i}`);
+    break;
+  }
+}
 
 type Bip39ValidationResult =
   | { valid: true; words: string[]; entropyBits: number }
@@ -130,6 +141,122 @@ export async function validateBip39(input: string): Promise<Bip39ValidationResul
   }
 
   return { valid: true, words, entropyBits };
+}
+
+/**
+ * Word-level helpers for the seed grid.
+ *
+ * All three answer questions about the *list*, never about a phrase, and none
+ * of them goes near the checksum: that stays with `validateBip39`, the one
+ * place a whole phrase is judged. They exist so the grid can say which word is
+ * wrong and what it was probably meant to be, in words, while it is being
+ * typed — the border tint this module used to feed could report that
+ * *something* was wrong and nothing more.
+ */
+
+/** True when `word` is one of the 2048. Exact: a prefix is not a word. */
+export function isBip39Word(word: string): boolean {
+  return WORD_INDEX.has(word);
+}
+
+/**
+ * The list entries that begin with `prefix`, in list order, at most `limit`.
+ *
+ * The list is alphabetical, so the matches are one contiguous run: a binary
+ * search finds where it starts and a walk reads it off. Four letters identify
+ * every word uniquely — a property of the list, and the reason a grid can
+ * complete a word from its prefix without guessing.
+ */
+export function bip39Completions(prefix: string, limit = 8): string[] {
+  if (!prefix) return [];
+  let lo = 0;
+  let hi = BIP39_WORDLIST.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >>> 1;
+    if (BIP39_WORDLIST[mid]! < prefix) lo = mid + 1;
+    else hi = mid;
+  }
+  const out: string[] = [];
+  for (let i = lo; i < BIP39_WORDLIST.length && out.length < limit; i++) {
+    const w = BIP39_WORDLIST[i]!;
+    if (!w.startsWith(prefix)) break;
+    out.push(w);
+  }
+  return out;
+}
+
+/**
+ * Optimal string alignment distance: Levenshtein plus a swap of two adjacent
+ * letters counted as one edit. "abosrb" for "absorb" is the commonest way a
+ * word goes wrong at a keyboard, and a metric that scores it as two
+ * substitutions ranks other words ahead of the one that was meant.
+ *
+ * Gives up early once a row's minimum passes `max` — the caller only wants
+ * to know whether this candidate beats the best so far.
+ */
+function osaDistance(a: string, b: string, max: number): number {
+  const n = a.length;
+  const m = b.length;
+  let prev2: number[] = [];
+  let prev: number[] = Array.from({ length: m + 1 }, (_, j) => j);
+  for (let i = 1; i <= n; i++) {
+    const cur: number[] = [i];
+    let rowMin = i;
+    for (let j = 1; j <= m; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j]! + 1, cur[j - 1]! + 1, prev[j - 1]! + cost);
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+        v = Math.min(v, prev2[j - 2]! + 1);
+      }
+      cur.push(v);
+      if (v < rowMin) rowMin = v;
+    }
+    if (rowMin > max) return max + 1;
+    prev2 = prev;
+    prev = cur;
+  }
+  return prev[m]!;
+}
+
+/** Length of the opening the two words share. */
+function commonPrefix(a: string, b: string): number {
+  let i = 0;
+  while (i < a.length && i < b.length && a[i] === b[i]) i++;
+  return i;
+}
+
+/**
+ * The list entry nearest to `word`, or null when nothing is close.
+ *
+ * Two edits is the ceiling. Past that a suggestion is a guess, and a guess
+ * offered in the same voice as a near-miss is worse than no suggestion: the
+ * status line says "did you mean", and it has to mean it.
+ *
+ * Ties go to the candidate that shares the longest opening with what was
+ * typed, then to list order. "yelow" is one edit from both "below" and
+ * "yellow", and only one of those is what anyone typing it meant: the first
+ * letters are the ones people get right, and on this list four of them name
+ * a word, so the opening is the better witness than the alphabet.
+ */
+export function suggestBip39Word(word: string): string | null {
+  const MAX_DISTANCE = 2;
+  if (!word) return null;
+  if (WORD_INDEX.has(word)) return word;
+  let best: string | null = null;
+  let bestDistance = MAX_DISTANCE + 1;
+  let bestPrefix = -1;
+  for (const candidate of BIP39_WORDLIST) {
+    if (Math.abs(candidate.length - word.length) > MAX_DISTANCE) continue;
+    const d = osaDistance(word, candidate, bestDistance);
+    if (d > MAX_DISTANCE || d > bestDistance) continue;
+    const prefix = commonPrefix(word, candidate);
+    if (d < bestDistance || prefix > bestPrefix) {
+      bestDistance = d;
+      bestPrefix = prefix;
+      best = candidate;
+    }
+  }
+  return best;
 }
 
 /**

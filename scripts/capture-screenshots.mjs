@@ -126,6 +126,32 @@ try {
   await shotRegion(seedField, seedField, join(SHOTS, '02-seed-detection.png'), 28);
   console.log('captured 02-seed-detection.png');
 
+  // ---- 11: Seed Phrase mode, with one word wrong on purpose. The status
+  // line naming the position and the word meant is the feature, so the band
+  // runs from the grid's header to that line. Revealed, because a blurred
+  // grid shows nothing worth a screenshot. ----
+  await visible(page.getByRole('button', { name: 'Seed phrase', exact: true })).click();
+  const gridWords = 'legal winner thank year wave sausage wotrh useful legal winner thank yellow'.split(' ');
+  for (const [i, w] of gridWords.entries()) {
+    await visible(page.getByRole('combobox', { name: `Word ${i + 1}`, exact: true })).fill(w);
+  }
+  await visible(page.getByRole('combobox', { name: 'Word 12', exact: true })).blur();
+  await visible(page.getByRole('button', { name: 'Show secret text' })).click();
+  await settle();
+  await shotRegion(
+    visible(page.getByTestId('seed-mode')),
+    page.getByTestId('seed-grid-status'),
+    join(SHOTS, '11-seed-mode.png'),
+    28
+  );
+  console.log('captured 11-seed-mode.png');
+  // Back to the textarea, holding the valid phrase again: the SeedQR shot
+  // below seals whatever the text box holds, and the grid left a misspelt
+  // one in it.
+  await visible(page.getByRole('button', { name: 'Text', exact: true })).click();
+  await seedField.fill(SEED);
+  await settle();
+
   // ---- 08: the SeedQR dialog, captured before Reveal — the reveal step is
   // the feature, and a shot of an exposed QR would undercut the thing the
   // dialog exists to make deliberate.
