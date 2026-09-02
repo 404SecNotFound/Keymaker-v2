@@ -83,7 +83,7 @@ physical, or use a passphrase you will genuinely still produce in ten years.
 
 ### Step 4: encrypt
 
-![The Result field holding a keym2: container](screenshots/walkthrough-3-container.png)
+![The receipt — what was written, how it is protected, the ways in — above the Result field holding a keym2: container](screenshots/walkthrough-3-container.png)
 
 What comes back starts with `keym2:` and is safe to paste anywhere text goes —
 a note app, an email to yourself, a printed page. The **Download** button gives

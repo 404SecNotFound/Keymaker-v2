@@ -126,7 +126,12 @@ function announcements(page: Page): Promise<string> {
     const region = document.querySelector<HTMLElement>(
       '[role="region"][aria-label*="otification"]'
     );
-    return (region?.innerText ?? "").trim();
+    // A seal's success is a receipt in the form now, not a toast — the same
+    // announcement, made where the owner is looking. Read both, so a receipt
+    // delivered into a panel that has moved on counts as the leak a stale
+    // toast always did.
+    const receipt = document.querySelector<HTMLElement>('[data-testid="seal-receipt"]');
+    return [region?.innerText ?? "", receipt?.innerText ?? ""].join("\n").trim();
   });
 }
 
@@ -179,7 +184,7 @@ async function measureOperation(page: Page): Promise<number> {
         "silence assertion in this file passes without checking anything",
       timeout: 60_000,
     })
-    .toMatch(/Success!/);
+    .toMatch(/Sealed|Success!/);
   return Date.now() - started;
 }
 
@@ -224,7 +229,7 @@ async function confirmRaceOpened(page: Page, landedMs: number, operationMs: numb
       `already succeeded (an uninterrupted one takes ${operationMs} ms here). Nothing was ` +
       `interrupted, so nothing was tested — widen the window by raising SLOW_KDF rather than ` +
       `relaxing what follows.`
-  ).not.toMatch(/Success!/);
+  ).not.toMatch(/Sealed|Success!/);
 }
 
 test.describe("an operation that loses the UI falls silent", () => {

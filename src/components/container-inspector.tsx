@@ -102,20 +102,57 @@ export function byteMapSpans(version: number, cipher: number, slotCount: number)
   ];
 }
 
-function ByteMap({ spans }: { spans: ByteSpan[] }) {
+/**
+ * The sweep, while a seal is running: the segments reveal left to right, each
+ * over the share of 500ms its bytes occupy, after the ones before it — stamp,
+ * fields, then slots — and the slots breathe until the worker returns. Phases,
+ * not telemetry: the worker reports no progress, and what this depicts is the
+ * order the header is written in, which the widths already state. Transform
+ * and opacity only, inside DESIGN-SYSTEM.md § Motion's completion allowance;
+ * the reduced-motion global flattens both to a frame, so the map simply
+ * appears lit. The finished container renders its own map, parsed from the
+ * bytes, with no sweep at all.
+ */
+const SWEEP_MS = 500;
+
+function ByteMap({ spans, filling = false }: { spans: ByteSpan[]; filling?: boolean }) {
   const total = spans.reduce((sum, s) => sum + s.bytes, 0);
   const slots = spans.filter((s) => s.kind === "slot").length;
+  let before = 0;
   return (
-    <div aria-hidden="true" data-testid="inspector-byte-map" className="px-4 pt-3">
+    <div
+      aria-hidden="true"
+      data-testid="inspector-byte-map"
+      data-sealing={filling || undefined}
+      className="px-4 pt-3"
+    >
       <div className="flex h-1.5 gap-px overflow-hidden rounded-full">
-        {spans.map((span) => (
-          <span
-            key={span.key}
-            data-kind={span.kind}
-            className={cn("h-full", SPAN_FILL[span.kind])}
-            style={{ flexGrow: span.bytes, flexBasis: 3 }}
-          />
-        ))}
+        {spans.map((span) => {
+          const start = total > 0 ? before / total : 0;
+          const share = total > 0 ? span.bytes / total : 0;
+          before += span.bytes;
+          return (
+            <span
+              key={span.key}
+              data-kind={span.kind}
+              className={cn(
+                "h-full",
+                SPAN_FILL[span.kind],
+                filling && (span.kind === "slot" ? "seal-wait" : "seal-reveal")
+              )}
+              style={{
+                flexGrow: span.bytes,
+                flexBasis: 3,
+                ...(filling
+                  ? {
+                      animationDelay: `${Math.round(start * SWEEP_MS)}ms, ${SWEEP_MS}ms`,
+                      animationDuration: `${Math.max(80, Math.round(share * SWEEP_MS))}ms, 1200ms`,
+                    }
+                  : {}),
+              }}
+            />
+          );
+        })}
       </div>
       <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1.5 font-mono text-[12px] text-subtle-foreground">
         <span className="flex items-center gap-1.5">
@@ -262,11 +299,14 @@ export function ContainerInspector({
   plan,
   peek,
   className,
+  sealing = false,
 }: {
   mode: "encrypt" | "decrypt";
   plan: InspectorPlan | null;
   peek: Uint8Array | null;
   className?: string;
+  /** True while the worker is writing the container the plan describes. */
+  sealing?: boolean;
 }) {
   const parsed = useMemo(() => (peek ? parsePeek(peek) : null), [peek]);
 
@@ -427,7 +467,7 @@ export function ContainerInspector({
           {/* The plan side of the same map: version is what this app writes,
               slot count is the ways-in the form has declared. Restated, not
               predicted — every input comes from a control on screen. */}
-          <ByteMap spans={byteMapSpans(KEYM2_VERSION, plan.cipherId, waysIn)} />
+          <ByteMap spans={byteMapSpans(KEYM2_VERSION, plan.cipherId, waysIn)} filling={sealing} />
 
           <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-subtle-foreground">
             ways in · as configured

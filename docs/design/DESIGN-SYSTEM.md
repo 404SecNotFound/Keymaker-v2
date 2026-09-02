@@ -267,6 +267,18 @@ header gives: a shot nothing regenerates goes stale silently.
 150–250ms, ease-out, opacity/transform only. The existing
 `prefers-reduced-motion` global applies unchanged.
 
+One scoped allowance, added with the seal ceremony. A **moment of
+completion** — a container sealed, a wipe carried out — may run **400–600ms**,
+still opacity/transform only, still flattened to nothing by the
+reduced-motion global. The reason is the same one that keeps everything else
+short: motion is information, and its length should match what it says. A
+tab arriving is a fact of no consequence and gets 200ms. A seal finishing is
+the one moment the owner is certain to be watching, the moment after which
+the bytes exist, and 200ms says "something flickered" where 500ms says
+"this happened". It is an allowance, not a range: an element that is not
+completing something is not entitled to it, and a completion that runs past
+600ms has stopped informing and started performing.
+
 ## Voice
 
 Headlines whisper (light weight, tight tracking, short sentences). Body is

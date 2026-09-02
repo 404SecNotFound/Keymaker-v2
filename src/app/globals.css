@@ -260,6 +260,48 @@
   }
 }
 
+/*
+ * The seal sweep — docs/design/DESIGN-SYSTEM.md § Motion, the completion
+ * allowance. Transform and opacity only. Durations and delays are set inline
+ * per segment from its byte share (see container-inspector.tsx), so the
+ * classes carry everything but the numbers. The reduced-motion global above
+ * flattens both animations to a frame: the reveal lands on its final state
+ * at once, and the breathing runs its single permitted iteration in 0.01ms.
+ */
+.seal-reveal {
+  transform-origin: left;
+  animation-name: seal-reveal;
+  animation-timing-function: ease-out;
+  animation-fill-mode: both;
+}
+
+.seal-wait {
+  transform-origin: left;
+  animation-name: seal-reveal, seal-wait;
+  animation-timing-function: ease-out, ease-in-out;
+  animation-iteration-count: 1, infinite;
+  animation-fill-mode: both, none;
+}
+
+@keyframes seal-reveal {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+@keyframes seal-wait {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
 /* ---------------------------------------------------------------------------
    Roadmap 4.2 — the paper vault print sheet.
 

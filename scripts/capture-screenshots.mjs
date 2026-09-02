@@ -60,8 +60,14 @@ async function settle() {
  * fullPage capture paints a ghost of the sticky footer across the page.
  */
 async function shotRegion(from, to, path, pad = 20) {
-  await from.scrollIntoViewIfNeeded();
-  await page.evaluate((p) => window.scrollBy(0, -p), pad + 8);
+  // Scrolled to the top of the viewport, then eased down past the sticky
+  // header — not scrollIntoViewIfNeeded, which leaves an anchor that is
+  // already on screen where it is, so a band that starts low is cut off at
+  // the bottom. That is how the receipt, arriving above the result, pushed
+  // the container's last lines out of walkthrough-3. The clip is relative to
+  // the anchors, so shots that already fit are unchanged by this.
+  await from.evaluate((el) => el.scrollIntoView({ block: 'start' }));
+  await page.evaluate((p) => window.scrollBy(0, -p), pad + 8 + 64);
   await settle();
   const a = await from.boundingBox();
   const b = await to.boundingBox();
@@ -307,7 +313,11 @@ try {
   );
   console.log('captured walkthrough-2-password.png');
 
-  // 3: the container. The shot that shows what the reader is meant to keep.
+  // 3: the container. The shot that shows what the reader is meant to keep —
+  // and, above it, the receipt that says what was written and how it is
+  // protected. Framed from the receipt rather than from the Result label:
+  // the receipt is the moment of completion, and a band that started below
+  // it was pushed off the bottom of the viewport by it.
   await visible(page.getByRole('button', { name: /^Encrypt Text$/i })).click();
   await page.waitForFunction(
     () => {
@@ -318,7 +328,7 @@ try {
     { timeout: 90_000 }
   );
   await shotRegion(
-    visible(page.getByText(/^Result/)),
+    page.getByTestId('seal-receipt'),
     page.locator('#output-text'),
     join(SHOTS, 'walkthrough-3-container.png')
   );
