@@ -231,6 +231,59 @@ test.describe("issued shares survive what they must", () => {
     ).toHaveValue("");
   });
 
+  test("the idle lock fires once, not once a second", async ({ page }) => {
+    await page.clock.install();
+    await issueShares(page);
+
+    // Sparing the shares keeps secrets on screen, so the lock effect never
+    // re-runs and its interval keeps sampling. Nothing moved the activity
+    // mark when the lock fired, so every later tick was past the deadline
+    // again: a new "Locked" toast each second, replacing the last, on top of
+    // the person transcribing shares. Each firing mounts a fresh toast element
+    // (the toast store gives each one a new id, so the old root unmounts and
+    // a new `li` is inserted with its subtree), so counting toast roots that
+    // enter the DOM distinguishes one firing from many. The root is matched
+    // by its `data-state` attribute rather than a role: the only
+    // `role="status"` element is Radix's hidden announcer, which is inserted
+    // empty and gets its text a frame later.
+    await page.evaluate(() => {
+      const w = window as unknown as { __lockToasts: number };
+      w.__lockToasts = 0;
+      new MutationObserver((records) => {
+        for (const record of records) {
+          for (const node of record.addedNodes) {
+            if (
+              node instanceof HTMLLIElement &&
+              node.hasAttribute("data-state") &&
+              (node.textContent ?? "").includes("Locked")
+            ) {
+              w.__lockToasts++;
+            }
+          }
+        }
+      }).observe(document.body, { childList: true, subtree: true });
+    });
+
+    await page.clock.runFor("05:01");
+    await expect
+      .poll(() => page.evaluate(() => (window as unknown as { __lockToasts: number }).__lockToasts), {
+        message: "expected exactly one lock at the deadline: 0 means it never fired, more means it fired on every tick",
+      })
+      .toBe(1);
+
+    // Five more idle seconds. With the defect these are five more locks.
+    await page.clock.runFor("00:05");
+    expect(
+      await page.evaluate(() => (window as unknown as { __lockToasts: number }).__lockToasts),
+      "the lock fired again on every tick after the deadline"
+    ).toBe(1);
+
+    await expect(
+      page.getByText(/Save these 3 shares now/),
+      "the once-only lock stopped sparing the shares"
+    ).toBeVisible();
+  });
+
   test("Wipe now still destroys them, because that is a person deciding", async ({ page }) => {
     // The control on the test above. Sparing them from the timer must not
     // spare them from the panic button, or the button stops meaning anything.
