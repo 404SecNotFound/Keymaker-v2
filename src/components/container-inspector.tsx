@@ -70,7 +70,7 @@ export interface InspectorPlan {
  * is invisible explains nothing. Below 3px the strip is schematic and the
  * caption's byte count is the exact figure.
  */
-interface ByteSpan {
+export interface ByteSpan {
   key: string;
   kind: "stamp" | "fields" | "slot";
   bytes: number;
@@ -82,7 +82,12 @@ const SPAN_FILL: Record<ByteSpan["kind"], string> = {
   slot: "bg-[#5C7FFF]",
 };
 
-function byteMapSpans(version: number, cipher: number, slotCount: number): ByteSpan[] {
+/**
+ * Exported for the paper vault, which prints the same strip under the
+ * symbols: one authority for the widths, so the sheet and the pane can never
+ * disagree about what the header holds.
+ */
+export function byteMapSpans(version: number, cipher: number, slotCount: number): ByteSpan[] {
   const table = keym2SlotTableOffset(version);
   const width = keym2SlotLen(cipher);
   return [

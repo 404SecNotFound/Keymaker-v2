@@ -378,14 +378,131 @@
     margin-top: 8pt;
   }
 
-  .pv-share {
-    border: 0.75pt dashed #000;
-    padding: 6pt;
-    margin-bottom: 8pt;
+  /* The cover: three cells read before a single square. Hairlines only —
+     the page is monochrome, and a filled cell is toner spent on nothing. */
+  .pv-cover {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8pt;
+    margin-bottom: 12pt;
+  }
+
+  .pv-cover-cell {
+    border: 0.5pt solid #000;
+    padding: 6pt 8pt;
+    font-size: 9.5pt;
     break-inside: avoid;
   }
 
-  .pv-share-head {
+  .pv-cover-cell h2 {
+    border-bottom: 0;
+    padding-bottom: 0;
+    margin-bottom: 3pt;
+  }
+
+  .pv-cover-cell p,
+  .pv-cover-cell ul,
+  .pv-cover-cell ol {
+    margin: 0;
+  }
+
+  .pv-cover-cell ul,
+  .pv-cover-cell ol {
+    padding-left: 12pt;
+  }
+
+  .pv-cover-cell li {
+    margin-bottom: 2pt;
+  }
+
+  /* The cells are narrow and their code is short — a filename, a prefix —
+     so the break-anywhere rule the share strings need would split
+     "parts.txt" across a line here. */
+  .pv-cover-cell code {
+    word-break: normal;
+  }
+
+  /* The byte map: the inspector's strip, printed. Its two spark cuts are the
+     page's only colour — data, per DESIGN-SYSTEM.md § sparks — and the
+     header-fields segment is black, so the map survives a monochrome
+     printer as three greys. print-color-adjust, or a browser drops every
+     fill on the way to paper and the strip prints as nothing. */
+  .pv-bytemap {
+    margin-top: 8pt;
+    break-inside: avoid;
+  }
+
+  .pv-bytemap-strip {
+    display: flex;
+    gap: 1pt;
+    height: 6pt;
+  }
+
+  .pv-bytemap-strip span,
+  .pv-swatch {
+    display: block;
+    height: 100%;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .pv-seg-stamp {
+    background: #ff7a47 !important;
+  }
+
+  .pv-seg-fields {
+    background: #000 !important;
+  }
+
+  .pv-seg-slot {
+    background: #5c7fff !important;
+  }
+
+  .pv-bytemap-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8pt;
+    margin: 3pt 0 0;
+    font-size: 8pt;
+  }
+
+  .pv-swatch {
+    display: inline-block;
+    width: 6pt;
+    height: 6pt;
+    margin-right: 3pt;
+    vertical-align: -0.5pt;
+  }
+
+  /* The rehearsal box: a record kept in ink. */
+  .pv-rehearsal {
+    border: 0.75pt solid #000;
+    padding: 6pt 8pt;
+    break-inside: avoid;
+  }
+
+  .pv-rehearsal-line {
+    margin: 4pt 0 0;
+    font-size: 10.5pt;
+  }
+
+  /* Strips: one per envelope, cut lines above each and below the last. */
+  .pv-strip {
+    border-top: 0.75pt dashed #000;
+    padding: 4pt 0 8pt;
+    break-inside: avoid;
+  }
+
+  .pv-strip:last-child {
+    border-bottom: 0.75pt dashed #000;
+  }
+
+  .pv-cut {
+    margin: 0 0 4pt;
+    font-size: 8pt;
+  }
+
+  .pv-strip-head {
     display: flex;
     justify-content: space-between;
     font-size: 9.5pt;
@@ -397,19 +514,19 @@
     font-weight: 400;
   }
 
-  .pv-share-body {
+  .pv-strip-body {
     display: flex;
     gap: 8pt;
     align-items: flex-start;
   }
 
-  .pv-share-body canvas {
+  .pv-strip-body canvas {
     width: 30mm !important;
     height: 30mm !important;
     flex: none;
   }
 
-  .pv-share-warn {
+  .pv-strip-note {
     margin: 4pt 0 0;
     font-size: 8.5pt;
   }
