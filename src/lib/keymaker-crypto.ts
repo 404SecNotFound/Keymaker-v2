@@ -280,7 +280,14 @@ export type KeymakerErrorCode =
   | "unsupported-version"
   | "malformed-container"
   | "kdf-params-out-of-range"
-  | "unsupported-config";
+  | "unsupported-config"
+  /**
+   * A lazily imported component (the ChaCha20 cipher, the Argon2id library)
+   * could not be loaded. Nothing about the file or the secret was checked.
+   */
+  | "dependency-unavailable"
+  /** The crypto worker died with an operation in flight. Nothing was checked. */
+  | "worker-failed";
 
 export class KeymakerError extends Error {
   readonly code: KeymakerErrorCode;
@@ -397,9 +404,37 @@ export function secureErase(buffer: ArrayBuffer | Uint8Array | null | undefined)
 let hashWasmPromise: Promise<typeof import("hash-wasm")> | null = null;
 export function loadHashWasm(): Promise<typeof import("hash-wasm")> {
   if (!hashWasmPromise) {
-    hashWasmPromise = import("hash-wasm");
+    hashWasmPromise = import("hash-wasm").catch((cause) => {
+      // Forget the failure so the next call imports again: a chunk that was
+      // unreachable a moment ago (offline before the precache landed, a
+      // deploy mid-session) may be reachable now, and a cached rejection
+      // would make the cipher permanently unavailable for the session.
+      hashWasmPromise = null;
+      throw dependencyUnavailable("the Argon2id key derivation", cause);
+    });
   }
   return hashWasmPromise;
+}
+
+/**
+ * A component failed to load, and the caller must not mistake that for a
+ * verdict on the file or the password.
+ *
+ * Both loaders used to reject with whatever the browser said about the
+ * import, and every decrypt path caught that alongside an authentication
+ * failure, so a missing chunk read as "the password may be incorrect". A
+ * user who is offline before the precache has landed, or whose deploy has
+ * moved under them, would retype a correct password into a container that
+ * was never opened. In a backup tool that is the wrong answer to send
+ * someone hunting with.
+ */
+function dependencyUnavailable(what: string, cause: unknown): KeymakerError {
+  const detail = cause instanceof Error && cause.message ? ` (${cause.message})` : "";
+  return new KeymakerError(
+    "dependency-unavailable",
+    `A part of Keymaker needed for this file, ${what}, could not be loaded${detail}. ` +
+      "The file and password were not checked. Reload the page while online and try again."
+  );
 }
 
 /**
@@ -465,7 +500,10 @@ export type NobleCiphers = typeof import("@noble/ciphers/chacha.js");
 let noblePromise: Promise<NobleCiphers> | null = null;
 export function loadNoble(): Promise<NobleCiphers> {
   if (!noblePromise) {
-    noblePromise = import("@noble/ciphers/chacha.js");
+    noblePromise = import("@noble/ciphers/chacha.js").catch((cause) => {
+      noblePromise = null;
+      throw dependencyUnavailable("the ChaCha20-Poly1305 cipher", cause);
+    });
   }
   return noblePromise;
 }

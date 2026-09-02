@@ -127,7 +127,20 @@ function spawn(): Worker | null {
     worker.addEventListener("error", () => {
       workerUnavailable = true;
       readiness = Promise.resolve(false);
-      failAllPending(new Error("Processing failed. Please try again."));
+      // Typed, so it survives the UI's "is this message safe to show"
+      // filter. As a plain Error it fell through to the generic decrypt
+      // string, "the password or key file may be incorrect", for a
+      // failure that never looked at either. The readiness probe is the one
+      // pending entry this must not reach as a verdict, and it does not:
+      // the probe's handler resolves "no worker" for any reason at all.
+      failAllPending(
+        new KeymakerError(
+          "worker-failed",
+          "The background worker stopped before it finished, so the file and password " +
+            "were not checked. Try again; if it keeps happening, this browser may not have " +
+            "enough memory for this file's key-derivation settings."
+        )
+      );
       terminate();
     });
 
