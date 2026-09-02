@@ -34,6 +34,7 @@ import {
   type KdfParams,
 } from "../src/lib/keymaker-crypto.ts";
 import { encryptFile as legacyEncryptFile } from "../src/lib/crypto.ts";
+import { PasskeyError } from "../src/lib/webauthn-prf.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LEGACY = JSON.parse(readFileSync(join(HERE, "crypto-fixtures.json"), "utf8"));
@@ -565,6 +566,28 @@ async function main() {
   } catch (err) {
     check(!isUserFacingError(err), "corrupted ciphertext is NOT a user-facing error code");
   }
+
+  // A subclass of KeymakerError must still be its own class. The base
+  // constructor re-pins the prototype to keep instanceof working through the
+  // transpile targets, and doing that with a literal `KeymakerError.prototype`
+  // silently demoted every subclass. `PasskeyError`, the one class whose
+  // whole job is to carry a `cancelled` flag its catch blocks test for by
+  // `instanceof`, reported itself as a plain KeymakerError and every
+  // second-tap failure took the generic "Enrolling the passkey failed." branch.
+  console.log("\nError classes survive subclassing:");
+  class SubclassedError extends KeymakerError {
+    constructor() {
+      super("invalid-input", "subclass");
+    }
+  }
+  const sub = new SubclassedError();
+  check(sub instanceof SubclassedError, "a subclass of KeymakerError is instanceof itself");
+  check(sub instanceof KeymakerError, "...and still instanceof KeymakerError");
+  check(Object.getPrototypeOf(sub) === SubclassedError.prototype, "its prototype is the subclass's");
+  const passkeyCancelled = new PasskeyError("cancelled", true);
+  check(passkeyCancelled instanceof PasskeyError, "PasskeyError is instanceof PasskeyError");
+  check(isUserFacingError(passkeyCancelled), "PasskeyError is still user-facing");
+  check(passkeyCancelled.cancelled, "the cancelled flag survives construction");
 
   // ---- B5: legacy Unicode normalization ----
   //

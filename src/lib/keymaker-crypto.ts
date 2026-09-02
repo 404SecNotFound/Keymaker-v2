@@ -290,7 +290,14 @@ export class KeymakerError extends Error {
     this.name = "KeymakerError";
     this.code = code;
     // Preserve instanceof across the esbuild/Next transpile targets used here.
-    Object.setPrototypeOf(this, KeymakerError.prototype);
+    //
+    // `new.target.prototype`, not `KeymakerError.prototype`. A subclass calls
+    // this constructor via `super()`, and at that moment `this` already has the
+    // subclass's prototype; naming this class here replaced it, so every
+    // subclass instance answered `instanceof KeymakerError` and nothing more
+    // specific. PasskeyError's own catch blocks test `instanceof PasskeyError`
+    // and took the generic branch on every failure.
+    Object.setPrototypeOf(this, new.target.prototype);
   }
 }
 
