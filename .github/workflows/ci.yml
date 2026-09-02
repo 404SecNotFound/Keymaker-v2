@@ -64,6 +64,14 @@ jobs:
       - name: Release notes still track docs/VERIFYING.md
         run: npm run test:release-notes
 
+      # A release is built with one more variable than a deployment, and that
+      # variable is compiled into a content-hashed chunk. The rebuild recipe in
+      # docs/VERIFYING.md has to set exactly what release.yml sets, or a
+      # verifier following it gets six differing files and is told to treat
+      # that as tampering. This reads both and refuses to let them drift.
+      - name: The release rebuild recipe still matches release.yml
+        run: npm run test:release-recipe
+
       - name: KEYM v1 regression suite
         run: npm run test:keymaker
 
@@ -172,7 +180,17 @@ jobs:
   #
   # Its own job because it runs the full build twice, and there is no reason
   # for that to serialise behind the test suite.
+  # Once per channel. The release label is compiled in (next.config.js reads
+  # KEYMAKER_RELEASE_TAG), so a release is a different build from a deployment
+  # of the same commit, and determinism proven on one channel says nothing
+  # about the other. The release leg sets the tag the way release.yml does,
+  # derived from package.json rather than typed here, so it cannot disagree
+  # with the version the label check compares against.
   reproducible:
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [development, release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -187,6 +205,11 @@ jobs:
           cache: npm
 
       - run: npm ci
+
+      - name: Label this leg as the tagged release
+        if: matrix.channel == 'release'
+        run: |
+          echo "KEYMAKER_RELEASE_TAG=v$(node -p "require('./package.json').version")" >> "$GITHUB_ENV"
 
       - name: Build twice and compare every byte
         run: npm run verify:reproducible
