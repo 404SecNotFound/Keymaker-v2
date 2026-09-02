@@ -265,13 +265,31 @@ test("Stop does not claim to have cancelled work it could not stop", async ({ pa
     readFileSync(join(process.cwd(), "tests/browser/fixtures/expensive-pbkdf2.json"), "utf8")
   ) as { password: string; armor: string };
 
-  // Before the first goto, so no service worker is ever registered to serve a
-  // cached copy of the script we are trying to take away.
-  await page.route("**/crypto-worker.js", (route) => route.abort());
+  // The no-worker page, produced the way the freeze-warning test below
+  // produces it: a Worker constructor that throws. This used to be
+  // `page.route("**/crypto-worker.js").abort()`, which is not reliable across
+  // engines (crypto-client.ts records it from the other side), and on Firefox
+  // the page kept a healthy worker, Stop correctly said "cancelled", and the
+  // test reported that as the app lying. The premise is asserted below rather
+  // than assumed, for the same reason.
+  await page.addInitScript(() => {
+    class BlockedWorker {
+      constructor() {
+        throw new Error("Worker construction blocked by the test");
+      }
+    }
+    Object.defineProperty(window, "Worker", { value: BlockedWorker, configurable: true });
+  });
+  const workers: string[] = [];
+  page.on("worker", (w) => workers.push(w.url()));
 
   await page.goto("/");
   await useTextMode(page);
-  await page.waitForTimeout(2_000); // let the readiness probe fail
+  await page.waitForTimeout(2_000); // let the form settle
+  expect(
+    workers.filter((u) => u.endsWith("/crypto-worker.js")),
+    "the crypto worker was supposed to be unavailable; with one present, Stop is right to say cancelled"
+  ).toHaveLength(0);
 
   await visible(page.getByRole("tab", { name: "Decrypt" })).click();
   await useTextMode(page);
