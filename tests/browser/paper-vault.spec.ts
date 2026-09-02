@@ -3,6 +3,7 @@ import type { Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodePaperParts } from "../../src/lib/keym-v2-paper";
+import { dearmorKeym2, keym2SlotCountOffset, KEYM2_VERSION_V3 } from "../../src/lib/keym-v2";
 import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 
 /**
@@ -29,6 +30,17 @@ interface PrintSnapshot {
   firstCaption: string;
   rules: number;
   text: string;
+  /** The cover's three headings, in order. */
+  coverCells: string[];
+  /** Slot segments in the byte map under the symbols. */
+  slotSegments: number;
+  /** Recovery strips, and how many of them carry a "Held by" line. */
+  strips: number;
+  heldBy: number;
+  /** Container symbols on the strips page — the owner's copy keeps those. */
+  stripsPageSymbols: number;
+  /** The rehearsal box's text. */
+  rehearsal: string;
 }
 
 async function encryptSomething(page: Page) {
@@ -66,6 +78,49 @@ async function encryptSomething(page: Page) {
   );
 }
 
+/** Enrol a k-of-n share set. The same helper container-inspector.spec.ts carries. */
+async function enableShares(page: Page, k: number, n: number) {
+  const advanced = visible(page.getByRole("button", { name: /^Advanced/ }));
+  if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
+  await expect(advanced).toHaveAttribute("aria-expanded", "true");
+
+  const sharesSwitch = visible(page.getByRole("switch", { name: "Recovery shares" }));
+  await expect(async () => {
+    if ((await sharesSwitch.getAttribute("aria-checked")) !== "true") {
+      await sharesSwitch.click();
+    }
+    await expect(sharesSwitch).toHaveAttribute("aria-checked", "true", { timeout: 1_000 });
+  }).toPass({ timeout: 20_000 });
+
+  await visible(page.getByLabel("Shares to print")).fill(String(n));
+  await visible(page.getByLabel("Needed to open")).fill(String(k));
+}
+
+/**
+ * Encrypt with a share set enrolled, and leave the one-time shares dialog
+ * open: its Print button is the one that hands the sheet the shares.
+ */
+async function encryptWithShares(page: Page, k: number, n: number) {
+  await page.goto("/");
+  await useTextMode(page);
+  await selectCrypto(page, "pbkdf2", "aes");
+  await enableShares(page, k, n);
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await expect(page.getByText(new RegExp(`Save these ${n} shares now`))).toBeVisible({ timeout: 90_000 });
+}
+
+/** The slot-count byte of the container the app just wrote, read the way §5 defines it. */
+async function slotCountByte(page: Page): Promise<number> {
+  const armored = await page.evaluate(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+  );
+  const bytes = dearmorKeym2(armored);
+  expect(bytes[4], "these tests are written against v3 output").toBe(KEYM2_VERSION_V3);
+  return bytes[keym2SlotCountOffset(KEYM2_VERSION_V3)] as number;
+}
+
 /**
  * Click Print and return what the document looked like at the moment it printed.
  *
@@ -80,24 +135,37 @@ async function encryptSomething(page: Page) {
  *    switch to print media afterwards and read the styles the printer would
  *    have used.
  */
-async function capturePrint(page: Page): Promise<PrintSnapshot> {
+async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promise<PrintSnapshot> {
   await page.evaluate(() => {
     const w = window as unknown as { __snap?: unknown; print: () => void };
     w.__snap = null;
     w.print = () => {
       const el = document.querySelector(".paper-vault") as HTMLElement | null;
+      const strips = el ? Array.from(el.querySelectorAll(".pv-strip")) : [];
       w.__snap = {
         sheets: document.querySelectorAll(".paper-vault").length,
         symbols: el ? el.querySelectorAll(".pv-qr canvas").length : 0,
         firstCaption: el?.querySelector(".pv-qr figcaption")?.textContent ?? "",
         rules: el ? el.querySelectorAll(".pv-rule").length : 0,
         text: el?.textContent ?? "",
+        coverCells: el
+          ? Array.from(el.querySelectorAll(".pv-cover-cell h2"), (h) => h.textContent ?? "")
+          : [],
+        slotSegments: el ? el.querySelectorAll('.pv-bytemap [data-kind="slot"]').length : 0,
+        strips: strips.length,
+        heldBy: strips.filter((s) => /Held by/.test(s.textContent ?? "")).length,
+        stripsPageSymbols: el ? el.querySelectorAll(".pv-strips .pv-qr canvas").length : 0,
+        rehearsal: el?.querySelector(".pv-rehearsal")?.textContent ?? "",
       };
       throw new Error("print stubbed — see capturePrint()");
     };
   });
 
-  await visible(page.getByRole("button", { name: /Print paper vault/i })).click();
+  // Two buttons print the sheet: the one under the result, and the one in
+  // the one-time shares dialog. While the dialog is up its scrim covers the
+  // first, so the caller says which.
+  const scope = from === "dialog" ? page.getByRole("dialog") : page;
+  await visible(scope.getByRole("button", { name: /Print paper vault/i })).click();
   await page.waitForFunction(
     () => (window as unknown as { __snap: unknown }).__snap !== null,
     null,
@@ -208,6 +276,81 @@ test.describe("paper vault", () => {
     // session, which is the surface auto-lock and the field blur exist to
     // shrink.
     await expect(page.locator(".paper-vault")).toHaveCount(0);
+  });
+});
+
+/**
+ * The sheet as a procedure (10× plan, Bet 4).
+ *
+ * The same snapshot, taken at the instant of printing, asked four more
+ * questions: does a cover in plain language come before the squares; does the
+ * byte map under them draw one segment per slot the container *actually*
+ * holds — the slot-count byte is the authority, read from the armored output
+ * the way container-inspector.spec.ts reads it; is every share a strip with a
+ * "Held by" line, on a page that carries no container symbol; and is there a
+ * rehearsal box to fill in ink. The strips test is the file's negative
+ * control: rendered as a list again, its count fails by number.
+ */
+test.describe("the sheet as a procedure", () => {
+  test("opens with a cover in plain language: what this is, what you need, do this", async ({ page }) => {
+    await encryptSomething(page);
+    const snap = await capturePrint(page);
+
+    expect(snap.coverCells).toEqual(["What this is", "What you need", "Do this"]);
+    // Written for someone who did not choose this tool: what the squares
+    // are, and the one fact that makes the page safe to keep.
+    expect(snap.text).toMatch(/The squares on this page are the backup itself/);
+    expect(snap.text).toMatch(/safe to keep and useless to steal/);
+    expect(snap.text).toMatch(/nothing here depends on it still existing/i);
+    // The cover points at the procedure rather than repeating it.
+    expect(snap.text).toContain("How to open this without Keymaker");
+  });
+
+  test("the byte map under the symbols draws one segment per slot the container holds", async ({ page }) => {
+    await encryptSomething(page);
+    const trueCount = await slotCountByte(page);
+    expect(trueCount, "a plain passphrase encrypt writes exactly one slot").toBe(1);
+
+    const snap = await capturePrint(page);
+    expect(snap.slotSegments).toBe(trueCount);
+    expect(snap.text).toMatch(/1 slot — the ways in/);
+    expect(snap.text).toMatch(/bytes of header, then the sealed payload/);
+  });
+
+  test("with shares: one strip per envelope, each with a held-by line, on a page without the symbols", async ({ page }) => {
+    await encryptWithShares(page, 2, 3);
+    const trueCount = await slotCountByte(page);
+    expect(trueCount, "a passphrase plus a share set is two slots").toBe(2);
+
+    const snap = await capturePrint(page, "dialog");
+    expect(snap.strips, "one strip per share, or an envelope is short a key").toBe(3);
+    expect(snap.heldBy, "every strip needs a line for its holder's name").toBe(3);
+    expect(snap.text).toContain("Recovery strip 1 of 3");
+    expect(snap.text).toContain("Recovery strip 3 of 3");
+    expect(snap.text).toMatch(/cut here/);
+    // The owner's copy keeps the symbols; a strip is a key and nothing else.
+    expect(snap.stripsPageSymbols).toBe(0);
+    expect(snap.symbols).toBeGreaterThan(0);
+    // The map grew with the container: two slots in the byte, two segments.
+    expect(snap.slotSegments).toBe(trueCount);
+    // And the strip says what it is to whoever finds it alone.
+    expect(snap.text).toMatch(/alone, this one reveals nothing/);
+    expect(snap.text).toContain("keym2.py decrypt --share");
+    // The rehearsal line asks which strips were used, one blank per strip needed.
+    expect(snap.rehearsal).toMatch(/with strips ______ and ______/);
+  });
+
+  test("carries a rehearsal box to be filled in ink", async ({ page }) => {
+    await encryptSomething(page);
+    const snap = await capturePrint(page);
+
+    expect(snap.rehearsal).toContain("Rehearsed on");
+    expect(snap.rehearsal).toContain("rehearse again by");
+    // A box to tick, not a value the app filled in: nothing is stored.
+    expect(snap.rehearsal).toContain("\u2610");
+    expect(snap.rehearsal).toMatch(/A backup that has never been opened is a hope/);
+    // No strips, no strip blanks.
+    expect(snap.rehearsal).not.toMatch(/with strips/);
   });
 });
 

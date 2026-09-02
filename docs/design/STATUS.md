@@ -237,6 +237,43 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   longer claims the field speaks in colour alone. Full chromium suite:
   205 passed. The first run was 204 of 205: `command-bar.spec.ts`'s "second Go-to entry is Tools" test, because the doors had gone in at the top of the command list. *Start* now follows *Go to*, so the palette still opens on the mode switches that test pins, and the re-run was clean.
 
+- PR 2 of the plan — Bet 4, the **paper vault as a procedure**. The sheet was
+  principled and it was one document doing three jobs: the owner's copy of
+  the backup, the envelopes for three different people, and the instructions
+  for a fourth person years later. It reads now in the order that person
+  meets it. A **cover** before a single square — *What this is · What you
+  need · Do this* — in the voice of someone who did not choose this tool,
+  pointing at the full procedure at the end rather than repeating it. The
+  **byte map** under the symbols, drawn by the inspector's own `byteMapSpans`
+  (exported for the purpose) from the header the sheet is printing, so the
+  page says how many ways in the container holds without anyone decoding a
+  square; its two spark cuts are the page's only colour, and they are data —
+  the header-fields segment is black so the strip survives a monochrome
+  printer as three greys, and `print-color-adjust: exact` keeps a browser
+  from dropping the fills on the way to paper. A **rehearsal box** — "☐
+  Rehearsed on ____ with strips ____ and ____ · rehearse again by ____",
+  one blank per strip the threshold needs — because a backup that has never
+  been opened is a hope, and the record belongs in ink on the copy that will
+  be in the drawer; the app stores nothing, and PR 3 fills the box in. And
+  the shares as **strips**: a cut line and a *Held by* line each, one per
+  envelope, on a page of their own, so the owner's copy keeps the symbols and
+  a holder gets a key that says what it is to whoever finds it. The
+  recovery-kit line stays, still naming `keym2.py` and `docs/RECOVERY.md`;
+  nothing secret is printed automatically, as before.
+
+  `paper-vault.spec.ts` gained four tests on the same print-instant
+  snapshot: the three cover headings in order and the plain-language lines;
+  the byte map's slot segments equal to the slot-count byte read from the
+  armored output (one for a passphrase seal, two with a share set — the
+  authority container-inspector.spec.ts uses); with 2-of-3 enrolled, three
+  strips, three *Held by* lines, no container symbol on the strips page, and
+  the rehearsal line asking for two strips; and the rehearsal box with its
+  empty tick. Sabotage: the strips rendered as none; typecheck and build clean, then 1 of 11 failed — the strips test, "one strip per share, or an envelope is short a key", expected 3 and received 0; restored, rebuilt. Print CSS is outside the palette
+  gate, so the page was held to the standard by eye: monochrome on white
+  except the two cuts. `test:recovery` and the walkthrough are untouched —
+  neither document describes the sheet's layout. Full chromium suite:
+  209 passed on the restored build, typecheck and production build clean.
+
 ## Loose ends
 
 - **Satoshi is not being vendored, and the question is closed.** It headed both
