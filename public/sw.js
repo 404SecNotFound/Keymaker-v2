@@ -212,12 +212,21 @@ self.addEventListener('fetch', (event) => {
     // Network-first with cache fallback (offline support). Only '/' is
     // precached; any other navigation path (e.g. '/index.html') falls back
     // to the precached app shell when there is no exact cache match.
+    //
+    // The network response is served as-is and deliberately *not* written
+    // back to the cache. The precached shell already is the offline copy, so
+    // storing it again would buy nothing, and it would cost the integrity
+    // check: after a deploy the new worker installs and waits while this one
+    // keeps serving, and a navigation through it fetches the *new* build's
+    // HTML. Putting that beside the *old* SHA256SUMS makes the cache disagree
+    // with its own manifest, and the sealed status (see
+    // src/components/sealed-status.tsx) then reports a mismatch on index.html
+    // for every routine release until the update is accepted. The cache must
+    // stay exactly what the manifest describes: the bytes install() wrote.
     event.respondWith(
-      fetch(event.request)
-        .then((response) => cacheResponse(event.request, response))
-        .catch(() =>
-          caches.match(event.request).then((cached) => cached || caches.match(`${BASE}/`))
-        )
+      fetch(event.request).catch(() =>
+        caches.match(event.request).then((cached) => cached || caches.match(`${BASE}/`))
+      )
     );
     return;
   }

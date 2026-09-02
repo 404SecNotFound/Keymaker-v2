@@ -1,8 +1,10 @@
 import { test, expect, type Page } from "@playwright/test";
+import { spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { resolve } from "node:path";
-import { BASE_PATH, encryptText, selectCrypto, useTextMode, STRONG_PASSWORD } from "./helpers";
+import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { appPath, BASE_PATH, encryptText, selectCrypto, useTextMode, STRONG_PASSWORD } from "./helpers";
 
 /**
  * The sealed status — trust you can test, not read (10× plan, Bet 5).
@@ -197,5 +199,122 @@ test("negative control: an altered manifest in the cache is reported as a mismat
     await expect(result(page)).toContainText("Do not trust this copy");
   } finally {
     await context.close();
+  }
+});
+
+/**
+ * A pending update must not trip the check.
+ *
+ * The service worker does not call skipWaiting(), so after a deploy the new
+ * worker installs and waits while the old one keeps serving. Navigations are
+ * network-first, and the worker used to write the fetched page back into its
+ * own cache, so the next reload through the *old* worker stored the *new*
+ * build's HTML beside the *old* SHA256SUMS. The check then hashed a page the
+ * manifest never described, and every routine release produced the red "Do
+ * not trust this copy" alert until the user accepted the update: a false
+ * alarm from the one control that is supposed to be worth believing.
+ *
+ * Simulating that deploy means changing the bytes the origin serves, for both
+ * sw.js and the page, after the browser has precached them. As in
+ * sw-update.spec.ts, request interception does not reach the worker's script
+ * fetch, so this runs its own static server over a private copy of out/ on a
+ * port of its own, not 4322, which sw-update.spec.ts owns, so the two never
+ * share an origin, a registration or a cache.
+ */
+const OWN_PORT = 4323;
+const OWN_ORIGIN = `http://127.0.0.1:${OWN_PORT}`;
+const CACHE_VERSION_RE = /const CACHE_VERSION = '([^']*)';/;
+
+async function startOwnOrigin(): Promise<{ dir: string; server: ChildProcess }> {
+  const dir = mkdtempSync(join(tmpdir(), "keymaker-sealed-"));
+  cpSync(OUT, dir, { recursive: true });
+  const server = spawn(
+    "node",
+    [resolve(process.cwd(), "scripts/static-server.mjs"), dir, String(OWN_PORT), BASE_PATH],
+    { stdio: "ignore" }
+  );
+  const deadline = Date.now() + 30_000;
+  for (;;) {
+    try {
+      const res = await fetch(`${OWN_ORIGIN}${appPath("/sw.js")}`);
+      if (res.ok) break;
+    } catch {
+      // not listening yet
+    }
+    if (Date.now() > deadline) throw new Error(`static server did not come up on ${OWN_PORT}`);
+    await new Promise((r) => setTimeout(r, 200));
+  }
+  return { dir, server };
+}
+
+/**
+ * A release lands: the worker's cache name changes, and so do the bytes of
+ * the page itself. Both matter, a new worker with an identical index.html
+ * would put the same bytes back and hide the defect.
+ */
+function deployNextVersion(dir: string) {
+  const swPath = join(dir, "sw.js");
+  const sw = readFileSync(swPath, "utf8");
+  const match = sw.match(CACHE_VERSION_RE);
+  if (!match) throw new Error("no CACHE_VERSION in sw.js — has the worker changed shape?");
+  const nextSw = sw.replace(match[0], "const CACHE_VERSION = 'keymaker-sealed-next-version';");
+  expect(nextSw, "the simulated update must differ from the deployed worker").not.toBe(sw);
+  writeFileSync(swPath, nextSw);
+
+  const pagePath = join(dir, "index.html");
+  const page = readFileSync(pagePath, "utf8");
+  writeFileSync(pagePath, `${page}<!-- next release -->`);
+}
+
+const swState = (page: Page) =>
+  page
+    .evaluate(async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      return {
+        waiting: reg?.waiting?.state ?? null,
+        active: reg?.active?.state ?? null,
+        controlled: navigator.serviceWorker.controller !== null,
+      };
+    })
+    .catch(() => null);
+
+test("a waiting update does not make the running build fail its own check", async ({
+  browser,
+  browserName,
+}) => {
+  test.skip(browserName === "webkit", "service workers are not testable in WebKit here");
+  const { dir, server } = await startOwnOrigin();
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto(`${OWN_ORIGIN}${appPath("/")}`);
+    await waitForPrecache(page);
+    await expect.poll(() => swState(page)).toMatchObject({ controlled: true, active: "activated" });
+
+    // A release lands while the tab is open; the browser picks it up and the
+    // new worker installs, then waits, by design.
+    deployNextVersion(dir);
+    await page.evaluate(async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      await reg?.update();
+    });
+    await expect
+      .poll(() => swState(page), { message: "the replacement installs and waits" })
+      .toMatchObject({ waiting: "installed", active: "activated", controlled: true });
+
+    // The reload is a navigation through the still-active old worker. It is
+    // served the new build's HTML from the network, and that page is exactly
+    // what must not end up in the old worker's cache.
+    await page.reload();
+    await expect.poll(() => swState(page)).toMatchObject({ controlled: true, waiting: "installed" });
+
+    await toggle(page).click();
+    await panel(page).getByRole("button", { name: /^Check now$/ }).click();
+    await expect(result(page)).toHaveAttribute("data-outcome", "ok", { timeout: 60_000 });
+    await expect(result(page)).not.toContainText("index.html");
+  } finally {
+    await context.close();
+    server.kill();
+    rmSync(dir, { recursive: true, force: true });
   }
 });
