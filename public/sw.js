@@ -66,6 +66,14 @@ const APP_SHELL = [
   `${BASE}/apple-touch-icon.png`,
   `${BASE}/icon-192x192.png`,
   `${BASE}/icon-512x512.png`,
+  // The build's own manifest. Precached so the page can read it back from
+  // this cache: the page's policy is connect-src 'none', so a fetch from it
+  // is refused, and the Cache API is the one place it may look. The sealed
+  // status hashes what this cache holds against it — see
+  // src/components/sealed-status.tsx. Written by scripts/build-manifest.mjs
+  // *after* this worker is stamped, so apply-build-id.mjs exempts it from
+  // the exists-in-the-export check every other entry here passes.
+  `${BASE}/SHA256SUMS`,
 ];
 
 // Every JS and CSS chunk the export emitted. The build replaces this
