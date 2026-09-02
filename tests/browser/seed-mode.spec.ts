@@ -296,6 +296,33 @@ test("the grid and the textarea edit one secret: a phrase moves between them int
   );
 });
 
+test("a phrase pasted untidily into the textarea seals as the words the grid shows, byte authority", async ({ page }) => {
+  await useTextMode(page);
+  const textarea = visible(page.getByPlaceholder("Enter text to encrypt"));
+  await expect(textarea).toBeVisible();
+
+  // The same twelve words as a wallet or a notes app might hand them over:
+  // numbered, mixed case, doubled spaces, a line break, trailing whitespace.
+  // The grid cleans all of it; the sealed bytes must be what the grid shows.
+  const words = VARIED_12.split(" ");
+  const untidy =
+    words.slice(0, 6).map((w, i) => `${i + 1}. ${i % 2 ? w : w.toUpperCase()}`).join("  ") +
+    "\n" +
+    words.slice(6).map((w, i) => `${i + 7}. ${w}`).join(" ") +
+    "  \n";
+  await textarea.fill(untidy);
+  await visible(page.getByRole("button", { name: "Seed phrase", exact: true })).click();
+  for (const [i, w] of words.entries()) await expect(cell(page, i + 1)).toHaveValue(w);
+  await expect(status(page)).toContainText("Checksum matches — a valid 12-word phrase");
+
+  const armored = await sealGrid(page);
+  const recovered = await decryptText(page, armored, STRONG_PASSWORD);
+  // Exactly the words the cells held, single-spaced, not the string that was
+  // pasted. A grid that vouches for one phrase while another is sealed is the
+  // defect this test holds shut.
+  expect(recovered).toBe(VARIED_12);
+});
+
 test("the cells are secrets: they arm the lock and Wipe now empties them", async ({ page }) => {
   await enterSeedMode(page);
   await expect(wipeNow(page)).toHaveCount(0);
