@@ -3831,6 +3831,91 @@ def _selftest() -> int:
     # on the run where it matters.
     check("no warning when neither was passed", _warns_for() == "")
 
+    # --- the CLI's own loader: what every command that reads a container
+    # does with the file it is handed. Driven through main() rather than the
+    # library, because the defects were all in main(): `inspect` refused a
+    # self-extracting page that `decrypt` opened, `split` cut the HTML into
+    # parts without noticing, and a page missing its END marker, the one
+    # file an heir was left, edited once in a decade, escaped as a bare
+    # ValueError and printed "internal error" with exit 2.
+    def _cli(argv: list[str]) -> tuple:
+        """
+        (exit code, stdout, stderr), with a crash returned as the exception's
+        type name in place of the code. Returned rather than raised because a
+        crash *is* the defect under test here, and an unguarded one would abort
+        the selftest instead of failing the one check that names it.
+        """
+        out, err = _io.StringIO(), _io.StringIO()
+        try:
+            with _contextlib.redirect_stdout(out), _contextlib.redirect_stderr(err):
+                code = main(argv)
+        except Exception as exc:  # deliberately broad: see the docstring
+            return type(exc).__name__, out.getvalue(), err.getvalue()
+        return code, out.getvalue(), err.getvalue()
+
+    with _tempfile.TemporaryDirectory() as _d:
+        _page = os.path.join(_d, "backup.html")
+        open(_page, "wb").write(embedded)
+        _code, _out, _err = _cli(["inspect", "--in", _page])
+        check("inspect reads a self-extracting page",
+              _code == 0 and _out.startswith("KEYM v") and "slots       1" in _out)
+        _code, _out, _err = _cli(["split", "--in", _page])
+        check("split reads the container out of a page, not the page itself",
+              _code == 0 and decode_parts(
+                  [ln for ln in _out.splitlines() if ln and not ln.startswith("#")]
+              ) == subset)
+
+        # The marker an editor is likeliest to eat: the END one sits after the
+        # armor, where a "trailing garbage" clean-up lands.
+        _noend = os.path.join(_d, "noend.html")
+        open(_noend, "wb").write(embedded.replace(SELFEXTRACT_END.encode(), b""))
+        for _argv, _what in (
+            (["decrypt", "--in", _noend, "--password", pw,
+              "--out", os.path.join(_d, "never.bin")], "decrypt"),
+            (["inspect", "--in", _noend], "inspect"),
+        ):
+            _code, _out, _err = _cli(_argv)
+            check(f"{_what} on a page missing its END marker exits 1, not "
+                  f"{_code if isinstance(_code, str) else 'a crash'}",
+                  _code == 1)
+            check(f"{_what} names the missing marker and the file",
+                  SELFEXTRACT_END in _err and "noend.html" in _err
+                  and "internal error" not in _err)
+
+        # A binary blob where text was promised. The old path called
+        # data.decode() bare, and UnicodeDecodeError is not a KeymError.
+        _blob = os.path.join(_d, "blob.bin")
+        open(_blob, "wb").write(b"\xff\xfe" * 16)
+        for _argv, _what in (
+            (["embed", "--in", _blob, "--armor"], "embed"),
+            (["split", "--in", _blob, "--armor"], "split"),
+            (["add-passkey", "--in", _blob, "--armor", "--password", pw,
+              "--prf-output", "00" * 32, "--out", os.path.join(_d, "never.keym")],
+             "add-passkey"),
+        ):
+            _code, _out, _err = _cli(_argv)
+            check(f"{_what} --armor on a binary blob exits 1, not "
+                  f"{_code if isinstance(_code, str) else 'a crash'}",
+                  _code == 1)
+            check(f"{_what} says the blob is not UTF-8 text, not that decryption failed",
+                  "UTF-8" in _err and "blob.bin" in _err
+                  and "decryption failed" not in _err)
+
+        # Text that is not armor, handed to a command that decrypts nothing.
+        _junk = os.path.join(_d, "junk.txt")
+        open(_junk, "w").write("this is not a container\n")
+        _code, _out, _err = _cli(["split", "--in", _junk, "--armor"])
+        check("split --armor on plain text does not report a decryption failure",
+              _code == 1 and "decryption failed" not in _err and "junk.txt" in _err)
+
+        # A mistyped --key-file is as ordinary as a mistyped --in, and was
+        # answered with "No such file or directory" and no path.
+        _code, _out, _err = _cli(["decrypt", "--in", _page, "--password", pw,
+                                  "--key-file", os.path.join(_d, "no-such.key"),
+                                  "--out", os.path.join(_d, "never.bin")])
+        check("a missing --key-file is named by path",
+              _code == 1 and "no-such.key" in _err and "internal error" not in _err)
+
     # A crash anywhere in the v3 section would leave every check below it
     # unrecorded and print nothing at all, which is how a broken implementation
     # can look like a clean run. Running it inside a function and reporting the
@@ -4337,6 +4422,96 @@ def resolve_password(supplied: Optional[str], confirm: bool = False) -> str:
     return pw
 
 
+# The subcommands whose input *is* a container, in any of the encodings §7
+# defines. `encrypt` takes plaintext, `join` takes parts and `extract` is the
+# encoding step itself, so none of them belong here: unwrapping a plaintext that
+# happens to contain the §7.2 sentinel would encrypt the wrong bytes.
+CONTAINER_COMMANDS = frozenset(
+    {"inspect", "split", "embed", "add-shares", "add-passkey", "decrypt"})
+
+
+def _read_input(args) -> bytes:
+    """
+    ``--in`` or stdin, as bytes.
+
+    The open() is guarded because a mistyped path is the most ordinary thing a
+    person does, and an unguarded one answered with a FileNotFoundError
+    traceback. To an heir following RECOVERY.md, a Python traceback is
+    indistinguishable from "the backup is destroyed".
+    """
+    if not args.infile:
+        return sys.stdin.buffer.read()
+    try:
+        with open(args.infile, "rb") as fh:
+            return fh.read()
+    except OSError as e:
+        raise UsageError(f"cannot read {args.infile}: {e.strerror}") from None
+
+
+def unwrap_container(data: bytes, source: str, armor_expected: bool = False) -> bytes:
+    """
+    The container inside whatever ``source`` turned out to be: a §7.2 page, §7
+    armor, or the bytes themselves.
+
+    Every command in CONTAINER_COMMANDS goes through here, so that a page opens
+    under `inspect` exactly as it does under `decrypt`. It did not: `decrypt`
+    unwrapped a page and `inspect` said "not a KEYM container", and RECOVERY.md
+    sends the heir to `inspect` first. `split` was worse, it cut the HTML into
+    paper parts without noticing.
+
+    Every failure is a UsageError that names the file and the problem. The
+    library raises ValueError for a page whose markers are damaged and
+    UnicodeDecodeError for bytes that are not text, and neither is anything
+    `main` catches, so a page with its END marker edited out, the one file an
+    heir was left, after a decade, reached the "internal error" branch and
+    exited 2. A KeymError would be wrong here too: §6's one fixed message is
+    for rejections that involve a secret, and no secret has been touched yet.
+    "decryption failed" from `split` sends a person to retype a password that
+    the command never asked for.
+    """
+    kind = detect(data)
+    if kind == "keym2-selfextract":
+        try:
+            return extract_selfextract(data)
+        except ValueError as e:
+            raise UsageError(
+                f"the marked region of {source} is not intact: {e}. "
+                "Recover from another copy") from None
+        except KeymError:
+            raise UsageError(
+                f"the marked region of {source} is not intact: the keym2: "
+                "text between the markers does not decode. Recover from "
+                "another copy") from None
+    if not (armor_expected or kind == "keym2-armor"):
+        return data
+    if kind.startswith("keym-binary"):
+        raise UsageError(
+            f"{source} is a binary container, not keym2: text. Run this "
+            "without --armor")
+    try:
+        text = data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise UsageError(
+            f"{source} is not keym2: text: it contains bytes that are not "
+            "UTF-8") from None
+    if not text.strip().startswith(ARMOR_PREFIX.decode()):
+        raise UsageError(
+            f"{source} does not start with keym2: so it is not a KEYM v2 text "
+            "backup (the prefix is case-sensitive)")
+    try:
+        return dearmor(text)
+    except KeymError:
+        raise UsageError(
+            f"the keym2: text in {source} is not intact: a character that is "
+            "not base64url. Recover from another copy") from None
+
+
+def _load_container(args) -> bytes:
+    """``--in`` or stdin, unwrapped. See unwrap_container."""
+    return unwrap_container(_read_input(args), args.infile or "stdin",
+                            armor_expected=bool(getattr(args, "armor", False)))
+
+
 def main(argv: Optional[list[str]] = None) -> int:
     ap = argparse.ArgumentParser(
         prog="keym2.py",
@@ -4519,21 +4694,18 @@ def main(argv: Optional[list[str]] = None) -> int:
     # tool having crashed rather than like it waiting. The condition mirrors
     # the one in the join branch below, which is where `data` stops being read.
     #
-    # The open() is guarded because a mistyped path is the most ordinary thing
-    # a person does, and an unguarded one answered with a FileNotFoundError
-    # traceback. To an heir following RECOVERY.md, a Python traceback is
-    # indistinguishable from "the backup is destroyed".
-    if args.cmd == "join" and args.parts and not args.infile:
-        data = b""
-    elif args.infile:
-        try:
-            with open(args.infile, "rb") as fh:
-                data = fh.read()
-        except OSError as e:
-            print(f"error: cannot read {args.infile}: {e.strerror}", file=sys.stderr)
-            return 1
-    else:
-        data = sys.stdin.buffer.read()
+    # Read here, before any password prompt, so a container on stdin is
+    # consumed before the prompt reads from it.
+    try:
+        if args.cmd == "join" and args.parts and not args.infile:
+            data = b""
+        elif args.cmd in CONTAINER_COMMANDS:
+            data = _load_container(args)
+        else:
+            data = _read_input(args)
+    except UsageError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 1
 
     if args.cmd == "inspect":
         # `inspect` is the command someone reaches for when they are *unsure*
@@ -4541,8 +4713,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         # its normal case, not an exceptional one. It answered with a KeymError
         # traceback.
         try:
-            if detect(data) == "keym2-armor":
-                data = dearmor(data.decode())
             print(_inspect(data))
         except (KeymError, UsageError, ValueError):
             print(f"error: {args.infile or 'stdin'} is not a KEYM container",
@@ -4552,8 +4722,6 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     # §7.1, before the key-file lookup: neither of these takes a credential.
     if args.cmd == "split":
-        if args.armor or detect(data) == "keym2-armor":
-            data = dearmor(data.decode())
         try:
             parts = encode_parts(data, args.capacity)
         except ValueError as e:
@@ -4614,8 +4782,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.cmd == "embed":
-        if args.armor or detect(data) == "keym2-armor":
-            data = dearmor(data.decode())
         try:
             text = embed_selfextract(data) + "\n"
         except (UsageError, KeymError) as e:
@@ -4628,11 +4794,19 @@ def main(argv: Optional[list[str]] = None) -> int:
             sys.stdout.write(text)
         return 0
 
-    keyfile = open(args.key_file, "rb").read() if args.key_file else None
+    # Guarded for the same reason --in is: a mistyped path answered with
+    # "No such file or directory" and nothing to say which file.
+    keyfile = None
+    if args.key_file:
+        try:
+            with open(args.key_file, "rb") as fh:
+                keyfile = fh.read()
+        except OSError as e:
+            print(f"error: cannot read key file {args.key_file}: {e.strerror}",
+                  file=sys.stderr)
+            return 1
 
     if args.cmd == "add-shares":
-        if args.armor or detect(data) == "keym2-armor":
-            data = dearmor(data.decode())
         try:
             container, texts = add_shamir_slot(
                 data, resolve_password(args.password), args.threshold, args.shares,
@@ -4660,8 +4834,6 @@ def main(argv: Optional[list[str]] = None) -> int:
         return 0
 
     if args.cmd == "add-passkey":
-        if args.armor or detect(data) == "keym2-armor":
-            data = dearmor(data.decode())
         try:
             container = add_passkey_slot(
                 data, resolve_password(args.password),
@@ -4750,11 +4922,10 @@ def main(argv: Optional[list[str]] = None) -> int:
             # §7.2. Handing this script the page itself is the obvious thing for
             # an heir to try — it is the file they were left — so it works,
             # rather than reporting a corrupt container at the one person least
-            # able to work out why.
-            if detect(data) == "keym2-selfextract":
-                data = extract_selfextract(data)
-            elif args.armor or detect(data) == "keym2-armor":
-                data = dearmor(data.decode())
+            # able to work out why. `data` is already the container: every
+            # encoding was unwrapped by _load_container above, the same way
+            # for every command that reads one.
+            #
             # decrypt_report rather than decrypt, so the v3 §5.2 report is
             # something this CLI states deliberately rather than a side effect
             # of the library printing. The plaintext still goes to stdout in
