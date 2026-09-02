@@ -38,6 +38,15 @@ import type { Metadata } from "next";
  * The commit is different: it is an *input* to the build, it is already baked
  * into every asset path, and checking it is the first step of the procedure
  * rather than a substitute for it.
+ *
+ * There is one honest way to show the digest, and it lives in the app rather
+ * than here: the service worker holds a copy of the manifest beside the build
+ * it caches, and the container inspector's sealed status reads it back from
+ * the Cache API — not baked, not fetched — hashes the cached files against
+ * it, and prints sha256 of the manifest it used. That number is what
+ * `sha256sum SHA256SUMS` on a mirror should equal, which makes it the bridge
+ * between the in-page check and the procedure below. See
+ * src/components/sealed-status.tsx.
  */
 
 export const metadata: Metadata = {
@@ -184,6 +193,16 @@ export default function VerifyBuild() {
         <code className="font-mono">sha256sum</code> is on every Unix machine and has nothing to do
         with this project, which is the point: that step needs no software you have to trust us
         about.
+      </p>
+
+      <p className="mt-3 text-[13px] leading-relaxed text-muted-foreground">
+        The app can tell you which manifest it is running against. In the container inspector,
+        open the footer line <em>sealed · runs in this tab</em> and press <em>Check now</em>: it
+        hashes the files its service worker holds against the manifest cached beside them and
+        prints that manifest&rsquo;s sha256 — read back from the cache, not from this page. The
+        number should equal <code className="font-mono">sha256sum SHA256SUMS</code> on your
+        mirror. It proves the running set is consistent, not who made it; the commands here are
+        what settle that.
       </p>
 
       <h2 className="mt-10 text-lg font-medium tracking-tight">

@@ -145,7 +145,12 @@ if (listed.length === 0) {
   );
   process.exit(1);
 }
-const unresolved = listed.filter((p) => !existsSync(join(OUT_DIR, p)));
+// SHA256SUMS is the one entry that cannot exist yet: build-manifest.mjs
+// writes it *after* this script, because it has to cover the stamped worker.
+// It is always written — a build that skipped it would fail install, loudly,
+// on every service-worker test — so the exemption is narrow and named.
+const PRODUCED_LATER = new Set(['/SHA256SUMS']);
+const unresolved = listed.filter((p) => !PRODUCED_LATER.has(p) && !existsSync(join(OUT_DIR, p)));
 if (unresolved.length) {
   for (const p of unresolved) {
     console.error(

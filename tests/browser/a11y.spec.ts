@@ -49,6 +49,14 @@ test.describe("axe", () => {
   const views: Array<[string, (page: Page) => Promise<void>]> = [
     ["encrypt", async () => {}],
     [
+      // The sealed status opened: a disclosure button, three rows, a control.
+      "encrypt with the sealed status open",
+      async (page) => {
+        await page.getByTestId("sealed-toggle").click();
+        await expect(page.getByTestId("sealed-panel")).toBeVisible();
+      },
+    ],
+    [
       "encrypt with Advanced open",
       async (page) => {
         await visible(page.getByRole("button", { name: /^Advanced/ })).click();

@@ -83,6 +83,29 @@ try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   icons.push(...(await scan(page, 'encrypt')));
 
+  // The inspector's sealed status, opened and with its in-place check run:
+  // the one place the page paints a success wash for a fact about itself.
+  // Waits for the worker's precache so the check reaches the "match" state
+  // rather than the "try again in a moment" one.
+  await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, null, { timeout: 30_000 });
+  await page.waitForFunction(
+    async () => {
+      for (const key of await caches.keys()) {
+        if (!key.startsWith('keymaker-')) continue;
+        if (await (await caches.open(key)).match('/SHA256SUMS')) return true;
+      }
+      return false;
+    },
+    null,
+    { timeout: 30_000 }
+  );
+  await page.getByTestId('sealed-toggle').click();
+  await page.getByTestId('sealed-panel').getByRole('button', { name: /^Check now$/ }).click();
+  await page.getByTestId('verify-result').waitFor({ timeout: 60_000 });
+  await page.waitForTimeout(400);
+  icons.push(...(await scan(page, 'encrypt · sealed status')));
+  await page.getByTestId('sealed-toggle').click();
+
   const advanced = page.getByRole('button', { name: /^Advanced/ }).locator('visible=true').first();
   await advanced.click();
   await page.waitForTimeout(400);
@@ -198,5 +221,5 @@ if (badSize.length || badStroke.length) {
 const histogram = [...SIZES.keys()]
   .map((px) => `${icons.filter((i) => i.w === px).length}×${px}px`)
   .join(', ');
-console.log(`icon-audit: ${icons.length} lucide icons across 9 views — ${histogram}\n`);
+console.log(`icon-audit: ${icons.length} lucide icons across 10 views — ${histogram}\n`);
 console.log(`All icons are a size docs/design/DESIGN-SYSTEM.md names, at stroke ${STROKE}.`);

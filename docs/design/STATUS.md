@@ -306,6 +306,40 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
   in its rehearsal state — a seal with a share set inside the audit, PBKDF2
   so it is quick — palette 3747→4376 colours across 9→10 views, icons 156→193 across 8→9. Full chromium suite: 214 passed on the restored build, typecheck and production build clean.
 
+- PR 4 of the plan — Bet 5, **trust you can test, not read**. `connect-src
+  'none'` and the signed, reproducible build both lived in a footer link and
+  a document; from inside the app, every competitor's "client-side" looked
+  the same. The inspector's footer — "runs in this tab · nothing is
+  uploaded" — now opens into the three things the page can prove about
+  itself on the spot, and the standing rule held: every row is a structural
+  fact established locally, never live telemetry. **The policy line is read,
+  not typed** — `connect-src 'none'` quoted from the page's own CSP meta tag
+  as served; a copy without it says *unsealed — a development build*, with
+  the warning dot, because a light that could be wrong is worse than none.
+  **Offline is noticed, not claimed** — `navigator.onLine`, with the one true
+  sentence beside it: nothing here ever needed a connection. And **the
+  in-place check** hashes what the service worker holds for this build
+  against the manifest it now holds beside it (`SHA256SUMS` joined the
+  precache list; `apply-build-id.mjs` exempts the one file the next build
+  step writes). Cache API only — no request is made, and none is allowed, so
+  the check runs inside the policy rather than around it. What it proves is
+  said plainly: the set is *consistent*, not *honest*, and the manifest's
+  sha256 is printed so the outside procedure can be run against the same
+  bytes. The verify page could never print that digest — baking it is
+  circular and fetching it is forbidden — and reading it back from the cache
+  is neither. That is the bridge the plan asked for.
+
+  `sealed-status.spec.ts` holds each row to an authority outside the
+  component: the quoted directive equals the meta tag's character for
+  character; the offline notice appears under `setOffline` and a seal runs
+  with the network off; the check's digest equals sha256 of the `SHA256SUMS`
+  in `out/`, and its file count covers every precached chunk plus the shell.
+  The negative control is built in — the cached manifest is rewritten with a
+  wrong digest for one chunk and the check reports that file by name — and
+  the verifier itself was sabotaged too — made to ignore every mismatch — and with it the altered-manifest test failed by name (the result never reached "mismatch"; the other three passed), then restored and rebuilt. The first full run on the restored build found one real failure of this change's own: the new footer toggle measured 257×18 at a phone width, under the 24px touch-target floor U8 holds, fixed with the footer's own idiom (padding plus a negative margin) and its pre-hydration label made to claim nothing. Both audits gained the opened status with its check run —
+  palette 4376→4891 colours across 10→11 views, icons 193→226 across 9→10 — and the axe sweep gained the opened panel. Full chromium
+  suite: 219 passed on the final build, typecheck and production build clean; six screenshots regenerated (every band that frames the inspector footer), all fourteen still 2360px.
+
 ## Loose ends
 
 - **Satoshi is not being vendored, and the question is closed.** It headed both

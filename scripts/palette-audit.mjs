@@ -265,7 +265,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const VIEWS = 10;
+const VIEWS = 11;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -279,6 +279,29 @@ const samples = [];
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
   collect(await scan(page, 'encrypt'));
+
+  // The inspector's sealed status, opened and with its in-place check run:
+  // the one place the page paints a success wash for a fact about itself.
+  // Waits for the worker's precache so the check reaches the "match" state
+  // rather than the "try again in a moment" one.
+  await page.waitForFunction(() => navigator.serviceWorker?.controller !== null, null, { timeout: 30_000 });
+  await page.waitForFunction(
+    async () => {
+      for (const key of await caches.keys()) {
+        if (!key.startsWith('keymaker-')) continue;
+        if (await (await caches.open(key)).match('/SHA256SUMS')) return true;
+      }
+      return false;
+    },
+    null,
+    { timeout: 30_000 }
+  );
+  await page.getByTestId('sealed-toggle').click();
+  await page.getByTestId('sealed-panel').getByRole('button', { name: /^Check now$/ }).click();
+  await page.getByTestId('verify-result').waitFor({ timeout: 60_000 });
+  await page.waitForTimeout(400);
+  collect(await scan(page, 'encrypt · sealed status'));
+  await page.getByTestId('sealed-toggle').click();
 
   // The itemised plan — behind the anticipation disclosure — is where the
   // byte map paints the spark cuts, so the sweep has to open it or the only
