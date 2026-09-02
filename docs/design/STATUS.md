@@ -125,6 +125,18 @@ the 12px floor, AA contrast, and the container-inspector spec are part of
     terminal-register data surface; its rows tightened two points and the new
     command bar carries the same mono voice (group labels, kbd chips, hints).
 
+- The command-menu pill shows on every width now. It shipped `hidden
+  sm:flex` on the theory that a shortcut hint is dead weight without a
+  keyboard — but the pill is a *button*, and hiding it made the bar
+  unreachable on exactly the devices where hunting through the page costs
+  the most. The label is the responsive part, not the existence: below `sm`
+  it is the 16px search glyph on a 32px target, at `sm+` it is "Ctrl K" /
+  "⌘ K" as before. The phone spec drives the whole round trip by touch —
+  pill visible, label hidden, glyph shown, tap opens, tapping a command
+  switches the tab — and was sabotage-verified by re-hiding the pill:
+  compiled, failed on visibility, restored. The 375px/393px overflow sweeps
+  still pass, so the tightest header holds.
+
 - The sparks are spent, once, where UI-REVIEW.md item 4 said they were owed:
   the container inspector's **byte map**, a strip under the hex readout whose
   segment widths are the byte extents the parser (or the plan) computes —
