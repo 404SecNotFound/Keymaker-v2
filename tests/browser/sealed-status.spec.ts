@@ -302,16 +302,26 @@ test("a waiting update does not make the running build fail its own check", asyn
       .poll(() => swState(page), { message: "the replacement installs and waits" })
       .toMatchObject({ waiting: "installed", active: "activated", controlled: true });
 
-    // The reload is a navigation through the still-active old worker. It is
+    // A second tab is a navigation through the still-active old worker. It is
     // served the new build's HTML from the network, and that page is exactly
     // what must not end up in the old worker's cache.
-    await page.reload();
-    await expect.poll(() => swState(page)).toMatchObject({ controlled: true, waiting: "installed" });
+    //
+    // A second tab rather than a reload, because the two are not the same
+    // navigation on every engine. Firefox treats a reloading tab as no longer
+    // a client of the registration, promotes the waiting worker, and lands the
+    // reload on the new one, so the scenario never happens and the poll below
+    // sees `waiting: null`. With the first tab still open the registration
+    // keeps a live client and the new worker keeps waiting, everywhere.
+    const second = await context.newPage();
+    await second.goto(`${OWN_ORIGIN}${appPath("/")}`);
+    await expect
+      .poll(() => swState(second), { message: "the second tab is served by the old worker" })
+      .toMatchObject({ controlled: true, waiting: "installed" });
 
-    await toggle(page).click();
-    await panel(page).getByRole("button", { name: /^Check now$/ }).click();
-    await expect(result(page)).toHaveAttribute("data-outcome", "ok", { timeout: 60_000 });
-    await expect(result(page)).not.toContainText("index.html");
+    await toggle(second).click();
+    await panel(second).getByRole("button", { name: /^Check now$/ }).click();
+    await expect(result(second)).toHaveAttribute("data-outcome", "ok", { timeout: 60_000 });
+    await expect(result(second)).not.toContainText("index.html");
   } finally {
     await context.close();
     server.kill();
