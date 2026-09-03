@@ -18,5 +18,5 @@
 # 50.0.0 requires Python >= 3.9 (excluding 3.9.0 and 3.9.1), which keeps the
 # "Python 3.10 or newer" promise in docs/RECOVERY.md intact. Check that before
 # bumping again: narrowing the recovery path is a worse trade than a stale pin.
-cryptography==50.0.0
+cryptography==50.0.1
 argon2-cffi==25.1.0
