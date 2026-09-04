@@ -69,7 +69,43 @@ if (!process.env.ACTIONS_ID_TOKEN_REQUEST_URL) {
   process.exit(1);
 }
 
-const bundle = await sign(payload);
+// Sign, retrying the whole call when Rekor rejects the transparency-log entry
+// with a 409.
+//
+// The sigstore client retries the Rekor POST internally (via @gar/promise-retry).
+// When Rekor is slow the first POST lands, its response is lost, the retry
+// re-submits the *same* entry, and Rekor answers
+// `(409) an equivalent entry already exists` — which the client surfaces as a
+// fatal TLOG_CREATE_ENTRY_ERROR even though the entry it names in `location` was
+// in fact created. That failure took the whole deploy down twice in a row on a
+// byte-neutral change, on a step the change never touched.
+//
+// Retrying the whole `sign()` clears it, because keyless signing mints a fresh
+// ephemeral key and therefore a fresh entry each call, so the retry is a new
+// submission rather than the duplicate Rekor is rejecting. This is deliberately
+// a retry and not "treat 409 as success": the downstream verify step needs a
+// real bundle, so an attempt that cannot produce one must fail the deploy rather
+// than publish an unsigned or half-signed manifest. Exhausting the attempts
+// re-throws the original error unchanged.
+const isRekorConflict = (err) =>
+  err?.code === 'TLOG_CREATE_ENTRY_ERROR' && (err?.cause?.statusCode ?? err?.statusCode) === 409;
+
+const MAX_SIGN_ATTEMPTS = 5;
+let bundle;
+for (let attempt = 1; ; attempt++) {
+  try {
+    bundle = await sign(payload);
+    break;
+  } catch (err) {
+    if (!isRekorConflict(err) || attempt >= MAX_SIGN_ATTEMPTS) throw err;
+    const delayMs = 1000 * attempt;
+    console.warn(
+      `sign: Rekor returned 409 (duplicate transparency-log entry) on attempt ${attempt}/${MAX_SIGN_ATTEMPTS}; ` +
+        `retrying with a fresh signature in ${delayMs}ms.`
+    );
+    await new Promise((resolve) => setTimeout(resolve, delayMs));
+  }
+}
 writeFileSync(BUNDLE, JSON.stringify(bundle), 'utf8');
 
 console.log(`sign: signed ${payload.length} bytes of manifest`);
