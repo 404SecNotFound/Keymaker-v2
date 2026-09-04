@@ -264,6 +264,24 @@ try {
   );
   console.log('captured 09-dice-entropy.png');
 
+  // ---- 12: the Audio (steganography) tab, Hide side, with the honest banner
+  // and the controls that seal a secret into a carrier. Framed from the banner
+  // to the primary button so the band is the whole workflow in one panel. ----
+  await page.setViewportSize({ width: 1180, height: 1600 });
+  await page.goto(BASE, { waitUntil: 'networkidle' });
+  await visible(page.getByRole('tab', { name: 'Audio' })).click();
+  await visible(page.getByPlaceholder('Enter the secret text to conceal…')).fill(
+    'The safe-deposit key is with Rachel. Recovery codes: 4471-0092, 8823-5510.'
+  );
+  await settle();
+  await shotRegion(
+    visible(page.getByText(/^Steganography hides that a secret exists/)),
+    visible(page.getByRole('button', { name: 'Hide in audio & download WAV' })),
+    join(SHOTS, '12-audio-stego.png'),
+    28
+  );
+  console.log('captured 12-audio-stego.png');
+
   // ---- docs/WALKTHROUGH.md ----
   //
   // Four shots, in the order the walkthrough tells the story. Captured here
