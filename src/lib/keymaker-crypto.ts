@@ -549,14 +549,20 @@ function validateCommon(dataBuffer: ArrayBuffer, password: string, isEncryption:
  */
 function buildBaseMaterial(password: string, keyFileData: ArrayBuffer | null): Uint8Array {
   const passwordBytes = textEncoder.encode(password.normalize("NFC"));
-  if (!keyFileData) {
-    const out = new Uint8Array(new ArrayBuffer(passwordBytes.length));
-    out.set(passwordBytes);
-    return out;
-  }
+  // No key file: the encoded password bytes are already a fresh, exact-length
+  // Uint8Array, so they *are* the base material. Returned directly rather than
+  // copied into a second buffer — the copy was not only redundant, it left the
+  // password sitting in `passwordBytes` unzeroed until GC while only the copy
+  // was erased by the caller. Returning the bytes themselves means the caller's
+  // `secureErase(baseMaterial)` lands on the one copy that exists.
+  if (!keyFileData) return passwordBytes;
   const out = new Uint8Array(passwordBytes.length + keyFileData.byteLength);
   out.set(passwordBytes, 0);
   out.set(new Uint8Array(keyFileData), passwordBytes.length);
+  // The password bytes have been copied into `out`; zero the intermediate so a
+  // second copy of the password does not linger until GC. `out` itself is the
+  // returned base material and is erased by the caller.
+  secureErase(passwordBytes);
   return out;
 }
 
