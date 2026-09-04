@@ -9,6 +9,7 @@ import { SelfExtractExport } from "@/components/self-extract-export";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperParts, splitPaperParts } from "@/lib/keym-v2-paper";
+import { decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import {
   KeyRound,
   Lock,
@@ -986,6 +987,11 @@ export function EncryptorTool() {
   /** The lazily loaded wordlist, held as state so the grid re-renders when it lands. */
   const [bip39, setBip39] = useState<Bip39Module | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  // True only while a QR image is being decoded, to disable the scan control
+  // and show progress. Decoding is a few milliseconds for the app's own
+  // exports but can be longer for a large phone photo.
+  const [qrScanBusy, setQrScanBusy] = useState(false);
+  const qrInputRef = useRef<HTMLInputElement>(null);
   const [textSecret, setTextSecret] = useState('');
   const [outputText, setOutputText] = useState('');
   const [password, setPassword] = useState('');
@@ -2064,6 +2070,54 @@ export function EncryptorTool() {
       setReceipt(null);
       setWipeAck(false);
   }, [textSecret]);
+
+  /**
+   * Decrypt-side QR scan: turn one or more QR images into the encrypted text
+   * they carry, then hand that text to the same routing a paste gets.
+   *
+   * A Keymaker QR encodes exactly what the Decrypt text box already accepts:
+   * a `keym2:` armor string, a `KMPART1:` paper part, or a `KMSHARE1:` share.
+   * So this decodes image to string and lets `handleTextSecretChange` decide
+   * what the string is. Several parts are joined with newlines, in the order
+   * the files were given, which is the shape `decodePaperParts` reassembles.
+   *
+   * Switching to Text mode is deliberate: the recovered container has to be
+   * visible above the password, and the reveal/blur controls the output uses
+   * only exist in text mode.
+   */
+  const handleQrImageFiles = useCallback(async (files: readonly File[]) => {
+    if (files.length === 0) return;
+    setQrScanBusy(true);
+    try {
+      const texts = await decodeQrImages(files);
+      if (inputType !== 'text') handleInputTypeChange('text');
+      handleTextSecretChange(texts.join("\n"));
+      toast({
+        title: files.length === 1 ? "QR image scanned" : `${files.length} QR images scanned`,
+        description:
+          "The encrypted text is in the box below. Type the password to open it.",
+      });
+    } catch (e) {
+      // A QR that will not read is a scanning problem, never an AEAD one, so it
+      // is reported here and never allowed to reach the password path. That is
+      // the same discipline the paper-part and self-extract branches keep, for
+      // the same reason: a bad scan reported as a decryption failure sends
+      // someone to retype a password that was never wrong.
+      const description =
+        e instanceof QrDecodeError
+          ? e.message
+          : "That image could not be read as a QR code.";
+      toast({ title: "Could not read QR", description, variant: "destructive" });
+    } finally {
+      setQrScanBusy(false);
+    }
+  }, [inputType, handleInputTypeChange, handleTextSecretChange, toast]);
+
+  /** Is this file an image, and so a QR to scan rather than a container to open?
+   *  MIME first, extension as the fallback for a drag that carried no type. */
+  const isImageFile = useCallback((f: File) => {
+    return /^image\//.test(f.type) || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name);
+  }, []);
 
   /**
    * The grid's one write path. The cells are the source of truth while the
@@ -3146,7 +3200,22 @@ export function EncryptorTool() {
         {inputType === 'file' ? (
           <FileSelector
             id={`${currentMode}-file`}
-            onFileChange={(e) =>
+            onFileChange={(e) => {
+              // A QR PNG dropped on the Decrypt file box is the natural
+              // instinct ("upload the picture"), but it is not a container.
+              // Detect an image here and scan it instead of reading its bytes
+              // as a container, which would fail on the magic and read as a
+              // wrong password.
+              if (currentMode === 'decrypt') {
+                const dropped = 'dataTransfer' in e
+                  ? e.dataTransfer.files?.[0]
+                  : e.target.files?.[0];
+                if (dropped && isImageFile(dropped)) {
+                  if (!('dataTransfer' in e) && e.target) e.target.value = "";
+                  void handleQrImageFiles([dropped]);
+                  return;
+                }
+              }
               handleFileChange(
                 e,
                 setFile,
@@ -3154,13 +3223,17 @@ export function EncryptorTool() {
                 // plaintext it holds by header + salt + nonces + tags.
                 currentMode === 'decrypt' ? MAX_CONTAINER_SIZE : MAX_PLAINTEXT_SIZE,
                 currentMode === 'decrypt' ? 'container' : 'plaintext'
-              )
-            }
+              );
+            }}
             onClear={() => setFile(null)}
             selectedFile={file}
             icon={<FileText className="h-5 w-5" />}
             label="Drop a file here"
-            description={`or click to browse · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`}
+            description={
+              currentMode === 'decrypt'
+                ? `a .keym container, or a QR image to scan · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`
+                : `or click to browse · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`
+            }
           />
         ) : currentMode === 'encrypt' && seedMode ? (
           <SeedGrid
@@ -3282,6 +3355,54 @@ export function EncryptorTool() {
                 {textInputRejected} Nothing was pasted, so what you already had is
                 still here.
               </p>
+            )}
+            {/*
+              QR scan, decrypt only. The encrypted text is often a QR (the
+              encrypt-side output QR is one symbol, a paper vault is several),
+              and typing a base64url container back by hand is not a thing
+              anyone does. Scanning fills the box above with exactly the text a
+              paste would carry, so from there it is the ordinary password
+              unlock.
+            */}
+            {currentMode === 'decrypt' && (
+              <div className="space-y-2 pt-1">
+                <div className="flex items-center gap-3">
+                  <hr className="grow border-t border-border" />
+                  <span className="text-[12px] font-medium uppercase tracking-wider text-muted-foreground">
+                    or scan a QR image
+                  </span>
+                  <hr className="grow border-t border-border" />
+                </div>
+                <input
+                  ref={qrInputRef}
+                  id="qr-scan-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    // Reset so re-selecting the same image fires onChange again.
+                    e.target.value = "";
+                    void handleQrImageFiles(files);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={qrScanBusy}
+                  onClick={() => qrInputRef.current?.click()}
+                  className="w-full rounded-xl border-border bg-inset py-2.5 text-sm font-medium text-foreground hover:bg-raised"
+                >
+                  <QrCode className="mr-2 h-4 w-4" />
+                  {qrScanBusy ? "Reading QR…" : "Scan a QR image"}
+                </Button>
+                <p className="text-[12px] leading-snug text-muted-foreground">
+                  Upload a Keymaker QR PNG, or every part of a paper backup at
+                  once, and its encrypted text fills the box above. Then type the
+                  password.
+                </p>
+              </div>
             )}
           </div>
         )}
