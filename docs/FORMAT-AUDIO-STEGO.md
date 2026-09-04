@@ -1,16 +1,20 @@
-# KAUD1: the audio carrier layout
+# KAUD1: the encrypted audio carrier layout
 
-This note defines how Keymaker hides a KEYM container inside an audio file. It is
+This note defines how Keymaker packs a KEYM container into an audio file. It is
 the audio analogue of a paper vault (§7.1): a **carrier**, not a cipher. The
-bytes hidden in the audio are an ordinary KEYM v2/v3 container, so every
+bytes packed into the audio are an ordinary KEYM v2/v3 container, so every
 protection the container already has (Argon2id, AES-256-GCM, Shamir, the
 independent Python decryptor) applies unchanged. Nothing here parses or weakens
 that container.
 
-This is concealment, not confidentiality. The confidentiality is the container's.
-LSB steganography is **detectable** by steganalysis, so KAUD1 hides *that a
-secret exists*, layered on real encryption; it does not make the secret
-unrecoverable to someone who suspects it is there and has the password.
+**This is a carrier, not steganography.** It does not meaningfully hide *that* a
+secret is present: the `KAUD1` magic sits in the first sample LSBs and the
+container follows it sequentially, so a fixed-offset check or any LSB-histogram
+steganalysis flags it immediately. All confidentiality is the container's; the
+carrier's only job is to move an encrypted payload as an ordinary-looking audio
+file. Genuine deniable steganography would need keyed placement, cover-aware
+encoding and measured resistance to steganalysis, which is a separate project
+and explicitly out of scope here.
 
 ## The two flows
 
