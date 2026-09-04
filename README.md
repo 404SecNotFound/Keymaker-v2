@@ -39,6 +39,7 @@ Security Policy does and does not add to that.
 - [Self-describing containers](#self-describing-containers)
 - [Seed-phrase awareness](#seed-phrase-awareness)
 - [Dice entropy calculator](#dice-entropy-calculator)
+- [Hiding a secret in audio](#hiding-a-secret-in-audio)
 - [Full feature list](#full-feature-list)
 - [A backup, end to end](#a-backup-end-to-end)
 - [Security model](#security-model)
@@ -66,6 +67,7 @@ comparison is only worth reading if it says where they win — so it does.
 | Works on a phone with nothing installed | **yes** | no | no | app | yes |
 | Split a secret k-of-n | **yes** ([Shamir](docs/FORMAT-V2-DESIGN.md)) | no | no | no | no |
 | Seed-phrase tooling (BIP-39, SeedQR, dice) | **yes** | no | no | no | no |
+| Hide a secret inside audio (steganography) | **yes** | no | no | no | no |
 
 A dash means *not claimed here* rather than *absent* — these projects are Go, C and Java
 respectively, and whether any given release is bit-reproducible is a question for their
@@ -277,6 +279,36 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
 
 ---
 
+## Hiding a secret in audio
+
+Under the **Audio** tab. It conceals an encrypted secret inside an audio file, so
+what you keep looks and plays like ordinary music. The bytes hidden in the audio
+are the same KEYM container the Encrypt tab writes, so Argon2id, AES-256-GCM and
+the [independent decryptor](reference/keym2.py) all still apply. This is a
+carrier, not a new cipher. Full layout in
+[**docs/FORMAT-AUDIO-STEGO.md**](docs/FORMAT-AUDIO-STEGO.md).
+
+<p align="center">
+  <img alt="The Audio tab: a warning that steganography is concealment not confidentiality, a carrier picker, a secret to conceal, and a password" src="docs/screenshots/12-audio-stego.png" width="620" />
+</p>
+
+- **Hide:** choose an audio carrier and a secret (text or file), set a password,
+  and download a WAV that carries the sealed container in the least-significant
+  bit of its samples.
+- **Reveal:** open that WAV here with the password to recover the secret.
+
+Two things it states plainly, because a security tool should not oversell hiding:
+
+- **Concealment, not confidentiality.** The password is what protects the secret.
+  LSB steganography hides *that a secret exists*, and it is **detectable** by
+  steganalysis. It does not make the secret unrecoverable to someone who suspects
+  it and has the password.
+- **Lossless output only.** Input may be MP3, WAV, FLAC or Ogg, but the file you
+  keep is a **WAV**. The hidden bit does not survive MP3 or other lossy
+  re-encoding, so there is deliberately no stego-MP3 out.
+
+---
+
 ## Full feature list
 
 **Cryptography**
@@ -311,6 +343,9 @@ from your recorded rolls on an air-gapped device, using dedicated, audited softw
   blobs are self-identifying
 - Optional filename obscuring, replacing the name with `keymaker-<random>.keym`
 - QR export for encrypted text, and Standard SeedQR export for recovered seeds
+- **Audio steganography**: hide the sealed container in an audio file's sample
+  LSBs and recover it (Audio tab). Input MP3/WAV/FLAC/Ogg, lossless WAV out;
+  concealment layered on the same crypto, not a replacement for it
 - Transparent import of legacy IttyBitz `.ibitz` files and bare IBTZ blobs
 
 **Privacy and operation**
@@ -697,6 +732,7 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
 | [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Normative KEYM v2 specification — still read, no longer written |
 | [`docs/FORMAT-V3-DESIGN.md`](docs/FORMAT-V3-DESIGN.md) | Normative KEYM v3 specification, a delta on v2 — the format the app writes today |
+| [`docs/FORMAT-AUDIO-STEGO.md`](docs/FORMAT-AUDIO-STEGO.md) | The KAUD1 audio carrier layout: hiding a container in audio, with a diagram |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased plan: what ships next, and what was cut |
 | [`docs/VERIFYING.md`](docs/VERIFYING.md) | Checking that the site you loaded is the code you read |
 | [`docs/WALKTHROUGH.md`](docs/WALKTHROUGH.md) | A backup end to end, illustrated — first encryption through to recovery |

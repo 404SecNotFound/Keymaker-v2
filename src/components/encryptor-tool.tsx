@@ -10,6 +10,7 @@ import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperParts, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
+import { meetsPasswordPolicy } from "@/lib/password-policy";
 import {
   KeyRound,
   Lock,
@@ -25,6 +26,7 @@ import {
   Info,
   Download,
   QrCode,
+  FileAudio,
   Shield,
   Globe,
   UserX,
@@ -84,6 +86,7 @@ import {
 } from "@/lib/kdf-calibration";
 import { EFF_LARGE_WORDLIST, EFF_LARGE_WORDLIST_SIZE } from "@/lib/eff-wordlist";
 import { DiceEntropyTool } from "@/components/dice-entropy-tool";
+import { AudioStegoTool } from "@/components/audio-stego-tool";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
@@ -91,7 +94,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 
-type Mode = "encrypt" | "decrypt" | "tools";
+type Mode = "encrypt" | "decrypt" | "tools" | "audio";
 type InputType = "file" | "text";
 /**
  * What the input pills offer. "seed" is not a third InputType: it is the text
@@ -304,8 +307,6 @@ function shareInputRejection(next: string): string | null {
 //
 // Advisory and UI-only. encryptData() has never consulted it, and must not —
 // cryptographic behaviour cannot depend on a heuristic.
-const PASSPHRASE_MIN_WORD_LEN = 3;
-
 // The generator's alphabet and length. Kept here rather than inline so the
 // entropy figure below is derived from the same values the generator uses,
 // and cannot drift from them.
@@ -351,44 +352,6 @@ const PASSPHRASE_ENTROPY_BITS = Math.floor(
 type GeneratedSecret =
   | { kind: "password"; bits: number }
   | { kind: "passphrase"; words: number; bits: number };
-
-function meetsPasswordPolicy(pwd: string, wasGenerated = false): boolean {
-  // Provenance settles it whenever provenance is known — which is the KM-02b
-  // lesson pointed in the direction where it actually helps. A typed string
-  // carries no evidence of how it was chosen, so morphology is all there is to
-  // go on. A string this component drew from the CSPRNG a moment ago has a
-  // known sampling process and an exact bit count, and needs no inference.
-  //
-  // This also removes a defect the rules below would otherwise introduce. A
-  // uniform seven-word draw repeats a word about once in 370, and with
-  // replacement that repetition costs nothing — the phrase is still 90 bits.
-  // The distinct-word rule cannot tell that from padding, so without this it
-  // would occasionally refuse to encrypt under a passphrase Keymaker had
-  // itself just certified in the line above the field.
-  if (wasGenerated) return true;
-
-  const trimmed = pwd.trim();
-
-  const distinctSubstantialWords = new Set(
-    trimmed
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((w) => w.toLowerCase())
-      .filter((w) => w.length >= PASSPHRASE_MIN_WORD_LEN)
-  ).size;
-
-  // A genuine diceware phrase clears one of these even with a repeated word,
-  // because the length floor carries it.
-  if (distinctSubstantialWords >= 6 && trimmed.length >= 20) return true;
-  if (distinctSubstantialWords >= 4 && trimmed.length >= 24) return true;
-
-  const hasUpperCase = /[A-Z]/.test(pwd);
-  const hasLowerCase = /[a-z]/.test(pwd);
-  const hasNumbers = /\d/.test(pwd);
-  const hasSpecialChars = /[!@#$%^&*()_+~`|}{[\]:;?><,.\/=-]/.test(pwd);
-  const hasMinLength = pwd.length >= 24;
-  return hasMinLength && hasUpperCase && hasLowerCase && hasNumbers && hasSpecialChars;
-}
 
 // Shared download plumbing. Creating/clicking/removing a transient anchor is
 // identical across every download path (key file, ciphertext, plaintext, QR
@@ -4804,6 +4767,13 @@ export function EncryptorTool() {
         run: () => handleModeChange("decrypt"),
       });
     }
+    if (mode !== "audio") {
+      items.push({
+        id: "go-audio", group: "Go to", label: "Audio", icon: FileAudio,
+        keywords: "steganography hide sound wav mp3 conceal mode tab",
+        run: () => handleModeChange("audio"),
+      });
+    }
     if (mode !== "tools") {
       items.push({
         id: "go-tools", group: "Go to", label: "Tools", icon: Dices,
@@ -4889,7 +4859,7 @@ export function EncryptorTool() {
     wipeNow,
   ]);
 
-  const tabTriggerClasses = "rounded-md border border-transparent px-2.5 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors sm:px-4 data-[state=active]:border-border-strong data-[state=active]:bg-inset data-[state=active]:text-foreground";
+  const tabTriggerClasses = "rounded-md border border-transparent px-2 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors sm:px-4 data-[state=active]:border-border-strong data-[state=active]:bg-inset data-[state=active]:text-foreground";
 
   return (
     <Tabs value={mode} onValueChange={handleModeChange} className="flex min-h-screen flex-col">
@@ -4962,8 +4932,15 @@ export function EncryptorTool() {
               <TabsTrigger value="decrypt" className={tabTriggerClasses}>
                 Decrypt
               </TabsTrigger>
+              <TabsTrigger value="audio" className={tabTriggerClasses}>
+                {/* Icon hidden on the narrowest screens: with four tabs the row
+                    overflows a 320px header otherwise, and the label carries it
+                    alone (platform.spec.ts). */}
+                <FileAudio className="hidden h-3.5 w-3.5 sm:mr-1.5 sm:inline-block" />
+                Audio
+              </TabsTrigger>
               <TabsTrigger value="tools" className={tabTriggerClasses}>
-                <Dices className="mr-1.5 h-3.5 w-3.5" />
+                <Dices className="hidden h-3.5 w-3.5 sm:mr-1.5 sm:inline-block" />
                 Tools
               </TabsTrigger>
             </TabsList>
@@ -4976,7 +4953,7 @@ export function EncryptorTool() {
         <div
           className={cn(
             "mx-auto px-4 pb-24 pt-12 sm:px-6 sm:pt-16",
-            mode === "tools" ? "max-w-[680px]" : "max-w-[680px] lg:max-w-[1152px]"
+            mode === "tools" || mode === "audio" ? "max-w-[680px]" : "max-w-[680px] lg:max-w-[1152px]"
           )}
         >
           {/* Hero. The margin below it is generous on purpose: the plate has
@@ -5120,7 +5097,7 @@ export function EncryptorTool() {
               print kits have no container to inspect. */}
           <div
             className={
-              mode === "tools"
+              mode === "tools" || mode === "audio"
                 ? undefined
                 : "lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:items-start lg:gap-8"
             }
@@ -5169,6 +5146,15 @@ export function EncryptorTool() {
               reset on a mode change, and mounting both permanently would keep
               two sets of secret-bearing fields alive at once for no benefit.
             */}
+            {/*
+              Audio (steganography). Not forceMount, unlike Tools: this panel
+              holds a password and a secret, and Radix unmounting it on a tab
+              change is the wanted reset, the same reason Encrypt and Decrypt
+              are not pinned mounted.
+            */}
+            <TabsContent value="audio" className="mt-0" tabIndex={-1}>
+              <AudioStegoTool />
+            </TabsContent>
             <TabsContent
               value="tools"
               className="mt-0"
@@ -5180,7 +5166,7 @@ export function EncryptorTool() {
             </TabsContent>
           </section>
 
-          {mode !== "tools" && (
+          {mode !== "tools" && mode !== "audio" && (
             <ContainerInspector
               mode={mode}
               plan={inspectorPlan}

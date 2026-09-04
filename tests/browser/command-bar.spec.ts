@@ -82,15 +82,15 @@ test("typing filters and Enter runs the first match — switching to Decrypt", a
   await expect(page.getByRole("tab", { name: "Decrypt" })).toHaveAttribute("aria-selected", "true");
 });
 
-test("the arrow keys move the selection — the second Go-to entry is Tools", async ({ page }) => {
+test("the arrow keys move the selection — the second Go-to entry is Audio", async ({ page }) => {
   await openBar(page);
-  // On the encrypt tab the list opens on [Decrypt, Tools, …]; one step down
-  // and Enter must land on Tools, or the active row and the run row have
-  // come apart — the exact failure aria-activedescendant wiring can hide.
+  // On the encrypt tab the Go-to list opens on [Decrypt, Audio, Tools, …]; one
+  // step down and Enter must land on Audio, or the active row and the run row
+  // have come apart — the exact failure aria-activedescendant wiring can hide.
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("Enter");
 
-  await expect(page.getByRole("tab", { name: "Tools" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Audio" })).toHaveAttribute("aria-selected", "true");
 });
 
 test("a command reaches the real handler — the passphrase generator fills the field", async ({ page }) => {

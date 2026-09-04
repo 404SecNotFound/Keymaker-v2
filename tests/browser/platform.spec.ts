@@ -298,7 +298,7 @@ for (const width of [320, 360, 375, 393, 430]) {
     await page.setViewportSize({ width, height: 900 });
     await page.goto("/");
 
-    for (const tab of ["Encrypt", "Decrypt", "Tools"] as const) {
+    for (const tab of ["Encrypt", "Decrypt", "Audio", "Tools"] as const) {
       await page.getByRole("tab", { name: tab }).locator("visible=true").first().click();
 
       const overflow = await page.evaluate(() => {
