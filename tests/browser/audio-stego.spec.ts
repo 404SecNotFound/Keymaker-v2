@@ -55,11 +55,11 @@ test.describe("hide a secret in audio", () => {
     });
     await expect(page.getByText(/holds \d/)).toBeVisible({ timeout: 20_000 });
 
-    await visible(page.getByPlaceholder("Enter the secret text to conceal…")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter the secret text to pack in…")).fill(SECRET);
     await visible(page.getByPlaceholder("Password to lock the secret")).fill(STRONG_PASSWORD);
 
     const downloadPromise = page.waitForEvent("download");
-    await visible(page.getByRole("button", { name: "Hide in audio & download WAV" })).click();
+    await visible(page.getByRole("button", { name: "Pack into audio & download WAV" })).click();
     const download = await downloadPromise;
     const path = await download.path();
     const { readFile } = await import("node:fs/promises");
@@ -69,14 +69,14 @@ test.describe("hide a secret in audio", () => {
     expect(stego.subarray(0, 4).toString("ascii")).toBe("RIFF");
 
     // Reveal side. Switch, upload the produced WAV, decrypt.
-    await visible(page.getByRole("button", { name: "Reveal from audio" })).click();
+    await visible(page.getByRole("button", { name: "Unpack from audio" })).click();
     await page.locator("#audio-carrier-input").setInputFiles({
       name: "keymaker-audio.wav",
       mimeType: "audio/wav",
       buffer: stego,
     });
     await expect(page.getByText(/holds \d/)).toBeVisible({ timeout: 20_000 });
-    await visible(page.getByPlaceholder("Password the secret was hidden with")).fill(STRONG_PASSWORD);
+    await visible(page.getByPlaceholder("Password the secret was packed with")).fill(STRONG_PASSWORD);
     await visible(page.getByRole("button", { name: /^Reveal secret$/i })).click();
 
     const recovered = page.getByTestId("audio-recovered-text");
@@ -86,7 +86,7 @@ test.describe("hide a secret in audio", () => {
 
   test("a clean carrier reports nothing hidden", async ({ page }) => {
     await gotoAudio(page);
-    await visible(page.getByRole("button", { name: "Reveal from audio" })).click();
+    await visible(page.getByRole("button", { name: "Unpack from audio" })).click();
 
     await page.locator("#audio-carrier-input").setInputFiles({
       name: "plain.wav",
@@ -94,7 +94,7 @@ test.describe("hide a secret in audio", () => {
       buffer: makeWav(44100),
     });
     await expect(page.getByText(/holds \d/)).toBeVisible({ timeout: 20_000 });
-    await visible(page.getByPlaceholder("Password the secret was hidden with")).fill(STRONG_PASSWORD);
+    await visible(page.getByPlaceholder("Password the secret was packed with")).fill(STRONG_PASSWORD);
     await visible(page.getByRole("button", { name: /^Reveal secret$/i })).click();
 
     await expect(page.getByText(/No hidden Keymaker data/i).first()).toBeVisible({ timeout: 20_000 });
@@ -110,17 +110,17 @@ test.describe("hide a secret in audio", () => {
       buffer: makeWav(44100),
     });
     await expect(page.getByText(/holds \d/)).toBeVisible({ timeout: 20_000 });
-    await visible(page.getByPlaceholder("Enter the secret text to conceal…")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter the secret text to pack in…")).fill(SECRET);
     await visible(page.getByPlaceholder("Password to lock the secret")).fill(STRONG_PASSWORD);
 
     const downloadPromise = page.waitForEvent("download");
-    await visible(page.getByRole("button", { name: "Hide in audio & download WAV" })).click();
+    await visible(page.getByRole("button", { name: "Pack into audio & download WAV" })).click();
     const stego = await (await downloadPromise).path().then(async (p) => {
       const { readFile } = await import("node:fs/promises");
       return readFile(p);
     });
 
-    await visible(page.getByRole("button", { name: "Reveal from audio" })).click();
+    await visible(page.getByRole("button", { name: "Unpack from audio" })).click();
     await page.locator("#audio-carrier-input").setInputFiles({
       name: "keymaker-audio.wav",
       mimeType: "audio/wav",
@@ -128,7 +128,7 @@ test.describe("hide a secret in audio", () => {
     });
     await expect(page.getByText(/holds \d/)).toBeVisible({ timeout: 20_000 });
     // A valid-looking but wrong password: same policy shape, different string.
-    await visible(page.getByPlaceholder("Password the secret was hidden with")).fill("Wrong-Passphrase-Entirely-9999!");
+    await visible(page.getByPlaceholder("Password the secret was packed with")).fill("Wrong-Passphrase-Entirely-9999!");
     await visible(page.getByRole("button", { name: /^Reveal secret$/i })).click();
 
     await expect(page.getByText(/Wrong password or damaged carrier/i).first()).toBeVisible({ timeout: 90_000 });

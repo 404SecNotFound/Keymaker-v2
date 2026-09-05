@@ -1,17 +1,23 @@
 "use client";
 
 /**
- * The Audio tab: hide a KEYM container inside an audio file (steganography), and
- * recover it. This is a carrier around the ordinary encrypt/decrypt path, not a
- * new cipher. The bytes hidden in the audio are a normal container produced by
- * `encryptViaWorker`, so Argon2id + AES-256-GCM and the independent decryptor
- * apply unchanged. See docs/FORMAT-AUDIO-STEGO.md.
+ * The Audio tab: an **encrypted audio carrier**. It packs a KEYM container into
+ * an audio file's samples and recovers it. This is a carrier around the ordinary
+ * encrypt/decrypt path, not a new cipher: the bytes packed into the audio are a
+ * normal container produced by `encryptViaWorker`, so Argon2id + AES-256-GCM and
+ * the independent decryptor apply unchanged. See docs/FORMAT-AUDIO-STEGO.md.
+ *
+ * Deliberately not called steganography in the UI. The `KAUD1` header sits in
+ * the first sample LSBs and the container follows it sequentially, so the
+ * presence of a payload is trivially detectable; this hides nothing from anyone
+ * who looks. What protects the secret is the password, exactly as on the Encrypt
+ * tab.
  *
  * Self-contained on purpose. It renders in its own tab like DiceEntropyTool, so
  * none of the 5,000-line encryptor's mode logic has to grow a fourth case.
  */
 
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -116,6 +122,38 @@ export function AudioStegoTool() {
     setShowRevealed(false);
   }, []);
 
+  // Drop every secret this tab holds. JavaScript cannot guarantee zeroization,
+  // but the recovered bytes are one buffer this code owns, so it is overwritten
+  // rather than merely dereferenced; the strings are released to the collector.
+  const clearSecrets = useCallback(() => {
+    setPassword("");
+    setSecretText("");
+    setRevealedText((prev) => (prev === null ? prev : null));
+    setRevealedBytes((prev) => {
+      if (prev) prev.fill(0);
+      return null;
+    });
+    setShowRevealed(false);
+    setShowPassword(false);
+  }, []);
+
+  // Auto-lock, matching the main tool's posture: a tab that is hidden or being
+  // navigated away from should not keep a password and a decrypted secret in
+  // memory, and neither should one that unmounts (which is what a tab switch
+  // does here, since this panel is not force-mounted).
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") clearSecrets();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", clearSecrets);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", clearSecrets);
+      clearSecrets();
+    };
+  }, [clearSecrets]);
+
   const switchSub = useCallback(
     (next: Sub) => {
       setSub(next);
@@ -155,12 +193,12 @@ export function AudioStegoTool() {
 
   const runHide = useCallback(async () => {
     if (!carrierPcm) {
-      toast({ title: "Add a carrier", description: "Choose an audio file to hide the secret in.", variant: "destructive" });
+      toast({ title: "Add a carrier", description: "Choose an audio file to pack the secret into.", variant: "destructive" });
       return;
     }
     const haveSecret = secretType === "text" ? secretText.length > 0 : secretFile !== null;
     if (!haveSecret) {
-      toast({ title: "Nothing to hide", description: "Enter text or choose a file to conceal.", variant: "destructive" });
+      toast({ title: "Nothing to hide", description: "Enter text or choose a file to pack in.", variant: "destructive" });
       return;
     }
     if (!meetsPasswordPolicy(password)) {
@@ -201,7 +239,7 @@ export function AudioStegoTool() {
       const wav = writePcm16Wav(stego);
       download(new Blob([wav as BlobPart], { type: "audio/wav" }), "keymaker-audio.wav");
       toast({
-        title: "Secret hidden in audio",
+        title: "Secret packed into audio",
         description: "Downloaded as a WAV. It plays normally; open it here on the Reveal side with the password.",
       });
     } catch (e) {
@@ -211,7 +249,7 @@ export function AudioStegoTool() {
           : isUserFacingError(e)
             ? e.message
             : "Something went wrong sealing the secret into the audio.";
-      toast({ title: "Could not hide the secret", description, variant: "destructive" });
+      toast({ title: "Could not pack the secret", description, variant: "destructive" });
     } finally {
       setBusy(false);
     }
@@ -274,23 +312,30 @@ export function AudioStegoTool() {
 
   return (
     <div className="space-y-5">
-      {/* Honest framing: concealment, not undetectability; lossless output only. */}
+      <div className="space-y-1">
+        <h2 className="text-[15px] font-semibold text-foreground">Encrypted audio carrier</h2>
+        <p className="text-[13px] leading-snug text-muted-foreground">
+          Pack an encrypted secret into an audio file, and take it back out with the password.
+        </p>
+      </div>
+
+      {/* Honest framing: this is a carrier, not deniable hiding; lossless out. */}
       <div className="flex items-start gap-2.5 rounded-xl border border-warning/40 bg-warning/10 px-3.5 py-3 text-[12px] leading-snug text-warning">
         <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
         <p>
-          Steganography hides that a secret exists; it does not replace the password. The real
-          protection is the same Argon2id and AES-256-GCM the Encrypt tab uses. LSB hiding is
-          detectable by analysis, and the carrier is written as a lossless WAV (an MP3 cannot hold
-          the data).
+          This is a carrier, not a hiding place: the payload sits in a known place in the samples
+          and is easy to detect, so do not rely on it to conceal that a secret exists. What protects
+          the secret is the password: the same Argon2id and AES-256-GCM the Encrypt tab uses. Output
+          is a lossless WAV, because an MP3 cannot hold the data.
         </p>
       </div>
 
       <div className="flex gap-0.5 rounded-xl bg-inset p-1">
         <button type="button" onClick={() => switchSub("hide")} className={pillClasses(sub === "hide")}>
-          Hide in audio
+          Pack into audio
         </button>
         <button type="button" onClick={() => switchSub("reveal")} className={pillClasses(sub === "reveal")}>
-          Reveal from audio
+          Unpack from audio
         </button>
       </div>
 
@@ -354,7 +399,7 @@ export function AudioStegoTool() {
                 id="audio-secret-text"
                 value={secretText}
                 onChange={(e) => setSecretText(e.target.value)}
-                placeholder="Enter the secret text to conceal…"
+                placeholder="Enter the secret text to pack in…"
                 rows={4}
                 spellCheck={false}
                 autoCorrect="off"
@@ -406,7 +451,7 @@ export function AudioStegoTool() {
             className="w-full rounded-xl py-6 text-sm font-semibold"
           >
             <Lock className="mr-2 h-4 w-4" />
-            {busy ? "Working…" : "Hide in audio & download WAV"}
+            {busy ? "Working…" : "Pack into audio & download WAV"}
           </Button>
         </>
       ) : (
@@ -417,7 +462,7 @@ export function AudioStegoTool() {
             onChange={setPassword}
             show={showPassword}
             onToggle={() => setShowPassword((v) => !v)}
-            placeholder="Password the secret was hidden with"
+            placeholder="Password the secret was packed with"
           />
 
           <Button
