@@ -1441,7 +1441,7 @@ def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) ->
     """
     if not texts:
         raise _reject()
-    shares = [decode_share(t) for t in texts]
+    shares = [decode_share_any(t) for t in texts]
 
     thresholds = {s.threshold for s in shares}
     if len(thresholds) != 1:
@@ -1450,8 +1450,13 @@ def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) ->
 
     if len({s.set_id for s in shares}) != 1:
         raise _reject()
+    # Compared against the prefix of the share's set id, not the whole of it, so
+    # a container's slot_salt (which yields the 4-byte v1 id) can cross-check a
+    # v2 share whose 16-byte id extends that same prefix. The shares still agree
+    # among themselves on their full id in the check above; this guard only
+    # cross-checks against the container.
     if expected_set_id is not None and not hmac.compare_digest(
-            shares[0].set_id, expected_set_id):
+            shares[0].set_id[:len(expected_set_id)], expected_set_id):
         raise _reject()
 
     indices = [s.index for s in shares]
@@ -1462,6 +1467,101 @@ def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) ->
 
     chosen = sorted(shares, key=lambda s: s.index)[:k]
     return shamir_combine([(s.index, s.value) for s in chosen])
+
+
+# ---------------------------------------------------------------------------
+# The v2 share record (§4.6, "The v2 share record" / KMSHARE2)
+# ---------------------------------------------------------------------------
+#
+# The envelope only: set id and checksum widen to 128 bits, the value, the field
+# arithmetic and the slot are §4.6's, untouched. New shares are v2; both are read.
+
+SHARE2_SET_ID_LEN = 16
+SHARE2_CHECKSUM_LEN = 16
+SHARE2_BODY_LEN = SHARE2_SET_ID_LEN + 1 + 1 + SHARE_VALUE_LEN   # 50, checksummed
+SHARE2_LEN = SHARE2_BODY_LEN + SHARE2_CHECKSUM_LEN              # 66
+SHARE2_PREFIX = "KMSHARE2:"
+
+
+def share_set_id_v2(slot_salt: bytes) -> bytes:
+    """
+    §4.6 v2. The §4.6 derivation, truncated to 128 bits.
+
+    The first four bytes are byte-identical to ``share_set_id``: both are a
+    prefix of the same hash of the same ``slot_salt``, so a v1 set and a v2 set
+    that open the same container never disagree about which container that is.
+    """
+    if len(slot_salt) != SALT_LEN:
+        raise UsageError("slot salt must be 32 bytes")
+    return hashlib.sha256(CTX_SHARE_SET + slot_salt).digest()[:SHARE2_SET_ID_LEN]
+
+
+def _share_checksum_v2(body: bytes) -> bytes:
+    """§4.6 v2. Sixteen bytes of SHA-256 over v2 share bytes [0, 50)."""
+    return hashlib.sha256(CTX_SHARE_CHECKSUM + body).digest()[:SHARE2_CHECKSUM_LEN]
+
+
+def _pack_share_v2(share: Share) -> bytes:
+    if len(share.set_id) != SHARE2_SET_ID_LEN:
+        raise UsageError("v2 share set id must be 16 bytes")
+    if len(share.value) != SHARE_VALUE_LEN:
+        raise UsageError("share value must be 32 bytes")
+    if not (SHAMIR_K_MIN <= share.threshold <= SHAMIR_K_MAX):
+        raise UsageError(f"threshold must be {SHAMIR_K_MIN}..{SHAMIR_K_MAX}")
+    if not (1 <= share.index <= 255):
+        raise UsageError("share index must be 1..255")
+    body = share.set_id + bytes([share.threshold, share.index]) + share.value
+    assert len(body) == SHARE2_BODY_LEN
+    return body + _share_checksum_v2(body)
+
+
+def parse_share_v2(record: bytes) -> Share:
+    """§4.6 v2. Parsing is validation, exactly as ``parse_share``."""
+    if len(record) != SHARE2_LEN:
+        raise _reject()
+    body, checksum = record[:SHARE2_BODY_LEN], record[SHARE2_BODY_LEN:]
+    if not hmac.compare_digest(checksum, _share_checksum_v2(body)):
+        raise _reject()
+    threshold = body[SHARE2_SET_ID_LEN]
+    index = body[SHARE2_SET_ID_LEN + 1]
+    if not (SHAMIR_K_MIN <= threshold <= SHAMIR_K_MAX):
+        raise _reject()
+    if index == 0:
+        raise _reject()
+    return Share(
+        set_id=body[:SHARE2_SET_ID_LEN],
+        threshold=threshold,
+        index=index,
+        value=body[SHARE2_SET_ID_LEN + 2:],
+    )
+
+
+def encode_share_v2(share: Share) -> str:
+    """§4.6 v2. ``KMSHARE2:`` plus Crockford base32 in groups of four."""
+    body = _b32_encode(_pack_share_v2(share))
+    groups = [body[i:i + SHARE_GROUP] for i in range(0, len(body), SHARE_GROUP)]
+    return SHARE2_PREFIX + "-".join(groups)
+
+
+def decode_share_v2(text: str) -> Share:
+    """§4.6 v2. The inverse, with every rejection in §6 applied."""
+    stripped = text.strip()
+    if not stripped.upper().startswith(SHARE2_PREFIX):
+        raise _reject()
+    return parse_share_v2(_b32_decode(stripped[len(SHARE2_PREFIX):], SHARE2_LEN))
+
+
+def decode_share_any(text: str) -> Share:
+    """Dispatch on the version digit: §4.6 ``KMSHARE1`` or its v2 ``KMSHARE2``."""
+    if text.strip().upper().startswith(SHARE2_PREFIX):
+        return decode_share_v2(text)
+    return decode_share(text)
+
+
+def is_share_text(text: str) -> bool:
+    """§7 as amended: a share of either version is not a container."""
+    upper = text.lstrip().upper()
+    return upper.startswith(SHARE_PREFIX) or upper.startswith(SHARE2_PREFIX)
 
 
 def build_passkey_slot(
@@ -2466,6 +2566,149 @@ def decode_parts(parts: Iterable[str]) -> bytes:
     return b"".join(seen[i] for i in range(1, total + 1))
 
 
+# ---------------------------------------------------------------------------
+# Paper parts, version 2 (§7.3, KMPART2)
+# ---------------------------------------------------------------------------
+#
+# The AEAD stays the only authority on integrity. KMPART2 adds a container
+# fingerprint, a total length and a per-part checksum so a mis-scan, a mixed set
+# or a truncated tail is diagnosed by name before the KDF, instead of surfacing
+# as a generic "decryption failed" a person reads as a wrong password.
+
+PART2_PREFIX = "KMPART2:"
+CTX_PART_CHECKSUM = b"keymaker.v2.part-checksum"
+
+# KMPART2:<index>/<total>:<cid>:<length>:<slice>:<part_checksum>. Every field
+# after the counts is base64url or decimal, none of which contains a colon, so
+# the fixed field split is unambiguous. cid is 22 chars (16 bytes), the checksum
+# 6 (4 bytes); both lengths are pinned so a truncated field cannot masquerade as
+# a short slice.
+_PART2_RE = re.compile(
+    r"^KMPART2:(\d{1,4})/(\d{1,4}):([A-Za-z0-9_-]{22}):(\d{1,10}):"
+    r"([A-Za-z0-9_-]+):([A-Za-z0-9_-]{6})$"
+)
+
+
+def _b64url_nopad(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+
+def _b64url_bytes(text: str) -> bytes:
+    return base64.urlsafe_b64decode(text.encode() + b"=" * (-len(text) % 4))
+
+
+def _container_fingerprint(container: bytes) -> bytes:
+    """§7.3. The 128-bit fingerprint that is both the id and the whole digest."""
+    return hashlib.sha256(container).digest()[:16]
+
+
+def _part_checksum(chunk: bytes) -> bytes:
+    """§7.3. Four bytes localising a corrupt part. A diagnosis, not a guarantee."""
+    return hashlib.sha256(CTX_PART_CHECKSUM + chunk).digest()[:4]
+
+
+def encode_parts_v2(container: bytes, capacity: int) -> list[str]:
+    """
+    §7.3. Split a container across KMPART2 paper parts of at most ``capacity``
+    raw bytes each. Every part carries the container fingerprint and total
+    length, so a lone part names its backup and a truncated set is caught early.
+    """
+    if capacity < 1:
+        raise ValueError("capacity must be at least one byte")
+    if not container:
+        raise ValueError("refusing to write paper parts for an empty container")
+    cid = _b64url_nopad(_container_fingerprint(container))
+    length = len(container)
+    slices = [container[i:i + capacity] for i in range(0, len(container), capacity)]
+    total = len(slices)
+    if total > 9999:
+        raise ValueError(f"{total} parts is not a paper backup anyone will reassemble")
+    return [
+        f"{PART2_PREFIX}{i}/{total}:{cid}:{length}:"
+        f"{_b64url_nopad(s)}:{_b64url_nopad(_part_checksum(s))}"
+        for i, s in enumerate(slices, start=1)
+    ]
+
+
+def decode_parts_v2(parts: Iterable[str]) -> bytes:
+    """
+    §7.3. Reassemble KMPART2 parts, naming what is wrong before the container
+    reader sees anything. The order of the checks is the order a person can act
+    on: a wrong-shaped line, then a mixed set, then a corrupt part, then a
+    missing or truncated one, then the fingerprint over the whole.
+    """
+    seen: dict[int, bytes] = {}
+    totals: set[int] = set()
+    cids: set[str] = set()
+    lengths: set[int] = set()
+    corrupt: list[int] = []
+
+    for raw in parts:
+        text = "".join(raw.split())
+        if not text:
+            continue
+        m = _PART2_RE.match(text)
+        if not m:
+            raise ValueError(
+                f"not a v2 paper part: {text[:24]!r}. Parts look like "
+                f"{PART2_PREFIX}1/4:... check the whole symbol scanned."
+            )
+        index, total = int(m.group(1)), int(m.group(2))
+        chunk = _b64url_bytes(m.group(5))
+        if total < 1:
+            raise ValueError("a part claims to be one of zero parts")
+        if not 1 <= index <= total:
+            raise ValueError(f"part {index} of {total} is out of range")
+        if index in seen:
+            raise ValueError(f"part {index} was supplied twice")
+        if not hmac.compare_digest(_b64url_bytes(m.group(6)), _part_checksum(chunk)):
+            corrupt.append(index)
+        totals.add(total)
+        cids.add(m.group(3))
+        lengths.add(int(m.group(4)))
+        seen[index] = chunk
+
+    if not seen:
+        raise ValueError("no parts supplied")
+    if len(cids) != 1 or len(totals) != 1 or len(lengths) != 1:
+        raise ValueError(
+            "these parts disagree about the backup they belong to. "
+            "They are from different backups."
+        )
+    if corrupt:
+        raise ValueError(
+            f"part(s) {', '.join(map(str, sorted(corrupt)))} look corrupted: "
+            "the part checksum does not match. Re-scan or re-key them."
+        )
+
+    total = totals.pop()
+    missing = [i for i in range(1, total + 1) if i not in seen]
+    if missing:
+        raise ValueError(
+            f"missing part(s) {', '.join(map(str, missing))} of {total}. "
+            "Every part is needed. This is not a k-of-n share set."
+        )
+
+    container = b"".join(seen[i] for i in range(1, total + 1))
+    length = lengths.pop()
+    if len(container) != length:
+        raise ValueError(
+            f"the reassembled backup is {len(container)} bytes but should be "
+            f"{length}. A part is truncated."
+        )
+    if _b64url_nopad(_container_fingerprint(container)) != cids.pop():
+        raise ValueError("the reassembled backup does not match its fingerprint.")
+    return container
+
+
+def decode_parts_any(parts: Iterable[str]) -> bytes:
+    """Dispatch on the version digit: §7.1 ``KMPART1`` or its v2 ``KMPART2``."""
+    items = [t for t in ("".join(p.split()) for p in parts) if t]
+    if any(t.startswith(PART2_PREFIX) for t in items):
+        return decode_parts_v2(items)
+    return decode_parts(items)
+
+
 def paper_capacity(qr_byte_capacity: int, total_hint: int = 9999) -> int:
     """
     Raw container bytes that fit in one symbol of ``qr_byte_capacity`` bytes.
@@ -2576,12 +2819,15 @@ def detect(data: bytes) -> str:
         return "keym2-armor"
     if data.startswith(b"KEYM1:"):
         return "keym1-armor"
-    if data.startswith(SHARE_PREFIX.encode()):
+    # Both share versions route the same: the label is what the reader does with
+    # it, and §4.6's KMSHARE1 and §4.6-v2's KMSHARE2 are the same box.
+    if data.startswith(SHARE_PREFIX.encode()) or data.startswith(SHARE2_PREFIX.encode()):
         return "keym2-share"
     # §7.1. A part is the likeliest wrong-box paste of them all: reassembling a
     # paper backup means scanning symbols one at a time, and the first one has
-    # to go somewhere. Naming it is the only useful thing to say.
-    if data.startswith(PART_PREFIX.encode()):
+    # to go somewhere. Naming it is the only useful thing to say. KMPART2 (§7.3)
+    # is the same box.
+    if data.startswith(PART_PREFIX.encode()) or data.startswith(PART2_PREFIX.encode()):
         return "keym2-part"
     if data.startswith(MAGIC):
         return f"keym-binary-v{data[4]}" if len(data) > 4 else "keym-binary"
@@ -3201,6 +3447,56 @@ def _selftest() -> int:
     check("paper_capacity leaves room for the prefix",
           len(encode_parts(long_container, paper_capacity(2_331))[0]) <= 2_331)
 
+    # --- §7.3: paper parts, version 2 (KMPART2) ---
+    parts2 = encode_parts_v2(long_container, 1_734)
+    check("v2 paper parts round-trip", decode_parts_v2(parts2) == long_container)
+    check("v2 parts reassemble out of order",
+          decode_parts_v2(list(reversed(parts2))) == long_container)
+    check("decode_parts_any reads a v2 set", decode_parts_any(parts2) == long_container)
+    check("a v2 part is recognised as a part, not a container",
+          detect(parts2[0].encode()) == "keym2-part")
+    check("a one-part v2 backup still says 1/1",
+          encode_parts_v2(b"tiny", 1_734)[0].startswith("KMPART2:1/1:"))
+    check("every v2 part carries the same fingerprint",
+          len({p.split(":")[2] for p in parts2}) == 1)
+    check("§7.1 stays frozen: v1 pages still reassemble through the v1 reader",
+          decode_parts(parts) == long_container)
+
+    # A corrupt part is named, so the reader points at the page rather than the set.
+    corrupt = list(parts2)
+    f = corrupt[1].split(":")
+    f[4] = ("A" if f[4][0] != "A" else "B") + f[4][1:]
+    corrupt[1] = ":".join(f)
+    try:
+        decode_parts_v2(corrupt)
+        check("a corrupt v2 part is named by index", False)
+    except ValueError as e:
+        check("a corrupt v2 part is named by index", "part(s) 2" in str(e))
+
+    # A truncated tail whose per-part checksum was recomputed still cannot pass:
+    # the length and the whole-container fingerprint are the guarantees, the
+    # per-part checksum is only a localiser.
+    t = parts2[-1].split(":")
+    short = _b64url_bytes(t[4])[:-1]
+    t[4], t[5] = _b64url_nopad(short), _b64url_nopad(_part_checksum(short))
+    forged = parts2[:-1] + [":".join(t)]
+    try:
+        decode_parts_v2(forged)
+        check("a truncated v2 tail is caught by length or fingerprint", False)
+    except ValueError as e:
+        check("a truncated v2 tail is caught by length or fingerprint",
+              "truncated" in str(e) or "fingerprint" in str(e))
+
+    # Two backups' parts do not silently merge: the fingerprints differ.
+    other2 = encode_parts_v2(
+        encrypt(os.urandom(2_000), pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES, **fast),
+        1_734)
+    try:
+        decode_parts_v2([parts2[0], other2[1]])
+        check("v2 parts from different backups are refused", False)
+    except ValueError:
+        check("v2 parts from different backups are refused", True)
+
     # --- §7.2: the WebCrypto-only subset and the self-extracting page ---
     subset = encrypt(b"read this when I am gone", pw, kdf_id=KDF_PBKDF2,
                      cipher_id=CIPHER_AES, **fast)
@@ -3557,6 +3853,32 @@ def _selftest() -> int:
     _at255 = bytes(secret32[j] ^ gf_mul(_coeffs[j], 255) for j in range(32))
     check("index 255 is field-legal and still reconstructs",
           shamir_combine([(255, _at255), (1, _p2[0][1])]) == secret32)
+
+    # --- §4.6 v2 share record (KMSHARE2) -------------------------------------
+    v2_salt = bytes(range(32))
+    v2_sid = share_set_id_v2(v2_salt)
+    check("a v2 set id is 16 bytes and extends the v1 id",
+          len(v2_sid) == 16 and v2_sid[:SHARE_SET_ID_LEN] == share_set_id(v2_salt))
+    v2_parts = shamir_split(secret32, 2, 3, coefficients=os.urandom(32))
+    v2_shares = [encode_share_v2(Share(set_id=v2_sid, threshold=2, index=x, value=v))
+                 for x, v in v2_parts]
+    check("a v2 share carries its version in the prefix",
+          v2_shares[0].startswith(SHARE2_PREFIX))
+    check("v2 shares round-trip through combine_shares",
+          combine_shares(v2_shares[:2]) == secret32)
+    check("decode_share_any reads a v2 share",
+          decode_share_any(v2_shares[0]).index == 1)
+    check("a v2 share is recognised as a share, not a container",
+          detect(v2_shares[0].encode()) == "keym2-share")
+    _c = list(v2_shares[0])
+    _p = len(SHARE2_PREFIX) + 2
+    _c[_p] = "0" if _c[_p] != "0" else "1"
+    rejects("a corrupt v2 share fails its 128-bit checksum",
+            lambda: decode_share_v2("".join(_c)))
+    _v1_share = encode_share(Share(set_id=share_set_id(v2_salt), threshold=2,
+                                   index=1, value=v2_parts[0][1]))
+    rejects("a set mixing KMSHARE1 and KMSHARE2 is refused",
+            lambda: combine_shares([_v1_share, v2_shares[1]]))
 
     # --- the slot, in a container -------------------------------------------
     for cipher_id, c_name in ((CIPHER_AES, "aes"), (CIPHER_CHACHA, "chacha"),
@@ -4594,6 +4916,10 @@ def main(argv: Optional[list[str]] = None) -> int:
     spl.add_argument("--capacity", type=int, default=1734, metavar="BYTES",
                      help="container bytes per part (default 1734: a version-40 "
                           "QR at ECC level M, which is what paper needs)")
+    spl.add_argument("--v2", action="store_true",
+                     help="write the §7.3 KMPART2 envelope, which carries a "
+                          "container fingerprint, length and per-part checksum "
+                          "so a mis-scan or mixed set is diagnosed by name")
 
     jn = sub.add_parser(
         "join", help="reassemble paper parts into a container (§7.1)")
@@ -4723,7 +5049,9 @@ def main(argv: Optional[list[str]] = None) -> int:
     # §7.1, before the key-file lookup: neither of these takes a credential.
     if args.cmd == "split":
         try:
-            parts = encode_parts(data, args.capacity)
+            # v1 by default so docs/WALKTHROUGH.md's example stays exact; --v2
+            # opts into the §7.3 envelope. `join` reads either.
+            parts = (encode_parts_v2 if args.v2 else encode_parts)(data, args.capacity)
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
@@ -4742,7 +5070,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             supplied += [ln for ln in data.decode("utf-8", "replace").splitlines()
                          if ln.strip() and not ln.lstrip().startswith("#")]
         try:
-            container = decode_parts(supplied)
+            # Dispatch on the version digit so a set printed by either the v1
+            # (§7.1) or the v2 (§7.3) writer reassembles here.
+            container = decode_parts_any(supplied)
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1

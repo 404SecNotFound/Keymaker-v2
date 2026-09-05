@@ -64,7 +64,8 @@ import {
   addPasskeySlotKeym2,
   derivePrfSalt,
 } from "../src/lib/keym-v2.ts";
-import { encodePaperParts, decodePaperParts, splitPaperParts } from "../src/lib/keym-v2-paper.ts";
+import { encodePaperParts, encodePaperPartsV2, decodePaperParts, decodePaperPartsAny, splitPaperParts } from "../src/lib/keym-v2-paper.ts";
+import { encodeShareV2, shareSetIdV2 } from "../src/lib/keym-v2-shamir.ts";
 import {
   buildSelfExtractingPage,
   embedSelfExtract,
@@ -104,9 +105,10 @@ const keyFile =
         return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer;
       })();
 
-// `prfsalt` is the one command with no container: it derives 32 bytes from a
-// slot salt and prints them. Everything else reads its input here.
-const input = cmd === "prfsalt" ? Buffer.alloc(0) : readFileSync(inFile);
+// `prfsalt` and `sharev2` are the commands with no container: one derives 32
+// bytes from a slot salt, the other prints one KMSHARE2 string from pinned
+// inputs. Everything else reads its input here.
+const input = cmd === "prfsalt" || cmd === "sharev2" ? Buffer.alloc(0) : readFileSync(inFile);
 const inputBuf = input.buffer.slice(input.byteOffset, input.byteOffset + input.byteLength) as ArrayBuffer;
 
 const CIPHERS: Record<string, CipherId> = {
@@ -241,11 +243,25 @@ try {
     const salt = await derivePrfSalt(Uint8Array.from(Buffer.from(flag("slot-salt")!, "hex")));
     process.stdout.write(Buffer.from(salt).toString("hex") + "\n");
   } else if (cmd === "split") {
-    // §7.1. Emitted so crosstest2.py can compare the *strings*, not only the
-    // reassembled container: transposing a slice boundary leaves reassembly
+    // §7.1 / §7.3. Emitted so crosstest2.py can compare the *strings*, not only
+    // the reassembled container: transposing a slice boundary leaves reassembly
     // correct and the two implementations' printed pages mutually unusable.
-    const parts = encodePaperParts(new Uint8Array(inputBuf), Number(flag("capacity") ?? 1734));
+    const cap = Number(flag("capacity") ?? 1734);
+    const parts = process.argv.includes("--v2")
+      ? await encodePaperPartsV2(new Uint8Array(inputBuf), cap)
+      : encodePaperParts(new Uint8Array(inputBuf), cap);
     writeFileSync(outFile, parts.join("\n") + "\n");
+  } else if (cmd === "sharev2") {
+    // §4.6 v2. One KMSHARE2 string from pinned inputs, so crosstest2.py can
+    // compare the emitted share bytes, the §4.6 lesson that a container-only
+    // comparison misses a transposed coefficient layout, now for the v2 record.
+    const share = await encodeShareV2({
+      setId: await shareSetIdV2(Uint8Array.from(Buffer.from(flag("salt")!, "hex"))),
+      threshold: Number(flag("threshold")),
+      index: Number(flag("index")),
+      value: Uint8Array.from(Buffer.from(flag("value")!, "hex")),
+    });
+    process.stdout.write(share + "\n");
   } else if (cmd === "selfextract") {
     // §7.2. The whole page, so the conformance suite can check that Python
     // extracts a container out of the artefact the app actually writes rather
@@ -280,7 +296,8 @@ try {
     // until now, which meant conformance handed the decoder text no user ever
     // produces and could not see that the app's own splitter kept them.
     const lines = splitPaperParts(readFileSync(inFile, "utf8"));
-    writeFileSync(outFile, Buffer.from(decodePaperParts(lines)));
+    // decodePaperPartsAny so join reads either §7.1 KMPART1 or §7.3 KMPART2.
+    writeFileSync(outFile, Buffer.from(await decodePaperPartsAny(lines)));
   } else if (cmd === "decrypt2") {
     // Deliberately the v2 module directly rather than decryptData(), so a
     // failure here points at the format code instead of at the dispatch. The

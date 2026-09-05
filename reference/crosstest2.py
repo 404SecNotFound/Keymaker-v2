@@ -901,6 +901,34 @@ def main() -> int:
         check("py classifies a share as a share",
               keym2.detect(py_shares[0].encode()) == "keym2-share")
 
+        # KMSHARE2 (§4.6 v2): the same string-equality promise as v1. Same
+        # setId derivation and same coefficients, so any disagreement about how
+        # to *write* the wider record shows up here rather than after the KDF.
+        v2_parts = keym2.shamir_split(SH_SECRET, K, N, coefficients=SH_COEFFS)
+        v2_sid = keym2.share_set_id_v2(SH_SALT)
+        py_v2_shares = [
+            keym2.encode_share_v2(keym2.Share(set_id=v2_sid, threshold=K, index=x, value=v))
+            for x, v in v2_parts]
+        js_v2_shares = [
+            bridge_stdout("sharev2", "--salt", SH_SALT.hex(), "--threshold", str(K),
+                          "--index", str(x), "--value", v.hex()).strip()
+            for x, v in v2_parts]
+        check("python and js emit byte-identical KMSHARE2 strings",
+              py_v2_shares == js_v2_shares,
+              f"first mismatch: {next((f'{a} != {b}' for a, b in zip(py_v2_shares, js_v2_shares) if a != b), 'none')}")
+        check("a v2 set id is 16 bytes and extends the v1 id",
+              len(v2_sid) == 16 and v2_sid[:keym2.SHARE_SET_ID_LEN] == keym2.share_set_id(SH_SALT))
+        check("a v2 share set combines back to the secret",
+              keym2.combine_shares(py_v2_shares[:K]) == SH_SECRET)
+        # The envelope is cosmetic to the crypto: v2 shares of the same secret
+        # open a container whose slot was enrolled with v1 shares.
+        check("v2 shares of the same secret open the v1-enrolled container (js)",
+              js_opens_with_shares(py_container, py_v2_shares[:K]))
+        check("v2 shares of the same secret open the v1-enrolled container (py)",
+              py_opens_with_shares(py_container, py_v2_shares[:K]))
+        check("a v2 share is a share to detect(), like v1",
+              keym2.detect(py_v2_shares[0].encode()) == "keym2-share")
+
         # ---------------------------------------------------------------
         # 6b. Passkey slots (§4.7) — byte equality, both directions
         # ---------------------------------------------------------------
@@ -1088,6 +1116,26 @@ def main() -> int:
         # A part is not a container, and §7.1 requires both sides to say which.
         check("py classifies a part as a part",
               keym2.detect(py_parts[0].encode()) == "keym2-part")
+
+        # §7.3 KMPART2: the same string-equality promise as §7.1, plus a
+        # container fingerprint, a length and a per-part checksum. `split --v2`
+        # drives the js side; `join` dispatches on the version digit.
+        py_parts2 = keym2.encode_parts_v2(good, 1_734)
+        js_parts2_file = tmp / "js-parts2.txt"
+        bridge("split", "--in", str(long_src), "--out", str(js_parts2_file),
+               "--capacity", "1734", "--v2")
+        js_parts2 = [ln for ln in js_parts2_file.read_text().splitlines() if ln.strip()]
+        check("python and js emit byte-identical KMPART2 parts",
+              py_parts2 == js_parts2, f"py {len(py_parts2)} js {len(js_parts2)}")
+        check("py reassembles js's v2 parts", keym2.decode_parts_v2(js_parts2) == good)
+        py_parts2_file = tmp / "py-parts2.txt"
+        py_parts2_file.write_text("\n".join(py_parts2) + "\n")
+        js_rejoined2 = tmp / "js-rejoined2.bin"
+        bridge("join", "--in", str(py_parts2_file), "--out", str(js_rejoined2))
+        check("js reassembles python's v2 parts (join dispatches on version)",
+              js_rejoined2.read_bytes() == good)
+        check("a v2 part is a part to detect(), like v1",
+              keym2.detect(py_parts2[0].encode()) == "keym2-part")
 
         # ---------------------------------------------------------------
         # 9. §7.2 self-extracting pages agree

@@ -857,6 +857,65 @@ asking me". The UI and the print kit must say this on the artifact itself, not
 only in the documentation — a share that ends up in a drawer because it looked
 like a receipt is the realistic failure, not a cryptographic one.
 
+#### The v2 share record (`KMSHARE2`)
+
+The four-byte set id and four-byte checksum above are sized for catching a casual
+mistake at a kitchen table, and the notes above are honest that this is all they
+claim. They are weak for a second job the same paper is asked to do: being one
+identifiable share set among the many a person, or an estate, may archive over
+decades. Four bytes of set id collide by birthday at a few tens of thousands of
+sets, and four bytes of checksum are an accidental-corruption probability rather
+than an identity. `KMSHARE2` widens both to 128 bits and changes nothing else.
+
+```
++--------+------+------------------------------------------------+
+| Offset | Size | Field                                          |
++--------+------+------------------------------------------------+
+| 0      | 16   | share_set_id                                   |
+| 16     | 1    | threshold: k                                   |
+| 17     | 1    | index: x, 1..n                                 |
+| 18     | 32   | value: [f_j(x) for j in 0..31]                 |
++========+======+================================================+
+                   checksummed body = share bytes [0, 50)
++--------+------+------------------------------------------------+
+| 50     | 16   | checksum                                       |
++--------+------+------------------------------------------------+
+```
+
+66 bytes.
+
+```
+share_set_id = SHA-256("keymaker.v2.share-set"      || slot_salt)[0:16]
+checksum     = SHA-256("keymaker.v2.share-checksum" || body)[0:16]
+```
+
+These are the §4.6 derivations with a wider truncation and no other change. A
+`KMSHARE2` set id is therefore the `KMSHARE1` set id extended: the first four
+bytes are byte-identical, because both are a prefix of the same hash of the same
+`slot_salt`. The value, the field arithmetic, `threshold`, `index` and the
+`2..16` bounds are §4.6's, untouched. `KMSHARE2` is an envelope change, not a
+cryptographic one: it does not reach `shamirSplit`, `shamirCombine`, or the slot
+the shares unwrap.
+
+Text encoding:
+
+```
+KMSHARE2:<Crockford base32, uppercase, in groups of 4 separated by ->
+```
+
+66 bytes is 528 bits, so 106 characters carrying two bits of zero padding in the
+last, in 27 groups (26 of four and a final group of two). The padding rule, the
+alphabet, the case-folding and the whitespace rule are §4.6's, unchanged.
+`KMSHARE2` is disjoint from `KMSHARE1` at byte 7, the version digit, and both
+stay inside the `KM` family §7 established.
+
+**Both versions are written and read, and a new set is `KMSHARE2`.** §4.6's
+`KMSHARE1` reader stays frozen, because a share set printed before this section
+must still open. A writer emits `KMSHARE2`; a reader accepts either, dispatching
+on the prefix's version digit. A set is single-version by construction, since one
+enrolment writes one version, and a set that mixes versions is refused: the two
+record lengths give set ids of different lengths that cannot compare equal.
+
 ### 4.7 Slot secret for a passkey slot (`slot_type = 0x01`)
 
 > **Implemented.** `reference/keym2.py` was written from this section, the
@@ -1602,6 +1661,62 @@ Of the four artefacts this document defines it is the likeliest of all to be
 pasted, because it is the one that looks least like a backup — it is a web page,
 and someone who opens it and sees a password box has no reason to think the
 bytes they need are in the same file.
+
+### 7.3 Paper parts, version 2 (`KMPART2`)
+
+§7.1 gives a paper part no checksum, no identity and no length, on purpose: the
+AEAD covers the whole container, so a mis-scan fails authentication, and a second
+integrity mechanism only invents a case where the two disagree. That reasoning is
+still right about *integrity*. It is silent about *diagnosis*. A slip within the
+base64 alphabet, a page from a different backup shuffled into the pile, and a
+missing tail all reach a `KMPART1` reader as one generic "decryption failed",
+which a person reads as a wrong password and answers by retyping a password that
+was never the problem. `KMPART2` keeps the AEAD as the only authority on
+integrity and adds exactly enough structure to tell those three apart, before the
+KDF, so the reader can name which page is wrong instead of failing the set
+blindly.
+
+```
+KMPART2:<index>/<total>:<cid>:<length>:<base64url-unpadded slice>:<part_checksum>
+```
+
+- `index`/`total` are §7.1's, 1-based decimal without leading zeros.
+- `cid` is `base64url(SHA-256(container)[0:16])`, 22 characters: the container's
+  128-bit fingerprint. It does double duty. Every part carries it, so a lone part
+  names the backup it belongs to and a part from a different backup is caught
+  before reassembly; and after reassembly the reader recomputes
+  `SHA-256(reassembled)[0:16]` and requires it to equal the `cid` the parts agree
+  on, which verifies the whole container to 128 bits. There is deliberately **no
+  separate whole-container digest field**: that value *is* the fingerprint, so a
+  second longer digest would carry nothing the fingerprint does not and would
+  reintroduce the "two mechanisms disagree" case §7.1 was right to avoid.
+- `length` is the container's total byte length in decimal. A set whose final
+  part is truncated has every index present, so the index check passes; `length`
+  is what turns that into "a part is shorter than it should be" before any
+  hashing, rather than a less specific fingerprint mismatch.
+- `part_checksum` is
+  `base64url(SHA-256("keymaker.v2.part-checksum" || slice)[0:4])`, 6 characters.
+  It localises damage: a part whose checksum fails is named, so the reader points
+  at "part 3" rather than at the set. Four bytes is a diagnosis, not a guarantee.
+  The fingerprint and the AEAD are the guarantees.
+
+Reassembly, in order: parse each part; require all parts to agree on `total`,
+`cid` and `length`; require exactly one of each index in `1..total`; verify each
+part's `part_checksum`, naming any that fails; concatenate the slices in index
+order; require the concatenation's length to equal `length` and its
+`SHA-256[0:16]` to equal `cid`. Only a set that clears all of those is handed to
+the container reader.
+
+`KMPART2` sits in the `KM` family beside `KMPART1`, disjoint at byte 7, the
+version digit. A `KMPART2` pasted into the container field gets §7.1's wrong-box
+treatment, reported as part i of n. The single-part `1/1` rule is §7.1's,
+unchanged.
+
+**Both versions are written and read, and a new backup is `KMPART2`.** §7.1's
+reader stays frozen, because pages printed before this section must still
+reassemble. A writer emits `KMPART2`; a reader dispatches on the version digit
+and accepts either, and a set is single-version by construction because one split
+writes one version.
 
 ## 8. What this does not fix
 
