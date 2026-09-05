@@ -237,8 +237,8 @@ Only after Phase 3 ships. Ordered by value.
 | 1 | **Shamir k-of-n key splitting** — **shipped**, §4.1 below | Slots made this as clean as predicted: a share set is a slot and the slot record did not change shape. ~150 lines of GF(256), as estimated. |
 | 2 | **Paper vault print kit** — **shipped**, §4.2 below | Ciphertext as QR grid, condensed recovery procedure, Shamir share slots, password *hint* field. Safe-deposit-box ready. Composes directly with 4.1, and there is now a concrete debt to pay: the share modal's Print button is `window.print()` against a screen layout, which is the weakest part of what 4.1 shipped. A share set printed from a dark-themed dialog is not a paper backup. |
 | 3 | **Self-extracting HTML decryptor** — **shipped**, §4.3 below | One `.html` = ciphertext + a minimal WebCrypto-only decryptor. The "openable by a non-technical heir in 2040" story, with `keym2.py` as the second line. PBKDF2/AES-GCM only — no WASM — and §7.2 now says so normatively rather than as advice. |
-| 4 | **Passkey / WebAuthn PRF slot** — **designed, not built**, §4.7 of the format doc | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
-| 5 | **Inheritance wizard** | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
+| 4 | **Passkey / WebAuthn PRF slot**, **shipped** (§4.4 below) | Phishing-proof daily unlock. Read the honest framing below before selling it as strength. |
+| 5 | **Inheritance wizard**, **shipped** (§4.5 below) | Pure composition of 1–3 plus the existing recovery doc. Cheap once they exist; incoherent before. |
 
 **Gate for each:** fixture-corpus entries and Python-reference parity, per the
 append-only rule. No exceptions — that rule is the moat.
@@ -878,6 +878,50 @@ and watching what stayed green.
 
 ---
 
+### 4.5 Inheritance wizard, shipped
+
+The last feature, and the one the whole envelope was building toward: a backup
+someone can open after you, without you handing over your password today. It is a
+**pure composition** and it earned that description literally. It adds no
+cryptography and no wire format. Everything it needs already shipped: recovery
+shares (§4.6), the paper vault (§7.1), the self-extracting page (§7.2) and the
+recovery kit. What was missing was not capability but a name for the intent and
+an order for the steps.
+
+**It is a plan, not a fourth door.** The three doors under the hero, back up a
+phrase, encrypt a file, open a backup, are the three fundamental intents, and
+inheritance is a *variant of backing up*, not a peer to them. Made a fourth door
+it would blur the taxonomy the doors exist to keep clean, and crowd a
+three-column grid the width tests already pin. So it is a line under the doors
+and a command-bar entry, both opening a guided panel on the encrypt path.
+
+**The panel configures and then gets out of the way**, the same contract a door
+keeps. Opening it turns recovery shares on, opens Advanced where their k-of-n
+controls live, and states the shape and the honest framing in one place: any *k*
+shares open the container without the password, so each share is as sensitive as
+the password itself. Then it lists the ordered steps (put the secret in, set
+k-of-n, encrypt and record the shares once, print the paper vault, keep the
+recovery kit with the shares), each naming a control already on the page. It
+renders nothing the user acts on; the already-built surfaces do the work.
+
+**Two decisions worth recording.**
+
+- **Dismiss hides guidance, it does not undo configuration.** Closing the plan
+  leaves the shares it turned on turned on. The instructions are done with; the
+  choice is not. A dismiss that silently reverted the share set would be the
+  worst kind of surprise for a backup feature.
+- **A tab switch ends the plan.** It belongs to a deliberate encrypt-and-hand-on
+  session, so it is cleared by the same `resetState` a tab click already runs,
+  rather than following the user into Decrypt or Tools.
+
+**Gate:** `tests/browser/inheritance.spec.ts`, negative-control shaped and each
+control shown to bite. The warning names the live k of n (a literal fails once
+the count changes), the plan is absent until opened, a tab switch clears it, and
+following the plan through encrypt issues a real 2-of-3 share set (a plan that
+only rendered prose lands on an ordinary container and no dialog).
+
+---
+
 ## Phase 8 — Outreach, and only after 6
 
 Gated deliberately. The first thing a security-minded visitor does is look for a
@@ -1001,7 +1045,8 @@ Phase 6  Make the claims checkable     ─ done ─  version · release · verif
 Phase 7  Documentation                 ─ done ─  walkthrough · trust postures · limitations
 Phase 4.2 Paper vault print kit        ─ done ─  §7.1 parts · the sheet · the debt paid
 Phase 4.3 Self-extracting page         ─ done ─  §7.2 subset · the page · three readers, one file
-Phase 4  The rest of what v2 unlocks   ──────    passkey (4.4) · inheritance wizard (4.5)
+Phase 4.4 Passkey / WebAuthn PRF slot  ─ done ─  §4.7 · reference · parity · UI
+Phase 4.5 Inheritance wizard           ─ done ─  a plan over shares · paper vault · self-extract · recovery kit
 Phase 8  Outreach                      ──────    gated on 6, and on a tag existing
 ```
 

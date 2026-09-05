@@ -6,6 +6,7 @@ import { QRCodeCanvas } from "qrcode.react";
 import { PaperVault } from "@/components/paper-vault";
 import { ContainerInspector, type InspectorPlan } from "@/components/container-inspector";
 import { SelfExtractExport } from "@/components/self-extract-export";
+import { InheritancePlan } from "@/components/inheritance-plan";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperParts, splitPaperParts } from "@/lib/keym-v2-paper";
@@ -43,6 +44,7 @@ import {
   Sprout,
   FileLock,
   FolderOpen,
+  ScrollText,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommandBar, type CommandBarItem } from "@/components/command-bar";
@@ -1072,6 +1074,12 @@ export function EncryptorTool() {
   // Recovery kit modal — see the footer.
   const [isRecoveryOpen, setIsRecoveryOpen] = useState(false);
 
+  // Roadmap 4.5. The inheritance plan is a guided orientation on the encrypt
+  // path, entered on purpose from the command bar or the link under the doors.
+  // It is closed by any mode switch, because it belongs to a deliberate
+  // encrypt-and-hand-on session, not to whatever the next tab is doing.
+  const [inheritanceOpen, setInheritanceOpen] = useState(false);
+
   /**
    * The command bar (⌘K / Ctrl+K).
    *
@@ -1863,6 +1871,9 @@ export function EncryptorTool() {
     setInputType('file');
     setSeedMode(false);
     setWipeAck(false);
+    // 4.5. A tab click ends the inheritance session the plan was guiding, the
+    // same way it resets the form beneath it.
+    setInheritanceOpen(false);
   }, [clearSensitiveState]);
 
   /**
@@ -2139,6 +2150,20 @@ export function EncryptorTool() {
       setShamirEnabled(false);
     }
   }, [currentDoor, mode, inputType, handleModeChange, handleInputTypeChange]);
+
+  /**
+   * 4.5. Open the inheritance plan. Like a door, it configures the existing
+   * form and adds no capability: encrypt mode, recovery shares on, and Advanced
+   * open so the k-of-n controls the plan points at are in view. The plan flag is
+   * set last, after `handleModeChange` may have queued a reset that clears it,
+   * the same ordering `openDoor` relies on to keep its `setShamirEnabled(true)`.
+   */
+  const openInheritance = useCallback(() => {
+    if (mode !== "encrypt") handleModeChange("encrypt");
+    setShamirEnabled(true);
+    setIsAdvancedOpen(true);
+    setInheritanceOpen(true);
+  }, [mode, handleModeChange]);
 
   /**
    * @param maxBytes Ceiling for this particular picker. Encrypting caps the
@@ -3125,6 +3150,13 @@ export function EncryptorTool() {
 
   const renderContent = (currentMode: Mode) => (
     <div className="space-y-5">
+      {currentMode === "encrypt" && inheritanceOpen && (
+        <InheritancePlan
+          threshold={shamirThreshold}
+          count={shamirCount}
+          onDismiss={() => setInheritanceOpen(false)}
+        />
+      )}
       <div className="space-y-5">
         <div className="flex gap-0.5 rounded-xl bg-inset p-1">
           <button
@@ -4790,6 +4822,14 @@ export function EncryptorTool() {
         run: () => openDoor(door.id),
       });
     }
+    // 4.5. In "Start" beside the doors, after them, so the "Go to" order
+    // command-bar.spec.ts pins is untouched.
+    items.push({
+      id: "inheritance", group: "Start", label: "Set up an inheritance",
+      icon: ScrollText,
+      keywords: "heir estate legacy beneficiary will after death shares recovery",
+      run: openInheritance,
+    });
     if (mode === "encrypt") {
       items.push({
         id: "generate-password", group: "Encrypt", label: "Generate a random password",
@@ -4852,7 +4892,7 @@ export function EncryptorTool() {
     });
     return items;
   }, [
-    mode, currentDoor, openDoor, hasSecretsOnScreen, handleModeChange,
+    mode, currentDoor, openDoor, openInheritance, hasSecretsOnScreen, handleModeChange,
     generatePassword, generatePassphrase, generateKeyFile, runCalibration,
     wipeNow,
   ]);
@@ -5061,7 +5101,7 @@ export function EncryptorTool() {
             role="group"
             aria-label="Start with"
             data-testid="intent-doors"
-            className="mb-8 grid grid-cols-3 gap-2 sm:mb-10 sm:gap-3"
+            className="grid grid-cols-3 gap-2 sm:gap-3"
           >
             {DOORS.map(({ id, icon: Icon, title, blurb }) => (
               <button
@@ -5087,6 +5127,22 @@ export function EncryptorTool() {
               </button>
             ))}
           </div>
+
+          {/*
+            4.5. Inheritance is a variant of backing up, not a fourth intent, so
+            it is a line under the doors rather than a peer to them. It does not
+            belong in the three-question taxonomy the doors are. It opens the
+            guided plan; the command bar reaches it too.
+          */}
+          <button
+            type="button"
+            onClick={openInheritance}
+            data-testid="inheritance-open"
+            className="mb-8 mt-3 flex cursor-pointer items-center gap-1.5 text-[12px] leading-snug text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline sm:mb-10"
+          >
+            <ScrollText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            Planning for someone to inherit this? Set up an inheritance plan.
+          </button>
 
           {/* The workbench. On a desktop the form and the container pane sit
               side by side — the Ledger split — and on anything narrower the
