@@ -10,7 +10,7 @@ import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperParts, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
-import { meetsPasswordPolicy } from "@/lib/password-policy";
+import { meetsPasswordPolicy, PASSWORD_POLICY_HINT } from "@/lib/password-policy";
 import {
   KeyRound,
   Lock,
@@ -3378,10 +3378,10 @@ export function EncryptorTool() {
               </Label>
               <InfoTip label="Password requirements">
                 <p>
-                  Minimum policy: 24+ characters with upper/lowercase, a number and a
-                  symbol — or a passphrase of several distinct words. This is a floor,
-                  not a strength measurement: Keymaker cannot tell how you chose a
-                  password. For a figure it can actually stand behind, use Generate.
+                  Minimum policy: {PASSWORD_POLICY_HINT} There is no upper/lower/number/symbol
+                  rule, because that rejects strong lowercase secrets while passing predictable
+                  ones. This is a floor, not a strength measurement: Keymaker cannot tell how you
+                  chose a password. For a figure it can actually stand behind, use Generate.
                 </p>
                 {/*
                   U24. The ceiling existed and was stated nowhere, so the first
@@ -3622,8 +3622,7 @@ export function EncryptorTool() {
                 </p>
               ) : (
                 <p className="text-[12px] leading-snug text-destructive">
-                  Below the minimum policy: 24+ characters with mixed classes, or a
-                  passphrase of several distinct words.
+                  Below the minimum policy: {PASSWORD_POLICY_HINT}
                 </p>
               )
             )}
@@ -4508,9 +4507,8 @@ export function EncryptorTool() {
           role="status"
           className="mt-2 text-center text-[12px] leading-snug text-muted-foreground"
         >
-          Encrypt stays disabled until the password meets the minimum policy —
-          24+ characters with upper and lowercase, a number and a symbol, or a
-          passphrase of several distinct words.
+          Encrypt stays disabled until the password meets the minimum policy:
+          {' '}{PASSWORD_POLICY_HINT}
         </p>
       )}
 

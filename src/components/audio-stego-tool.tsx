@@ -35,7 +35,7 @@ import {
 } from "lucide-react";
 import { encryptViaWorker, decryptViaWorker } from "@/lib/crypto-client";
 import { KdfId, CipherId, DEFAULT_ARGON2ID, MAX_PLAINTEXT_SIZE, isUserFacingError } from "@/lib/keymaker-crypto";
-import { meetsPasswordPolicy } from "@/lib/password-policy";
+import { meetsPasswordPolicy, PASSWORD_POLICY_HINT } from "@/lib/password-policy";
 import {
   AudioStegoError,
   parseWavToPcm16,
@@ -204,7 +204,7 @@ export function AudioStegoTool() {
     if (!meetsPasswordPolicy(password)) {
       toast({
         title: "Stronger password needed",
-        description: "Use 24+ characters with a mix of cases, a number and a symbol, or a passphrase of several distinct words.",
+        description: `Use ${PASSWORD_POLICY_HINT}`,
         variant: "destructive",
       });
       return;
