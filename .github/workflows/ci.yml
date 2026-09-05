@@ -48,6 +48,12 @@ jobs:
       - name: EFF wordlist integrity
         run: npm run test:wordlist
 
+      # The advisory password floor (KM-02c). It is UI-only, so nothing else
+      # exercises it; this asserts it accepts strong lowercase secrets and
+      # refuses short, low-variety and known-weak ones.
+      - name: Password policy floor
+        run: npm run test:password-policy
+
       # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
       # § Screenshots). It reads the committed PNG headers, so it needs
       # neither a build nor a browser and belongs in this cheap job. Nothing
