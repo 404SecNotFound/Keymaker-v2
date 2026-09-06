@@ -108,6 +108,6 @@ test("following the plan, encrypting issues the heir's shares", async ({ page })
   // rendered guidance would land on an ordinary container and no dialog.
   const dialog = page.getByRole("dialog", { name: /Save these 3 shares now/ });
   await expect(dialog).toBeVisible({ timeout: 90_000 });
-  await expect(dialog.getByText(/^KMSHARE1:/).first()).toBeVisible();
-  await expect(dialog.getByText(/^KMSHARE1:/)).toHaveCount(3);
+  await expect(dialog.getByText(/^KMSHARE2:/).first()).toBeVisible();
+  await expect(dialog.getByText(/^KMSHARE2:/)).toHaveCount(3);
 });

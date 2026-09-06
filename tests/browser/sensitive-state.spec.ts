@@ -92,7 +92,7 @@ test.describe("one clearing function", () => {
     await visible(page.getByRole("tab", { name: "Decrypt" })).click();
     await useTextMode(page);
     await visible(page.getByRole("button", { name: /^Use recovery shares$/i })).click();
-    await visible(page.getByPlaceholder(/KMSHARE1:/)).fill(SHARE_TEXT);
+    await visible(page.getByPlaceholder(/KMSHARE2:/)).fill(SHARE_TEXT);
 
     // Mode change runs resetState, which cleared the password and the file and
     // not the shares — so k credentials that open the container survived the
@@ -107,7 +107,7 @@ test.describe("one clearing function", () => {
 
     // And the toggle came back off, so the textarea is not merely hidden.
     await expect(
-      page.getByPlaceholder(/KMSHARE1:/),
+      page.getByPlaceholder(/KMSHARE2:/),
       "the share textarea is still mounted, so its contents are still in state"
     ).toHaveCount(0);
   });

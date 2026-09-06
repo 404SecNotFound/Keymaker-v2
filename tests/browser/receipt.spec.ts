@@ -106,7 +106,7 @@ test("its buttons download the container, print the paper vault, and rehearse fr
   await expect(page.getByRole("tab", { name: "Decrypt" })).toHaveAttribute("aria-selected", "true");
   await expect(visible(page.getByPlaceholder("Enter text to decrypt"))).toHaveValue(armored);
   await expect(visible(page.getByRole("switch", { name: /Verify only/ }))).toHaveAttribute("aria-checked", "true");
-  await expect(visible(page.getByPlaceholder(/KMSHARE1:/))).toBeVisible();
+  await expect(visible(page.getByPlaceholder(/KMSHARE2:/))).toBeVisible();
 });
 
 test("the byte map sweeps while sealing, and with reduced motion it simply appears — the receipt either way", async ({

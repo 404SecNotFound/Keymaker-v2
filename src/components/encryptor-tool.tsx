@@ -9,7 +9,7 @@ import { SelfExtractExport } from "@/components/self-extract-export";
 import { InheritancePlan } from "@/components/inheritance-plan";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
-import { looksLikePaperPart, describePaperPart, decodePaperParts, splitPaperParts } from "@/lib/keym-v2-paper";
+import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import { meetsPasswordPolicy, PASSWORD_POLICY_HINT } from "@/lib/password-policy";
 import {
@@ -241,10 +241,11 @@ function parseShareLines(text: string): string[] {
  * but "however much you like" is not a size for an input the UI rescans that
  * often.
  *
- * The numbers come from the format, generously. A `KMSHARE1:` line is about 95
- * characters and the UI issues at most 8 shares, so 16 lines is double any real
- * share set and 8 KiB is several times the text they occupy. Past that it is a
- * paste into the wrong box, which is what §7 is for.
+ * The numbers come from the format, generously. A `KMSHARE2:` line is about 140
+ * characters (the wider v2 set id and checksum; a legacy `KMSHARE1:` is ~95) and
+ * the UI issues at most 8 shares, so 16 lines is double any real share set and
+ * 8 KiB is several times the text they occupy. Past that it is a paste into the
+ * wrong box, which is what §7 is for.
  */
 const MAX_SHARE_INPUT_CHARS = 8 * 1024;
 const MAX_SHARE_LINES = 16;
@@ -934,6 +935,33 @@ const FEATURE_CARDS = [
   },
 ] as const;
 
+/**
+ * §7.3. Encode a container into KMPART2 paper parts, each sized to fit one QR
+ * symbol, and decide whether it is simply too large to be a paper backup.
+ *
+ * Async because the container fingerprint and per-part checksums are SHA-256, so
+ * this runs in the print handler before the sheet mounts rather than in the
+ * sheet's render: a QR whose value arrives a tick after layout prints blank, and
+ * a page must never go to paper half-formed. The sheet is handed a finished
+ * array. `paperCapacityV2` reserves the v2 metadata so no part overflows its
+ * symbol — the trap a naive swap of the v1 writer would have hit.
+ */
+async function preparePaperParts(
+  container: Uint8Array
+): Promise<{ parts: string[]; tooLarge: boolean }> {
+  const { encodePaperPartsV2, paperCapacityV2, PAPER_QR_MAX_BYTES } = await import(
+    "@/lib/keym-v2-paper"
+  );
+  try {
+    const parts = await encodePaperPartsV2(container, paperCapacityV2(PAPER_QR_MAX_BYTES));
+    // 300 symbols is ~500 kB of container and a ream of paper. Past that the
+    // honest answer is "this is not a paper backup", not pages no one will scan.
+    return { parts, tooLarge: parts.length > 300 };
+  } catch {
+    return { parts: [], tooLarge: true };
+  }
+}
+
 export function EncryptorTool() {
   const [mode, setMode] = useState<Mode>("encrypt");
   const [inputType, setInputType] = useState<InputType>('file');
@@ -1323,6 +1351,10 @@ export function EncryptorTool() {
    */
   const [paperVault, setPaperVault] = useState<{
     container: Uint8Array;
+    /** §7.3 KMPART2 parts, encoded before this state is set so the sheet mounts ready. */
+    parts: string[];
+    /** The container needs too many symbols to be a paper backup. */
+    tooLarge: boolean;
     shares?: string[];
     threshold?: number;
     printedOn: string;
@@ -1599,7 +1631,7 @@ export function EncryptorTool() {
    * is on UTF-8 bytes, and a field measured in UTF-16 code units would disagree
    * with it for any non-ASCII secret.
    */
-  const handleTextSecretChange = useCallback((next: string) => {
+  const handleTextSecretChange = useCallback(async (next: string) => {
     const decrypting = mode === 'decrypt';
     if (decrypting) {
       if (next.length > MAX_TEXT_ARMOR_CHARS) {
@@ -1631,7 +1663,7 @@ export function EncryptorTool() {
     //
     // The text is kept, not refused. Throwing away what they just pasted would
     // be the second unhelpful thing to do; the notice says where it belongs.
-    if (decrypting && next.trimStart().toUpperCase().startsWith("KMSHARE1:")) {
+    if (decrypting && /^KMSHARE[12]:/.test(next.trimStart().toUpperCase())) {
       setTextInputRejected(
         'That is a recovery share, not an encrypted container. Put the container here, ' +
         'then choose "Use recovery shares" beside the password field to enter it.'
@@ -1670,7 +1702,7 @@ export function EncryptorTool() {
       return;
     }
 
-    // §7.1. Paper parts, and the same rule §7.2 sets for a self-extracting
+    // §7.1/§7.3. Paper parts, and the same rule §7.2 sets for a self-extracting
     // page: a reader that recognises the encoding and *can* use it must use it.
     //
     // This branch used to only report. It told the reader "scan them all into
@@ -1680,14 +1712,18 @@ export function EncryptorTool() {
     // the app; only `keym2.py join` ever used it. So the one instruction the
     // paper vault gives its own user could not be followed in the tool that
     // gave it.
+    //
+    // Version-aware: `decodePaperPartsAny` dispatches on the prefix, so a
+    // KMPART2 set (what the vault now writes) and any older KMPART1 page both
+    // reassemble here. It is async because §7.3's checksums are SHA-256.
     if (decrypting && looksLikePaperPart(next)) {
       const lines = splitPaperParts(next);
       try {
         // Structural, never routed through the AEAD, for the reason the
-        // self-extract branch gives above and `decodePaperParts` repeats: a
-        // missing page reported as a decryption failure sends someone to
-        // retype a password that was never wrong.
-        const container = decodePaperParts(lines);
+        // self-extract branch gives above: a missing page reported as a
+        // decryption failure sends someone to retype a password that was
+        // never wrong.
+        const container = await decodePaperPartsAny(lines);
         setTextInputRejected(null);
         setTextSecret(armorKeym2(container));
         toast({
@@ -2050,7 +2086,8 @@ export function EncryptorTool() {
    * they carry, then hand that text to the same routing a paste gets.
    *
    * A Keymaker QR encodes exactly what the Decrypt text box already accepts:
-   * a `keym2:` armor string, a `KMPART1:` paper part, or a `KMSHARE1:` share.
+   * a `keym2:` armor string, a `KMPART2:`/`KMPART1:` paper part, or a
+   * `KMSHARE2:`/`KMSHARE1:` share.
    * So this decodes image to string and lets `handleTextSecretChange` decide
    * what the string is. Several parts are joined with newlines, in the order
    * the files were given, which is the shape `decodePaperParts` reassembles.
@@ -3478,7 +3515,7 @@ export function EncryptorTool() {
                   id="share-input"
                   value={shareInput}
                   onChange={(e) => handleShareInputChange(e.target.value)}
-                  placeholder={"KMSHARE1:...\nKMSHARE1:...\nOne share per line"}
+                  placeholder={"KMSHARE2:...\nKMSHARE2:...\nOne share per line"}
                   rows={4}
                   spellCheck={false}
                   autoCorrect="off"
@@ -4676,8 +4713,12 @@ export function EncryptorTool() {
   const printPaperVault = useCallback(async () => {
     if (!outputText.startsWith("keym2:")) return;
     const { dearmorKeym2 } = await import("@/lib/keym-v2");
+    const container = dearmorKeym2(outputText);
+    const { parts, tooLarge } = await preparePaperParts(container);
     setPaperVault({
-      container: dearmorKeym2(outputText),
+      container,
+      parts,
+      tooLarge,
       printedOn: new Date().toISOString().slice(0, 10),
       rehearsal: rehearsalStamp,
     });
@@ -5458,8 +5499,12 @@ export function EncryptorTool() {
                 if (!issuedShares || !outputText.startsWith("keym2:")) return;
                 try {
                   const { dearmorKeym2 } = await import("@/lib/keym-v2");
+                  const container = dearmorKeym2(outputText);
+                  const { parts, tooLarge } = await preparePaperParts(container);
                   setPaperVault({
-                    container: dearmorKeym2(outputText),
+                    container,
+                    parts,
+                    tooLarge,
                     shares: issuedShares.shares,
                     threshold: issuedShares.threshold,
                     printedOn: new Date().toISOString().slice(0, 10),
@@ -5532,7 +5577,7 @@ export function EncryptorTool() {
                 id="rehearsal-input"
                 value={rehearsalInput}
                 onChange={(e) => handleRehearsalInputChange(e.target.value)}
-                placeholder={"KMSHARE1:...\nKMSHARE1:...\nOne strip per line"}
+                placeholder={"KMSHARE2:...\nKMSHARE2:...\nOne strip per line"}
                 rows={3}
                 spellCheck={false}
                 autoCorrect="off"
@@ -5624,6 +5669,8 @@ export function EncryptorTool() {
       {paperVault ? (
         <PaperVault
           container={paperVault.container}
+          parts={paperVault.parts}
+          tooLarge={paperVault.tooLarge}
           shares={paperVault.shares}
           threshold={paperVault.threshold}
           printedOn={paperVault.printedOn}

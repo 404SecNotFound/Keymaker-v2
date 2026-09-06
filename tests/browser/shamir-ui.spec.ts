@@ -92,7 +92,7 @@ async function encryptWithShares(
   const armored = await page.evaluate(
     () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
   );
-  return { armored, shares: shares.filter((s) => s.startsWith("KMSHARE1:")) };
+  return { armored, shares: shares.filter((s) => s.startsWith("KMSHARE2:")) };
 }
 
 test.describe("enrolling a share set", () => {
@@ -100,7 +100,7 @@ test.describe("enrolling a share set", () => {
     const { armored, shares } = await encryptWithShares(page, 2, 3);
 
     expect(shares, "the share set was not produced").toHaveLength(3);
-    for (const s of shares) expect(s).toMatch(/^KMSHARE1:[0-9A-HJKMNP-TV-Z-]+$/);
+    for (const s of shares) expect(s).toMatch(/^KMSHARE2:[0-9A-HJKMNP-TV-Z-]+$/);
     expect(new Set(shares).size, "two shares came out identical").toBe(3);
     expect(armored.startsWith("keym2:"), "the container is not v2 armor").toBe(true);
   });

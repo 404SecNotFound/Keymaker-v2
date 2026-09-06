@@ -82,5 +82,17 @@ ok(m.looksLikePaperPart(parts[0]), "looksLikePaperPart recognises a v2 part");
 const d = m.describePaperPart(parts[2]);
 ok(d && d.index === 3 && d.total === parts.length, "describePaperPart reads a v2 part's i of n");
 
+// R02: the QR-capacity trap. `paperCapacityV2` reserves the KMPART2 metadata —
+// the 22-char fingerprint, the length, the checksum, the separators — so every
+// part it sizes fits one symbol. Reusing `paperCapacity`'s KMPART1 figure would
+// push a part past the budget; the control shows it does, which is the defect a
+// naive swap of the v1 writer would have shipped.
+const budget = m.PAPER_QR_MAX_BYTES;
+const big = Uint8Array.from({ length: 6000 }, (_, i) => (i * 13 + 1) & 0xff);
+const fit = await m.encodePaperPartsV2(big, m.paperCapacityV2(budget));
+ok(fit.every((p) => p.length <= budget), `every v2 part fits the ${budget}-char symbol budget`);
+const over = await m.encodePaperPartsV2(big, m.paperCapacity(budget));
+ok(over.some((p) => p.length > budget), "control: the v1 (KMPART1) capacity overflows a v2 symbol");
+
 console.log(failed === 0 ? "\nAll recovery-envelope checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

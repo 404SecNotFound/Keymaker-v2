@@ -1,11 +1,6 @@
 "use client";
 
 import { QRCodeCanvas } from "qrcode.react";
-import {
-  encodePaperParts,
-  paperCapacity,
-  PAPER_QR_MAX_BYTES,
-} from "@/lib/keym-v2-paper";
 import { parseKeym2CoreHeader, keym2SlotCountOffset } from "@/lib/keym-v2";
 import { byteMapSpans } from "@/components/container-inspector";
 
@@ -76,8 +71,19 @@ import { byteMapSpans } from "@/components/container-inspector";
  */
 
 export interface PaperVaultProps {
-  /** The container to print, raw bytes. */
+  /** The container to print, raw bytes. Used only for the header byte map. */
   container: Uint8Array;
+  /**
+   * §7.3 KMPART2 paper parts, encoded by the caller. Preparation is async
+   * (the fingerprint and per-part checksums are SHA-256), so it happens in the
+   * print handler before this sheet mounts rather than in render: a QR whose
+   * value arrived a tick late prints blank, and a sheet must never go to paper
+   * half-formed. An empty array with `tooLarge` false is the caller still
+   * preparing, and the sheet says so instead of printing nothing.
+   */
+  parts: readonly string[];
+  /** The container will not fit a sane number of symbols; print the procedure only. */
+  tooLarge: boolean;
   /** §4.6 share strings, if a set was enrolled in the same operation. */
   shares?: readonly string[] | undefined;
   /** The k of k-of-n, needed to say what a share is worth. */
@@ -92,8 +98,6 @@ export interface PaperVaultProps {
    */
   rehearsal?: { on: string; strips: readonly number[] } | undefined;
 }
-
-const CAPACITY = paperCapacity(PAPER_QR_MAX_BYTES);
 
 /**
  * The header's shape, read from the bytes the sheet is printing. Null for
@@ -132,25 +136,14 @@ function aYearAfter(isoDate: string): string {
 
 export function PaperVault({
   container,
+  parts,
+  tooLarge,
   shares,
   threshold,
   label,
   printedOn,
   rehearsal,
 }: PaperVaultProps) {
-  let parts: string[] = [];
-  let tooLarge = false;
-  try {
-    parts = encodePaperParts(container, CAPACITY);
-  } catch {
-    tooLarge = true;
-  }
-
-  // 300 symbols is ~500 kB of container and a ream of paper. Past that the
-  // honest answer is "this is not a paper backup", not 300 pages someone will
-  // never scan.
-  if (parts.length > 300) tooLarge = true;
-
   const hasStrips = !!shares && shares.length > 0;
   const k = threshold ?? 0;
   const n = shares?.length ?? 0;
@@ -209,7 +202,7 @@ export function PaperVault({
           <ol>
             <li>
               Scan every square in the block below. Each reads as a line beginning{" "}
-              <code>KMPART1:</code>.
+              <code>KMPART2:</code>.
             </li>
             <li>
               Save all the lines in one text file, <code>parts.txt</code>.
@@ -388,7 +381,7 @@ export function PaperVault({
           </li>
           <li>
             Scan every symbol above. Each decodes to a line starting{" "}
-            <code>KMPART1:</code>. Save them all into one file,{" "}
+            <code>KMPART2:</code>. Save them all into one file,{" "}
             <code>parts.txt</code>, one per line.
           </li>
           <li>
@@ -415,7 +408,7 @@ export function PaperVault({
 
       <footer className="pv-foot">
         Format KEYM v2 · specified in <code>docs/FORMAT-V2-DESIGN.md</code> ·
-        paper parts are §7.1 · this page prints no secret except what you write
+        paper parts are §7.3 · this page prints no secret except what you write
         on it.
       </footer>
     </div>

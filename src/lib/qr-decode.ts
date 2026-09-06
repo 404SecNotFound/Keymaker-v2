@@ -6,8 +6,9 @@
  * how to route:
  *
  *   - a full armor string, `keym2:…`, from the encrypt-side output QR;
- *   - a paper part, `KMPART1:i/n:…`, from the paper vault (one QR per part);
- *   - a recovery share, `KMSHARE1:…`, from a recovery strip.
+ *   - a paper part, `KMPART2:i/n:…` (or a legacy `KMPART1:`), from the paper
+ *     vault (one QR per part);
+ *   - a recovery share, `KMSHARE2:…` (or a legacy `KMSHARE1:`), from a strip.
  *
  * So the decoder's only job is image → string. What the string *means* is left
  * to `handleTextSecretChange`, which already reassembles paper parts, unwraps a
