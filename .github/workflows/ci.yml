@@ -8,10 +8,14 @@ name: CI
 # decryption of users' existing files. This one needs the dependency tree
 # (hash-wasm, @noble/ciphers, esbuild, next), so it is kept apart.
 
+# On main this no longer runs on `push`. deploy.yml calls it via
+# `workflow_call` as a prerequisite of build/sign/deploy (R01), so a merge to
+# main verifies before it publishes rather than beside it. Running it here on
+# push as well would test the same commit twice. PRs still run it directly, so
+# a branch-protection required check has a run to gate on.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions: {}
@@ -84,6 +88,16 @@ jobs:
       # that as tampering. This reads both and refuses to let them drift.
       - name: The release rebuild recipe still matches release.yml
         run: npm run test:release-recipe
+
+      # R01: deploy.yml and release.yml must not build, sign or publish bytes
+      # the suites have not passed. This asserts the `needs` edges that make the
+      # publish jobs wait for every verification workflow, and the
+      # `workflow_call` triggers that let them be waited on. A deleted edge
+      # turns a deploy green while testing nothing; this catches that in the PR
+      # that deletes it. This job is itself one of the gated suites, so the gate
+      # guards its own wiring.
+      - name: Publication is gated on the test suites
+        run: npm run test:release-gate
 
       - name: KEYM v1 regression suite
         run: npm run test:keymaker

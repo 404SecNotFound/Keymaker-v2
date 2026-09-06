@@ -21,7 +21,41 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # R01: verification is a prerequisite of building, signing and publishing the
+  # SAME commit, in the SAME run. Each job below calls a test workflow through
+  # its `workflow_call` trigger; `build` needs all four, so nothing is built,
+  # signed or deployed unless every suite passed on this exact SHA. This is the
+  # property a separate "tests" workflow running beside deploy could not give:
+  # a green run on an earlier commit can never authorize this one.
+  #
+  # `contents: read` is set here because a called workflow's token is capped by
+  # the calling job; its jobs each declare the same and need nothing more.
+  verify-crypto:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/crypto-regression.yml
+
+  verify-ci:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  verify-conformance:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/conformance.yml
+
+  verify-browser:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/browser.yml
+
   build:
+    # Gate the whole publish chain on verification. build -> sign -> deploy, so
+    # gating build gates all three. The bytes built here are byte-identical to
+    # the ones verify-ci built and proved reproducible, so "publish the tested
+    # artifact" holds without threading the artifact between workflows.
+    needs: [verify-crypto, verify-ci, verify-conformance, verify-browser]
     runs-on: ubuntu-latest
     permissions:
       contents: read

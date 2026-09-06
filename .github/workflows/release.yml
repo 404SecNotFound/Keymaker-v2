@@ -43,15 +43,19 @@ env:
   NEXT_TELEMETRY_DISABLED: "1"
 
 jobs:
-  build:
+  # Fail in the first thirty seconds rather than after a four-minute build, the
+  # full test matrix and a Sigstore signature. These two checks were steps at
+  # the head of `build`; they are their own job now so that the R01 verification
+  # gate can run *after* them (build needs the verify jobs, the verify jobs need
+  # this), keeping the fast-fail property while still refusing to sign or
+  # publish anything the suites have not passed.
+  preflight:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Don't persist the GITHUB_TOKEN in .git/config where dependency
-          # install scripts could read it.
           persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -59,15 +63,14 @@ jobs:
           node-version: 22
           cache: npm
 
-      # Fail in the first thirty seconds rather than after a four-minute build
-      # and a Sigstore signature. This runs the same generator `publish` uses,
-      # so there is no second copy of the rule to drift: it rejects a ref that
-      # is not `v<package.json version>`, and it proves the notes compose at all
-      # before anything gets signed.
+      # Runs the same generator `publish` uses, so there is no second copy of
+      # the rule to drift: it rejects a ref that is not `v<package.json
+      # version>`, and it proves the notes compose at all before anything gets
+      # signed.
       - name: The release notes must compose for this ref
         # Every value a tag author controls reaches this script through `env`
         # rather than `${{ }}` interpolation. See the note on the annotated-tag
-        # check above: git permits quotes, semicolons and $( ) in a ref name,
+        # check below: git permits quotes, semicolons and $( ) in a ref name,
         # and `${{ }}` is substituted before bash parses the line.
         env:
           TAG: ${{ github.ref_name }}
@@ -84,8 +87,8 @@ jobs:
       # #29" as its notes — but declining quietly meant v2.0.0 shipped
       # lightweight and nobody found out until a review said so.
       #
-      # Asked over the API rather than by fetching tags, so the build job keeps
-      # its shallow checkout. `object.type` is "tag" for an annotated tag and
+      # Asked over the API rather than by fetching tags, so this job keeps its
+      # shallow checkout. `object.type` is "tag" for an annotated tag and
       # "commit" for a lightweight one.
       - name: The tag must be annotated
         env:
@@ -107,6 +110,53 @@ jobs:
             exit 1
           fi
           echo "$TAG is annotated."
+
+  # R01, for the release channel: the same suites that gate a deployment gate a
+  # published release, on the tagged commit, in this run. `build` needs all
+  # four, so nothing is built, signed, packaged or published unless every suite
+  # passed on this exact tag. Each needs `preflight`, so a lightweight tag or
+  # a changelog that will not compose still fails in the first thirty seconds
+  # rather than after the matrix.
+  verify-crypto:
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/crypto-regression.yml
+
+  verify-ci:
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/ci.yml
+
+  verify-conformance:
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/conformance.yml
+
+  verify-browser:
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/browser.yml
+
+  build:
+    needs: [verify-crypto, verify-ci, verify-conformance, verify-browser]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # Don't persist the GITHUB_TOKEN in .git/config where dependency
+          # install scripts could read it.
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
 
       - run: npm ci
 

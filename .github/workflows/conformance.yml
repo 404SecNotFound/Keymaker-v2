@@ -13,10 +13,12 @@ name: Format conformance
 # without bounding them, so an implementation written faithfully from the prose
 # reproduced a resource-exhaustion flaw the TypeScript had already fixed.
 
+# No `push` on main: deploy.yml calls this via `workflow_call` before it
+# publishes (R01), so main is verified once as a deploy prerequisite rather
+# than a second time on push. PRs still run it directly.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions: {}

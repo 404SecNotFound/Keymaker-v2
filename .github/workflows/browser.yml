@@ -13,10 +13,12 @@ name: Browser tests
 # No amount of additional Node testing closes that gap. Only a browser loading
 # the built output does.
 
+# No `push` on main: deploy.yml calls this via `workflow_call` before it
+# publishes (R01), so main is verified once as a deploy prerequisite rather
+# than a second time on push. PRs still run it directly.
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
   workflow_dispatch:
 
 permissions: {}
