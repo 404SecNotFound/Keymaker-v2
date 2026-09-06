@@ -54,6 +54,13 @@ jobs:
       - name: Password policy floor
         run: npm run test:password-policy
 
+      # §7.3 KMPART2 diagnosis on the TypeScript side (corrupt part named,
+      # truncated tail caught, mixed set refused). The byte-parity with the
+      # Python reference is in the conformance job; this is the negative-control
+      # half the parity gate does not cover.
+      - name: Recovery envelope diagnosis
+        run: npm run test:recovery-envelopes
+
       # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
       # § Screenshots). It reads the committed PNG headers, so it needs
       # neither a build nor a browser and belongs in this cheap job. Nothing

@@ -200,16 +200,190 @@ export function splitPaperParts(text: string): string[] {
  */
 export function looksLikePaperPart(text: string): boolean {
   const first = splitPaperParts(text)[0];
-  return first !== undefined && first.startsWith(KEYM2_PART_PREFIX);
+  return (
+    first !== undefined &&
+    (first.startsWith(KEYM2_PART_PREFIX) || first.startsWith(KEYM2_PART2_PREFIX))
+  );
 }
 
 /**
  * The `i of n` a wrong-box paste should be told, without committing to the
  * whole part being valid — the point is to name what they pasted, not to
- * validate it.
+ * validate it. Reads either version's prefix.
  */
 export function describePaperPart(text: string): { index: number; total: number } | null {
-  const m = PART_RE.exec(text.replace(/\s+/g, ""));
+  const stripped = text.replace(/\s+/g, "");
+  const m = PART_RE.exec(stripped) ?? PART2_RE.exec(stripped);
   if (!m) return null;
   return { index: Number(m[1]), total: Number(m[2]) };
+}
+
+// ---------------------------------------------------------------------------
+// Paper parts, version 2 (§7.3, KMPART2)
+// ---------------------------------------------------------------------------
+//
+// Mirrors `reference/keym2.py`'s `encode_parts_v2`/`decode_parts_v2` byte for
+// byte. The AEAD stays the only authority on integrity; KMPART2 adds a container
+// fingerprint, a total length and a per-part checksum so a mis-scan, a mixed set
+// or a truncated tail is named before the KDF instead of surfacing as a generic
+// "decryption failed".
+
+export const KEYM2_PART2_PREFIX = "KMPART2:";
+
+// Every field after the counts is base64url or decimal, none of which contains a
+// colon, so the fixed split is unambiguous. cid is 22 chars (16 bytes), the
+// checksum 6 (4 bytes); both lengths are pinned.
+const PART2_RE =
+  /^KMPART2:(\d{1,4})\/(\d{1,4}):([A-Za-z0-9_-]{22}):(\d{1,10}):([A-Za-z0-9_-]+):([A-Za-z0-9_-]{6})$/;
+
+const PART_CHECKSUM_CTX = new TextEncoder().encode("keymaker.v2.part-checksum");
+
+async function sha256(...parts: Uint8Array[]): Promise<Uint8Array> {
+  let total = 0;
+  for (const p of parts) total += p.length;
+  const buf = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) {
+    buf.set(p, at);
+    at += p.length;
+  }
+  return new Uint8Array(await crypto.subtle.digest("SHA-256", buf as BufferSource));
+}
+
+/** §7.3. The 128-bit fingerprint that is both the id and the whole digest. */
+async function containerFingerprint(container: Uint8Array): Promise<string> {
+  return b64urlEncode((await sha256(container)).slice(0, 16));
+}
+
+/** §7.3. Four bytes localising a corrupt part. A diagnosis, not a guarantee. */
+async function partChecksum(chunk: Uint8Array): Promise<string> {
+  return b64urlEncode((await sha256(PART_CHECKSUM_CTX, chunk)).slice(0, 4));
+}
+
+/**
+ * §7.3. Split a container into KMPART2 paper parts of at most `capacity` raw
+ * bytes. Every part carries the fingerprint and total length, so a lone part
+ * names its backup and a truncated set is caught before the container reader.
+ */
+export async function encodePaperPartsV2(
+  container: Uint8Array,
+  capacity: number
+): Promise<string[]> {
+  if (capacity < 1) throw new Error("capacity must be at least one byte");
+  if (container.length === 0) {
+    throw new Error("refusing to write paper parts for an empty container");
+  }
+  const cid = await containerFingerprint(container);
+  const length = container.length;
+  const slices: Uint8Array[] = [];
+  for (let i = 0; i < container.length; i += capacity) {
+    slices.push(container.subarray(i, i + capacity));
+  }
+  if (slices.length > 9999) {
+    throw new Error(`${slices.length} parts is not a paper backup anyone will reassemble`);
+  }
+  const out: string[] = [];
+  for (let i = 0; i < slices.length; i++) {
+    const s = slices[i] as Uint8Array;
+    out.push(
+      `${KEYM2_PART2_PREFIX}${i + 1}/${slices.length}:${cid}:${length}:` +
+        `${b64urlEncode(s)}:${await partChecksum(s)}`
+    );
+  }
+  return out;
+}
+
+function timingSafeEqualStr(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
+}
+
+/**
+ * §7.3. Reassemble KMPART2 parts, naming what is wrong before the container
+ * reader sees anything. Same order as the Python reference: a wrong-shaped line,
+ * then a mixed set, then a corrupt part, then a missing or truncated one, then
+ * the fingerprint over the whole.
+ */
+export async function decodePaperPartsV2(parts: readonly string[]): Promise<Uint8Array> {
+  const seen = new Map<number, Uint8Array>();
+  const totals = new Set<number>();
+  const cids = new Set<string>();
+  const lengths = new Set<number>();
+  const corrupt: number[] = [];
+
+  for (const raw of parts) {
+    const text = raw.replace(/\s+/g, "");
+    if (!text) continue;
+    const m = PART2_RE.exec(text);
+    if (!m) {
+      throw new Error(
+        `Not a v2 paper part: "${text.slice(0, 24)}". Parts look like ` +
+          `${KEYM2_PART2_PREFIX}1/4:… check the whole symbol scanned.`
+      );
+    }
+    const index = Number(m[1]);
+    const total = Number(m[2]);
+    const chunk = b64urlDecode(m[5] as string);
+    if (total < 1) throw new Error("A part claims to be one of zero parts.");
+    if (index < 1 || index > total) throw new Error(`Part ${index} of ${total} is out of range.`);
+    if (seen.has(index)) throw new Error(`Part ${index} was supplied twice.`);
+    if (!timingSafeEqualStr(m[6] as string, await partChecksum(chunk))) corrupt.push(index);
+    totals.add(total);
+    cids.add(m[3] as string);
+    lengths.add(Number(m[4]));
+    seen.set(index, chunk);
+  }
+
+  if (seen.size === 0) throw new Error("No parts supplied.");
+  if (cids.size !== 1 || totals.size !== 1 || lengths.size !== 1) {
+    throw new Error("These parts are from different backups.");
+  }
+  if (corrupt.length) {
+    throw new Error(
+      `Part ${corrupt.sort((a, b) => a - b).join(", ")} looks corrupted: the part ` +
+        "checksum does not match. Re-scan or re-key it."
+    );
+  }
+
+  const total = [...totals][0] as number;
+  const missing: number[] = [];
+  for (let i = 1; i <= total; i++) if (!seen.has(i)) missing.push(i);
+  if (missing.length) {
+    throw new Error(
+      `Missing part ${missing.join(", ")} of ${total}. Every part is needed. ` +
+        "This is not a k-of-n share set."
+    );
+  }
+
+  let byteLen = 0;
+  for (const slice of seen.values()) byteLen += slice.length;
+  const container = new Uint8Array(byteLen);
+  let offset = 0;
+  for (let i = 1; i <= total; i++) {
+    const slice = seen.get(i) as Uint8Array;
+    container.set(slice, offset);
+    offset += slice.length;
+  }
+  const declaredLength = [...lengths][0] as number;
+  if (container.length !== declaredLength) {
+    throw new Error(
+      `The reassembled backup is ${container.length} bytes but should be ` +
+        `${declaredLength}. A part is truncated.`
+    );
+  }
+  if ((await containerFingerprint(container)) !== ([...cids][0] as string)) {
+    throw new Error("The reassembled backup does not match its fingerprint.");
+  }
+  return container;
+}
+
+/** Dispatch on the version digit: §7.1 `KMPART1` or its v2 §7.3 `KMPART2`. */
+export async function decodePaperPartsAny(parts: readonly string[]): Promise<Uint8Array> {
+  const items = parts.map((p) => p.replace(/\s+/g, "")).filter((p) => p !== "");
+  if (items.some((p) => p.startsWith(KEYM2_PART2_PREFIX))) {
+    return decodePaperPartsV2(items);
+  }
+  return decodePaperParts(items);
 }

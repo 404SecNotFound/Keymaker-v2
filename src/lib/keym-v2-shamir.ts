@@ -408,7 +408,7 @@ export async function decodeShare(text: string): Promise<Share> {
  */
 export async function combineShares(texts: string[], expectedSetId?: Uint8Array): Promise<Uint8Array> {
   if (texts.length === 0) reject();
-  const shares = await Promise.all(texts.map((t) => decodeShare(t)));
+  const shares = await Promise.all(texts.map((t) => decodeShareAny(t)));
 
   // Everything from here is inside the `finally`, because a decoded share value
   // is key material of the same class as the secret it reconstructs — k of them
@@ -424,7 +424,11 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
 
     const first = shares[0] as Share;
     if (shares.some((s) => !bytesEqual(s.setId, first.setId))) reject();
-    if (expectedSetId !== undefined && !bytesEqual(first.setId, expectedSetId)) reject();
+    // Prefix comparison, not whole: the container's slot_salt yields the 4-byte
+    // v1 id, and a v2 share's 16-byte id extends that same prefix. The shares
+    // still agree on their full id above; this only cross-checks the container.
+    if (expectedSetId !== undefined
+        && !bytesEqual(first.setId.slice(0, expectedSetId.length), expectedSetId)) reject();
 
     const indices = shares.map((s) => s.index);
     if (new Set(indices).size !== indices.length) reject();
@@ -439,5 +443,88 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
 
 /** §7 as amended by §4.6 — a share is not a container, and must not be read as one. */
 export function isKeym2Share(text: string): boolean {
-  return text.trimStart().toUpperCase().startsWith(SHARE_PREFIX);
+  const upper = text.trimStart().toUpperCase();
+  return upper.startsWith(SHARE_PREFIX) || upper.startsWith(SHARE2_PREFIX);
+}
+
+// ---------------------------------------------------------------------------
+// The v2 share record (§4.6, "The v2 share record" / KMSHARE2)
+// ---------------------------------------------------------------------------
+//
+// Mirrors `reference/keym2.py`. Envelope only: the set id and checksum widen to
+// 128 bits, the value, the field arithmetic and the slot are §4.6's, untouched.
+// New shares are v2; both versions are read.
+
+export const SHARE2_SET_ID_LEN = 16;
+export const SHARE2_CHECKSUM_LEN = 16;
+export const SHARE2_BODY_LEN = SHARE2_SET_ID_LEN + 1 + 1 + SHARE_VALUE_LEN; // 50
+export const SHARE2_LEN = SHARE2_BODY_LEN + SHARE2_CHECKSUM_LEN; // 66
+export const SHARE2_PREFIX = "KMSHARE2:";
+
+/**
+ * §4.6 v2. The §4.6 derivation, truncated to 128 bits. Its first four bytes are
+ * byte-identical to `shareSetId`, so a v1 set and a v2 set that open the same
+ * container never disagree about which container that is.
+ */
+export async function shareSetIdV2(slotSalt: Uint8Array): Promise<Uint8Array> {
+  if (slotSalt.length !== 32) usage("Slot salt must be 32 bytes.");
+  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_SHARE_SET, slotSalt]) as BufferSource);
+  return new Uint8Array(digest).slice(0, SHARE2_SET_ID_LEN);
+}
+
+async function shareChecksumV2(body: Uint8Array): Promise<Uint8Array> {
+  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_SHARE_CHECKSUM, body]) as BufferSource);
+  return new Uint8Array(digest).slice(0, SHARE2_CHECKSUM_LEN);
+}
+
+export async function packShareV2(share: Share): Promise<Uint8Array> {
+  if (share.setId.length !== SHARE2_SET_ID_LEN) usage("v2 share set id must be 16 bytes.");
+  if (share.value.length !== SHARE_VALUE_LEN) usage("Share value must be 32 bytes.");
+  if (share.threshold < SHAMIR_K_MIN || share.threshold > SHAMIR_K_MAX) {
+    usage(`Share threshold must be ${SHAMIR_K_MIN}..${SHAMIR_K_MAX}.`);
+  }
+  if (share.index < 1 || share.index > 255) usage("Share index must be 1..255.");
+  const body = concat([share.setId, new Uint8Array([share.threshold, share.index]), share.value]);
+  return concat([body, await shareChecksumV2(body)]);
+}
+
+/** §4.6 v2 and §6, for one share. Parsing is validation, as with `parseShare`. */
+export async function parseShareV2(record: Uint8Array): Promise<Share> {
+  if (record.length !== SHARE2_LEN) reject();
+  const body = record.subarray(0, SHARE2_BODY_LEN);
+  const checksum = record.subarray(SHARE2_BODY_LEN);
+  if (!bytesEqual(checksum, await shareChecksumV2(body))) reject();
+
+  const threshold = body[SHARE2_SET_ID_LEN] as number;
+  const index = body[SHARE2_SET_ID_LEN + 1] as number;
+  if (threshold < SHAMIR_K_MIN || threshold > SHAMIR_K_MAX) reject();
+  if (index === 0) reject();
+
+  return {
+    setId: body.slice(0, SHARE2_SET_ID_LEN),
+    threshold,
+    index,
+    value: body.slice(SHARE2_SET_ID_LEN + 2),
+  };
+}
+
+export async function encodeShareV2(share: Share): Promise<string> {
+  const body = b32Encode(await packShareV2(share));
+  const groups: string[] = [];
+  for (let i = 0; i < body.length; i += SHARE_GROUP) {
+    groups.push(body.slice(i, i + SHARE_GROUP));
+  }
+  return SHARE2_PREFIX + groups.join("-");
+}
+
+export async function decodeShareV2(text: string): Promise<Share> {
+  const stripped = text.trim();
+  if (!stripped.toUpperCase().startsWith(SHARE2_PREFIX)) reject();
+  return parseShareV2(b32Decode(stripped.slice(SHARE2_PREFIX.length), SHARE2_LEN));
+}
+
+/** Dispatch on the version digit: §4.6 `KMSHARE1` or its v2 `KMSHARE2`. */
+export async function decodeShareAny(text: string): Promise<Share> {
+  if (text.trim().toUpperCase().startsWith(SHARE2_PREFIX)) return decodeShareV2(text);
+  return decodeShare(text);
 }
