@@ -1,8 +1,6 @@
 # Keymaker
 
-[![CI](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/ci.yml/badge.svg)](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/ci.yml)
-[![Browser tests](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/browser.yml/badge.svg)](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/browser.yml)
-[![Format conformance](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/conformance.yml/badge.svg)](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/conformance.yml)
+[![Build, test and deploy](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/deploy.yml/badge.svg)](https://github.com/404SecNotFound/Keymaker-v2/actions/workflows/deploy.yml)
 [![Reproducible build](https://img.shields.io/badge/build-reproducible-2ea44f)](docs/VERIFYING.md)
 [![License](https://img.shields.io/badge/license-GPL--3.0-blue)](LICENSE)
 
