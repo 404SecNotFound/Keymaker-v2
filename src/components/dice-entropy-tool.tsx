@@ -439,8 +439,8 @@ export function DiceEntropyTool() {
         <div className={cn("flex items-start gap-2.5 rounded-lg border px-3 py-2.5", verdictUI.classes)}>
           <VerdictIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
-            <p className="text-[13px] font-medium">{verdictUI.title}</p>
-            <p className="mt-0.5 text-[12px]">{verdictUI.body}</p>
+            <p className="text-[13px] font-medium text-foreground">{verdictUI.title}</p>
+            <p className="mt-0.5 text-[12px] text-muted-foreground">{verdictUI.body}</p>
           </div>
         </div>
       </div>

@@ -51,7 +51,7 @@ test("after sealing, the receipt names the output, the KDF and the cipher as the
   expect(parsedKdf, "the parsed pane has no KDF detail to hold the receipt to").toMatch(/PBKDF2/);
   await expect(receipt(page).getByTestId("receipt-kdf")).toHaveText(parsedKdf);
   const cipher = (await receipt(page).getByTestId("receipt-cipher").textContent())!.trim();
-  await expect(page.getByTestId("container-inspector")).toContainText(`Payload sealed with ${cipher}`);
+  await expect(page.getByTestId("container-inspector")).toContainText(`Header declares ${cipher}`);
 
   await expect(receipt(page).getByTestId("receipt-written")).toContainText("text → keym2:");
   await expect(receipt(page).getByTestId("receipt-ways")).toContainText("Passphrase");

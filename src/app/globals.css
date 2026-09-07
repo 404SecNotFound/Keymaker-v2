@@ -1,5 +1,5 @@
 @import 'tailwindcss';
-@import '@fontsource-variable/plus-jakarta-sans/index.css';
+@import '@fontsource-variable/spline-sans/index.css';
 @import '@fontsource-variable/jetbrains-mono/index.css';
 
 @plugin 'tailwindcss-animate';
@@ -7,17 +7,9 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  Plus Jakarta Sans heads both text stacks, vendored from npm under OFL-1.1 and
-  therefore in the lockfile, precached, and available offline — like JetBrains
-  Mono beside it.
-
-  It replaces Satoshi, which headed these stacks and was never once drawn. The
-  ITF Free Font License forbids redistributing the binary through a repository
-  or a publicly accessible server, so it could not be committed here; the stack
-  fell through to whatever system UI face the reader happened to have, and the
-  whispered 300 display this system is built on was never what anyone saw.
-  docs/design/DESIGN-SYSTEM.md records the licence reasoning and the test any
-  replacement has to pass.
+  Spline Sans heads both text stacks, pinned from npm under OFL-1.1 and
+  precached for offline use alongside JetBrains Mono. Its licence travels
+  with the static export in public/licenses/spline-sans-OFL.txt.
 
   No @font-face block: the fontsource import above brings its own, pointing at
   files the bundler content-hashes into _next/static, which is what makes them
@@ -25,11 +17,11 @@
 */
 @theme {
   --font-display:
-    'Plus Jakarta Sans Variable', ui-sans-serif, system-ui, -apple-system,
+    'Spline Sans Variable', ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif;
 
   --font-body:
-    'Plus Jakarta Sans Variable', ui-sans-serif, system-ui, -apple-system,
+    'Spline Sans Variable', ui-sans-serif, system-ui, -apple-system,
     BlinkMacSystemFont, Segoe UI, Roboto, Helvetica Neue, Arial, sans-serif;
 
   --font-mono:
@@ -38,6 +30,13 @@
 
   --color-background: hsl(var(--background));
   --color-foreground: hsl(var(--foreground));
+  --color-heading: hsl(var(--heading));
+  --color-structural: hsl(var(--structural));
+  --color-action: hsl(var(--action));
+  --color-action-hover: hsl(var(--action-hover));
+  --color-selected: hsl(var(--selected));
+  --color-selection: hsl(var(--selection));
+  --color-selection-border: hsl(var(--selection-border));
 
   --color-card: hsl(var(--card));
   --color-inset: hsl(var(--inset));
@@ -71,11 +70,10 @@
   --color-input: hsl(var(--input));
   --color-ring: hsl(var(--ring));
 
-  /* Cards 20px, inputs and small controls 12px. Buttons are pills and carry
-     their own radius. */
+  /* Panel 12px, controls 8px, compact controls 6px. */
   --radius-lg: var(--radius);
-  --radius-md: calc(var(--radius) - 8px);
-  --radius-sm: calc(var(--radius) - 12px);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) - 6px);
 }
 
 /*
@@ -92,9 +90,7 @@
   ::before,
   ::backdrop,
   ::file-selector-button {
-    /* Tailwind's own gray-200 was the default here: a cool neutral, and the
-       one grey that could still reach a pseudo-element the `border-border`
-       rule below does not cover. Warm line instead. */
+    /* Explicit semantic border color, including pseudo-elements. */
     border-color: hsl(var(--border));
   }
 }
@@ -111,11 +107,8 @@
 }
 
 /*
-  Nightpaper. Every ground shares one warm hue family (taupe, 30–40°); a cool
-  or neutral grey anywhere is the defect this palette exists to prevent, so
-  each triplet below carries a hue even where the saturation is almost nil.
-  Values are the hex table in docs/design/DESIGN-SYSTEM.md converted to HSL —
-  that file is normative, this one follows it.
+  Graphite. Neutral near-black surfaces replace the earlier taupe palette.
+  The dark token values follow docs/design/DESIGN-SYSTEM.md.
 */
 @layer base {
   :root {
@@ -147,58 +140,49 @@
     --border-strong: 30 12% 78%;
     --input: 30 15% 89%;
     --ring: 36 14% 7%;
-    --radius: 1.25rem;
+    --radius: .75rem;
+    --heading: var(--foreground);
+    --structural: 215 54% 38%;
+    --action: 214 75% 35%;
+    --action-hover: 214 75% 28%;
+    --selected: 190 75% 28%;
+    --selection: 190 35% 93%;
+    --selection-border: 190 45% 40%;
   }
   .dark {
-    --background: 40 12% 5%; /* canvas      #0E0D0B */
-    --foreground: 30 17% 95%; /* ink         #F5F3F1 */
-    --card: 36 12% 8%; /* card        #171512 */
-    --inset: 30 12% 10%; /* inset       #1D1A17 */
-    /* The only surface above `inset`, and only ever a hover or active state:
-       a control already filled with `inset` has nowhere to go otherwise, and
-       lightening it by a fraction of white is the drift this palette exists
-       to prevent. Idle never uses it. */
-    --raised: 30 12% 13%; /* raised      #262320 */
-
-    /* The primary action is the highest-contrast neutral, not a colour. */
-    --primary: 30 17% 95%; /* #F5F3F1 fill */
-    --primary-foreground: 36 14% 7%; /* #14120F text */
-    --primary-hover: 0 20% 99%; /* #FDFCFC — hover lifts the fill */
-
-    --secondary: 30 12% 10%;
-    --secondary-foreground: 30 17% 95%;
-    --muted: 30 12% 10%; /* fields, wells, segmented tracks */
-    --muted-foreground: 32 8% 63%; /* body        #A9A29A — 7.7:1 on canvas */
-    /* #7E776F, the hex the system named for `muted`, lands at 4.40:1 on canvas
-       — under the 4.5:1 AA floor that DESIGN-SYSTEM.md says overrides it.
-       Lifting to 50% bought 4.98:1 and the file recorded it.
-
-       That fix measured one ground. `muted` is captions and hints, which live
-       in fields, wells and segmented tracks — `inset`, not `canvas` — and on
-       `inset` the lifted value still read 4.45:1, under the same floor it was
-       raised to clear. On `raised`, the hover state of those same controls, it
-       read 4.01:1. The floor applies to the pair, not to the token, so the
-       value is now the lowest lightness that clears 4.5:1 on every ground the
-       system defines: canvas 5.70, card 5.35, inset 5.09, raised 4.59. */
-    --subtle-foreground: 32 6% 54%; /* muted       #918A83 — 5.7:1 on canvas */
-
-    /* Hover/open surface, not an accent colour — there is no accent colour. */
-    --accent: 30 12% 10%;
-    --accent-foreground: 30 17% 95%;
-
-    /* Semantic status is data, not decoration: warm-shifted, and dark-on-fill
-       so a filled danger button clears AA where white-on-fill would not. */
-    --destructive: 8 74% 60%; /* #E5624E */
-    --destructive-foreground: 36 14% 7%;
-    --success: 147 39% 51%; /* #53B37E */
-    --success-foreground: 36 14% 7%;
-    --warning: 39 67% 55%; /* #D9A23F */
-    --warning-foreground: 36 14% 7%;
-
-    --border: 30 11% 15%; /* line        #292521 */
-    --border-strong: 30 12% 20%; /* line-strong #3A342E */
-    --input: 30 11% 15%;
-    --ring: 30 17% 95%; /* focus is ink, never a spark */
+    /* Neutral graphite surfaces; blue and ember remain in the container diagram. */
+    --background: 220.00 14.29% 4.12%; /* #090A0C */
+    --foreground: 216.00 20.00% 95.10%; /* #F0F2F5 */
+    --card: 216.00 12.82% 7.65%; /* #111316 */
+    --inset: 214.29 12.28% 11.18%; /* #191C20 */
+    --raised: 218.18 13.58% 15.88%; /* #23272E */
+    --primary: var(--action); /* #84B9FF */
+    --primary-foreground: 216.00 12.82% 7.65%; /* #111316 */
+    --primary-hover: var(--action-hover);
+    --secondary: 214.29 12.28% 11.18%; /* #191C20 */
+    --secondary-foreground: 216.00 20.00% 95.10%; /* #F0F2F5 */
+    --muted: 214.29 12.28% 11.18%; /* #191C20 */
+    --muted-foreground: 217.50 11.43% 72.55%; /* #B1B7C1 */
+    --subtle-foreground: 217.14 10.88% 62.16%; /* #949CA9 */
+    --accent: 214.29 12.28% 11.18%; /* #191C20 */
+    --accent-foreground: 216.00 20.00% 95.10%; /* #F0F2F5 */
+    --destructive-foreground: 216.00 12.82% 7.65%; /* #111316 */
+    --success-foreground: 216.00 12.82% 7.65%; /* #111316 */
+    --warning-foreground: 216.00 12.82% 7.65%; /* #111316 */
+    --border: 218.18 11.58% 18.63%; /* #2A2E35 */
+    --border-strong: 217.50 10.39% 30.20%; /* #454B55 */
+    --input: 217.50 10.39% 30.20%; /* #454B55 */
+    --ring: var(--action);
+    --destructive: 8 74% 60%;
+    --success: 154.211 61.290% 63.529%; /* #69DBAA — mint feedback */
+    --heading: 216.000 45.455% 97.843%; /* #F7F9FC */
+    --structural: 215.876 100.000% 80.980%; /* #9EC5FF — section numbers */
+    --action: 214.146 100.000% 75.882%; /* #84B9FF */
+    --action-hover: 213.976 100.000% 83.725%; /* #ACD0FF */
+    --selected: 185.000 83.544% 69.020%; /* #6EE7F2 */
+    --selection: 194.118 51.515% 12.941%; /* #102A32 */
+    --selection-border: 190.120 38.605% 42.157%; /* #428795 */
+    --warning: 39 67% 55%;
   }
 }
 
@@ -214,7 +198,7 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-body);
-    letter-spacing: -0.011em;
+    letter-spacing: 0;
     /* Flat canvas. The page-wide lime glow that used to sit here is gone with
        the rest of that identity; atmosphere belongs to the hero plate only,
        which fades to canvas before any form or text panel. */
@@ -317,6 +301,128 @@
 
 .paper-vault {
   display: none;
+}
+
+/* Linear workspace: flat surfaces, compact chrome, one responsive form. */
+.km-topbar { min-height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 24px; border-bottom: 1px solid var(--color-border); background: var(--color-background); }
+.km-brand { display: flex; align-items: center; gap: 10px; font-size: 15px; font-weight: 500; }
+.km-brand-divider { height: 16px; width: 1px; margin: 0 8px; background: var(--color-border-strong); }
+.km-topbar-context { color: var(--color-muted-foreground); font-size: 12px; font-weight: 400; }
+.km-command { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-muted-foreground); font-size: 12px; cursor: pointer; }
+.km-command kbd { border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 1px 4px; font-size: 12px; }
+.km-shell { display: grid; grid-template-columns: 204px minmax(0, 1fr); flex: 1; }
+.km-sidebar { display: flex; flex-direction: column; padding: 30px 14px 20px; border-right: 1px solid var(--color-border); }
+.km-nav-label { color: var(--color-subtle-foreground); font-size: 12px; letter-spacing: .06em; margin: 0 12px 14px; }
+.km-navigation { display: flex; height: auto; width: 100%; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 4px; padding: 0; border: 0; background: transparent; }
+.km-nav-item { display: flex; justify-content: flex-start; gap: 10px; min-height: 38px; border: 1px solid transparent; border-radius: 6px; padding: 8px 12px; color: var(--color-muted-foreground); font-size: 13px; font-weight: 400; cursor: pointer; box-shadow: none; }
+.km-nav-item:hover { background: var(--color-inset); color: var(--color-foreground); }
+.km-nav-item[data-state="active"]:not(:disabled) { background: var(--color-selection); border-color: var(--color-selection-border); color: var(--color-selected); box-shadow: none; }
+.km-sidebar-foot { margin-top: auto; padding: 60px 12px 0; display: flex; gap: 8px; color: var(--color-subtle-foreground); font-size: 12px; line-height: 1.6; }
+.km-sidebar-foot svg { flex-shrink: 0; margin-top: 3px; }
+.km-sidebar-foot p { color: var(--color-muted-foreground); }
+.km-main { width: 100%; max-width: 1280px; min-width: 0; margin: 0 auto; padding: 24px 36px 64px; }
+.km-page-heading { margin-bottom: 26px; }
+.km-breadcrumb { font-size: 12px; color: var(--color-subtle-foreground); }
+.km-breadcrumb span { margin: 0 8px; }
+.km-page-heading h1 { margin-top: 26px; font-size: 32px; line-height: 1.2; letter-spacing: -.025em; font-weight: 400; }
+.km-page-heading > p:last-child { margin-top: 10px; color: var(--color-muted-foreground); font-size: 13px; line-height: 1.7; }
+.km-intents { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+.km-intents button { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 10px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-action); font-size: 12px; cursor: pointer; }
+.km-intents button[aria-pressed="true"] { background: var(--color-selection); border-color: var(--color-selection-border); color: var(--color-selected); }
+.km-input-choice { display: flex; flex: 1; align-items: center; justify-content: center; gap: 7px; min-width: 0; cursor: pointer; border: 1px solid transparent; padding: 8px; font-size: 13px; font-weight: 500; color: var(--color-muted-foreground); transition: color 150ms, background-color 150ms, border-color 150ms; }
+.km-input-choice:hover { color: var(--color-foreground); }
+.km-input-choice svg { flex-shrink: 0; }
+.km-choice[aria-pressed="true"]:not(:disabled) { background: var(--color-selection); border-color: var(--color-selection-border); color: var(--color-selected); }
+.km-choice[aria-pressed="true"] .km-option-note { color: var(--color-muted-foreground); }
+.km-kdf-choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr)); gap: 8px; }
+.km-action:not(:disabled):not([aria-disabled="true"]) { color: var(--color-action); }
+.km-action:not(:disabled):not([aria-disabled="true"]):hover { color: var(--color-action-hover); }
+.km-upload-label, .km-upload-icon { color: var(--color-action); }
+.km-dropzone[data-dragging="true"] { background: var(--color-selection); border-color: var(--color-selection-border); }
+.km-workbench { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(300px, 1fr); gap: 24px; align-items: start; }
+.km-editor { min-width: 0; }
+.km-form-section { min-width: 0; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-card); padding: 22px; }
+.km-form-section > * + * { margin-top: 18px; }
+.km-section-heading { display: flex; align-items: center; gap: 9px; margin-bottom: 20px; }
+.km-section-heading h2 { font-size: 15px; font-weight: 500; }
+.km-section-heading > span:last-child:not(:first-child) { margin-left: auto; font-size: 12px; color: var(--color-subtle-foreground); }
+.km-section-number { display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 26px; border: 1px solid var(--color-border-strong); border-radius: 5px; font-family: var(--font-mono); font-size: 13px; color: var(--color-structural); }
+.km-page-heading h1, .km-home-intro h2 { color: var(--color-heading); }
+.km-section-heading h2, .km-inspector-title h2, .km-recovery-reference h2 { color: var(--color-structural); font-size: 15px; font-weight: 500; }
+.km-workform label { color: var(--color-foreground); }
+.km-workform input:not([type="checkbox"]):not([type="radio"]), .km-workform textarea { border-radius: 8px; }
+.km-workform button:not([role="switch"]) { border-radius: 8px; }
+.km-inspector { position: sticky; top: 24px; border-radius: 12px; }
+.km-inspector > header { padding-top: 20px; padding-bottom: 18px; }
+.km-inspector-title p { margin-top: 4px; font-size: 12px; color: var(--color-subtle-foreground); }
+.km-byte-field { display: grid; grid-template-columns: repeat(24, minmax(0, 1fr)); gap: 3px; padding: 16px; margin-bottom: 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-background); }
+.km-byte-field span { aspect-ratio: 1; border-radius: 1px; }
+.km-byte-caption { margin: 8px 0 12px; font-size: 12px; line-height: 1.6; color: var(--color-subtle-foreground); }
+.km-inheritance-link { display: flex; align-items: center; gap: 6px; margin-top: 20px; font-size: 12px; color: var(--color-action); text-align: left; cursor: pointer; }
+.km-inheritance-link:hover { color: var(--color-action-hover); }
+.km-selected-file { display: flex; align-items: center; gap: 10px; padding: 12px; border: 1px solid var(--color-selection-border); border-radius: 8px; background: var(--color-selection); }
+.km-file-icon { color: var(--color-selected); flex-shrink: 0; }
+.km-file-name { flex: 1; min-width: 0; font-size: 13px; }
+.km-file-name > span { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.km-file-name small { display: block; margin-top: 4px; color: var(--color-subtle-foreground); font-family: var(--font-mono); font-size: 12px; }
+.km-home-intro { max-width: 660px; margin: 44px 0 28px; }
+.km-home-intro h2 { font-size: 22px; font-weight: 400; letter-spacing: -.02em; }
+.km-home-intro p { margin-top: 12px; font-size: 14px; line-height: 1.8; color: var(--color-muted-foreground); }
+.km-task-list { max-width: 840px; border: 1px solid var(--color-border); border-radius: 12px; overflow: hidden; background: var(--color-card); }
+.km-task { display: flex; align-items: center; gap: 18px; width: 100%; padding: 24px; text-align: left; cursor: pointer; }
+.km-task + .km-task { border-top: 1px solid var(--color-border); }
+.km-task:hover { background: var(--color-inset); }
+.km-task > svg { flex-shrink: 0; color: var(--color-action); }
+.km-task strong { display: block; font-size: 14px; font-weight: 500; color: var(--color-action); }
+.km-task strong + span { display: block; margin-top: 6px; font-size: 13px; color: var(--color-muted-foreground); }
+.km-task-arrow { margin-left: auto; color: var(--color-action); }
+.km-recovery-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.km-recovery-facts { font-size: 12px; }
+.km-recovery-facts > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; border-top: 1px solid var(--color-border); padding: 12px 0; }
+.km-recovery-facts dt { color: var(--color-muted-foreground); }
+.km-recovery-facts dd { font-family: var(--font-mono); }
+.km-recovery-options { display: grid; gap: 10px; }
+.km-recovery-options > button { justify-content: flex-start; }
+.km-help { font-size: 12px; line-height: 1.7; color: var(--color-muted-foreground); }
+.km-action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.km-recovery-reference { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
+.km-recovery-reference h2 { font-size: 14px; font-weight: 500; }
+.km-recovery-reference p { max-width: 470px; margin-top: 8px; font-size: 13px; line-height: 1.7; color: var(--color-muted-foreground); }
+.km-recovery-reference > * + * { margin-top: 0; }
+.km-utility-panel { max-width: 760px; padding: 24px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-card); }
+.km-app button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
+:where(input, textarea, select, [role="combobox"]):focus-visible { outline-color: var(--color-ring); }
+@media (max-width: 480px) {
+  .km-input-choice svg { display: none; }
+}
+@media (max-width: 1150px) {
+  .km-shell { grid-template-columns: 176px minmax(0, 1fr); }
+  .km-main { padding: 24px 24px 48px; }
+  .km-workbench { grid-template-columns: minmax(0, 1.45fr) minmax(260px, 1fr); gap: 20px; }
+  .km-recovery-grid { grid-template-columns: minmax(0, 1fr); }
+  .km-recovery-reference { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 980px) {
+  .km-workbench { grid-template-columns: minmax(0, 1fr); }
+  .km-inspector { position: static; }
+  .km-byte-field { grid-template-columns: repeat(32, minmax(0, 1fr)); }
+}
+@media (max-width: 760px) {
+  .km-topbar { padding: 12px 16px; }
+  .km-brand-divider, .km-topbar-context, .km-command span, .km-command kbd { display: none; }
+  .km-command { padding: 8px; }
+  .km-shell { display: flex; flex-direction: column; }
+  .km-sidebar { padding: 10px 12px; border-right: 0; border-bottom: 1px solid var(--color-border); }
+  .km-nav-label, .km-sidebar-foot { display: none; }
+  .km-navigation { flex-direction: row; overflow-x: auto; border-radius: 0; }
+  .km-nav-item { flex: 0 0 auto; padding: 8px 10px; }
+  .km-main { padding: 20px 16px 40px; }
+  .km-page-heading h1 { font-size: 28px; margin-top: 20px; }
+  .km-form-section { padding: 16px; }
+  .km-section-heading > span:last-child:not(:first-child) { display: none; }
+  .km-selected-file { gap: 6px; padding: 10px; }
+  .km-task { padding: 20px 16px; gap: 12px; }
+  .km-byte-field { grid-template-columns: repeat(24, minmax(0, 1fr)); }
 }
 
 @media print {

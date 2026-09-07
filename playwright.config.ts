@@ -31,6 +31,9 @@ import { existsSync } from "node:fs";
  *   KEYMAKER_BASE_PATH=/Keymaker-v2 npm run test:browser
  */
 const BASE_PATH = (process.env.KEYMAKER_BASE_PATH ?? "").replace(/\/$/, "");
+// Optional local browser already installed by the host; CI uses pinned engines.
+const localChromium = !process.env.CI ? process.env.KEYMAKER_BROWSER_PATH : undefined;
+if (localChromium && !existsSync(localChromium)) throw new Error("KEYMAKER_BROWSER_PATH does not exist");
 
 /**
  * Only the engines whose binaries are actually present — locally.
@@ -69,8 +72,9 @@ const installed = (launcher: { executablePath(): string }): boolean => {
 const PROJECTS = process.env.CI
   ? ENGINES.map((e) => ({ name: e.name, use: { ...e.use } }))
   : (() => {
-      const present = ENGINES.filter((e) => installed(e.launcher));
-      const absent = ENGINES.filter((e) => !installed(e.launcher)).map((e) => e.name);
+      const available = (e: typeof ENGINES[number]) => (e.name === "chromium" && !!localChromium) || installed(e.launcher);
+      const present = ENGINES.filter(available);
+      const absent = ENGINES.filter((e) => !available(e)).map((e) => e.name);
       if (present.length === 0) {
         throw new Error(
           "No Playwright browser binaries are installed, so this suite would " +
@@ -84,7 +88,10 @@ const PROJECTS = process.env.CI
             `Running ${present.map((e) => e.name).join(", ")} only; CI covers all three.\n`
         );
       }
-      return present.map((e) => ({ name: e.name, use: { ...e.use } }));
+      return present.map((e) => ({
+        name: e.name,
+        use: { ...e.use, ...(e.name === "chromium" && localChromium ? { launchOptions: { executablePath: localChromium } } : {}) },
+      }));
     })();
 
 export default defineConfig({

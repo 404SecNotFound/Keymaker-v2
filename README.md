@@ -24,7 +24,7 @@ reproducible and the manifest is signed. [The security model](#security-model) i
 Security Policy does and does not add to that.
 
 <p align="center">
-  <img alt="Keymaker — Encrypt everything. Trust nothing." src="docs/screenshots/01-landing.png" width="820" />
+  <img alt="Keymaker secure workspace — charcoal navigation, file encryption controls and the live container preview" src="docs/screenshots/01-landing.png" width="820" />
 </p>
 
 ---

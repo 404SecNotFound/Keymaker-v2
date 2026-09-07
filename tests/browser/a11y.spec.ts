@@ -18,6 +18,13 @@ import { visible, useTextMode } from "./helpers";
 
 /** Scan whatever is currently on screen for WCAG 2.1 A/AA violations. */
 async function scan(page: Page) {
+  // Measure the settled interface, not translucent text during a panel entrance.
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    await Promise.all(document.getAnimations()
+      .filter(animation => animation.effect?.getTiming().iterations !== Infinity)
+      .map(animation => animation.finished.catch(() => {})));
+  });
   return new AxeBuilder({ page })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();

@@ -77,9 +77,10 @@ test("encrypt: with no input the pane summarises instead of itemising", async ({
   await expect(pane).not.toContainText("Argon2id");
   await expect(pane).not.toContainText("ways in · as configured");
   await expect(slotRows(page)).toHaveCount(0);
-  // The byte map is itemisation too — a summary with a diagram is a wall
-  // with a picture on it.
-  await expect(byteMap(page)).toHaveCount(0);
+  // A labelled plan schematic is visible; parsed rows still do not exist.
+  await expect(byteMap(page)).toBeVisible();
+  await expect(pane).toContainText("Header layout");
+  await expect(byteMapSlots(page)).toHaveCount(1);
 });
 
 test("encrypt: the itemisation is one click away, and still restates the form", async ({ page }) => {
