@@ -128,7 +128,22 @@ self.addEventListener('install', (event) => {
 // that promotes a waiting worker, which is what keeps the version stable for
 // the lifetime of a page that never accepts.
 self.addEventListener('message', (event) => {
-  if (!event.data || event.data.type !== 'SKIP_WAITING') return;
+  if (!event.data) return;
+
+  // Which cache does this worker own? Asked by the page's sealed-status check so
+  // it verifies the build that actually controls this tab, not merely the first
+  // keymaker-* cache it finds — during a deploy the installed-but-waiting worker
+  // has a second cache, and enumeration order is not a safe way to tell which
+  // one is running. The reply carries only the cache name, which same-origin
+  // code can already read from caches.keys(), so no scope check is needed and
+  // the port is the only recipient.
+  if (event.data.type === 'WHICH_CACHE') {
+    const port = event.ports && event.ports[0];
+    if (port) port.postMessage({ cacheName: CACHE_VERSION });
+    return;
+  }
+
+  if (event.data.type !== 'SKIP_WAITING') return;
 
   // Only from a page this worker actually serves.
   //
