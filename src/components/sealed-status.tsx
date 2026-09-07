@@ -24,10 +24,14 @@
  * - **The in-place check reads the Cache API and nothing else.** The service
  *   worker holds a copy of this build and, as of this change, the build's
  *   manifest beside it; this hashes what the cache holds against that
- *   manifest. No request is made — none is allowed, and the check has to run
- *   inside the policy rather than around it. What it proves is that the set
- *   of files this page runs is the set its manifest names: *consistent*, not
- *   *honest*. A hostile host ships a consistent set too. The digest of the
+ *   manifest. It checks the cache of the worker *controlling this tab* — asked
+ *   of the worker itself, not the first keymaker-* cache on the origin, because
+ *   during a deploy the installed-but-waiting next version has a second cache
+ *   and enumeration order cannot say which build is running. No request is
+ *   made — none is allowed, and the check has to run inside the policy rather
+ *   than around it. What it proves is that the set of files this page runs is
+ *   the set its manifest names: *consistent*, not *honest*. A hostile host
+ *   ships a consistent set too. The digest of the
  *   manifest is shown so the outside procedure — cosign, on a mirror — can be
  *   run against the same bytes; that is the bridge, and the verify page could
  *   never print it because baking the digest into the page is circular and
@@ -66,6 +70,39 @@ async function sha256Hex(bytes: ArrayBuffer): Promise<string> {
 }
 
 /**
+ * Which cache does the worker controlling this page own?
+ *
+ * The check must verify the build that is actually running, and the only
+ * authority on that is the worker serving this tab's requests — not the set of
+ * caches on the origin, which during a deploy holds the installed-but-waiting
+ * next version beside the running one, and whose enumeration order is no way to
+ * tell them apart. So the page asks its controller, over a MessageChannel, and
+ * the worker answers with its own `CACHE_VERSION`.
+ *
+ * Returns null when nothing controls the page yet (a first load before the
+ * worker has claimed it) or when the controller does not answer — an older
+ * worker from before this handler shipped will not, for the one deploy it takes
+ * the update to reach everyone. Both are reported as "cannot check yet" rather
+ * than guessed around: a check that verified the wrong build would be worse than
+ * one that declined.
+ */
+async function controllingCacheName(): Promise<string | null> {
+  const controller =
+    typeof navigator !== "undefined" ? navigator.serviceWorker?.controller ?? null : null;
+  if (!controller) return null;
+  return new Promise<string | null>((resolve) => {
+    const channel = new MessageChannel();
+    const timer = setTimeout(() => resolve(null), 3000);
+    channel.port1.onmessage = (event: MessageEvent) => {
+      clearTimeout(timer);
+      const name = (event.data as { cacheName?: unknown } | null)?.cacheName;
+      resolve(typeof name === "string" ? name : null);
+    };
+    controller.postMessage({ type: "WHICH_CACHE" }, [channel.port2]);
+  });
+}
+
+/**
  * Hash every file the service worker holds for this build against the
  * manifest it holds beside them. Cache API only — see the header.
  */
@@ -76,26 +113,28 @@ export async function verifyCachedBuild(): Promise<VerifyOutcome> {
       reason: "This browser has no cache storage, so the page cannot read what it is running.",
     };
   }
-  const keys = (await caches.keys()).filter((k) => k.startsWith("keymaker-"));
-  if (keys.length === 0) {
+  // The generation actually serving this tab, from the worker itself — never the
+  // first keymaker-* cache that happens to hold a manifest, which may belong to
+  // a waiting update rather than the running build.
+  const cacheName = await controllingCacheName();
+  if (!cacheName || !cacheName.startsWith("keymaker-")) {
     return {
       kind: "unavailable",
-      reason: "The service worker has not finished caching this build yet. Try again in a moment.",
+      reason:
+        "No service worker is controlling this page yet, so it cannot tell which build is " +
+        "running. Reload once while online, then try again.",
+    };
+  }
+  if (!(await caches.has(cacheName))) {
+    return {
+      kind: "unavailable",
+      reason: "The running build's cache is not available to check. Reload once while online.",
     };
   }
   const manifestPath = `${BASE_PATH}/SHA256SUMS`;
-  let cache: Cache | null = null;
-  let manifestText = "";
-  for (const key of keys) {
-    const candidate = await caches.open(key);
-    const held = await candidate.match(manifestPath);
-    if (held) {
-      cache = candidate;
-      manifestText = await held.text();
-      break;
-    }
-  }
-  if (!cache) {
+  const cache = await caches.open(cacheName);
+  const held = await cache.match(manifestPath);
+  if (!held) {
     return {
       kind: "unavailable",
       reason:
@@ -103,6 +142,7 @@ export async function verifyCachedBuild(): Promise<VerifyOutcome> {
         "Reload once while online.",
     };
   }
+  const manifestText = await held.text();
   const manifestDigest = await sha256Hex(
     new TextEncoder().encode(manifestText).buffer as ArrayBuffer
   );

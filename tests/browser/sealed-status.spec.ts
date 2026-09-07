@@ -328,3 +328,120 @@ test("a waiting update does not make the running build fail its own check", asyn
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+/**
+ * The check must verify the build controlling this tab, not any keymaker-*
+ * cache on the origin.
+ *
+ * The old implementation took the first keymaker-* cache that held a manifest
+ * and hashed it against its own manifest — a result that is "consistent" for
+ * any self-consistent cache, whichever generation it belongs to. On GitHub
+ * Pages the origin is shared and a deploy leaves the installed-but-waiting
+ * version's cache beside the running one, so "the first cache with a manifest"
+ * is not the same question as "the build this page runs". A stale or planted
+ * consistent cache could answer the check green while the running build was
+ * tampered with — a false clean bill from the one control meant to be believed.
+ *
+ * This plants a fully self-consistent decoy cache *before* the worker installs
+ * its own — so the decoy is older in creation order and is what the first-match
+ * scan would pick — then tampers the real controlling cache. The fix asks the
+ * controller which cache is its own and verifies that one, so it reports the
+ * mismatch in the running build. Reverted to the first-match scan, it verifies
+ * the pristine decoy and reports "ok": the control bites.
+ */
+const DECOY = "keymaker-decoy-not-controlling";
+
+test("the check verifies the controlling build, not any cached one (R06)", async ({
+  browser,
+  browserName,
+}) => {
+  test.skip(browserName === "webkit", "service workers are not testable in WebKit here");
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  try {
+    await page.goto("/");
+    await waitForPrecache(page);
+
+    // Build the adversarial state: a self-consistent decoy cache that is *older*
+    // than the running build's cache, so a first-match scan would pick it. The
+    // real cache is created after the worker's, so to make the decoy older we
+    // re-create the real cache under its own name once the decoy exists — the
+    // controller keeps answering with that same name, so the fix still finds it.
+    const setup = await page.evaluate(
+      async ([base, decoy]) => {
+        const real = (await caches.keys()).filter((k) => k.startsWith("keymaker-")).find((k) => k !== decoy);
+        if (!real) return { error: "no real cache" } as const;
+
+        // 1. The decoy: one file and a manifest naming it with its true digest.
+        const bytes = new TextEncoder().encode("decoy");
+        const hex = Array.from(
+          new Uint8Array(await crypto.subtle.digest("SHA-256", bytes)),
+          (b) => b.toString(16).padStart(2, "0")
+        ).join("");
+        const dc = await caches.open(decoy);
+        await dc.put(`${base}/decoy-only.txt`, new Response("decoy", { headers: { "content-type": "text/plain" } }));
+        await dc.put(`${base}/SHA256SUMS`, new Response(`${hex}  decoy-only.txt\n`, { headers: { "content-type": "text/plain" } }));
+
+        // 2. Re-create the real cache under the same name, so it is newer than
+        //    the decoy in creation order. Bodies only, content-type only, to
+        //    avoid re-decoding an encoded response on put.
+        const rc = await caches.open(real);
+        const snapshot: Array<{ url: string; body: ArrayBuffer; type: string | null }> = [];
+        for (const req of await rc.keys()) {
+          const res = await rc.match(req);
+          if (!res) continue;
+          snapshot.push({ url: req.url, body: await res.arrayBuffer(), type: res.headers.get("content-type") });
+        }
+        await caches.delete(real);
+        const rc2 = await caches.open(real);
+        for (const s of snapshot) {
+          await rc2.put(s.url, new Response(s.body, s.type ? { headers: { "content-type": s.type } } : undefined));
+        }
+
+        const keys = (await caches.keys()).filter((k) => k.startsWith("keymaker-"));
+        return { real, keys, decoyFirst: keys[0] === decoy } as const;
+      },
+      [BASE_PATH, DECOY] as const
+    );
+    expect("error" in setup ? setup.error : null, "the real controlling cache is missing").toBeNull();
+    if ("error" in setup) return;
+
+    // Precondition: the decoy really is the first keymaker-* cache, so the old
+    // first-match scan would have chosen it. If not, the bite is not exercised.
+    expect(setup.decoyFirst, "the decoy must be the oldest keymaker-* cache").toBe(true);
+
+    // Tamper the real controlling cache's manifest — not the decoy's — so the
+    // running build would fail its check while the pristine decoy still passes.
+    const victim = await page.evaluate(
+      async ([base, realName]) => {
+        const cache = await caches.open(realName);
+        const held = await cache.match(`${base}/SHA256SUMS`);
+        if (!held) return null;
+        const text = await held.text();
+        const line = text.split("\n").find((l) => /  _next\/static\/chunks\/.*\.js$/.test(l));
+        if (!line) return null;
+        const path = line.slice(66);
+        const altered = text.replace(line, `${"0".repeat(64)}  ${path}`);
+        await cache.put(
+          `${base}/SHA256SUMS`,
+          new Response(altered, { headers: { "content-type": "text/plain" } })
+        );
+        return path;
+      },
+      [BASE_PATH, setup.real] as const
+    );
+    expect(victim, "no cached chunk line to alter in the real cache").not.toBeNull();
+
+    await toggle(page).click();
+    await panel(page).getByRole("button", { name: /^Check now$/ }).click();
+
+    // The running build is tampered, so the honest answer is a mismatch naming
+    // the file. The old first-match scan would have verified the pristine decoy
+    // and said "ok" instead.
+    await expect(result(page)).toHaveAttribute("data-outcome", "mismatch", { timeout: 60_000 });
+    await expect(result(page)).toContainText(victim!);
+    await expect(result(page)).toContainText("Do not trust this copy");
+  } finally {
+    await context.close();
+  }
+});
