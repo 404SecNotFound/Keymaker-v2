@@ -54,6 +54,9 @@ const OPTIONS = {
   cipher: CipherId.AES_256_GCM as const,
 };
 
+/** Same five-minute idle window as the main tool's auto-lock. */
+const AUTO_LOCK_MS = 5 * 60_000;
+
 type Sub = "hide" | "reveal";
 type SecretType = "text" | "file";
 
@@ -113,6 +116,20 @@ export function AudioStegoTool() {
   const [revealedText, setRevealedText] = useState<string | null>(null);
   const [revealedBytes, setRevealedBytes] = useState<Uint8Array | null>(null);
   const [showRevealed, setShowRevealed] = useState(false);
+  // §5.2 slot-table verdict and the weak-KDF advisory for the slot that opened,
+  // carried alongside the recovered output so the audio path reports the same
+  // two facts the Decrypt tab does. Neither refuses the plaintext.
+  const [slotWarning, setSlotWarning] = useState(false);
+  const [kdfNotice, setKdfNotice] = useState<string | null>(null);
+
+  // Generation guard, mirroring the main tool. Every wipe or context switch
+  // bumps this; an async op captures it and abandons its result if it changed
+  // while awaiting, so a decrypt that finishes after the tab was cleared or the
+  // carrier swapped never repaints the secret it was told to forget.
+  const opSeqRef = useRef(0);
+  // Sampled once a second by the inactivity effect, rather than resetting a
+  // timer in state on every pointer and key event.
+  const lastActivityRef = useRef(Date.now());
 
   const capacity = carrierPcm ? audioCapacityBytes(carrierPcm.samples.length, 1) : 0;
 
@@ -120,14 +137,20 @@ export function AudioStegoTool() {
     setRevealedText(null);
     setRevealedBytes(null);
     setShowRevealed(false);
+    setSlotWarning(false);
+    setKdfNotice(null);
   }, []);
 
   // Drop every secret this tab holds. JavaScript cannot guarantee zeroization,
   // but the recovered bytes are one buffer this code owns, so it is overwritten
   // rather than merely dereferenced; the strings are released to the collector.
   const clearSecrets = useCallback(() => {
+    // Invalidate any decrypt or encrypt still awaiting the worker: whatever it
+    // returns after this point is a secret this wipe was meant to erase.
+    opSeqRef.current++;
     setPassword("");
     setSecretText("");
+    setSecretFile(null);
     setRevealedText((prev) => (prev === null ? prev : null));
     setRevealedBytes((prev) => {
       if (prev) prev.fill(0);
@@ -135,6 +158,8 @@ export function AudioStegoTool() {
     });
     setShowRevealed(false);
     setShowPassword(false);
+    setSlotWarning(false);
+    setKdfNotice(null);
   }, []);
 
   // Auto-lock, matching the main tool's posture: a tab that is hidden or being
@@ -154,8 +179,45 @@ export function AudioStegoTool() {
     };
   }, [clearSecrets]);
 
+  // Auto-lock on inactivity, matching the main tool: a password, a chosen
+  // secret, or a recovered secret left untouched for five minutes is wiped from
+  // memory. Activity is tracked in a ref and sampled once a second so the clock
+  // does not re-render the tab on every event.
+  const hasSecretsOnScreen =
+    password.length > 0 || secretText.length > 0 || revealedBytes !== null;
+  useEffect(() => {
+    if (!hasSecretsOnScreen) return;
+    lastActivityRef.current = Date.now();
+    const bump = () => {
+      lastActivityRef.current = Date.now();
+    };
+    const events = ["pointerdown", "keydown", "wheel", "touchstart"] as const;
+    for (const event of events) window.addEventListener(event, bump, { passive: true });
+
+    const id = setInterval(() => {
+      if (Date.now() - lastActivityRef.current >= AUTO_LOCK_MS) {
+        // Re-arm before wiping so a password typed later while the tab stays
+        // mounted restarts the clock rather than locking every second.
+        lastActivityRef.current = Date.now();
+        clearSecrets();
+        toast({
+          title: "Locked — secrets cleared",
+          description: `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any recovered secret were wiped from memory.`,
+        });
+      }
+    }, 1000);
+
+    return () => {
+      for (const event of events) window.removeEventListener(event, bump);
+      clearInterval(id);
+    };
+  }, [hasSecretsOnScreen, clearSecrets, toast]);
+
   const switchSub = useCallback(
     (next: Sub) => {
+      // A reveal in flight against the old sub-mode must not paint its result
+      // after the switch.
+      opSeqRef.current++;
       setSub(next);
       resetOutputs();
     },
@@ -164,6 +226,9 @@ export function AudioStegoTool() {
 
   const onCarrierChange = useCallback(
     async (file: File | null) => {
+      // Swapping the carrier invalidates a reveal still running against the old
+      // one, whose recovered bytes would otherwise repaint under the new file.
+      opSeqRef.current++;
       resetOutputs();
       setCarrierPcm(null);
       setCarrierError(null);
@@ -211,20 +276,33 @@ export function AudioStegoTool() {
     }
 
     setBusy(true);
+    const opId = ++opSeqRef.current;
+    const isStale = () => opSeqRef.current !== opId;
     try {
       const secretBytes =
         secretType === "text"
           ? new TextEncoder().encode(secretText)
           : new Uint8Array(await secretFile!.arrayBuffer());
+      if (isStale()) {
+        secretBytes.fill(0);
+        return;
+      }
       // exact-length ArrayBuffer, since encryptViaWorker takes ownership.
       const input = secretBytes.slice().buffer;
       const enc = await encryptViaWorker(input, password, null, OPTIONS);
       const container = new Uint8Array(enc.data);
+      // If the tab was wiped or the carrier swapped while the KDF ran, the
+      // sealed container is a secret to drop, not a file to download.
+      if (isStale()) {
+        container.fill(0);
+        return;
+      }
 
       // Capacity is re-checked inside embedContainer, but checking here lets the
       // message name the container size the carrier actually has to hold, which
       // is larger than the secret by the header, salt, nonces and tags.
       if (container.length > capacity) {
+        container.fill(0);
         toast({
           title: "Carrier too small",
           description:
@@ -238,6 +316,9 @@ export function AudioStegoTool() {
       const stego = embedContainer(carrierPcm, container, 1);
       const wav = writePcm16Wav(stego);
       download(new Blob([wav as BlobPart], { type: "audio/wav" }), "keymaker-audio.wav");
+      // The secret is now on disk behind the password; keep no live copy of the
+      // password in the field.
+      setPassword("");
       toast({
         title: "Secret packed into audio",
         description: "Downloaded as a WAV. It plays normally; open it here on the Reveal side with the password.",
@@ -267,12 +348,21 @@ export function AudioStegoTool() {
 
     setBusy(true);
     resetOutputs();
+    const opId = ++opSeqRef.current;
+    const isStale = () => opSeqRef.current !== opId;
     try {
       // Structural failure first: a file with no KAUD1 header is reported as
       // carrying nothing, never routed to the AEAD where it would read as a
       // wrong password.
       const container = extractContainer(carrierPcm);
       const res = await decryptViaWorker(container.slice().buffer, password, null);
+      // The plaintext arrived, but if the tab was wiped or the carrier swapped
+      // while the KDF ran, it is a secret this op no longer owns: erase it and
+      // paint nothing.
+      if (isStale()) {
+        new Uint8Array(res.data).fill(0);
+        return;
+      }
       const data = new Uint8Array(res.data);
 
       let asText: string | null = null;
@@ -281,13 +371,23 @@ export function AudioStegoTool() {
       } catch {
         asText = null;
       }
+      // §5.2: `false` only ever arrives after a slot opened and the payload
+      // authenticated, so this reports on the container's recovery options,
+      // never on the data. The weak-KDF note describes the slot that opened it.
+      // Both are advisories; neither withholds the recovered secret.
+      setSlotWarning(res.slotTableAuthentic === false);
+      setKdfNotice(res.weakKdf);
       setRevealedBytes(data);
       setRevealedText(asText);
+      // The secret is on screen now; the password that opened it does not need
+      // to stay in the field.
+      setPassword("");
       toast({
         title: "Secret recovered",
         description: asText !== null ? "Recovered as text below." : "Recovered a file. Download it below.",
       });
     } catch (e) {
+      if (isStale()) return;
       if (e instanceof AudioStegoError) {
         toast({ title: "No hidden data", description: e.message, variant: "destructive" });
       } else if (isUserFacingError(e)) {
@@ -521,6 +621,36 @@ export function AudioStegoTool() {
                 <Download className="mr-2 h-4 w-4" />
                 Download recovered {revealedText !== null ? "text" : "file"}
               </Button>
+
+              {slotWarning && (
+                <div
+                  role="alert"
+                  data-testid="audio-slot-table-warning"
+                  className="rounded-xl border border-warning/40 bg-warning/10 p-3 text-[12px] leading-snug text-warning"
+                >
+                  <p className="flex items-start gap-2 font-medium">
+                    <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                    This backup&apos;s list of unlock methods has changed since it was created.
+                  </p>
+                  <p className="mt-1.5">
+                    Your data is intact — the contents are authenticated separately and were
+                    verified before anything was shown. What changed is the set of ways back in.
+                    It is not possible to say which one, only that the list is no longer the one
+                    sealed with the file. If you did not change it yourself, treat this copy as
+                    untrusted and recover from another one.
+                  </p>
+                </div>
+              )}
+
+              {kdfNotice && (
+                <p
+                  data-testid="audio-weak-kdf-notice"
+                  className="rounded-xl border border-border bg-inset p-3 text-[12px] leading-snug text-muted-foreground"
+                >
+                  Heads up: this was packed with {kdfNotice}. It opened fine and its contents are
+                  intact. Packing it again here would use today&apos;s stronger settings.
+                </p>
+              )}
             </div>
           )}
         </>
