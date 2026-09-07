@@ -30,11 +30,15 @@ decisions recorded below.
   aria-pressed. Entered content stays off-white; descriptions stay silver.
 - Local branch: `ui/linear-workspace`. Preview iterations are not deployed.
 - Latest checks: production export with Webpack fallback and CSP/build manifest
-  postprocessing; typecheck and 44 Chromium browser tests passed, including
+  postprocessing; typecheck and 255 Chromium browser tests passed, including
   rendered Spline Sans, offline font caching, accessibility, responsive layout,
   password feedback, container inspection, and receipts. The new font test
   first failed against the prior Jakarta build. All three new control-state
   tests failed against the prior neutral-control build before implementation.
+  Crypto regressions passed: 45 legacy checks and 238 Keymaker checks. The
+  upstream passkey-binding checks passed as well.
+  The five deployment-path tests skipped by the root run then passed separately
+  against a fresh `/Keymaker-v2` export (assets, worker, offline cache and CSP).
   Accessibility scans now wait
   for finite entrance animations before measuring text contrast.
   Palette audit passed (11,480 colors across 12 views); icon audit passed
@@ -42,6 +46,18 @@ decisions recorded below.
 - `scripts/capture-workspace.mjs` captures review screens, waiting for the
   selected tab, visible panel, fonts and finite transitions before taking each
   screenshot. Includes a public demo-file state and expanded advanced options.
+- All 11 README screenshots and all 4 walkthrough screenshots were regenerated
+  from the Graphite production build. All 15 retain the canonical 2360px width;
+  every README image was checked against its previous blob, with no stale image
+  remaining. The README lead image now frames the complete Encrypt workflow.
+- Screenshot review caught cramped Argon2id option copy at 1180px. KDF cards now
+  use available container width rather than forcing two narrow columns. A text
+  bounding-box regression first failed on the old build, then passed at 320,
+  768, 1180 and 1440px with the fix.
+- The branch includes main's passkey-enrolment binding fix (`adcbe0c`).
+  No cryptographic implementation or container-format changes are part of the
+  workspace diff. Local checks can set `KEYMAKER_SEALED_TEST_PORT` if another
+  checkout has a preview on the sealed-status suite's default port 4323.
 
 ## Historical Nightpaper decisions (superseded)
 
