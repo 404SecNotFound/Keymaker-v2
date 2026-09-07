@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { encodePaperParts } from "../../src/lib/keym-v2-paper";
+import { encodePaperParts, encodePaperPartsV2 } from "../../src/lib/keym-v2-paper";
 import { dearmorKeym2, keym2SlotCountOffset, KEYM2_VERSION_V3 } from "../../src/lib/keym-v2";
 import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 
@@ -423,6 +423,63 @@ test.describe("a printed backup can be scanned back in", () => {
     await expect(
       page.getByText(/Missing part \d+ of \d+/i),
       "a short set of parts must say which page is missing"
+    ).toBeVisible();
+  });
+
+  // R02: the vault now writes KMPART2, and the executed finding was that a valid
+  // KMPART2 set was refused by the box that claims to accept paper parts, because
+  // it read only KMPART1. This drives the version-aware read path the way a user
+  // does: paste the parts, then open with the password.
+  test("v2 (KMPART2) parts pasted in reassemble and open the backup", async ({ page }) => {
+    if (!fx) throw new Error("corpus has no pbkdf2-aes256gcm fixture");
+    const container = new Uint8Array(readFileSync(resolve(CORPUS, fx.file)));
+    const parts = await encodePaperPartsV2(container, Math.ceil(container.length / 3));
+    expect(parts.length, "the fixture must split into more than one v2 part").toBeGreaterThan(1);
+    expect(parts[0]?.startsWith("KMPART2:"), "these are not v2 parts").toBe(true);
+
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+
+    // One part first: the version-aware describer still names which part it is.
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(parts[0] as string);
+    await expect(
+      page.getByText(/part 1 of \d+ of a paper backup/i),
+      "a single v2 part should say which part it is and that the rest are needed"
+    ).toBeVisible();
+
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(parts.join("\n"));
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(meta.password);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+
+    await expect(
+      page.locator("#output-text"),
+      "the KMPART2 parts did not reassemble into the backup they came from"
+    ).toHaveValue(fx.plaintext, { timeout: 90_000 });
+  });
+
+  // R02: §7.3's per-part checksum is the diagnosis a v1 part cannot carry — a
+  // mis-scan is named before the KDF instead of surfacing as a wrong password.
+  test("a corrupted v2 part is named as corrupt, not as a wrong password", async ({ page }) => {
+    if (!fx) throw new Error("corpus has no pbkdf2-aes256gcm fixture");
+    const container = new Uint8Array(readFileSync(resolve(CORPUS, fx.file)));
+    const parts = await encodePaperPartsV2(container, Math.ceil(container.length / 3));
+
+    // Mangle one character of the second part's chunk (field 4 of the colon
+    // split), leaving its checksum intact so they disagree.
+    const f = (parts[1] as string).split(":");
+    const chunk = f[4] as string;
+    f[4] = (chunk[0] === "A" ? "B" : "A") + chunk.slice(1);
+    const mangled = [parts[0], f.join(":"), ...parts.slice(2)];
+
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(mangled.join("\n"));
+
+    await expect(
+      page.getByText(/looks corrupted/i),
+      "a checksum mismatch on a v2 part must be named, not left to the AEAD"
     ).toBeVisible();
   });
 });

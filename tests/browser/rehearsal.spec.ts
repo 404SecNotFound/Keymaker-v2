@@ -65,7 +65,7 @@ async function sealWithShares(page: Page, k: number, n: number): Promise<string[
   await expect(dialog(page).getByText(new RegExp(`Save these ${n} shares now`))).toBeVisible({
     timeout: 90_000,
   });
-  const shares = (await dialog(page).getByText(/^KMSHARE1:/).allTextContents()).map((s) => s.trim());
+  const shares = (await dialog(page).getByText(/^KMSHARE2:/).allTextContents()).map((s) => s.trim());
   expect(shares, "the dialog shows one string per share").toHaveLength(n);
   await dialog(page).getByRole("button", { name: /Rehearse now/ }).click();
   await expect(rehearsalInput(page)).toBeVisible();

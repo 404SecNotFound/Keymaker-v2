@@ -1473,7 +1473,7 @@ export async function addShamirSlotKeym2(
   count: number,
   explicit?: { salt?: Uint8Array; shareSecret?: Uint8Array; coefficients?: Uint8Array }
 ): Promise<Keym2ShareSet> {
-  const { shamirSplit, shareSetId, encodeShare, SHARE_VALUE_LEN } = await import("./keym-v2-shamir");
+  const { shamirSplit, shareSetIdV2, encodeShareV2, SHARE_VALUE_LEN } = await import("./keym-v2-shamir");
 
   const parsed = parseKeym2Container(container);
   if (parsed.records.length >= KEYM2_MAX_SLOTS) {
@@ -1521,11 +1521,15 @@ export async function addShamirSlotKeym2(
     secureErase(master);
   }
 
-  const setId = await shareSetId(salt);
+  // New share sets are written v2 (KMSHARE2): a 128-bit set id and checksum,
+  // and diagnostics a v1 share cannot carry. The container slot is unchanged, so
+  // the set id's first four bytes still equal `shareSetId(salt)` and the unwrap
+  // guard (which compares that prefix) opens either version.
+  const setId = await shareSetIdV2(salt);
 
   const shares: string[] = [];
   for (const part of shamirSplit(shareSecret, threshold, count, explicit?.coefficients)) {
-    shares.push(await encodeShare({ setId, threshold, index: part.index, value: part.value }));
+    shares.push(await encodeShareV2({ setId, threshold, index: part.index, value: part.value }));
   }
   if (explicit?.shareSecret === undefined) secureErase(shareSecret);
 

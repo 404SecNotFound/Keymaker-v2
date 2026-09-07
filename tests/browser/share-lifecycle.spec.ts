@@ -27,7 +27,7 @@ async function pasteShares(page: Page) {
   await visible(page.getByRole("tab", { name: "Decrypt" })).click();
   await useTextMode(page);
   await visible(page.getByRole("button", { name: /^Use recovery shares$/i })).click();
-  await visible(page.getByPlaceholder(/KMSHARE1:/)).fill(SHARE_TEXT);
+  await visible(page.getByPlaceholder(/KMSHARE2:/)).fill(SHARE_TEXT);
 }
 
 test.describe("recovery shares are treated as secrets", () => {
@@ -56,7 +56,7 @@ test.describe("recovery shares are treated as secrets", () => {
     await expect
       .poll(
         async () => {
-          const box = page.getByPlaceholder(/KMSHARE1:/);
+          const box = page.getByPlaceholder(/KMSHARE2:/);
           return (await box.count()) === 0 ? "" : await box.first().inputValue();
         },
         { message: "the panic wipe left recovery shares in the DOM", timeout: 30_000 }
@@ -122,7 +122,7 @@ test.describe("recovery shares are treated as secrets", () => {
     await visible(page.getByRole("button", { name: /^Use recovery shares$/i })).click();
 
     await expect(
-      visible(page.getByPlaceholder(/KMSHARE1:/)),
+      visible(page.getByPlaceholder(/KMSHARE2:/)),
       "the shares came back when the mode was re-enabled"
     ).toHaveValue("");
   });
@@ -143,7 +143,7 @@ test.describe("the share input has a size", () => {
     await visible(page.getByRole("tab", { name: "Decrypt" })).click();
     await useTextMode(page);
     await visible(page.getByRole("button", { name: /^Use recovery shares$/i })).click();
-    return visible(page.getByPlaceholder(/KMSHARE1:/));
+    return visible(page.getByPlaceholder(/KMSHARE2:/));
   }
 
   test("a real share set is still accepted", async ({ page }) => {

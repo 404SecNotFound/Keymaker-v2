@@ -61,6 +61,34 @@ export function paperCapacity(qrByteCapacity: number, totalHint = 9999): number 
 }
 
 /**
+ * Raw container bytes that fit one **KMPART2** (§7.3) symbol of `qrByteCapacity`.
+ *
+ * KMPART2 carries far more than KMPART1: the 22-char container fingerprint, the
+ * decimal total length, a 6-char per-part checksum, and the separators between
+ * them. Reusing `paperCapacity`'s KMPART1 figure of 1,734 raw bytes overflows
+ * the symbol — b64(1,734) is 2,312 chars on its own, and the v2 metadata pushes
+ * the printed line past the 2,331-byte budget. This reserves the widest v2
+ * overhead a run can emit (four-digit counts, a ten-digit length, the fixed
+ * fingerprint and checksum), so every part it sizes fits inside one symbol.
+ *
+ * At the paper budget this yields 1,704 raw bytes per part; a full part is then
+ * 2,331 chars exactly, the ceiling and not over it. `scripts/recovery-envelopes-test.mjs`
+ * asserts that bound rather than trusting this comment.
+ */
+export function paperCapacityV2(qrByteCapacity: number, totalHint = 9999): number {
+  const overhead =
+    KEYM2_PART2_PREFIX.length + // "KMPART2:", including its colon
+    2 * String(totalHint).length + // the widest `i` and `n`
+    22 + // the container fingerprint (16 bytes, base64url)
+    10 + // the widest total length the §7.3 regex admits, in decimal
+    6 + // the per-part checksum (4 bytes, base64url)
+    5; // the "/" between the counts and the four ":" that follow
+  const usable = qrByteCapacity - overhead;
+  if (usable < 4) throw new Error("symbol too small to hold a v2 part");
+  return Math.floor(usable / 4) * 3;
+}
+
+/**
  * §7.1. Split a container into paper parts of at most `capacity` raw bytes.
  *
  * A one-part backup is still written `1/1`. Special-casing it would leave an

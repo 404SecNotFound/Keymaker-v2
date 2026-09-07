@@ -1652,9 +1652,12 @@ def build_shamir_slot(
     slot_key = derive_slot_key(draft, build_shamir_input(share_secret))
     record = prefix + wrap_master_key(core, prefix, slot_key, master_key)
 
-    set_id = share_set_id(salt)
+    # New share sets are written v2 (KMSHARE2), as §4.6 v2 requires: a 128-bit
+    # set id and checksum. The slot record above is unchanged, so the id's first
+    # four bytes still equal share_set_id(salt) and either version opens the slot.
+    set_id = share_set_id_v2(salt)
     texts = [
-        encode_share(Share(set_id=set_id, threshold=k, index=x, value=value))
+        encode_share_v2(Share(set_id=set_id, threshold=k, index=x, value=value))
         for x, value in shamir_split(share_secret, k, n, coefficients=coefficients)
     ]
     return record, texts
@@ -3737,9 +3740,14 @@ def _selftest() -> int:
 
     # --- set-level rules (§6) -----------------------------------------------
     known_secret = bytes(range(200, 232))
-    _, texts35 = build_shamir_slot(CoreHeader(cipher_id=CIPHER_AES),
-                                   fixed_mk, 3, 5, salt=fixed_salt,
-                                   share_secret=known_secret)
+    # v1 shares on purpose. These are §4.6's set-level rules for the frozen
+    # KMSHARE1 reader, and several checks below mix in a v1 share forged by hand.
+    # build_shamir_slot now writes KMSHARE2 (§4.6 v2, "a new set is KMSHARE2"),
+    # so drawing texts35 from it would make those a mixed-version set, refused
+    # for the wrong reason. The v2 section below covers the v2 writer.
+    texts35 = [encode_share(Share(set_id=share_set_id(fixed_salt), threshold=3,
+                                  index=x, value=v))
+               for x, v in shamir_split(known_secret, 3, 5)]
     check("combine_shares recovers the secret it was built from",
           combine_shares(texts35[:3]) == known_secret)
     check("combine_shares accepts more than k",
@@ -3765,8 +3773,9 @@ def _selftest() -> int:
             lambda: combine_shares([texts35[0], texts35[0], texts35[1]]))
 
     other_salt = bytes(32)
-    _, other_texts = build_shamir_slot(CoreHeader(cipher_id=CIPHER_AES),
-                                       fixed_mk, 3, 5, salt=other_salt)
+    other_texts = [encode_share(Share(set_id=share_set_id(other_salt), threshold=3,
+                                      index=x, value=v))
+                   for x, v in shamir_split(os.urandom(32), 3, 5)]
     rejects("shares from two different sets mixed together",
             lambda: combine_shares([texts35[0], texts35[1], other_texts[2]]))
     rejects("a complete share set from the wrong slot",
