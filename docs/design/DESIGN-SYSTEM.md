@@ -1,286 +1,116 @@
-# Nightpaper — the Keymaker design system
+# Graphite — the Keymaker workspace design system
 
-The ElevenLabs system (see `BAR.md`), printed on warm black paper. This file
-is the objective source of truth a reviewer can hold a rendered screen to:
-every value here is checkable by looking, and any screen that disagrees with
-this file is wrong — the file only changes by editing it first.
+Approved 7 September 2026. Linear-inspired component styling and the approved
+Keymaker layout. Neutral black and graphite replace the earlier brown/taupe
+Nightpaper palette at the user's request. See [BAR.md](BAR.md) for the reference.
 
 ## Surfaces
 
-All grounds share one warm hue family (taupe, hue ≈ 40–75°). Cool or neutral
-greys do not appear anywhere.
-
-| token          | value     | use                                            |
-| -------------- | --------- | ---------------------------------------------- |
-| `canvas`       | `#0E0D0B` | the page                                       |
-| `card`         | `#171512` | panels, the workbench cards                    |
-| `inset`        | `#1D1A17` | fields, wells, segmented tracks                |
-| `raised`       | `#262320` | hover/active on an `inset` surface             |
-| `line`         | `#292521` | hairline borders (1px, everywhere)             |
-| `line-strong`  | `#3A342E` | hover borders, active hairlines                |
-
-`raised` exists because a control already filled with `inset` has nowhere to
-go on hover: the three grounds are absolute, so lightening one by a fraction
-of white is exactly the drift this palette forbids. One more named step is
-the honest fix. It is the only surface above `inset`, and nothing idle uses
-it — a `raised` fill on a resting control means the state is wrong.
-
-Two levels do all the work inside a card. A resting container or an
-unselected option carries **no fill at all** and is drawn by its hairline
-alone; a field, a well, a segmented track, or a selected option carries
-`inset`. That is the reference's "flat or barely elevated" rule stated as a
-choice between two values rather than a gradient of washes.
-
-Elevation is fill difference plus a 1px hairline — **no drop shadows,
-anywhere**. Cards: 20px radius, 32px padding (24px under 480px). Inputs and
-small controls: 12px radius. Buttons: 9999px pills, always with a 1px border,
-including the filled primary.
-
-## Text
-
-| token     | value     | canvas | card | inset | raised | use                                              |
-| --------- | --------- | ------ | ---- | ----- | ------ | ------------------------------------------------ |
-| `ink`     | `#F5F3F1` | 17.6:1 | 16.5 | 15.7  | 14.1   | headlines, primary labels — never pure `#FFFFFF` |
-| `body`    | `#A9A29A` | 7.7:1  | 7.2  | 6.9   | 6.2    | body copy, secondary labels                      |
-| `muted`   | `#918A83` | 5.7:1  | 5.4  | 5.1   | 4.6    | captions, hints — 12px minimum, nothing smaller  |
-
-Every ground is listed because the floor applies to the **pair**, not to the
-token. A single "on canvas" column is what let `muted` sit under AA on `inset`
-through two separate fixes of the same value.
-
-These three are the whole text scale. Opacity modifiers on top of them
-(`text-body/60` and the like) are not part of it: they were how the old
-palette drifted under the contrast floor without anyone deciding to, so a
-tone that needs to be quieter uses the next token down, not a fraction of the
-one above.
-
-`muted` has now been lifted twice, and the second time is the instructive one.
-It was `#7E776F` when this file was first written, 4.40:1 on `canvas`, under
-the 4.5:1 AA floor; the floor overrides the palette, so the value rose two
-lightness points to `#878078` rather than the floor bending.
-
-That fix measured `canvas`, because `canvas` was the only column this table
-had. But `muted` is captions and hints, and those live in fields, wells and
-segmented tracks — `inset`. On `inset` the lifted value read **4.45:1**, still
-under the floor it had just been raised to clear, and on `raised`, the hover
-state of those same controls, **4.01:1**. A token does not have a contrast
-ratio. A pair does, and the table now says so in four columns.
-
-`scripts/palette-audit.mjs` checks every pair in that table before it opens a
-browser. What it does not check is which pairs the app actually composes: it
-proves the palette cannot fail, not that no element picked an unlisted ground.
-The membership half of the same gate is what keeps grounds on the list.
-
-## Actions
-
-The primary action is the highest-contrast **neutral**: `#F5F3F1` fill,
-`#14120F` text, pill, and — because every button in this system carries one —
-a 1px border in `#FDFCFC`, the same tone its hover lifts the fill to. That
-border was `rgba(255,255,255,0.18)` when this file was first written, which
-is a translucent white wash: the exact thing the palette forbids everywhere
-else, written into the spec by hand. An opaque named tone keeps the
-silhouette rule without keeping the exception, and on an eggshell fill the
-two read the same. Secondary buttons: transparent or `inset` fill, `line`
-border, `body` text. Focus ring: 2px `#F5F3F1`, offset 2px — the ring is
-never a spark colour. Destructive confirmation buttons may use the semantic
-danger fill; nothing else is a coloured button.
-
-## Disabled
-
-A disabled control is a **named state built from the tokens**, never a fraction
-of the enabled one. `disabled:opacity-50` is the same defect as `text-body/60`,
-one level up: it dims the whole element rather than choosing a tone, so nobody
-decides what the result looks like and nobody can name it.
-
-On the filled primary it is actively misleading. `#F5F3F1` at 40% over `canvas`
-composites to a mid grey pill — which reads as *an ordinary button*, not as an
-unavailable one. The single most important control in the app was announcing
-itself in the one treatment reserved for nothing at all.
-
-So a disabled control **stops being filled**: no background, `line` border,
-`muted` label, `not-allowed` cursor. The filled eggshell pill then means one
-thing only — this action is available now. Enabled and disabled differ in fill,
-border and text tone together, so the distinction survives greyscale, low
-contrast displays, and a glance.
-
-Disabled text is exempt from the AA floor (WCAG 1.4.3), and `muted` clears it
-anyway at 5.7:1 on `canvas`. The exemption is not the reason for the choice.
-
-## Anticipation
-
-A panel that describes something the user has not made yet shows a **summary,
-not the full record**. The itemised form is available on request and arrives on
-its own once the thing is real.
-
-The container inspector was the case that produced this rule. On first load,
-before a single character is typed, it painted a header hex row, a slot table,
-and three green ticks — a complete description of a file that does not exist.
-Everything in it was true and none of it was answering a question anyone had
-yet, so the pane read as a wall and the one line worth reading, *which format
-this writes*, was buried in it.
-
-Volume is the failure, not detail. The fix is never to delete what the panel
-knows or to soften it into vagueness: the summary states the same facts in one
-line, the disclosure is labelled with what it will reveal rather than "more",
-and the moment there is real input the detail opens by itself — the user should
-not have to ask twice for a description of something they have now made.
-
-Applies to any surface that speaks in the future tense. A panel describing
-bytes that exist is not anticipating anything, and this rule has nothing to say
-about it.
-
-## Icons
-
-One family — lucide — at **three sizes, each with a job**:
-
-| class | paints | for |
+| Token | Value | Use |
 | --- | --- | --- |
-| `h-3.5 w-3.5` | 14px | inline, sitting in a run of text |
-| `h-4 w-4` | 16px | standalone, and inside any control |
-| `h-5 w-5` | 20px | display: empty states, and nothing else |
+| Canvas | #090A0C | Page and navigation |
+| Card | #111316 | Content, protection, and inspector panels |
+| Inset | #191C20 | Fields and segmented tracks |
+| Raised | #23272E | Hovered inset controls |
+| Line | #2A2E35 | Section dividers and quiet panel edges |
+| Line strong | #454B55 | Active borders and field edges |
+| Selection | #102A32 | Active navigation and selected options only |
+| Selection line | #428795 | Selected option borders, never body text |
 
-Stroke weight is never set. Lucide draws a 2-unit stroke on a 24 grid, so the
-painted line follows the size — 1.17px, 1.33px, 1.67px. That is the whole
-reason the sizes are rationed: the apparent weight of an icon is a function of
-its height, so five sizes is five line weights in one family, and *that* is
-what reads as inconsistent long before anyone notices a glyph. The audit that
-produced this rule found no `strokeWidth` prop anywhere. There was never a
-stroke problem to fix.
+No brown undertones, glass, background gradients or drop shadows. Surfaces
+separate sections through neutral lightness and crisp 1px edges.
 
-Before this, six sizes were in use — 12, 14, 16, 18, 20 and 22px — expressed
-three different ways: a `h-*` class, a `size={22}` prop, and nothing at all.
+## Typography and contrast
 
-**Inside a control the size class is decoration.** The button base carries
-`[&_svg]:size-4`, a class-plus-type selector, which outranks the `.h-5` on the
-icon itself. Measured, not assumed: an icon written `h-5 w-5` in a button
-computes to 16×16, one written `h-3.5 w-3.5` in a button also computes to
-16×16, and the same `h-5 w-5` icon outside a button computes to 20×20. So the
-encrypt button's `Lock` was authored at 20 and had been painting 16 since the
-button was written. Author `h-4 w-4` on icons in controls — matching what the
-control will paint anyway — rather than a number the cascade discards.
+Spline Sans Variable, pinned to @fontsource-variable/spline-sans 5.3.0
+(OFL-1.1), for interface text and headings. JetBrains Mono, likewise
+self-hosted, for bytes, codes, shares and cryptographic settings. Never use a
+remote font. Both Latin subsets are precached; the Spline Sans licence ships
+at /licenses/spline-sans-OFL.txt. Body copy uses natural tracking (0).
 
-**One name per icon.** `AlertTriangle` and `TriangleAlert` are the same export
-object; the first is lucide's deprecated alias. Two names for one glyph means a
-search for one usage silently misses the other half, so only the current name
-is used.
+| Text | Value | Canvas | Card | Inset | Raised |
+| --- | --- | --- | --- | --- | --- |
+| ink | #F0F2F5 | 17.66:1 | 16.59:1 | 15.24:1 | 13.36:1 |
+| body | #B1B7C1 | 9.82:1 | 9.23:1 | 8.48:1 | 7.43:1 |
+| muted | #949CA9 | 7.16:1 | 6.72:1 | 6.18:1 | 5.42:1 |
+| heading | #F7F9FC | 18.78:1 | 17.64:1 | 16.21:1 | 14.21:1 |
 
-`scripts/icon-audit.mjs` enforces the sizes against the rendered page, the same
-way the palette gate does, because the override above is exactly the kind of
-thing that is invisible in the source and obvious in the pixels. The logo is
-not a lucide icon and is not covered — it is a fill-based mark on its own grid.
+Titles 28–32px/400, section headings 15px/500, body 13–14px/400,
+captions/data at least 12px. No opacity modifiers on body or caption text.
+Contrast must remain at least 4.5:1 for ordinary text; accessibility floors
+override the visual reference.
 
-## The sparks — quarantined
+## Geometry and controls
 
-`#0447FF` (electric blue) and `#FF4704` (ember) exist **only** inside
-product visuals: the generated background art, data visualisation, and
-illustrative objects. Never on buttons, links, borders, focus, icons-as-
-chrome, or text. Strip the imagery from any screen and what remains is
-entirely warm monochrome. For data-viz strokes on dark grounds the lifted
-cuts `#5C7FFF` / `#FF7A47` are permitted, in viz only.
+- Panels: 12px radius, 22–24px padding, 16px padding on phones.
+- Inputs and buttons: 8px radius; compact navigation 6px. Switches and dots
+  remain round. Primary buttons are not pills.
+- Primary: action blue #84B9FF fill, #111316 text, #ACD0FF hover.
+- Outline actions: transparent or inset fill, line border, action-blue text.
+- Utility controls (copy, clear, reveal): neutral until focused or hovered.
+- Disabled: transparent fill, line border, muted label; not reduced opacity.
+- Focus: a visible 2px action-blue ring, offset from the control.
+- Motion: restrained 150–200ms color/opacity changes, no scale on press.
+  Existing reduced-motion handling remains. Completion may use 400–600ms.
 
-## Overlays
+## Accent and status
 
-A modal scrim is the one surface that must be translucent — it dims whatever
-happens to be behind it, which no opaque token can do. It is `canvas` at
-**80%**, not black: a pure-black scrim is the same cool-neutral drift as a
-white wash, just in the other direction, and against a warm ground it reads
-grey. `rgba(14, 13, 11, 0.8)`.
+Container diagrams keep blue #5C7FFF and ember #FF7A47. These marks are the
+visual focal point against the neutral shell, not decorative glows behind forms.
+Do not use diagram colors for form text or fill entire panels with them.
 
-## Semantic status (data, not decoration)
+Section numbers and panel headings use ice blue #9EC5FF. The marker-only
+version was too subtle in review: 15px panel titles now carry the accent too.
+Page titles remain crisp off-white #F7F9FC. Body text and descriptions remain
+neutral silver. Ice blue marks structure, not a successful outcome.
 
-Warm-shifted, used as text on their own `/10` washes and required to pass
-AA there: success `#53B37E`, warning `#D9A23F`, danger `#E5624E`. Status
-dots may use the same values.
+Action blue #84B9FF identifies links, task titles, upload prompts and actions
+such as Random, Passphrase and recovery verification. Hover is #ACD0FF.
+Selected options and the active destination use cyan #6EE7F2 over #102A32,
+with #428795 borders. Selection is also expressed by a filled shape, border,
+and aria-pressed/aria-selected; it never relies on hue alone. Switch tracks
+use cyan for enabled settings, not mint: configuration is not validation.
+Within a selected card, the option title is cyan but its description stays
+silver. Filenames and entered text stay off-white, with cyan file icons.
 
-## Type
+Blue and cyan clear 7.40:1 and 10.26:1 respectively on raised surfaces.
+Muted text clears 5.42:1 on selection fill; selection borders clear 3.66:1
+against raised surfaces. Dark primary-button text clears 9.18:1 on blue.
 
-- **Plus Jakarta Sans Variable** for everything textual.
-  - Display: weight **300**, sizes 36/44/56px, tracking −0.02em,
-    line-height ≤ 1.1. A display headline at ≥600 weight is a defect.
-  - UI and body: 400 and 500 only, 13–16px.
-  - At most three type sizes visible on one screen.
-- **JetBrains Mono** 400/500 for data surfaces: hex bytes, armored text,
-  share strings, KDF parameters, the container inspector's readouts.
-  Mono text renders in `body`/`muted` tones; a byte in a spark colour is a
-  defect (emphasis uses `ink`).
-- Floors from the browser suite override everything: 12px minimum
-  rendered size, WCAG AA contrast, visible focus.
+Semantic status uses brighter mint #69DBAA, warning #D9A23F and danger #E5624E.
+Ice blue and mint clear 8.48:1 and 8.79:1 respectively on the raised surface.
+Use status colors only for real outcomes or warnings, with a textual explanation.
+For a typed password, mint means only "Minimum policy met"; retain the explicit
+disclaimer that this is not a strength rating. Empty inputs carry no success state.
+Primary and destructive fills use dark text, not white where contrast fails.
 
-This said **Satoshi Variable** until the licence was read. Satoshi is under the
-ITF Free Font License, whose §02 forbids distributing the font "through
-another font website, font library, marketplace, repository, download service"
-or via "publicly accessible servers", and requires any third party to obtain
-their own copy from Fontshare. This repository is public, so the binary can
-never live in it. Self-hosting on the deployed site is permitted (§01) — but a
-font that may not be in the source while it must be in the deployment breaks
-the promise that the build is reproducible from what you can read, and that
-promise is worth more than a typeface.
+## Layout and navigation
 
-So the display face was never actually drawn: the stack fell through to
-whatever system UI face the reader had, which is why the interface read as
-characterless rather than quiet. Plus Jakarta Sans is OFL-1.1, ships on npm as
-`@fontsource-variable/plus-jakarta-sans`, and is therefore vendored,
-precached, and offline like JetBrains Mono. Its 200–800 axis covers the 300
-display weight this system is built on.
+Persistent workspace navigation on desktop; a contained horizontal tab strip
+on mobile. Keyboard direction matches the navigation orientation. One controlled
+form, not parallel desktop/mobile secret fields. Sections: Content and Protection.
+The inspector sits alongside at desktop widths, below on narrower screens.
 
-Any future replacement is subject to the same test, in this order: the licence
-must permit redistribution in a public repository, then it must self-host from
-the lockfile, then it must carry a light weight. A face that fails the first
-is not a candidate however well it reads.
+Workspace, Encrypt, Decrypt, Recovery, Audio and Tools are distinct views.
+No marketing hero, fabricated activity feed, accounts, cloud storage or scorecards.
+Keep advanced cryptographic options, cancellation, auto-lock and offline tools.
 
-## Imagery
+## Container preview and recovery honesty
 
-- **Hero background**: the "Deep Field" plate (see `STATUS.md` for source) —
-  sparse blue/ember bokeh over warm charcoal. It sits behind the hero only,
-  fades to flat `canvas` before any form or text panel, and text over it
-  always has ≥ AA contrast against the darkest local region or sits on a
-  `canvas` scrim.
-- **Illustrative objects and icons-as-art** (empty states, tool cards,
-  social imagery): generated in the spark palette on `canvas` grounds,
-  vector-style, no text baked in.
-- **UI glyphs** (buttons, rows, nav): remain the stroke icon set, coloured
-  by the text tokens like any other glyph — never spark-coloured.
+The preview is a plan until real bytes exist. Its diagram is a header schematic
+derived from real format dimensions. Each cell's byte extent is stated; it is not
+random ciphertext or an entropy meter. Parsed metadata is not successful verification.
 
-## Screenshots
+A downloaded file is only a download request; the user must confirm their saved
+copy. Recovery shares configured is not the same as shares issued. Verification
+states which method was tested and never renders or downloads plaintext.
 
-The README and walkthrough images (`docs/screenshots/`) are one set, captured
-by `scripts/capture-screenshots.mjs` — never by hand, for the reason its
-header gives: a shot nothing regenerates goes stale silently.
+## Icons and screenshots
 
-- **One width.** Every shot is captured at the viewport width — 1180 CSS at
-  DPR 2, so **2360px** intrinsic — whether it frames a full-width band of the
-  centred layout or a modal centred on its scrim. Uniform intrinsic width is
-  what keeps the folder listing and the rendered README from reading as
-  ragged; a shot narrower than its neighbours announces itself as an
-  afterthought.
-- **Even padding, never an edge-to-edge crop.** Capture through `shotRegion`
-  (a viewport-width vertical-band clip carrying a `pad` margin) or a full
-  `page.screenshot`. An element `.screenshot()` frames its target with zero
-  surrounding margin, jammed against the image edge — the tell of the two
-  shots this rule brought back into line.
-- **Height follows content.** The band is only as tall as the panel it frames
-  plus the padding, so heights differ from shot to shot and that is correct.
-  Width is the axis that must not.
+Lucide only, default stroke 2: 14px inline, 16px controls/navigation, 20px empty
+states. Preserve the Keymaker keyhole mark. Rendered icon and palette audits
+remain required, including neutral text/ground contrast.
 
-## Motion
-
-150–250ms, ease-out, opacity/transform only. The existing
-`prefers-reduced-motion` global applies unchanged.
-
-One scoped allowance, added with the seal ceremony. A **moment of
-completion** — a container sealed, a wipe carried out — may run **400–600ms**,
-still opacity/transform only, still flattened to nothing by the
-reduced-motion global. The reason is the same one that keeps everything else
-short: motion is information, and its length should match what it says. A
-tab arriving is a fact of no consequence and gets 200ms. A seal finishing is
-the one moment the owner is certain to be watching, the moment after which
-the bytes exist, and 200ms says "something flickered" where 500ms says
-"this happened". It is an allowance, not a range: an element that is not
-completing something is not entitled to it, and a completion that runs past
-600ms has stopped informing and started performing.
-
-## Voice
-
-Headlines whisper (light weight, tight tracking, short sentences). Body is
-calm and factual. The interface states what it does and what it will not do
-in the same tone — the honesty register the app already uses.
+README captures remain 1180 CSS pixels at DPR 2 (2360px intrinsic), produced by
+`scripts/capture-screenshots.mjs`. Capture viewport-width bands with padding,
+not tight element crops. Presentation previews may also include mobile captures.

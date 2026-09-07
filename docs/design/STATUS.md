@@ -1,10 +1,49 @@
-# Nightpaper — decisions and asset manifest
+# Keymaker — design decisions and asset manifest
 
 The working state of the redesign, kept in the repository so any session can
 resume it. `BAR.md` holds the reference mechanisms; `DESIGN-SYSTEM.md` holds
 the binding tokens. This file holds the choices and the loose ends.
 
-## Decided
+## Current — Graphite workspace, 7 September 2026
+
+The active direction is Linear-inspired workspace styling with the approved
+Keymaker layout. The user rejected the brown/taupe grounds in the first preview.
+The neutral Graphite palette in DESIGN-SYSTEM.md supersedes the Nightpaper
+decisions recorded below.
+
+- Charcoal/black shell, persistent navigation, separate workspace/encrypt/decrypt/
+  recovery views; Audio and Tools retained.
+- Blue/ember header schematic retained as the main visual focal point.
+- Spline Sans Variable selected for the interface and headings, replacing
+  Plus Jakarta Sans. Natural body tracking; existing size/weight hierarchy
+  retained. JetBrains Mono remains for technical values. Spline Sans is
+  pinned at 5.3.0, bundled locally with its OFL notice, and precached offline.
+  The historical social-card template still uses its existing Jakarta face.
+- Ice-blue panel titles at 15px and section markers at 13px. Coloring only the
+  small markers was too subtle in review. Main page titles stay crisp off-white.
+- Brighter mint feedback; typed passwords say only "Minimum policy met", not
+  "strong". Descriptive text stays neutral and readable.
+- Control contrast pass: action-blue prompts, generators, primary actions and
+  recovery controls; cyan selected content modes, KDF/cipher options and active
+  navigation with matching borders and dark tinted fills. Checked switches
+  use cyan (configuration), not mint (validation). Input mode buttons now expose
+  aria-pressed. Entered content stays off-white; descriptions stay silver.
+- Local branch: `ui/linear-workspace`. Preview iterations are not deployed.
+- Latest checks: production export with Webpack fallback and CSP/build manifest
+  postprocessing; typecheck and 44 Chromium browser tests passed, including
+  rendered Spline Sans, offline font caching, accessibility, responsive layout,
+  password feedback, container inspection, and receipts. The new font test
+  first failed against the prior Jakarta build. All three new control-state
+  tests failed against the prior neutral-control build before implementation.
+  Accessibility scans now wait
+  for finite entrance animations before measuring text contrast.
+  Palette audit passed (11,480 colors across 12 views); icon audit passed
+  (335 icons across 11 views). Other browser engines not run locally.
+- `scripts/capture-workspace.mjs` captures review screens, waiting for the
+  selected tab, visible panel, fonts and finite transitions before taking each
+  screenshot. Includes a public demo-file state and expanded advanced options.
+
+## Historical Nightpaper decisions (superseded)
 
 - **Direction**: ElevenLabs design system, translated to dark ("Nightpaper").
   Reference: styles.refero.design/style/031056ff-7af1-46db-8daa-115f731c5d26

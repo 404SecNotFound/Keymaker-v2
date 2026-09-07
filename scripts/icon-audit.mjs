@@ -76,7 +76,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 await new Promise((r) => setTimeout(r, 1200));
 
 const icons = [];
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: !process.env.CI ? process.env.KEYMAKER_BROWSER_PATH : undefined });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
 
 try {

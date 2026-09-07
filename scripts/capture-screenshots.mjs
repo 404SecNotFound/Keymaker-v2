@@ -26,10 +26,10 @@ const HERE = dirname(fileURLToPath(import.meta.url));
 const SHOTS = join(HERE, '..', 'docs', 'screenshots');
 const BASE = process.env.KEYMAKER_SHOT_URL || 'http://127.0.0.1:4323';
 
-const VIEWPORT = { width: 1180, height: 1020 };
+const VIEWPORT = { width: 1180, height: 1140 };
 const SCALE = 2;
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: !process.env.CI ? process.env.KEYMAKER_BROWSER_PATH : undefined });
 const context = await browser.newContext({
   viewport: VIEWPORT,
   deviceScaleFactor: SCALE,
@@ -44,7 +44,12 @@ async function settle() {
   // Fonts drive layout; capturing before they load produces a shot with
   // different metrics than any user will ever see.
   await page.evaluate(() => document.fonts.ready);
-  await page.waitForTimeout(400);
+  await page.evaluate(async () => {
+    await Promise.all(document.getAnimations().filter((a) =>
+      a.effect?.getComputedTiming().iterations !== Infinity
+    ).map((a) => a.finished.catch(() => undefined)));
+    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  });
 }
 
 /**

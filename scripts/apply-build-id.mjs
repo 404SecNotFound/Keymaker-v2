@@ -79,17 +79,15 @@ if (!sw.includes(ASSETS_PLACEHOLDER)) {
 // never draws.
 //
 // The patterns name the families, so they go stale silently when the UI moves
-// — which has now happened twice: once when the identity left Inter, and again
-// when the text face left Satoshi for Plus Jakarta Sans. Both times the only
-// symptom was an offline first visit in the fallback face. The assertions
-// below turn that back into a build failure.
+// — a replacement can otherwise render online but silently fall back offline.
+// The assertions below turn that into a build failure.
 //
 // One entry per family, each asserted separately. A single combined count is
 // the version of this check that cannot fail for the reason it exists: with
 // two families and one total, the mono face alone keeps the number above zero
 // while the text face — the one that sets the whole page — is quietly absent.
 const FONT_PRECACHE = [
-  { family: 'Plus Jakarta Sans (text and display)', re: /plus-jakarta-sans-latin(-ext)?-wght-normal[^/]*\.woff2$/ },
+  { family: 'Spline Sans (text and display)', re: /spline-sans-latin(-ext)?-wght-normal[^/]*\.woff2$/ },
   { family: 'JetBrains Mono (data surfaces)', re: /jetbrains-mono-latin(-ext)?-wght-normal[^/]*\.woff2$/ },
 ];
 const isPrecachedFont = (f) => FONT_PRECACHE.some(({ re }) => re.test(f));

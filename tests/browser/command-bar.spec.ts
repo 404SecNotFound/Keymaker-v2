@@ -19,7 +19,7 @@ import { visible } from "./helpers";
  */
 
 const openBar = async (page: Page) => {
-  await page.keyboard.press("Control+k");
+  await page.keyboard.press("ControlOrMeta+k");
   await expect(page.getByRole("dialog", { name: "Command menu" })).toBeVisible();
 };
 
