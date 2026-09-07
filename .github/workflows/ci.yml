@@ -65,6 +65,15 @@ jobs:
       - name: Recovery envelope diagnosis
         run: npm run test:recovery-envelopes
 
+      # R03: passkey enrolment binds its second WebAuthn tap to the credential it
+      # just created, so a device holding several Keymaker passkeys cannot key a
+      # backup to the wrong one. The browser suite's virtual authenticator holds
+      # one credential and always consents, so it cannot reach this; this drives
+      # webauthn-prf.ts with a mocked navigator.credentials where create() and
+      # get() can disagree, and the control bites when the binding is removed.
+      - name: Passkey enrolment binds to the created credential
+        run: npm run test:passkey-binding
+
       # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
       # § Screenshots). It reads the committed PNG headers, so it needs
       # neither a build nor a browser and belongs in this cheap job. Nothing

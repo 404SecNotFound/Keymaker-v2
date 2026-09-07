@@ -25,12 +25,24 @@
  *
  * ## Why nothing is stored about the credential
  *
- * §4.7 keeps no identifier, so `get()` passes an empty `allowCredentials` and
- * lets the authenticator find its own. That requires the credential to be
- * *discoverable*, which is why `residentKey` is `required` at creation rather
- * than preferred — a non-discoverable credential cannot be found without the id
- * the container does not carry, so it would enrol happily and never open
- * anything.
+ * §4.7 keeps no identifier, so recovery's `get()` passes an empty
+ * `allowCredentials` and lets the authenticator find its own. That requires the
+ * credential to be *discoverable*, which is why `residentKey` is `required` at
+ * creation rather than preferred — a non-discoverable credential cannot be found
+ * without the id the container does not carry, so it would enrol happily and
+ * never open anything.
+ *
+ * ## Why enrolment binds its second tap to the credential it just made
+ *
+ * Recovery keeps that empty-allowlist picker. Enrolment must not: the two taps
+ * are one ceremony, and on a device that already holds a Keymaker passkey an
+ * empty allowlist lets the second tap be answered by the *older* credential.
+ * Enrolment would then key the backup to a credential the user did not just
+ * create and believes is not in play — and deleting that older credential would
+ * silently remove passkey access. So enrolment's assertion restricts
+ * `allowCredentials` to the created credential's id and verifies the assertion
+ * came back with it. The id is used only for this one ceremony and is never
+ * stored in the container, so §4.7's "no identifier" property is unchanged.
  */
 
 import { KeymakerError } from "./keymaker-crypto";
@@ -95,6 +107,15 @@ function readPrfOutput(credential: PublicKeyCredential): Uint8Array | null {
   const first = results.prf?.results?.first;
   if (!first || first.byteLength !== PRF_OUTPUT_LEN) return null;
   return new Uint8Array(first);
+}
+
+/** Whether an assertion's `rawId` is the credential id enrolment bound it to. */
+function sameRawId(rawId: ArrayBuffer, expected: Uint8Array): boolean {
+  const got = new Uint8Array(rawId);
+  if (got.length !== expected.length) return false;
+  let diff = 0;
+  for (let i = 0; i < got.length; i++) diff |= (got[i] as number) ^ (expected[i] as number);
+  return diff === 0;
 }
 
 /**
@@ -191,7 +212,10 @@ export async function enrolPasskey(prfSalt: Uint8Array): Promise<Uint8Array> {
     );
   }
 
-  // The assertion, which is where the output actually comes from.
+  // The assertion, which is where the output actually comes from. Bound to the
+  // credential just created (its `rawId`), so on a device holding other Keymaker
+  // passkeys the second tap cannot be answered by a different one — see the
+  // header.
   //
   // Anything that goes wrong from here leaves a credential on the
   // authenticator that Keymaker will never use. There is no browser API to
@@ -200,7 +224,11 @@ export async function enrolPasskey(prfSalt: Uint8Array): Promise<Uint8Array> {
   // someone with a passkey manager slowly filling with Keymaker entries and
   // no idea which, if any, opens anything.
   try {
-    return await assertPasskeyPrf(prfSalt, "Enrolling the passkey");
+    return await assertPasskeyPrf(
+      prfSalt,
+      "Enrolling the passkey",
+      new Uint8Array(created.rawId)
+    );
   } catch (e) {
     const detail =
       e instanceof PasskeyError && e.cancelled
@@ -218,16 +246,23 @@ export async function enrolPasskey(prfSalt: Uint8Array): Promise<Uint8Array> {
 }
 
 /**
- * Ask an already-enrolled passkey for the PRF output over `prfSalt`.
+ * Ask a passkey for the PRF output over `prfSalt`.
  *
- * `allowCredentials` is empty on purpose: §4.7 stores no credential id, so the
- * authenticator finds its own. On a device holding several Keymaker passkeys
- * the browser shows a picker, and a wrong choice yields an output that does not
- * unwrap — indistinguishable from a wrong password, by §6.
+ * Without `bindToCredentialId`, `allowCredentials` is empty on purpose: §4.7
+ * stores no credential id, so the authenticator finds its own. On a device
+ * holding several Keymaker passkeys the browser shows a picker, and a wrong
+ * choice yields an output that does not unwrap — indistinguishable from a wrong
+ * password, by §6. That is recovery's contract.
+ *
+ * `bindToCredentialId` restricts the ceremony to one credential and verifies the
+ * assertion came back with it. Enrolment passes the id it just created so its
+ * second tap cannot be answered by a different Keymaker passkey; recovery leaves
+ * it undefined and keeps the picker.
  */
 export async function assertPasskeyPrf(
   prfSalt: Uint8Array,
-  what: string = "Unlocking with the passkey"
+  what: string = "Unlocking with the passkey",
+  bindToCredentialId?: Uint8Array
 ): Promise<Uint8Array> {
   if (prfSalt.length !== PRF_OUTPUT_LEN) {
     throw new PasskeyError("Keymaker asked for a PRF salt of the wrong size.");
@@ -238,7 +273,9 @@ export async function assertPasskeyPrf(
     assertion = (await navigator.credentials.get({
       publicKey: {
         challenge: crypto.getRandomValues(new Uint8Array(32)),
-        allowCredentials: [],
+        allowCredentials: bindToCredentialId
+          ? [{ type: "public-key", id: bindToCredentialId as BufferSource }]
+          : [],
         userVerification: "required",
         extensions: {
           prf: { eval: { first: prfSalt as BufferSource } },
@@ -249,6 +286,15 @@ export async function assertPasskeyPrf(
     throw toPasskeyError(e, what);
   }
   if (!assertion) throw new PasskeyError(`${what} produced no assertion.`);
+
+  // Defence in depth. A conformant authenticator honours `allowCredentials`, but
+  // the whole point of binding is to not take that on trust: verify the ceremony
+  // came back with the credential we bound it to before believing its output.
+  if (bindToCredentialId && !sameRawId(assertion.rawId, bindToCredentialId)) {
+    throw new PasskeyError(
+      "The authenticator answered with a different passkey than the one Keymaker asked for."
+    );
+  }
 
   const output = readPrfOutput(assertion);
   if (!output) {

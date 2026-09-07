@@ -22,6 +22,7 @@
     "test:wordlist": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-wordlist.mjs",
     "test:password-policy": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/password-policy-test.mjs",
     "test:recovery-envelopes": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/recovery-envelopes-test.mjs",
+    "test:passkey-binding": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/passkey-binding-test.mjs",
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:release-recipe": "node scripts/release-recipe-test.mjs",
     "test:release-gate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-gate-test.mjs",
