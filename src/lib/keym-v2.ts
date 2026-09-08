@@ -1884,7 +1884,13 @@ export function dearmorKeym2(text: string): Uint8Array {
   const trimmed = text.trim();
   if (!trimmed.startsWith(KEYM2_ARMOR_PREFIX)) reject();
   try {
-    return fromBase64Url(trimmed.slice(KEYM2_ARMOR_PREFIX.length).replace(/\s+/g, ""));
+    // §7: ASCII whitespace only inside the body, matching keym2.py's
+    // `bytes.split()` (the ends are trimmed above, as its `str.strip()` does). A
+    // non-ASCII space — U+00A0, a stray BOM — is *kept*, so `fromBase64Url`
+    // rejects it exactly as the reference does. Stripping it here with `\s`
+    // instead opened a container the durable Python decryptor refuses, which
+    // strands the heir on the one path that has no browser.
+    return fromBase64Url(trimmed.slice(KEYM2_ARMOR_PREFIX.length).replace(/[ \t\n\r\v\f]/g, ""));
   } catch {
     reject();
   }
