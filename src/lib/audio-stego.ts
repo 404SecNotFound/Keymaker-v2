@@ -163,6 +163,14 @@ export function parseWavToPcm16(bytes: Uint8Array): Pcm16 {
     const size = view.getUint32(p + 4, true);
     const body = p + 8;
     if (id === "fmt ") {
+      // The PCM fmt chunk is 16 bytes and the fields below read through body+15.
+      // The loop guard only proves the 8-byte chunk header is present, not the
+      // body, so a declared-but-truncated fmt chunk would make DataView throw a
+      // raw RangeError. Refuse it as a typed carrier error instead, keeping the
+      // promise that every carrier problem is an AudioStegoError, not a crash.
+      if (size < 16 || body + 16 > bytes.length) {
+        throw new AudioStegoError("This WAV's format chunk is malformed or truncated.");
+      }
       format = view.getUint16(body, true);
       channels = view.getUint16(body + 2, true);
       sampleRate = view.getUint32(body + 4, true);

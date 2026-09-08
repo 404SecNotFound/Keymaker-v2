@@ -93,6 +93,14 @@ jobs:
       - name: Dearmor strips ASCII whitespace only (keym2.py parity)
         run: npm run test:dearmor-whitespace
 
+      # parseWavToPcm16 walks the RIFF chunks and its loop guard only proves the
+      # 8-byte chunk header is present, not the fmt body. A truncated fmt chunk
+      # made DataView throw a raw RangeError, which is not an AudioStegoError, so
+      # the UI could not tell a bad audio file from a wrong password. The control
+      # bites (a RangeError leaks) when the fmt bounds check is removed.
+      - name: WAV fmt chunk bounds are a typed carrier error (not a RangeError)
+        run: npm run test:audio-wav-bounds
+
       # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
       # § Screenshots). It reads the committed PNG headers, so it needs
       # neither a build nor a browser and belongs in this cheap job. Nothing

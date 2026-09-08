@@ -25,6 +25,7 @@
     "test:passkey-binding": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/passkey-binding-test.mjs",
     "test:secret-erase": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/secret-erase-test.mjs",
     "test:dearmor-whitespace": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/dearmor-whitespace-test.mjs",
+    "test:audio-wav-bounds": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/audio-wav-bounds-test.mjs",
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:release-recipe": "node scripts/release-recipe-test.mjs",
     "test:release-gate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-gate-test.mjs",
