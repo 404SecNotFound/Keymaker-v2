@@ -1,8 +1,68 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
+
+const REPO_ROOT = resolve(__dirname, "../..");
+const BRIDGE = resolve(REPO_ROOT, "reference/bridge.mjs");
+
+/** Drive the shipping TypeScript through the bridge, the way v3-default.spec.ts does. */
+function bridge(...args: string[]): void {
+  execFileSync("node", [BRIDGE, ...args], { cwd: REPO_ROOT, encoding: "utf8" });
+}
+
+// §4.5 forbids a pinned salt and master key on real data; these build a fixture,
+// so it is exactly the case they are for. 32 bytes each, as hex.
+const SE_SALT = "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f";
+const SE_MASTER_KEY = "202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f";
+const SE_PK_SALT = "404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f";
+const SE_PK_PRF = "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f";
+
+/**
+ * A self-extracting page whose container carries a slot the WebCrypto subset
+ * cannot use, placed *before* the passphrase slot that it can.
+ *
+ * The order is the point. §4.4 says a reader skips a slot it cannot use and
+ * opens through one it can; the failure it guards against is a reader that
+ * rejects the whole file for the first slot it does not understand. If the
+ * usable slot came first the reader would open on it and never reach the skip,
+ * so `addpasskey` (which appends its slot) is followed by a swap that puts the
+ * passkey slot at index 0 and the PBKDF2/AES passphrase slot at index 1. Each
+ * slot authenticates against its own 48-byte prefix (§5.3), not its position,
+ * and a v2 container carries no slot_table_mac, so reordering two whole records
+ * leaves a container both readers still open.
+ */
+function multiSlotUnusableFirstPage(outPath: string, ptPath: string, containerPath: string): string {
+  writeFileSync(ptPath, SECRET, "utf8");
+  const single = containerPath + ".single";
+  const twoSlot = containerPath + ".two";
+  bridge("encrypt2", "--password", STRONG_PASSWORD, "--in", ptPath, "--out", single,
+    "--cipher", "aes", "--salt", SE_SALT, "--master-key", SE_MASTER_KEY,
+    "--kdf", "pbkdf2", "--iterations", "600000");
+  bridge("addpasskey", "--password", STRONG_PASSWORD, "--in", single, "--out", twoSlot,
+    "--prf-output", SE_PK_PRF, "--salt", SE_PK_SALT);
+
+  // v2 slot table starts at offset 9 (DECRYPTOR_JS `V2.table`); an AES slot is
+  // 96 bytes (`SLOT_LEN`). Swap record 0 (passphrase) with record 1 (passkey).
+  const TABLE = 9;
+  const W = 96;
+  const buf = readFileSync(twoSlot);
+  if (buf[4] !== 2) throw new Error(`expected a v2 base container, got version ${buf[4]}`);
+  if (buf[8] !== 2) throw new Error(`expected exactly two slots, got ${buf[8]}`);
+  const passphrase = Buffer.from(buf.subarray(TABLE, TABLE + W));
+  const passkey = Buffer.from(buf.subarray(TABLE + W, TABLE + 2 * W));
+  passkey.copy(buf, TABLE);
+  passphrase.copy(buf, TABLE + W);
+  const swapped = containerPath + ".swapped";
+  writeFileSync(swapped, buf);
+
+  bridge("selfextract", "--in", swapped, "--out", outPath,
+    "--created-on", "2026-01-01", "--app-version", "0.0.0");
+  return outPath;
+}
 
 /**
  * Roadmap 4.3 — the self-extracting page (`docs/FORMAT-V2-DESIGN.md` §7.2).
@@ -244,5 +304,52 @@ test.describe("§7.2 self-extracting page", () => {
       SECRET,
       { timeout: 90_000 }
     );
+  });
+
+  test("skips a slot it cannot use and opens through the password, refusing without naming a slot", async ({
+    context,
+  }, testInfo) => {
+    // The embedded reader's slot loop is a hand-written copy, and until now
+    // every page opened here carried a single passphrase slot — so its §4.4
+    // skip was never exercised in a browser. An inheritance backup is exactly
+    // where multiple slots turn up: an owner password beside an heir's passkey.
+    // The page must open through the password it can use and never reject the
+    // file for the passkey slot it cannot. Built with the unusable slot first
+    // so the skip is load-bearing; see multiSlotUnusableFirstPage.
+    const saved = multiSlotUnusableFirstPage(
+      testInfo.outputPath("multislot.html"),
+      testInfo.outputPath("ms-pt.bin"),
+      testInfo.outputPath("ms.keym2")
+    );
+
+    const offline = await context.newPage();
+    const pageErrors: string[] = [];
+    offline.on("pageerror", (e) => pageErrors.push(e.message));
+    await offline.goto(`file://${saved}`);
+
+    await offline.fill("#pw", STRONG_PASSWORD);
+    await offline.click("#go");
+    await offline.waitForSelector("#result:not([hidden])", { timeout: 90_000 });
+    expect(await offline.inputValue("#out")).toBe(SECRET);
+    expect(pageErrors).toEqual([]);
+    // v2 has no slot_table_mac, so nothing is claimed about the table.
+    expect(await offline.isHidden("#table")).toBe(true);
+
+    // §4.4 / §6: a wrong password is refused only once every slot has been
+    // tried, with the one message the format allows — nothing about the passkey
+    // slot it skipped or which slot it got furthest with — and the result panel
+    // goes back to hidden, so no plaintext stays on screen.
+    await offline.fill("#pw", "not the password");
+    await offline.click("#go");
+    await offline.waitForFunction(
+      () => document.querySelector("#status")?.className === "bad",
+      null,
+      { timeout: 90_000 }
+    );
+    const refusal = (await offline.textContent("#status")) ?? "";
+    expect(refusal).toMatch(/password is wrong or this file is damaged/i);
+    expect(refusal).not.toMatch(/slot|passkey|chunk|tag|header|nonce/i);
+    expect(await offline.isHidden("#result")).toBe(true);
+    await offline.close();
   });
 });
