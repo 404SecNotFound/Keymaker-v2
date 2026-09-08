@@ -548,8 +548,9 @@ export function ContainerInspector({
       )}
 
       {/* Claims here are structural facts about the app, not live telemetry:
-          the export has connect-src 'none', so "nothing leaves" is enforced
-          by CSP rather than asserted by a status light. The footer now opens
+          the export's CSP sets default-src, connect-src and form-action all to
+          'none', so "nothing leaves" is enforced by policy rather than asserted
+          by a status light (connect-src alone would leave a form POST). The footer now opens
           into the three of them the page can prove on the spot — the policy
           line read from the served document, the offline state as the
           browser reports it, and the cached build hashed against its own
