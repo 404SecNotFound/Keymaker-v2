@@ -2867,6 +2867,19 @@ export function EncryptorTool() {
         );
         resultBuffer = decryptResult.data;
 
+        // A decrypt that goes stale mid-flight — a tab or mode switch, or the
+        // auto-lock firing during one of the post-result awaits below
+        // (inspectKeym2, loadBip39) — must not abandon the recovered plaintext
+        // un-zeroed. finishOperation erases it on every success exit, but the
+        // early returns that follow skip it, so they zero it here first. The
+        // buffer is ours, and zeroing it a second time on a later path is
+        // harmless.
+        const abandonIfStale = (): boolean => {
+          if (!isStale()) return false;
+          new Uint8Array(resultBuffer).fill(0);
+          return true;
+        };
+
         // Info line + legacy-format nudge.
         //
         // 6.1. These name a *container*, so they carry the format's name and
@@ -2927,7 +2940,7 @@ export function EncryptorTool() {
             `secret behind today's stronger settings.`;
         }
         if (decryptResult.keyFileUsed) info += " · key file";
-        if (isStale()) return;
+        if (abandonIfStale()) return;
         setDecryptInfo(info);
         // v3 §5.2. `false` only ever arrives after a slot has already opened
         // and the payload has already authenticated, so this reports on the
@@ -2988,7 +3001,7 @@ export function EncryptorTool() {
               // key a second time in File mode to get at them would be a
               // pointless second Argon2id run, so hand them over now and say
               // plainly what happened.
-              if (isStale()) return;
+              if (abandonIfStale()) return;
               triggerDownload(new Blob([resultBuffer]), "decrypted.bin");
               finishOperation(resultBuffer, {
                 title: "Decrypted, but not text",
@@ -3008,14 +3021,14 @@ export function EncryptorTool() {
             try {
               const { validateBip39 } = await loadBip39();
               const result = await validateBip39(decryptedText);
-              if (isStale()) return;
+              if (abandonIfStale()) return;
               setDecryptedQrStatus(
                 result.valid
                   ? { kind: "seed", words: result.words }
                   : { kind: "plain", seedShaped: result.seedShaped }
               );
             } catch {
-              if (isStale()) return;
+              if (abandonIfStale()) return;
               setDecryptedQrStatus({ kind: "plain", seedShaped: false });
             }
         }
