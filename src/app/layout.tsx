@@ -126,7 +126,17 @@ export default function RootLayout({
               // performs it only when the user accepts — so a version change can
               // never land in the middle of an encryption.
               if ('serviceWorker' in navigator) {
-                var reloading = false;
+                // True when this page loaded already under a controller. A
+                // controllerchange on such a page means its worker was replaced
+                // by a new version — whether this tab accepted the update or
+                // another tab did and promoted the worker for every client at
+                // once. Either way this tab is now running old page code against
+                // a new worker whose cache no longer holds the old chunks, so it
+                // must reload. A page that loaded with NO controller is seeing
+                // its first worker claim it (first install) and must not bounce
+                // a new visitor.
+                var hadController = navigator.serviceWorker.controller !== null;
+                var reloaded = false;
 
                 function offerUpdate(registration) {
                   if (document.getElementById('sw-update-banner')) return;
@@ -143,7 +153,6 @@ export default function RootLayout({
                     // onto the new version.
                     banner.disabled = true;
                     banner.textContent = 'Updating…';
-                    reloading = true;
                     if (registration.waiting) {
                       registration.waiting.postMessage({ type: 'SKIP_WAITING' });
                     } else {
@@ -153,13 +162,19 @@ export default function RootLayout({
                   document.body.appendChild(banner);
                 }
 
-                // Guarded by the flag the banner sets, because controllerchange
-                // also fires on a first install when the new worker claims a
-                // page that had no controller — reloading there would bounce a
-                // first-time visitor for no reason.
+                // Reload whenever a controller that was already in place is
+                // replaced — the running version genuinely changed. This fires
+                // in the tab that accepted the update and, because promoting the
+                // worker claims every client at once, in any other open tab too:
+                // those tabs would otherwise keep serving old page code from a
+                // cache the new worker has evicted, which fails offline on the
+                // next lazily imported chunk. The first-install claim of a page
+                // that had no controller is the one case that must not reload,
+                // so it does not bounce a first-time visitor.
                 navigator.serviceWorker.addEventListener('controllerchange', function() {
-                  if (!reloading) return;
-                  reloading = false;
+                  if (!hadController) { hadController = true; return; }
+                  if (reloaded) return;
+                  reloaded = true;
                   window.location.reload();
                 });
 
