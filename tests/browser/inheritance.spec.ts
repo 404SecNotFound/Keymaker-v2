@@ -23,6 +23,26 @@ const plan = (page: Page) => page.getByTestId("inheritance-plan");
 const sharesSwitch = (page: Page) =>
   visible(page.getByRole("switch", { name: "Recovery shares" }));
 
+/**
+ * Open the plan through its button, and wait until the panel is actually on the
+ * page.
+ *
+ * `openInheritance` only ever sets the panel open (it never toggles), so this is
+ * idempotent. Playwright's `.click()` waits for the button to be actionable but
+ * not for React to have attached its handler, and on WebKit under CI the click
+ * can land in that window and be lost — nothing opens, and a later query for a
+ * child of the panel times out as "element not found". That is a hydration race
+ * in the test, not a product fault: the same button, once handled, works. Retry
+ * the click until the plan mounts so every test below asserts on an opened plan
+ * rather than on a click that never registered.
+ */
+async function openPlan(page: Page) {
+  await expect(async () => {
+    await page.getByTestId("inheritance-open").click();
+    await expect(plan(page)).toBeVisible({ timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
 });
@@ -32,7 +52,7 @@ test("the plan is not on the page until it is opened, and opening it turns share
   // clean page. A panel that rendered unconditionally would fail here.
   await expect(plan(page)).toBeHidden();
 
-  await page.getByTestId("inheritance-open").click();
+  await openPlan(page);
 
   await expect(plan(page)).toBeVisible();
   // The point of the plan: it configured the form. Recovery shares are on, and
@@ -44,7 +64,7 @@ test("the plan is not on the page until it is opened, and opening it turns share
 });
 
 test("the warning names the live k of n, not a fixed string", async ({ page }) => {
-  await page.getByTestId("inheritance-open").click();
+  await openPlan(page);
 
   const warning = page.getByTestId("inheritance-warning");
   await expect(warning).toContainText("any 2 of the 3 shares");
@@ -68,7 +88,7 @@ test("the command bar reaches the plan (reach, not a second capability)", async 
 });
 
 test("a tab switch ends the plan", async ({ page }) => {
-  await page.getByTestId("inheritance-open").click();
+  await openPlan(page);
   await expect(plan(page)).toBeVisible();
 
   await visible(page.getByRole("tab", { name: "Decrypt" })).click();
@@ -81,7 +101,7 @@ test("a tab switch ends the plan", async ({ page }) => {
 });
 
 test("dismissing hides the guidance but keeps the shares configured", async ({ page }) => {
-  await page.getByTestId("inheritance-open").click();
+  await openPlan(page);
   await expect(sharesSwitch(page)).toBeChecked();
 
   await page.getByRole("button", { name: "Hide the inheritance plan" }).click();
@@ -93,7 +113,7 @@ test("dismissing hides the guidance but keeps the shares configured", async ({ p
 });
 
 test("following the plan, encrypting issues the heir's shares", async ({ page }) => {
-  await page.getByTestId("inheritance-open").click();
+  await openPlan(page);
   await expect(sharesSwitch(page)).toBeChecked();
 
   await visible(page.getByRole("button", { name: "Text", exact: true })).click();
