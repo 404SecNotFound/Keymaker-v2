@@ -510,6 +510,14 @@ const FileSelector = ({
 
   return (
     <div>
+      {selectedFile ? (
+        <div className="km-selected-file" data-testid="selected-file" onDrop={handleDrop} onDragOver={handleDragOver}>
+          <span className="km-file-icon">{icon}</span>
+          <div className="km-file-name"><span title={selectedFile.name}>{selectedFile.name}</span><small>{formatBytes(selectedFile.size)}</small></div>
+          <Button type="button" variant="ghost" size="sm" className="km-action" onClick={handleContainerClick}>Replace</Button>
+          <Button type="button" variant="ghost" size="icon" onClick={onClear} aria-label="Remove file"><X className="h-4 w-4" /></Button>
+        </div>
+      ) : (
       <div
         className={cn(
           // Three states that have to read as three: resting is the plain
@@ -517,7 +525,7 @@ const FileSelector = ({
           // fills. The mechanical token mapping had all three landing on
           // border-strong, which left the hover and drag affordances
           // invisible on the one control the whole encrypt flow starts at.
-          "relative flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-10 text-center transition-all duration-200 hover:border-border-strong hover:bg-inset",
+          "km-dropzone relative flex w-full cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-border px-6 py-10 text-center transition-all duration-200 hover:border-border-strong hover:bg-inset",
           { 'border-border-strong bg-inset': isDragging }
         )}
         onClick={handleContainerClick}
@@ -525,6 +533,7 @@ const FileSelector = ({
         onDragOver={handleDragOver}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
+        data-dragging={isDragging}
         role="button"
         tabIndex={0}
         onKeyDown={(e) => {
@@ -539,7 +548,7 @@ const FileSelector = ({
           }
         }}
       >
-        <div className="mb-3 grid h-12 w-12 place-items-center rounded-xl border border-border bg-inset text-muted-foreground">
+        <div className="km-upload-icon mb-3 grid h-12 w-12 place-items-center rounded-xl border border-border bg-inset">
           {icon}
         </div>
         <div className="w-full overflow-hidden">
@@ -550,26 +559,20 @@ const FileSelector = ({
             Visual weight is set by the class, not the tag, so this changes
             nothing on screen.
           */}
-          <h2 className="text-[15px] font-medium text-foreground">{label}</h2>
+          <p className="km-upload-label text-[14px] font-medium">{label}</p>
           <p className={cn(
             "mt-1 w-full overflow-hidden truncate text-[13px]",
             selectedFile ? "font-medium text-foreground" : "text-muted-foreground"
           )}>
-            {selectedFile ? selectedFile.name : description}
+            {description}
           </p>
         </div>
       </div>
+      )}
       {dropRejected && (
         <p role="status" className="mt-2 text-[12px] leading-snug text-warning">
           {dropRejected}
         </p>
-      )}
-      {selectedFile && (
-        <div className="mt-2 text-right">
-          <Button variant="link" size="sm" onClick={onClear} className="h-auto p-0 text-xs text-destructive hover:text-destructive/80">
-            Clear
-          </Button>
-        </div>
       )}
       <Input
         id={id}
@@ -964,6 +967,15 @@ async function preparePaperParts(
 
 export function EncryptorTool() {
   const [mode, setMode] = useState<Mode>("encrypt");
+  const [workspacePage, setWorkspacePage] = useState<"workbench" | "workspace" | "recovery">("workbench");
+  const [compactNavigation, setCompactNavigation] = useState(false);
+  useEffect(() => {
+    const query = window.matchMedia("(max-width: 760px)");
+    const sync = () => setCompactNavigation(query.matches);
+    sync();
+    query.addEventListener("change", sync);
+    return () => query.removeEventListener("change", sync);
+  }, []);
   const [inputType, setInputType] = useState<InputType>('file');
   /**
    * Seed Phrase mode — the grid editor for the text input.
@@ -1096,7 +1108,7 @@ export function EncryptorTool() {
    * clipboard, a Blob, or a file.
    */
   const [verifyOnly, setVerifyOnly] = useState(false);
-  type VerifyResult = { detail: string; bytes: number };
+  type VerifyResult = { detail: string; bytes: number; method: "password" | "recovery shares" | "passkey" };
   const [verifyResult, setVerifyResult] = useState<VerifyResult | null>(null);
 
   // Recovery kit modal — see the footer.
@@ -2030,13 +2042,15 @@ export function EncryptorTool() {
   }, [hasSecretsOnScreen, clearSensitiveState, toast]);
 
   const handleModeChange = useCallback((newMode: string) => {
+    setWorkspacePage("workbench");
+    if (newMode === mode) return;
     setMode(newMode as Mode);
     // The Tools tab has no shared state with encrypt/decrypt — resetting
     // would only wipe an in-progress form when the user peeks at Tools.
     if (newMode !== "tools") {
       resetState();
     }
-  }, [resetState]);
+  }, [mode, resetState]);
   
   const handleInputTypeChange = useCallback((newType: InputChoice) => {
       // Same reasoning as resetState: an operation started against File mode
@@ -2164,6 +2178,7 @@ export function EncryptorTool() {
    * is a no-op, so a form in progress is never reset by a stray click.
    */
   const openDoor = useCallback((door: Door) => {
+    setWorkspacePage("workbench");
     if (door === currentDoor) return;
     if (door === "open") {
       if (mode !== "decrypt") handleModeChange("decrypt");
@@ -2196,6 +2211,7 @@ export function EncryptorTool() {
    * the same ordering `openDoor` relies on to keep its `setShamirEnabled(true)`.
    */
   const openInheritance = useCallback(() => {
+    setWorkspacePage("workbench");
     if (mode !== "encrypt") handleModeChange("encrypt");
     setShamirEnabled(true);
     setIsAdvancedOpen(true);
@@ -2229,7 +2245,7 @@ export function EncryptorTool() {
     }
 
     if (!selectedFile) {
-        setter(null);
+        // Cancelling a replacement picker leaves the previous selection intact.
         return;
     }
 
@@ -2932,7 +2948,7 @@ export function EncryptorTool() {
           // count is reported because "it opens, and it is the size you
           // expect" catches a class of mistake that a bare tick does not: the
           // right password on the wrong backup.
-          setVerifyResult({ detail: info, bytes: resultBuffer.byteLength });
+          setVerifyResult({ detail: info, bytes: resultBuffer.byteLength, method: suppliedShares.length > 0 ? "recovery shares" : usePasskey ? "passkey" : "password" });
           finishOperation(resultBuffer, {
             title: "Verified — the backup opens",
             description: "The contents were checked and discarded without being shown.",
@@ -3128,13 +3144,6 @@ export function EncryptorTool() {
     return false;
   }
 
-  const inputTypePillClasses = (active: boolean) => cn(
-    "flex-1 cursor-pointer rounded-full border px-3 py-2 text-center text-[13px] font-medium transition-colors",
-    active
-      ? "border-border-strong bg-inset text-foreground"
-      : "border-transparent text-muted-foreground hover:text-foreground"
-  );
-
   // Key-file toggle + picker/generator. Rendered in place on the Decrypt
   // tab and inside the Advanced section on the Encrypt tab.
   const keyFileControls = (
@@ -3144,7 +3153,6 @@ export function EncryptorTool() {
           id="use-keyfile"
           checked={useKeyFile}
           onCheckedChange={handleUseKeyFileChange}
-          className="data-[state=checked]:bg-success"
         />
         <div className="flex items-center gap-1.5">
           <Label htmlFor="use-keyfile" className="cursor-pointer text-sm text-foreground">
@@ -3186,7 +3194,7 @@ export function EncryptorTool() {
   );
 
   const renderContent = (currentMode: Mode) => (
-    <div className="space-y-5">
+    <div className="km-workform space-y-5">
       {currentMode === "encrypt" && inheritanceOpen && (
         <InheritancePlan
           threshold={shamirThreshold}
@@ -3195,19 +3203,29 @@ export function EncryptorTool() {
         />
       )}
       <div className="space-y-5">
+        <section className="km-form-section" aria-labelledby={`${currentMode}-content-title`}>
+        <div className="km-section-heading">
+          <span className="km-section-number">01</span>
+          <h2 id={`${currentMode}-content-title`}>{currentMode === "encrypt" ? "Content" : "Encrypted content"}</h2>
+          <span>{currentMode === "encrypt" ? "Choose what to protect" : "Choose a backup to open"}</span>
+        </div>
         <div className="flex gap-0.5 rounded-xl bg-inset p-1">
           <button
             type="button"
             onClick={() => handleInputTypeChange('file')}
-            className={inputTypePillClasses(inputType === 'file')}
+            aria-pressed={inputType === 'file'}
+            className="km-input-choice km-choice"
           >
+            <FileText className="h-4 w-4" aria-hidden="true" />
             File
           </button>
           <button
             type="button"
             onClick={() => handleInputTypeChange('text')}
-            className={inputTypePillClasses(inputType === 'text' && !(currentMode === 'encrypt' && seedMode))}
+            aria-pressed={inputType === 'text' && !(currentMode === 'encrypt' && seedMode)}
+            className="km-input-choice km-choice"
           >
+            <ScrollText className="h-4 w-4" aria-hidden="true" />
             Text
           </button>
           {/*
@@ -3222,8 +3240,10 @@ export function EncryptorTool() {
               onClick={() => {
                 if (!(inputType === 'text' && seedMode)) handleInputTypeChange('seed');
               }}
-              className={inputTypePillClasses(inputType === 'text' && seedMode)}
+              aria-pressed={inputType === 'text' && seedMode}
+              className="km-input-choice km-choice"
             >
+              <Sprout className="h-4 w-4" aria-hidden="true" />
               Seed phrase
             </button>
           )}
@@ -3439,6 +3459,12 @@ export function EncryptorTool() {
           </div>
         )}
 
+        </section>
+        <section className="km-form-section" aria-labelledby={`${currentMode}-protection-title`}>
+        <div className="km-section-heading">
+          <span className="km-section-number">02</span>
+          <h2 id={`${currentMode}-protection-title`}>{currentMode === "encrypt" ? "Protection" : "Unlock method"}</h2>
+        </div>
         <TooltipProvider>
           <div>
             <div className="mb-2 flex items-center gap-1.5">
@@ -3483,7 +3509,7 @@ export function EncryptorTool() {
                     })
                   }
                   aria-pressed={useShares}
-                  className="ml-auto rounded-md px-2 py-1 text-[12px] text-foreground transition-colors hover:bg-inset"
+                  className="km-action ml-auto rounded-md px-2 py-1 text-[12px] transition-colors hover:bg-inset"
                 >
                   {useShares ? "Use a password instead" : "Use recovery shares"}
                 </button>
@@ -3502,7 +3528,7 @@ export function EncryptorTool() {
                   type="button"
                   onClick={() => setUsePasskey((v) => !v)}
                   aria-pressed={usePasskey}
-                  className="rounded-md px-2 py-1 text-[12px] text-foreground transition-colors hover:bg-inset"
+                  className="km-action rounded-md px-2 py-1 text-[12px] transition-colors hover:bg-inset"
                 >
                   {usePasskey ? "Use a password instead" : "Use a passkey"}
                 </button>
@@ -3569,6 +3595,7 @@ export function EncryptorTool() {
                   }
                 }}
                 placeholder={currentMode === 'encrypt' ? "Enter a strong password" : "Enter decryption password"}
+                aria-describedby={currentMode === "encrypt" && password ? "password-feedback" : undefined}
                 // A password field reveals its contents whenever "Show" is
                 // pressed, at which point spellcheck and autocorrect apply to
                 // it like any other text. Off for the same reasons as above.
@@ -3638,7 +3665,7 @@ export function EncryptorTool() {
                     size="sm"
                     onClick={generatePassword}
                     title={`${PASSWORD_LENGTH} random characters — ${PASSWORD_ENTROPY_BITS} bits`}
-                    className="min-w-0 flex-1 rounded-lg border-border bg-inset text-[13px] font-medium text-muted-foreground hover:bg-raised hover:text-foreground"
+                    className="km-action min-w-0 flex-1 rounded-lg border-border bg-inset text-[13px] font-medium hover:bg-raised"
                   >
                     <RefreshCw className="mr-1.5 h-3.5 w-3.5" />Random
                   </Button>
@@ -3647,7 +3674,7 @@ export function EncryptorTool() {
                     size="sm"
                     onClick={generatePassphrase}
                     title={`${PASSPHRASE_WORDS} words from the EFF long list — ${PASSPHRASE_ENTROPY_BITS} bits`}
-                    className="min-w-0 flex-1 rounded-lg border-border bg-inset text-[13px] font-medium text-muted-foreground hover:bg-raised hover:text-foreground"
+                    className="km-action min-w-0 flex-1 rounded-lg border-border bg-inset text-[13px] font-medium hover:bg-raised"
                   >
                     <Dices className="mr-1.5 h-3.5 w-3.5" />Passphrase
                   </Button>
@@ -3668,7 +3695,7 @@ export function EncryptorTool() {
             */}
             {currentMode === 'encrypt' && password && (
               generated ? (
-                <p className="text-[12px] leading-snug text-success">
+                <p id="password-feedback" className="text-[12px] leading-snug text-success">
                   {generated.kind === 'passphrase' ? (
                     <>
                       Generated · {generated.words} words drawn uniformly from the{' '}
@@ -3684,13 +3711,14 @@ export function EncryptorTool() {
                   )}
                 </p>
               ) : passwordMeetsPolicy ? (
-                <p className="text-[12px] leading-snug text-muted-foreground">
-                  Minimum policy met. This is a floor, not a strength rating — Keymaker
+                <p id="password-feedback" className="text-[12px] leading-snug text-muted-foreground">
+                  <span className="text-success">Minimum policy met.</span>{" "}
+                  This is a floor, not a strength rating — Keymaker
                   cannot tell how you chose this password. Use <strong>Random</strong> or{' '}
                   <strong>Passphrase</strong> for a figure it can stand behind.
                 </p>
               ) : (
-                <p className="text-[12px] leading-snug text-destructive">
+                <p id="password-feedback" className="text-[12px] leading-snug text-destructive">
                   Below the minimum policy: {PASSWORD_POLICY_HINT}
                 </p>
               )
@@ -3731,7 +3759,7 @@ export function EncryptorTool() {
                 aria-expanded={isAdvancedOpen}
                 className="flex w-full items-center justify-between px-4 py-3 text-left transition-colors hover:bg-inset"
               >
-                <span className="text-[13px] font-medium text-foreground">
+                <span className="text-[13px] font-medium text-action">
                   Advanced <span className="font-normal text-muted-foreground">— KDF, cipher, key file</span>
                 </span>
                 <ChevronDown
@@ -3783,20 +3811,20 @@ export function EncryptorTool() {
                       <section aria-labelledby="adv-derivation" className="space-y-4">
                         <h3
                           id="adv-derivation"
-                          className="text-[12px] font-medium uppercase tracking-[0.08em] text-subtle-foreground"
+                          className="text-[12px] font-medium uppercase tracking-[0.08em] text-structural"
                         >
                           Key derivation
                         </h3>
                     {/* KDF choice */}
                     <div className="space-y-2">
                       <Label className="text-[13px] font-medium text-muted-foreground">Key derivation</Label>
-                      <div className="grid grid-cols-2 gap-2">
+                      <div className="km-kdf-choices">
                         <button
                           type="button"
                           onClick={() => setKdfChoice("pbkdf2")}
                           aria-pressed={kdfChoice === "pbkdf2"}
                           className={cn(
-                            "rounded-lg border p-3 text-left transition-colors",
+                            "km-choice rounded-lg border p-3 text-left transition-colors",
                             kdfChoice === "pbkdf2"
                               ? "border-border-strong bg-inset"
                               : "border-border hover:border-border-strong"
@@ -3813,7 +3841,7 @@ export function EncryptorTool() {
                           disabled={argon2Available === false}
                           aria-pressed={kdfChoice === "argon2id"}
                           className={cn(
-                            "rounded-lg border p-3 text-left transition-colors",
+                            "km-choice rounded-lg border p-3 text-left transition-colors",
                             kdfChoice === "argon2id"
                               ? "border-border-strong bg-inset"
                               : "border-border hover:border-border-strong",
@@ -3823,7 +3851,7 @@ export function EncryptorTool() {
                         >
                           <p className="text-[13px] font-medium">
                             Argon2id{" "}
-                            <span className="text-foreground">
+                            <span className="km-option-note text-muted-foreground">
                               {argon2Available === false ? "· unavailable" : "· recommended · default"}
                             </span>
                           </p>
@@ -3879,7 +3907,7 @@ export function EncryptorTool() {
                               onClick={runCalibration}
                               disabled={calibrating || isLoading}
                               className={cn(
-                                "w-full rounded-lg border px-3 py-2 text-[12px] font-medium transition-colors",
+                                "km-action w-full rounded-lg border px-3 py-2 text-[12px] font-medium transition-colors",
                                 "border-border hover:border-border-strong",
                                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                                 "disabled:cursor-not-allowed disabled:border-border disabled:text-subtle-foreground"
@@ -3913,7 +3941,7 @@ export function EncryptorTool() {
                       <section aria-labelledby="adv-container" className="space-y-4">
                         <h3
                           id="adv-container"
-                          className="text-[12px] font-medium uppercase tracking-[0.08em] text-subtle-foreground"
+                          className="text-[12px] font-medium uppercase tracking-[0.08em] text-structural"
                         >
                           What the container carries
                         </h3>
@@ -3928,7 +3956,7 @@ export function EncryptorTool() {
                             onClick={() => setCipherChoice(id)}
                             aria-pressed={cipherChoice === id}
                             className={cn(
-                              "flex w-full items-start gap-2.5 rounded-lg border p-3 text-left transition-colors",
+                              "km-choice flex w-full items-start gap-2.5 rounded-lg border p-3 text-left transition-colors",
                               cipherChoice === id
                                 ? "border-border-strong bg-inset"
                                 : "border-border hover:border-border-strong"
@@ -3952,7 +3980,6 @@ export function EncryptorTool() {
                         id="obscure-filename"
                         checked={obscureFilename}
                         onCheckedChange={setObscureFilename}
-                        className="data-[state=checked]:bg-success"
                       />
                       <div className="flex items-center gap-1.5">
                         <Label htmlFor="obscure-filename" className="cursor-pointer text-sm text-foreground">
@@ -3983,7 +4010,6 @@ export function EncryptorTool() {
                             id="passkey-enabled"
                             checked={passkeyEnabled}
                             onCheckedChange={setPasskeyEnabled}
-                            className="data-[state=checked]:bg-success"
                           />
                           <div className="flex items-center gap-1.5">
                             <Label htmlFor="passkey-enabled" className="cursor-pointer text-sm text-foreground">
@@ -4035,7 +4061,6 @@ export function EncryptorTool() {
                             id="shamir-enabled"
                             checked={shamirEnabled}
                             onCheckedChange={setShamirEnabled}
-                            className="data-[state=checked]:bg-success"
                           />
                           <div className="flex items-center gap-1.5">
                             <Label htmlFor="shamir-enabled" className="cursor-pointer text-sm text-foreground">
@@ -4138,6 +4163,7 @@ export function EncryptorTool() {
             </div>
           )}
         </TooltipProvider>
+        </section>
       </div>
 
       {/*
@@ -4147,11 +4173,12 @@ export function EncryptorTool() {
       {verifyResult && currentMode === 'decrypt' ? (
         <div
           role="status"
+          data-testid="verify-result"
           className="animate-in fade-in-50 rounded-xl border border-success/40 bg-success/10 px-4 py-3"
         >
           <p className="flex items-center gap-2 text-[13px] font-medium text-success">
             <ShieldCheck className="h-4 w-4 shrink-0" />
-            The backup opens with this password
+            The backup opens with {verifyResult.method === "password" ? "this password" : verifyResult.method === "passkey" ? "this passkey" : "these recovery shares"}
           </p>
           <p className="mt-1 text-[12px] leading-snug text-success/90">
             {verifyResult.detail} · {formatBytes(verifyResult.bytes)} of contents,
@@ -4824,28 +4851,28 @@ export function EncryptorTool() {
    */
   const commandBarCommands = useMemo<CommandBarItem[]>(() => {
     const items: CommandBarItem[] = [];
-    if (mode !== "encrypt") {
+    if (mode !== "encrypt" || workspacePage !== "workbench") {
       items.push({
         id: "go-encrypt", group: "Go to", label: "Encrypt", icon: Lock,
         keywords: "seal file text mode tab",
         run: () => handleModeChange("encrypt"),
       });
     }
-    if (mode !== "decrypt") {
+    if (mode !== "decrypt" || workspacePage !== "workbench") {
       items.push({
         id: "go-decrypt", group: "Go to", label: "Decrypt", icon: Unlock,
         keywords: "open unlock container mode tab",
         run: () => handleModeChange("decrypt"),
       });
     }
-    if (mode !== "audio") {
+    if (mode !== "audio" || workspacePage !== "workbench") {
       items.push({
         id: "go-audio", group: "Go to", label: "Audio", icon: FileAudio,
         keywords: "steganography hide sound wav mp3 conceal mode tab",
         run: () => handleModeChange("audio"),
       });
     }
-    if (mode !== "tools") {
+    if (mode !== "tools" || workspacePage !== "workbench") {
       items.push({
         id: "go-tools", group: "Go to", label: "Tools", icon: Dices,
         keywords: "dice entropy mode tab",
@@ -4933,358 +4960,190 @@ export function EncryptorTool() {
     });
     return items;
   }, [
-    mode, currentDoor, openDoor, openInheritance, hasSecretsOnScreen, handleModeChange,
+    mode, workspacePage, currentDoor, openDoor, openInheritance, hasSecretsOnScreen, handleModeChange,
     generatePassword, generatePassphrase, generateKeyFile, runCalibration,
     wipeNow,
   ]);
 
-  const tabTriggerClasses = "rounded-md border border-transparent px-2 py-1.5 text-[13px] font-medium text-muted-foreground transition-colors sm:px-4 data-[state=active]:border-border-strong data-[state=active]:bg-inset data-[state=active]:text-foreground";
+  const activePage = workspacePage === "workbench" ? mode : workspacePage;
+  const navigateWorkspace = (next: string) => {
+    if (next === "workspace" || next === "recovery") {
+      // Audio owns local secret state. Leaving its view must unmount it.
+      if (mode === "audio") handleModeChange("encrypt");
+      setWorkspacePage(next);
+    } else {
+      handleModeChange(next);
+    }
+  };
+  const pageCopy = {
+    workspace: ["Secure workspace", "Choose what you want to protect, open, or recover."],
+    encrypt: ["Encrypt", "Protect a file, a private note, or a recovery phrase."],
+    decrypt: ["Decrypt", "Open an encrypted backup, or verify it without revealing its contents."],
+    recovery: ["Recovery", "Prepare another way in. Test it before you need it."],
+    audio: ["Audio", "Hide encrypted content inside a WAV file."],
+    tools: ["Tools", "Generate entropy from physical dice rolls."],
+  } as const;
+  const navItems = [
+    { id: "workspace", label: "Workspace", icon: FolderOpen },
+    { id: "encrypt", label: "Encrypt", icon: Lock },
+    { id: "decrypt", label: "Decrypt", icon: Unlock },
+    { id: "recovery", label: "Recovery", icon: LifeBuoy },
+    { id: "audio", label: "Audio", icon: FileAudio },
+    { id: "tools", label: "Tools", icon: Dices },
+  ];
+  const returnToBackupTest = (withShares: boolean) => {
+    const armored = mode === "encrypt" && receipt?.onScreen ? outputText : "";
+    handleModeChange("decrypt");
+    if (armored) {
+      setInputType("text");
+      setTextSecret(armored);
+    }
+    setUseShares(withShares);
+    setVerifyOnly(true);
+  };
 
   return (
-    <Tabs value={mode} onValueChange={handleModeChange} className="flex min-h-screen flex-col">
-      {/* ---- HEADER ---- */}
-      <header className="sticky top-0 z-50 w-full border-b border-border bg-background/80 backdrop-blur-xl">
-        <div className="mx-auto flex max-w-5xl items-center justify-between gap-2 px-4 py-3 sm:px-6">
-          <div className="flex min-w-0 items-center gap-2 sm:gap-2.5">
-            <svg viewBox="0 0 512 512" width={28} height={28} aria-label="Keymaker Logo" role="img" xmlns="http://www.w3.org/2000/svg">
-              <defs>
-                <linearGradient id="kmHdrGrad" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stopColor="#F5F3F1" />
-                  <stop offset="45%" stopColor="#D8D2CA" />
-                  <stop offset="100%" stopColor="#A9A29A" />
-                </linearGradient>
-                <mask id="kmHdrKey">
-                  <rect width="512" height="512" fill="white" />
-                  <circle cx="256" cy="205" r="51" fill="black" />
-                  <path d="M 230 205 L 282 205 L 297 369 L 215 369 Z" fill="black" />
-                </mask>
-              </defs>
-              <rect width="512" height="512" rx="48" fill="url(#kmHdrGrad)" mask="url(#kmHdrKey)" />
-            </svg>
-            {/* The wordmark is what pushes the header row over on a small
-                phone, so below the breakpoint only the logo remains — the
-                brand is still present, and the tabs are the part a user cannot
-                do without.
-
-                The breakpoint is measured, not guessed, and deliberately has
-                room to spare: text metrics differ between Chromium, Firefox
-                and WebKit by a few pixels, and only Chromium can be checked
-                locally. The overflow sweep in platform.spec.ts runs 375px and
-                393px — either side of this line — in all three engines, so CI
-                is what actually proves it. */}
-            <span className="hidden text-[16px] font-medium tracking-tight min-[390px]:inline sm:text-[17px]">
-              Keymaker
-            </span>
-          </div>
-          <div className="flex items-center gap-2.5 sm:gap-3">
-            {/*
-              The command-menu affordance. A pill like every button here, on
-              every width — it shipped `hidden sm:flex` first, on the theory
-              that a shortcut hint is dead weight where no keyboard exists,
-              but the button is a *button*: a tap opens the same menu, and
-              hiding it made the bar unreachable on exactly the devices where
-              hunting through the page costs the most.
-
-              What stays responsive is the label, not the existence. Below
-              `sm` the header is the tightest space in the app (see the
-              wordmark note above) and "Ctrl K" is a claim about a keyboard
-              the device does not have, so the pill shrinks to the same
-              search glyph the menu opens with — 16px, the standalone size,
-              and a 32px target so WCAG 2.5.8 is met without moving the row.
-            */}
-            <button
-              type="button"
-              onClick={() => setIsCommandBarOpen(true)}
-              aria-label="Open the command menu"
-              data-testid="command-bar-hint"
-              className="flex cursor-pointer items-center rounded-full border border-border p-2 font-mono text-[12px] leading-none text-muted-foreground transition-colors hover:border-border-strong hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background sm:px-3 sm:py-1.5"
-            >
-              <Search className="h-4 w-4 sm:hidden" aria-hidden="true" />
-              <span className="hidden sm:inline">
-                {isApplePlatform ? "⌘" : "Ctrl"}&nbsp;K
-              </span>
-            </button>
-            <TabsList className="h-auto bg-inset p-0.5">
-              <TabsTrigger value="encrypt" className={tabTriggerClasses}>
-                Encrypt
-              </TabsTrigger>
-              <TabsTrigger value="decrypt" className={tabTriggerClasses}>
-                Decrypt
-              </TabsTrigger>
-              <TabsTrigger value="audio" className={tabTriggerClasses}>
-                {/* Icon hidden on the narrowest screens: with four tabs the row
-                    overflows a 320px header otherwise, and the label carries it
-                    alone (platform.spec.ts). */}
-                <FileAudio className="hidden h-3.5 w-3.5 sm:mr-1.5 sm:inline-block" />
-                Audio
-              </TabsTrigger>
-              <TabsTrigger value="tools" className={tabTriggerClasses}>
-                <Dices className="hidden h-3.5 w-3.5 sm:mr-1.5 sm:inline-block" />
-                Tools
-              </TabsTrigger>
-            </TabsList>
-          </div>
+    <Tabs value={activePage} onValueChange={navigateWorkspace} orientation={compactNavigation ? "horizontal" : "vertical"} className="km-app flex min-h-screen flex-col">
+      <header className="km-topbar">
+        <div className="km-brand">
+          <img src={`${BASE_PATH}/logo.svg`} alt="Keymaker" width={24} height={24} />
+          <span>Keymaker</span>
+          <span className="km-brand-divider" aria-hidden="true" />
+          <span className="km-topbar-context">Secure workspace</span>
         </div>
-      </header>
-
-      {/* ---- MAIN CONTENT ---- */}
-      <div className="w-full flex-1">
-        <div
-          className={cn(
-            "mx-auto px-4 pb-24 pt-12 sm:px-6 sm:pt-16",
-            mode === "tools" || mode === "audio" ? "max-w-[680px]" : "max-w-[680px] lg:max-w-[1152px]"
-          )}
+        <button
+          type="button"
+          onClick={() => setIsCommandBarOpen(true)}
+          aria-label="Open the command menu"
+          data-testid="command-bar-hint"
+          className="km-command"
         >
-          {/* Hero. The margin below it is generous on purpose: the plate has
-              to finish fading to flat canvas, and the workbench reads calmer
-              arriving after a beat of empty paper than pressed against the
-              headline's atmosphere. */}
-          <div className="relative mb-12 text-center sm:mb-16">
-            {/*
-              The Deep Field plate. Two rules from DESIGN-SYSTEM.md shape how it
-              is mounted, and both are in the classes rather than in the image:
-
-              it sits behind the hero *only*, so the wrapper is clipped and a
-              scrim takes it to flat canvas before the workbench begins — the
-              system does not allow atmosphere behind a form or a text panel;
-
-              and the sparks live in imagery, nowhere else. This is the one
-              element on the page allowed to be blue or ember, which is exactly
-              why it is an <img> and not a border, a glow or a gradient on
-              something functional.
-
-              Prefixed with BASE_PATH like every other hand-authored URL here:
-              Next rewrites its own asset paths but not ours, and a bare
-              "/hero-cipher-field.webp" is a 404 on the project-site deploy.
-
-              -z-10 rather than z-0: an absolutely positioned box paints above
-              static in-flow content whatever the document order, so at z-0 the
-              plate washed over the top-left corner of the workbench card below
-              it. Negative pulls it behind the flow while still leaving it above
-              the page background.
-            */}
-            <div
-              aria-hidden="true"
-              className="pointer-events-none absolute left-1/2 top-0 -z-10 h-[560px] w-screen -translate-x-1/2 -translate-y-[165px] overflow-hidden"
-            >
-              {/*
-                brightness(1.3): the plate reads at 3.23x the canvas mean where
-                it used to read 2.32x — the asset itself is deliberately dim,
-                so once opacity was already 1.0 the remaining lever was the
-                filter. 1.3 rather than 1.5 because of the eyebrow: measured on
-                glyph-free strips at its own height, the worst ground under it
-                is 5.50:1 against `body` at 1.3 and 4.99:1 at 1.5, and an 11%
-                margin over a 4.5 floor is not one to ship across three
-                engines. hero-plate.spec.ts's floors moved up with this, so
-                quietly reverting the filter fails the build the same way
-                re-dimming the opacity always has.
-
-                The height came down 60px in the same change: at 1.3 the
-                residue where the bottom gradient had not quite finished
-                stopped being invisible, and "fades to flat canvas before any
-                form" is a rule, so the fade now completes a clear margin
-                above the workbench card instead of at its top edge.
-              */}
-              <img
-                src={`${BASE_PATH}/hero-cipher-field.webp`}
-                alt=""
-                aria-hidden="true"
-                decoding="async"
-                className="h-full w-full object-cover brightness-[1.3] saturate-[1.2] [mask-image:radial-gradient(112%_74%_at_50%_36%,#000_34%,transparent_78%)]"
-              />
-              {/* The canvas scrim that used to sit here is gone, and the plate
-                  is no longer held at 40%. Both were guarding the headline, and
-                  a sweep of the two against the rendered page showed they were
-                  not earning it: across every combination from 0.4-with-scrim to
-                  1.0-without, the worst background behind the headline moved
-                  only 9.3:1 to 9.0:1, while the plate itself went from 1.52x the
-                  canvas to 2.07x. Three suppressors stacked had made the image
-                  almost invisible — a lift of two values out of 255 — to buy
-                  0.3:1 of contrast on a floor of 4.5.
-
-                  What guarded the headline is now measured rather than painted
-                  over: hero-plate.spec.ts reads the composited pixels behind the
-                  words and fails below AA, so a future plate that is genuinely
-                  too bright is caught by a number instead of pre-emptively
-                  dimmed away. */}
-              {/* Down to flat canvas before anything reads on top of it. */}
-              <div className="absolute inset-x-0 bottom-0 h-2/3 bg-gradient-to-b from-transparent to-background" />
-            </div>
-
-            <p className="relative z-10 font-mono text-[12px] uppercase tracking-[0.14em] text-muted-foreground">
-              Client-side · Offline · Open source
-            </p>
-            {/* The second line dims rather than the whole block fading through
-                a gradient: the thesis stays paper-white, the counterweight
-                steps back, and the contrast between them is the design. */}
-            <h1 className="relative z-10 mt-4 text-[44px] font-[300] leading-[1.05] tracking-[-0.02em] text-foreground sm:text-[56px]">
-              Encrypt everything.<br />
-              <span className="text-subtle-foreground">Trust nothing.</span>
-            </h1>
-            <p className="relative z-10 mx-auto mt-4 max-w-md text-[16px] leading-snug text-muted-foreground sm:text-[17px]">
-              Runs entirely in your browser — no accounts, no servers, no upload.{' '}
-              <a href={KEYMAKER_REPO} target="_blank" rel="noopener noreferrer" className="text-foreground underline underline-offset-4 decoration-1">
-                Open source
-              </a>
-              , forked from IttyBitz.
-            </p>
-          </div>
-
-          {/*
-            The doors — see DOORS. Three buttons, not three forms: the one
-            pressed is the one the form below already answers to, and the
-            same option treatment the KDF and cipher cards use says so —
-            hairline alone at rest, `inset` fill plus the strong hairline
-            when selected. The description hides below `sm`, where three
-            columns of 12px prose would cost more than they say.
-          */}
-          <div
-            role="group"
-            aria-label="Start with"
-            data-testid="intent-doors"
-            className="grid grid-cols-3 gap-2 sm:gap-3"
-          >
-            {DOORS.map(({ id, icon: Icon, title, blurb }) => (
-              <button
+          <Search className="h-4 w-4" aria-hidden="true" />
+          <span>Search commands</span>
+          <kbd>{isApplePlatform ? "⌘" : "Ctrl"} K</kbd>
+        </button>
+      </header>
+      <div className="km-shell">
+        <aside className="km-sidebar" aria-label="Workspace navigation">
+          <p className="km-nav-label">WORKSPACE</p>
+          <TabsList className="km-navigation" aria-label="Workspace views">
+            {navItems.map(({ id, label, icon: Icon }) => (
+              <TabsTrigger
                 key={id}
-                type="button"
-                onClick={() => openDoor(id)}
-                aria-pressed={currentDoor === id}
-                data-testid={`door-${id}`}
-                className={cn(
-                  "flex min-w-0 cursor-pointer flex-col items-start gap-2 rounded-lg border p-3 text-left transition-colors sm:p-4",
-                  currentDoor === id
-                    ? "border-border-strong bg-inset"
-                    : "border-border hover:border-border-strong"
-                )}
+                value={id}
+                disabled={(id === "workspace" || id === "recovery") && (isLoading || qrScanBusy)}
+                className="km-nav-item"
               >
-                <Icon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
-                <span className="text-[13px] font-medium leading-snug text-foreground sm:text-[14px]">
-                  {title}
-                </span>
-                <span className="hidden text-[12px] leading-snug text-muted-foreground sm:block">
-                  {blurb}
-                </span>
+                <Icon className="h-4 w-4" aria-hidden="true" />
+                {label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+          <div className="km-sidebar-foot">
+            <Lock className="h-4 w-4" aria-hidden="true" />
+            <div><p>Local by design</p><span>Encryption runs in your browser.</span></div>
+          </div>
+        </aside>
+        <div className="km-main">
+          <div className="km-page-heading">
+            <p className="km-breadcrumb">Workspace <span aria-hidden="true">/</span> {pageCopy[activePage][0]}</p>
+            <h1>{pageCopy[activePage][0]}</h1>
+            <p>{pageCopy[activePage][1]}</p>
+          </div>
+
+          <TabsContent value="workspace" className="mt-0" tabIndex={-1}>
+            <div className="km-home-intro">
+              <h2>Your files. Your keys.</h2>
+              <p>No account or upload is needed. Keymaker does not keep a library of your backups — save each encrypted container somewhere you control.</p>
+            </div>
+            <div className="km-task-list">
+              {DOORS.map(({ id, icon: Icon, title, blurb }) => (
+                <button key={id} type="button" onClick={() => openDoor(id)} className="km-task">
+                  <Icon className="h-4 w-4" aria-hidden="true" />
+                  <span><strong>{title}</strong><span>{blurb}</span></span>
+                  <span className="km-task-arrow" aria-hidden="true">→</span>
+                </button>
+              ))}
+              <button type="button" onClick={() => setWorkspacePage("recovery")} className="km-task">
+                <LifeBuoy className="h-4 w-4" aria-hidden="true" />
+                <span><strong>Prepare recovery</strong><span>Print a backup, manage shares, and verify a way back in.</span></span>
+                <span className="km-task-arrow" aria-hidden="true">→</span>
               </button>
-            ))}
-          </div>
+            </div>
+          </TabsContent>
 
-          {/*
-            4.5. Inheritance is a variant of backing up, not a fourth intent, so
-            it is a line under the doors rather than a peer to them. It does not
-            belong in the three-question taxonomy the doors are. It opens the
-            guided plan; the command bar reaches it too.
-          */}
-          <button
-            type="button"
-            onClick={openInheritance}
-            data-testid="inheritance-open"
-            className="mb-8 mt-3 flex cursor-pointer items-center gap-1.5 text-[12px] leading-snug text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline sm:mb-10"
-          >
-            <ScrollText className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-            Planning for someone to inherit this? Set up an inheritance plan.
-          </button>
-
-          {/* The workbench. On a desktop the form and the container pane sit
-              side by side — the Ledger split — and on anything narrower the
-              pane stacks below the form, where it stops being a companion
-              and becomes a receipt. Tools keeps the single column: dice and
-              print kits have no container to inspect. */}
-          <div
-            className={
-              mode === "tools" || mode === "audio"
-                ? undefined
-                : "lg:grid lg:grid-cols-[minmax(0,5fr)_minmax(0,4fr)] lg:items-start lg:gap-8"
-            }
-          >
-          {/* Card. 24px of padding either side of a 320px screen leaves 240px
-              of usable width; p-5 buys back 16px where it is scarcest. */}
-          <section className="panel rounded-[20px] p-5 sm:p-8">
-            {/*
-              U18. Radix gives every TabsContent `tabIndex={0}` so a scrollable
-              panel is reachable by keyboard. Here the panels are not scrollable
-              and every control inside is focusable on its own, so it is a tab
-              stop that lands on a 566x533 div, shows no focus ring, and does
-              nothing — a keyboard user presses Tab and appears to lose focus.
-
-              -1 keeps the panel programmatically focusable (which Radix relies
-              on when switching tabs) while removing it from the sequential
-              order.
-            */}
-            <TabsContent value="encrypt" className="mt-0" tabIndex={-1}>
-              {renderContent("encrypt")}
-            </TabsContent>
-            <TabsContent value="decrypt" className="mt-0" tabIndex={-1}>
-              {renderContent("decrypt")}
-            </TabsContent>
-            {/*
-              U2b. Radix unmounts an inactive tab panel, so switching away from
-              Tools destroyed the dice roll log — a tally someone had physically
-              rolled, gone because they glanced at the Encrypt tab. forceMount
-              keeps it mounted, and the count survives.
-
-              `hidden` has to be supplied here, though, and the reason is worth
-              spelling out because the opposite is the natural assumption.
-              Radix computes `hidden={!present}` with `present = forceMount ||
-              isSelected`, so forceMount does not merely keep the panel mounted
-              — it pins `hidden` to false for the panel's whole life. The
-              inactive Tools panel was therefore rendered, 820px tall, in the
-              document flow directly under the Encrypt button, with five
-              controls a keyboard user could Tab into.
-
-              Passing it explicitly works because Radix spreads the caller's
-              props *after* its own `hidden`, so this wins. Same reason
-              tabIndex={-1} above takes effect over the `tabIndex: 0` Radix
-              sets.
-
-              Only this panel gets forceMount. Encrypt and Decrypt deliberately
-              reset on a mode change, and mounting both permanently would keep
-              two sets of secret-bearing fields alive at once for no benefit.
-            */}
-            {/*
-              Audio (steganography). Not forceMount, unlike Tools: this panel
-              holds a password and a secret, and Radix unmounting it on a tab
-              change is the wanted reset, the same reason Encrypt and Decrypt
-              are not pinned mounted.
-            */}
-            <TabsContent value="audio" className="mt-0" tabIndex={-1}>
-              <AudioStegoTool />
-            </TabsContent>
-            <TabsContent
-              value="tools"
-              className="mt-0"
-              tabIndex={-1}
-              forceMount
-              hidden={mode !== "tools"}
-            >
-              <DiceEntropyTool />
-            </TabsContent>
-          </section>
-
-          {mode !== "tools" && mode !== "audio" && (
-            <ContainerInspector
-              mode={mode}
-              plan={inspectorPlan}
-              peek={mode === "encrypt" ? sealedPeek : decryptPeek}
-              sealing={isLoading && mode === "encrypt"}
-              className="mt-6 lg:sticky lg:top-24 lg:mt-0"
-            />
-          )}
-          </div>
-
-          {/* Feature cards */}
-          <div className="mt-10 grid gap-3 sm:mt-14 sm:grid-cols-3">
-            {FEATURE_CARDS.map(({ icon: Icon, title, description }) => (
-              <div key={title} className="rounded-2xl border border-border bg-card p-5">
-                <div className="mb-2.5 grid h-8 w-8 place-items-center rounded-md border border-border bg-inset text-muted-foreground">
-                  <Icon className="h-4 w-4" />
+          <TabsContent value="recovery" className="mt-0" tabIndex={-1}>
+            <div className="km-recovery-grid">
+              <section className="km-form-section" aria-labelledby="recovery-current-title">
+                <div className="km-section-heading"><span className="km-section-number">01</span><h2 id="recovery-current-title">Current backup</h2></div>
+                {mode === "encrypt" && receipt ? (
+                  <>
+                    <p className="text-sm text-foreground">Container created · {formatBytes(receipt.bytes)}</p>
+                    <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{receipt.cipher} · {receipt.kdf}</p>
+                    <dl className="km-recovery-facts">
+                      <div><dt>Recovery shares</dt><dd>{receipt.shares ? `${receipt.shares.threshold} of ${receipt.shares.count} needed` : "Not included"}</dd></div>
+                      <div><dt>Saved copy</dt><dd>Confirm in your downloads</dd></div>
+                      <div><dt>Recovery test</dt><dd>No result shown for this backup</dd></div>
+                    </dl>
+                    {receipt.onScreen ? (
+                      <div className="km-action-row">
+                        <Button onClick={downloadContainer}><Download className="h-4 w-4" />Download container</Button>
+                        <Button variant="outline" onClick={() => void printPaperVault()}><Printer className="h-4 w-4" />Paper backup</Button>
+                      </div>
+                    ) : <p className="km-help">The file download was requested when encryption finished. Keymaker kept only its header; load your saved file to test it.</p>}
+                  </>
+                ) : (
+                  <>
+                    <p className="text-[13px] leading-relaxed text-muted-foreground">No newly created backup in this session. Encrypt content to prepare a paper backup, or test a container you have already saved.</p>
+                    <Button className="mt-5" onClick={() => handleModeChange("encrypt")}>Go to Encrypt</Button>
+                  </>
+                )}
+              </section>
+              <section className="km-form-section" aria-labelledby="recovery-test-title">
+                <div className="km-section-heading"><span className="km-section-number">02</span><h2 id="recovery-test-title">Test a way back in</h2></div>
+                <p className="text-[13px] leading-relaxed text-muted-foreground">Verification checks whether your backup opens. It does not display or download the decrypted contents.</p>
+                <div className="km-recovery-options">
+                  <Button variant="outline" onClick={() => returnToBackupTest(false)}><ShieldCheck className="h-4 w-4" />Verify with password</Button>
+                  <Button variant="outline" onClick={() => returnToBackupTest(true)}><KeyRound className="h-4 w-4" />Verify with recovery shares</Button>
                 </div>
-                <p className="text-[14px] font-medium">{title}</p>
-                <p className="mt-1 text-[12px] leading-relaxed text-muted-foreground">
-                  {description}
-                </p>
+                <p className="km-help">Test each method you plan to rely on. A successful password test does not prove that your shares work.</p>
+              </section>
+              <section className="km-form-section km-recovery-reference" aria-labelledby="recovery-offline-title">
+                <div><h2 id="recovery-offline-title">Recovery without this app</h2><p>The standalone recovery kit and an inheritance plan help you prepare for someone else opening your backup.</p></div>
+                <div className="km-action-row">
+                  <Button variant="outline" onClick={() => setIsRecoveryOpen(true)}>Open recovery kit</Button>
+                  <Button variant="outline" onClick={openInheritance}>Set up inheritance</Button>
+                </div>
+              </section>
+            </div>
+          </TabsContent>
+
+          <div hidden={workspacePage !== "workbench"}>
+            {(mode === "encrypt" || mode === "decrypt") && (
+              <div className="km-intents" role="group" aria-label="Start with" data-testid="intent-doors">
+                {DOORS.map(({ id, icon: Icon, title }) => (
+                  <button key={id} type="button" onClick={() => openDoor(id)} aria-pressed={currentDoor === id} data-testid={`door-${id}`}>
+                    <Icon className="h-4 w-4" aria-hidden="true" />{title}
+                  </button>
+                ))}
               </div>
-            ))}
+            )}
+            <div className={mode === "tools" || mode === "audio" ? "km-utility-panel" : "km-workbench"}>
+              <section className="km-editor">
+                <TabsContent value="encrypt" className="mt-0" tabIndex={-1}>{renderContent("encrypt")}</TabsContent>
+                <TabsContent value="decrypt" className="mt-0" tabIndex={-1}>{renderContent("decrypt")}</TabsContent>
+                <TabsContent value="audio" className="mt-0" tabIndex={-1}><AudioStegoTool /></TabsContent>
+                <TabsContent value="tools" className="mt-0" tabIndex={-1} forceMount hidden={mode !== "tools" || workspacePage !== "workbench"}><DiceEntropyTool /></TabsContent>
+              </section>
+              {workspacePage === "workbench" && (mode === "encrypt" || mode === "decrypt") && (
+                <ContainerInspector mode={mode} plan={inspectorPlan} peek={mode === "encrypt" ? sealedPeek : decryptPeek} sealing={isLoading && mode === "encrypt"} className="km-inspector" />
+              )}
+            </div>
+            {(mode === "encrypt" || mode === "decrypt") && (
+              <button type="button" onClick={openInheritance} data-testid="inheritance-open" className="km-inheritance-link">
+                <ScrollText className="h-3.5 w-3.5" aria-hidden="true" />Planning for someone to inherit this? Set up an inheritance plan.
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -5738,5 +5597,3 @@ export function EncryptorTool() {
     </Tabs>
   );
 }
-
-    

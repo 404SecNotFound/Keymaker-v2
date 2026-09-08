@@ -221,7 +221,8 @@ test("negative control: an altered manifest in the cache is reported as a mismat
  * port of its own, not 4322, which sw-update.spec.ts owns, so the two never
  * share an origin, a registration or a cache.
  */
-const OWN_PORT = 4323;
+// Allow a local override when another checkout has a preview on this port.
+const OWN_PORT = Number(process.env.KEYMAKER_SEALED_TEST_PORT || 4323);
 const OWN_ORIGIN = `http://127.0.0.1:${OWN_PORT}`;
 const CACHE_VERSION_RE = /const CACHE_VERSION = '([^']*)';/;
 

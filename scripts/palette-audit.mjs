@@ -2,12 +2,9 @@
  * The palette gate.
  *
  * docs/design/DESIGN-SYSTEM.md makes one claim that is easy to write down and
- * very hard to keep by proofreading: every ground shares one warm hue family,
- * and a cool or neutral grey anywhere is the defect the palette exists to
- * prevent. Nothing enforced it. The washes this replaced — `bg-white/4` and
- * friends — were exactly how the rule got broken, because a white wash over a
- * warm ground pulls it toward neutral by construction and no one reviewing a
- * class name would see it.
+ * very hard to keep by proofreading: every rendered color must belong to
+ * the approved Graphite palette. Arbitrary washes and browser-default focus
+ * colors must not silently replace the named surfaces and readable text.
  *
  * So this walks the rendered page rather than the source, reads the *computed*
  * colour of every element, and fails on anything that is not a value the
@@ -42,13 +39,15 @@ const BASE = process.env.KEYMAKER_SHOT_URL || `http://127.0.0.1:${PORT}`;
 const ALLOWED = new Set(
   [
     // Surfaces
-    '#0e0d0b', '#171512', '#1d1a17', '#262320', '#292521', '#3a342e',
+    '#090a0c', '#111316', '#191c20', '#23272e', '#2a2e35', '#454b55',
     // Text
-    '#f5f3f1', '#a9a29a', '#918a83',
+    '#f0f2f5', '#b1b7c1', '#949ca9', '#f7f9fc', '#9ec5ff',
     // Primary action and its ink
-    '#fdfcfc', '#14120f',
+    '#84b9ff', '#acd0ff', '#111316',
+    // Selected controls: cyan title, deep tinted ground, visible outline
+    '#6ee7f2', '#102a32', '#428795',
     // Semantic status — data, not decoration
-    '#53b37e', '#d9a23f', '#e5624e',
+    '#69dbaa', '#d9a23f', '#e5624e',
     // The spark cuts § "The sparks — quarantined" permits for data-viz
     // strokes on dark grounds. Membership is what this gate can check; the
     // "viz only" clause — marks, never text, never chrome — is the reviewer's
@@ -81,12 +80,13 @@ const TOLERANCE = 10;
  * It proves the palette cannot fail. The membership sweep further down is what
  * keeps an element from inventing a ground that is not on the list.
  */
-const TEXT_TOKENS = { ink: '#f5f3f1', body: '#a9a29a', muted: '#918a83' };
+const TEXT_TOKENS = { ink: '#f0f2f5', body: '#b1b7c1', muted: '#949ca9', heading: '#f7f9fc', structural: '#9ec5ff', action: '#84b9ff', selected: '#6ee7f2', success: '#69dbaa' };
 const GROUND_TOKENS = {
-  canvas: '#0e0d0b',
-  card: '#171512',
-  inset: '#1d1a17',
-  raised: '#262320',
+  canvas: '#090a0c',
+  card: '#111316',
+  inset: '#191c20',
+  raised: '#23272e',
+  selection: '#102a32',
 };
 const AA_FLOOR = 4.5;
 
@@ -272,7 +272,7 @@ const collect = ({ out, unreadable: bad }) => {
   unreadable.push(...bad);
 };
 
-const browser = await chromium.launch();
+const browser = await chromium.launch({ executablePath: !process.env.CI ? process.env.KEYMAKER_BROWSER_PATH : undefined });
 const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
 const samples = [];
 
@@ -435,11 +435,7 @@ for (const s of samples) {
   const why = washingAnAbsolute
     ? `${hex} at ${s.alpha.toFixed(2)} — a translucent white or black wash is exactly ` +
       'the drift this palette forbids; use the surface token the wash was imitating'
-    : hue === null || sat < 0.04
-      ? 'neutral grey — the palette has no colour without a hue'
-      : hue >= 20 && hue <= 90
-        ? `warm (hue ${hue}) but not a named value; nearest is ${near}, ${distance} off`
-        : `cool (hue ${hue}) — outside the warm family entirely`;
+    : `not a named Graphite value (hue ${hue ?? "neutral"}, saturation ${sat.toFixed(2)}); nearest is ${near}, ${distance} off`;
   const key = `${hex}|${why}`;
   if (!offenders.has(key)) offenders.set(key, { hex, why, alpha: s.alpha, seen: [] });
   const rec = offenders.get(key);

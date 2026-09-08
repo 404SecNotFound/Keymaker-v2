@@ -18,23 +18,21 @@ import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 const STRONG = "correct-horse-battery-staple-9271!X";
 
 test.describe("U16 — links lead to this product's source", () => {
-  test("GitHub and Open source point at Keymaker, and the fork credit does not", async ({
+  test("GitHub points at Keymaker, and the fork credit does not", async ({
     page,
   }) => {
     await page.goto("/");
 
-    // Both of these describe *Keymaker*, so both must lead to Keymaker.
+    // The persistent source link describes Keymaker. The old marketing
+    // hero's duplicate Open source link is no longer part of the workspace.
     await expect(
       page.getByRole("link", { name: "GitHub", exact: true }),
       "the footer GitHub link sends people to a different product"
     ).toHaveAttribute("href", "https://github.com/404SecNotFound/Keymaker-v2");
-    await expect(
-      page.getByRole("link", { name: /^Open source$/ })
-    ).toHaveAttribute("href", "https://github.com/404SecNotFound/Keymaker-v2");
 
     // ...and the GPL-3 attribution must NOT have been swept up in the fix.
     // Repointing this one would trade a broken link for a licensing
-    // discourtesy, which is why the finding is two links and not three.
+    // discourtesy.
     await expect(
       page.getByRole("link", { name: /^IttyBitz$/ }),
       "the fork attribution was repointed away from the project being credited"

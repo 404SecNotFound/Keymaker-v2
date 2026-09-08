@@ -19,7 +19,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { CheckCircle2, TriangleAlert } from "lucide-react";
+import { Info, TriangleAlert } from "lucide-react";
 import { CipherId, KdfId } from "@/lib/keymaker-crypto";
 import {
   KEYM2_KDF_HKDF,
@@ -118,6 +118,14 @@ const SWEEP_MS = 500;
 function ByteMap({ spans, filling = false }: { spans: ByteSpan[]; filling?: boolean }) {
   const total = spans.reduce((sum, s) => sum + s.bytes, 0);
   const slots = spans.filter((s) => s.kind === "slot").length;
+  const bytesPerCell = Math.max(1, Math.ceil(total / 96));
+  const cells = spans.flatMap((span) =>
+    Array.from({ length: Math.ceil(span.bytes / bytesPerCell) }, (_, i) => ({
+      key: `${span.key}-${i}`,
+      kind: span.kind,
+      bytes: Math.min(bytesPerCell, span.bytes - i * bytesPerCell),
+    }))
+  );
   let before = 0;
   return (
     <div
@@ -126,6 +134,11 @@ function ByteMap({ spans, filling = false }: { spans: ByteSpan[]; filling?: bool
       data-sealing={filling || undefined}
       className="px-4 pt-3"
     >
+      <div className="km-byte-field" data-testid="inspector-header-schematic">
+        {cells.map((cell) => (
+          <span key={cell.key} data-region={cell.kind} data-bytes={cell.bytes} className={SPAN_FILL[cell.kind]} />
+        ))}
+      </div>
       <div className="flex h-1.5 gap-px overflow-hidden rounded-full">
         {spans.map((span) => {
           const start = total > 0 ? before / total : 0;
@@ -169,6 +182,7 @@ function ByteMap({ spans, filling = false }: { spans: ByteSpan[]; filling?: bool
         </span>
         <span className="ml-auto">{total} B → payload</span>
       </p>
+      <p className="km-byte-caption">Header layout · each cell represents up to {bytesPerCell} bytes. Payload not shown.</p>
     </div>
   );
 }
@@ -288,7 +302,7 @@ function SlotList({ slots }: { slots: SlotRow[] }) {
 function Check({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-2 text-[12px] text-muted-foreground">
-      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" aria-hidden="true" />
+      <Info className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
       <span>{children}</span>
     </div>
   );
@@ -346,7 +360,10 @@ export function ContainerInspector({
       )}
     >
       <header className="flex items-center gap-2.5 px-4 py-3">
-        <h2 className="text-[13px] font-medium">{title}</h2>
+        <div className="km-inspector-title">
+          <h2 className="text-[14px] font-medium">{peek ? "Container details" : "Container preview"}</h2>
+          <p>{title}</p>
+        </div>
         {versionShown !== null && (
           <span className="ml-auto inline-flex items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 font-mono text-[12px] font-medium tracking-wide text-muted-foreground">
             <span
@@ -402,9 +419,9 @@ export function ContainerInspector({
           <SlotList slots={parsed.slots} />
 
           <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
-            <Check>Payload sealed with {parsed.cipherLabel}</Check>
+            <Check>Header declares {parsed.cipherLabel}</Check>
             {parsed.version === KEYM2_VERSION_V3 ? (
-              <Check>Slot table authenticated — a removed slot can&apos;t hide</Check>
+              <Check>v3 authenticates the slot table on unlock</Check>
             ) : (
               <div className="flex items-center gap-2 text-[12px] text-warning/90">
                 <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -429,6 +446,8 @@ export function ContainerInspector({
           KEYM v2 and v3 headers.
         </p>
       ) : mode === "encrypt" && plan && !showPlanDetail ? (
+        <>
+        <ByteMap spans={byteMapSpans(KEYM2_VERSION, plan.cipherId, waysIn)} filling={sealing} />
         <div className="px-4 pb-3" data-testid="inspector-plan-summary">
           <p className="text-[12.5px] leading-relaxed text-muted-foreground">
             Type or drop something in and this pane itemises the container it
@@ -441,11 +460,12 @@ export function ContainerInspector({
             type="button"
             onClick={() => setAsked(true)}
             aria-expanded={false}
-            className="mt-3 rounded-full border border-border px-3 py-1 font-mono text-[12px] text-muted-foreground transition-colors hover:bg-inset hover:text-foreground focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
+            className="km-action mt-3 rounded-md border border-border px-3 py-1 font-mono text-[12px] transition-colors hover:bg-inset focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
             Show the header it will write
           </button>
         </div>
+        </>
       ) : mode === "encrypt" && plan ? (
         <>
           <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">

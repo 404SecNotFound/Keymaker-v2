@@ -1,10 +1,65 @@
-# Nightpaper — decisions and asset manifest
+# Keymaker — design decisions and asset manifest
 
 The working state of the redesign, kept in the repository so any session can
 resume it. `BAR.md` holds the reference mechanisms; `DESIGN-SYSTEM.md` holds
 the binding tokens. This file holds the choices and the loose ends.
 
-## Decided
+## Current — Graphite workspace, 7 September 2026
+
+The active direction is Linear-inspired workspace styling with the approved
+Keymaker layout. The user rejected the brown/taupe grounds in the first preview.
+The neutral Graphite palette in DESIGN-SYSTEM.md supersedes the Nightpaper
+decisions recorded below.
+
+- Charcoal/black shell, persistent navigation, separate workspace/encrypt/decrypt/
+  recovery views; Audio and Tools retained.
+- Blue/ember header schematic retained as the main visual focal point.
+- Spline Sans Variable selected for the interface and headings, replacing
+  Plus Jakarta Sans. Natural body tracking; existing size/weight hierarchy
+  retained. JetBrains Mono remains for technical values. Spline Sans is
+  pinned at 5.3.0, bundled locally with its OFL notice, and precached offline.
+  The historical social-card template still uses its existing Jakarta face.
+- Ice-blue panel titles at 15px and section markers at 13px. Coloring only the
+  small markers was too subtle in review. Main page titles stay crisp off-white.
+- Brighter mint feedback; typed passwords say only "Minimum policy met", not
+  "strong". Descriptive text stays neutral and readable.
+- Control contrast pass: action-blue prompts, generators, primary actions and
+  recovery controls; cyan selected content modes, KDF/cipher options and active
+  navigation with matching borders and dark tinted fills. Checked switches
+  use cyan (configuration), not mint (validation). Input mode buttons now expose
+  aria-pressed. Entered content stays off-white; descriptions stay silver.
+- Local branch: `ui/linear-workspace`. Preview iterations are not deployed.
+- Latest checks: production export with Webpack fallback and CSP/build manifest
+  postprocessing; typecheck and 255 Chromium browser tests passed, including
+  rendered Spline Sans, offline font caching, accessibility, responsive layout,
+  password feedback, container inspection, and receipts. The new font test
+  first failed against the prior Jakarta build. All three new control-state
+  tests failed against the prior neutral-control build before implementation.
+  Crypto regressions passed: 45 legacy checks and 238 Keymaker checks. The
+  upstream passkey-binding checks passed as well.
+  The five deployment-path tests skipped by the root run then passed separately
+  against a fresh `/Keymaker-v2` export (assets, worker, offline cache and CSP).
+  Accessibility scans now wait
+  for finite entrance animations before measuring text contrast.
+  Palette audit passed (11,480 colors across 12 views); icon audit passed
+  (335 icons across 11 views). Other browser engines not run locally.
+- `scripts/capture-workspace.mjs` captures review screens, waiting for the
+  selected tab, visible panel, fonts and finite transitions before taking each
+  screenshot. Includes a public demo-file state and expanded advanced options.
+- All 11 README screenshots and all 4 walkthrough screenshots were regenerated
+  from the Graphite production build. All 15 retain the canonical 2360px width;
+  every README image was checked against its previous blob, with no stale image
+  remaining. The README lead image now frames the complete Encrypt workflow.
+- Screenshot review caught cramped Argon2id option copy at 1180px. KDF cards now
+  use available container width rather than forcing two narrow columns. A text
+  bounding-box regression first failed on the old build, then passed at 320,
+  768, 1180 and 1440px with the fix.
+- The branch includes main's passkey-enrolment binding fix (`adcbe0c`).
+  No cryptographic implementation or container-format changes are part of the
+  workspace diff. Local checks can set `KEYMAKER_SEALED_TEST_PORT` if another
+  checkout has a preview on the sealed-status suite's default port 4323.
+
+## Historical Nightpaper decisions (superseded)
 
 - **Direction**: ElevenLabs design system, translated to dark ("Nightpaper").
   Reference: styles.refero.design/style/031056ff-7af1-46db-8daa-115f731c5d26
