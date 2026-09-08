@@ -131,6 +131,15 @@ jobs:
       - name: Sealed verdict requires the full egress directive set
         run: npm run test:seal-verdict
 
+      # The build's counterpart of the sealed verdict: apply-csp-hashes.mjs fails
+      # the build unless default-src, connect-src AND form-action are all 'none'
+      # in every shipped page's CSP. connect-src has been gated since KM-07;
+      # form-action (a form POST is not covered by connect-src or the default-src
+      # fallback) and default-src complete the set. Control bites: dropping
+      # form-action or default-src from the gate stops flagging a policy missing it.
+      - name: Build egress gate requires the full directive set
+        run: npm run test:csp-egress
+
       # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
       # § Screenshots). It reads the committed PNG headers, so it needs
       # neither a build nor a browser and belongs in this cheap job. Nothing
