@@ -14,10 +14,14 @@
  * establish locally**, never live telemetry. A status light that could be
  * wrong is worse than none.
  *
- * - **The policy line is read, not typed.** `connect-src 'none'` is quoted
- *   from the page's own CSP meta tag as it was served. If the tag is missing
- *   or says something else — a development build — the status says *that*,
- *   and the dot is not green.
+ * - **The policy is read, not typed.** The verdict is not `connect-src 'none'`
+ *   on its own — that stops fetch/XHR/WebSocket and nothing else, while a form
+ *   POST (governed by `form-action`, which does not fall back to `default-src`)
+ *   would still leave. So "sealed" requires all three of `default-src 'none'`,
+ *   `connect-src 'none'` and `form-action 'none'`, each quoted from the page's
+ *   own CSP meta tag as it was served (see `lib/seal-verdict.ts`). If the tag
+ *   is missing or any of them says something else — a development build — the
+ *   status says *that*, and the dot is not green.
  * - **Offline is noticed, not claimed.** `navigator.onLine` is a fact about
  *   the browser; the page reports it and says the one true thing about it:
  *   nothing here ever needed a connection.
@@ -42,19 +46,15 @@ import { useEffect, useId, useState } from "react";
 import { CheckCircle2, ChevronDown, Loader2, ShieldCheck, TriangleAlert, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
+import { isSealed, pickDirective, SEAL_REQUIRED_DIRECTIVES } from "@/lib/seal-verdict";
 
 const BASE_PATH = (process.env.KEYMAKER_BASE_PATH || "").replace(/\/$/, "");
 
-/** The connect-src directive of this page's own policy, read from the served document. */
-export function readConnectSrc(): string | null {
+/** This page's own CSP, read from the served document. null when it carries none. */
+export function readCsp(): string | null {
   const meta = document.querySelector('meta[http-equiv="Content-Security-Policy"]');
-  const content = meta?.getAttribute("content") ?? "";
-  return (
-    content
-      .split(";")
-      .map((d) => d.trim())
-      .find((d) => d.startsWith("connect-src")) ?? null
-  );
+  const content = meta?.getAttribute("content")?.trim();
+  return content ? content : null;
 }
 
 export type VerifyOutcome =
@@ -184,12 +184,12 @@ export function SealedStatus({ writes }: { writes: number }) {
   // null until mounted: the export is static HTML, and the server has no
   // network state to render.
   const [online, setOnline] = useState<boolean | null>(null);
-  // undefined until read; null when the page carries no such directive.
-  const [connectSrc, setConnectSrc] = useState<string | null | undefined>(undefined);
+  // undefined until read; null when the page carries no policy at all.
+  const [csp, setCsp] = useState<string | null | undefined>(undefined);
   const [verify, setVerify] = useState<VerifyOutcome>({ kind: "idle" });
 
   useEffect(() => {
-    setConnectSrc(readConnectSrc());
+    setCsp(readCsp());
     const update = () => setOnline(navigator.onLine);
     update();
     window.addEventListener("online", update);
@@ -200,8 +200,12 @@ export function SealedStatus({ writes }: { writes: number }) {
     };
   }, []);
 
-  const sealed = connectSrc === "connect-src 'none'";
+  const sealed = isSealed(csp);
   const offline = online === false;
+  // The directives the verdict rests on, quoted from the served policy — shown
+  // so "read, not typed" holds for every one of them, not just connect-src.
+  const shownDirectives =
+    csp == null ? [] : SEAL_REQUIRED_DIRECTIVES.map((name) => pickDirective(csp, name)).filter((d): d is string => d !== null);
 
   const runCheck = async () => {
     setVerify({ kind: "running" });
@@ -243,7 +247,7 @@ export function SealedStatus({ writes }: { writes: number }) {
               // claims nothing and takes the muted tone; on a build that
               // carries no such rule it is the warning token. A light that
               // could be wrong is worse than none.
-              connectSrc === undefined
+              csp === undefined
                 ? "bg-subtle-foreground"
                 : sealed
                   ? "bg-success"
@@ -251,7 +255,7 @@ export function SealedStatus({ writes }: { writes: number }) {
             )}
             aria-hidden="true"
           />
-          {connectSrc === undefined ? "" : sealed ? "sealed · " : "unsealed · "}runs in this tab
+          {csp === undefined ? "" : sealed ? "sealed · " : "unsealed · "}runs in this tab
           <ChevronDown
             className={cn("h-3.5 w-3.5 transition-transform duration-200", open && "rotate-180")}
             aria-hidden="true"
@@ -292,26 +296,34 @@ export function SealedStatus({ writes }: { writes: number }) {
               <p className={rowText}>
                 {sealed ? (
                   <>
-                    Not a promise: a rule the browser enforces before a request starts, for
-                    every request to anywhere. The line that says so, read from this page as
-                    it was served — not typed here:
+                    Not a promise: rules the browser enforces before a request starts, for
+                    every request to anywhere — the scripted APIs, and a form POST too. The
+                    lines that say so, read from this page as it was served — not typed here:
                   </>
                 ) : (
                   <>
-                    The production export carries a rule that forbids every request, and the
-                    build fails on purpose if it changes. This copy does not carry it, so it
-                    is not that export.{" "}
-                    {connectSrc === null ? "No policy line was found." : "It says:"}
+                    The production export forbids every request — the scripted APIs by{" "}
+                    <span className="font-mono">connect-src</span> and{" "}
+                    <span className="font-mono">default-src</span>, a form POST by{" "}
+                    <span className="font-mono">form-action</span> — and the build fails on
+                    purpose if that changes. This copy does not carry the full set, so it is
+                    not that export.{" "}
+                    {csp === null ? "No policy was found." : "It carries:"}
                   </>
                 )}
               </p>
-              {connectSrc && (
-                <code
-                  data-testid="sealed-directive"
-                  className="mt-1.5 inline-block rounded-md border border-border bg-inset px-1.5 py-0.5 font-mono text-[12px] text-foreground"
-                >
-                  {connectSrc}
-                </code>
+              {shownDirectives.length > 0 && (
+                <div data-testid="sealed-directives" className="mt-1.5 flex flex-col items-start gap-1">
+                  {shownDirectives.map((directive) => (
+                    <code
+                      key={directive}
+                      data-testid="sealed-directive"
+                      className="inline-block rounded-md border border-border bg-inset px-1.5 py-0.5 font-mono text-[12px] text-foreground"
+                    >
+                      {directive}
+                    </code>
+                  ))}
+                </div>
               )}
             </div>
           </div>
