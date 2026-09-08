@@ -111,6 +111,16 @@ jobs:
       - name: WAV fmt chunk bounds are a typed carrier error (not a RangeError)
         run: npm run test:audio-wav-bounds
 
+      # The "sealed" verdict must rest on the whole egress-relevant CSP set, not
+      # connect-src alone: connect-src 'none' stops fetch/XHR/WebSocket but a
+      # form POST is governed by form-action, which does not fall back to
+      # default-src. The panel claims total egress prevention, so the verdict
+      # requires default-src 'none' + connect-src 'none' + form-action 'none'.
+      # The control bites: a connect-src-only check calls a form-action-dropped
+      # policy sealed. The served page's set is checked in sealed-status.spec.ts.
+      - name: Sealed verdict requires the full egress directive set
+        run: npm run test:seal-verdict
+
       # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
       # § Screenshots). It reads the committed PNG headers, so it needs
       # neither a build nor a browser and belongs in this cheap job. Nothing

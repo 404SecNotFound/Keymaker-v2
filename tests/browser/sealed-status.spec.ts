@@ -63,7 +63,13 @@ test("the status opens and quotes the served page's own connect-src, read rather
         .querySelector('meta[http-equiv="Content-Security-Policy"]')
         ?.getAttribute("content") ?? ""
   );
+  // The verdict rests on all three egress directives, not connect-src alone:
+  // a build that kept connect-src 'none' but dropped form-action 'none' could
+  // still POST a form out. The unit control that keys each one is in
+  // scripts/seal-verdict-test.mjs; here the served page must carry the set.
+  expect(csp).toContain("default-src 'none'");
   expect(csp).toContain("connect-src 'none'");
+  expect(csp).toContain("form-action 'none'");
 
   await expect(toggle(page)).toContainText("sealed");
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "false");
@@ -74,13 +80,17 @@ test("the status opens and quotes the served page's own connect-src, read rather
   await expect(panel(page)).toBeVisible();
   await expect(panel(page)).toContainText("Forbidden to talk to any server");
 
-  // Character for character against the meta tag: the directive shown is
-  // the one the browser is enforcing, not a string the component believes.
-  const inMeta = csp
-    .split(";")
-    .map((d) => d.trim())
-    .find((d) => d.startsWith("connect-src"));
-  await expect(panel(page).getByTestId("sealed-directive")).toHaveText(inMeta!);
+  // Character for character against the meta tag: the directives shown are the
+  // ones the browser is enforcing, read rather than typed, and it is the whole
+  // set the verdict depends on — default-src, connect-src and form-action.
+  const pick = (name: string) =>
+    csp.split(";").map((d) => d.trim()).find((d) => d === name || d.startsWith(`${name} `));
+  const shown = panel(page).getByTestId("sealed-directives");
+  for (const name of ["default-src", "connect-src", "form-action"]) {
+    const directive = pick(name);
+    expect(directive, `served CSP is missing ${name}`).toBe(`${name} 'none'`);
+    await expect(shown.getByTestId("sealed-directive").filter({ hasText: directive! })).toHaveCount(1);
+  }
 
   await toggle(page).click();
   await expect(panel(page)).toHaveCount(0);
