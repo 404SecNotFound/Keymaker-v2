@@ -1224,6 +1224,42 @@ def main() -> int:
         except BridgeError:
             check("js refuses a page holding two backups", True)
 
+        # The doubled page is one of four ways a page is structurally wrong, and
+        # until now it was the only one either extractor was handed. The other
+        # three — no marker at all, a marker never closed, a marked region that
+        # is not keym2: armor — must be refused the same way: as a *page* problem
+        # rather than routed through dearmor/AEAD, where the failure would read
+        # as "decryption failed" and send an heir to retype a password that was
+        # never wrong. §7.2, the argument §7.1 made for a short set of paper
+        # parts. Python answers with ValueError and the TypeScript with a thrown
+        # Error (a BridgeError here); a KeymError on the Python side would itself
+        # be the defect, because it is exactly the crypto failure the structural
+        # split exists to avoid.
+        BEGIN, END = keym2.SELFEXTRACT_BEGIN, keym2.SELFEXTRACT_END
+        structural = {
+            "a page with no marker at all":
+                "<!doctype html><html><body>not a backup</body></html>",
+            "a marker that is never closed": page_text.replace(END, ""),
+            "a marked region that is not keym2: armor":
+                f"<!doctype html><pre>{BEGIN}\nthis is not base64 armor\n{END}</pre>",
+        }
+        for why, bad in structural.items():
+            try:
+                keym2.extract_selfextract(bad)
+                check(f"py refuses {why}", False, "it returned a container")
+            except ValueError:
+                check(f"py refuses {why}", True)
+            except keym2.KeymError as e:
+                check(f"py refuses {why} as a page problem, not a crypto one",
+                      False, f"raised KeymError: {e}")
+            bad_path = tmp / "structural.html"
+            bad_path.write_text(bad, encoding="utf-8")
+            try:
+                bridge("unselfextract", "--in", str(bad_path), "--out", str(tmp / "no.bin"))
+                check(f"js refuses {why}", False, "the bridge accepted it")
+            except BridgeError:
+                check(f"js refuses {why}", True)
+
         # §7.2's subset, enforced identically on both sides. A disagreement here
         # means one implementation writes a page the other calls impossible.
         #
@@ -1257,6 +1293,41 @@ def main() -> int:
             check("js accepts it too", True)
         except BridgeError as e:
             check("js accepts it too", False, str(e))
+
+        # §4.4 for the artefact itself. A container may carry a slot the subset
+        # cannot use — a passkey, a share — beside the passphrase slot it can,
+        # and the page's reader must skip the one it cannot use and open through
+        # the password, not refuse a recoverable backup for a slot it did not
+        # understand. Every container embedded above had a single slot, so the
+        # page reader's own skip was never exercised on this side. (The embedded
+        # JavaScript reader's copy of the loop is a separate hand-written one,
+        # covered by tests/browser/self-extract.spec.ts; this is the durable
+        # Python path and the TypeScript extractor feeding its core.)
+        MS_PRF = bytes(range(70, 102))
+        MS_SALT = bytes(range(102, 134))
+        ms_container = keym2.add_passkey_slot(se_bytes, PASSWORD, MS_PRF, salt=MS_SALT)
+        check("a passphrase+passkey container is still inside the subset",
+              keym2.webcrypto_profile_violations(ms_container) == [])
+        ms_page = ("<!doctype html><html><body><pre>"
+                   + keym2.embed_selfextract(ms_container) + "</pre></body></html>")
+        try:
+            ms_extracted = keym2.extract_selfextract(ms_page)
+            check("py opens a multi-slot page through its password slot",
+                  keym2.decrypt(ms_extracted, PASSWORD) == se_src.read_bytes())
+        except (ValueError, keym2.KeymError) as e:
+            check("py opens a multi-slot page through its password slot", False, str(e))
+        ms_page_path = tmp / "multislot.html"
+        ms_page_path.write_text(ms_page, encoding="utf-8")
+        ms_out = tmp / "multislot.out"
+        ms_extract_out = tmp / "multislot.keym2"
+        try:
+            bridge("unselfextract", "--in", str(ms_page_path), "--out", str(ms_extract_out))
+            bridge("decrypt2", "--password", PASSWORD, "--in", str(ms_extract_out),
+                   "--out", str(ms_out))
+            check("js extracts that multi-slot page and opens it too",
+                  ms_out.read_bytes() == se_src.read_bytes())
+        except BridgeError as e:
+            check("js extracts that multi-slot page and opens it too", False, str(e))
 
         # The frozen page from the corpus — the durability claim itself, which is
         # that a page written on a particular day still gives its container up.
