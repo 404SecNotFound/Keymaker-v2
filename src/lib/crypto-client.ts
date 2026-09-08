@@ -442,12 +442,22 @@ async function encryptViaWorkerInner(
   // from the key file inside the worker, so neither may transfer it.
   if (keyFile && !shamir && !passkey) transfer.push(keyFile);
 
-  const res = await post<Extract<CryptoResponse, { op: "encrypt"; ok: true }>>(
-    w,
-    { id, op: "encrypt", data, password, keyFile, options, shamir, passkey },
-    transfer
-  );
-  return { data: res.data, shares: res.shares };
+  try {
+    const res = await post<Extract<CryptoResponse, { op: "encrypt"; ok: true }>>(
+      w,
+      { id, op: "encrypt", data, password, keyFile, options, shamir, passkey },
+      transfer
+    );
+    return { data: res.data, shares: res.shares };
+  } finally {
+    // When a share or passkey slot is enrolled the key file is *not* transferred
+    // (see above): the worker needs it twice, so it is structured-cloned, and
+    // the worker erases only its own copy. The page's copy — half the key
+    // material — would otherwise outlive the operation in this heap, so erase it
+    // here. This runs only on the non-transfer path, so `keyFile` is never
+    // detached and `secureErase` never touches a zero-length transferred buffer.
+    if (keyFile && (shamir || passkey)) secureErase(keyFile);
+  }
 }
 
 /**

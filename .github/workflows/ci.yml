@@ -74,6 +74,16 @@ jobs:
       - name: Passkey enrolment binds to the created credential
         run: npm run test:passkey-binding
 
+      # The page's key-file buffer is erased after an encrypt-via-worker that
+      # enrols a share or passkey slot — the one path where the key file is
+      # structured-cloned rather than transferred, so the page's copy is not
+      # detached and has to be zeroed by hand. The key-file ArrayBuffer is
+      # internal to the client call, so the browser suite cannot see it; this
+      # drives crypto-client.ts with a stubbed Worker and the control bites when
+      # the erase is removed.
+      - name: Owned secret buffers are zeroed on every path
+        run: npm run test:secret-erase
+
       # docs/screenshots/ is one set at one width (docs/design/DESIGN-SYSTEM.md
       # § Screenshots). It reads the committed PNG headers, so it needs
       # neither a build nor a browser and belongs in this cheap job. Nothing
