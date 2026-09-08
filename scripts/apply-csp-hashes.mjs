@@ -21,6 +21,7 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { egressViolations } from './csp-egress-gate.mjs';
 
 const OUT_DIR = new URL('../out', import.meta.url).pathname;
 
@@ -218,12 +219,15 @@ if (wasmless.length > 0) {
 }
 
 // The product claim is that nothing a user types can leave the device. That is
-// only structurally true while the page cannot open a connection at all —
-// connect-src 'self' would still permit same-origin fetch/XHR/WebSocket, which
-// downgrades the guarantee from "impossible" to "we didn't write that code".
-// Verified: the app needs no page-initiated connections. The service worker
-// fetches under its own policy and is unaffected.
-const connectable = [];
+// only structurally true while the page cannot reach the network at all, and no
+// single directive delivers that: connect-src 'none' stops fetch/XHR/WebSocket,
+// but a <form> POST is governed by form-action (which does not fall back to
+// default-src), and default-src 'none' refuses the rest. connect-src has been
+// gated since KM-07; the build now fails unless default-src, connect-src AND
+// form-action are all 'none', matching what the sealed verdict verifies at
+// runtime (src/lib/seal-verdict.ts). Verified: the app needs no page-initiated
+// connections. The service worker fetches under its own policy and is unaffected.
+const leaky = [];
 for (const file of htmlFiles(OUT_DIR)) {
   const html = readFileSync(file, 'utf8');
   const metaMatch = html.match(metaRe);
@@ -232,18 +236,21 @@ for (const file of htmlFiles(OUT_DIR)) {
     .replace(/&#x27;/gi, "'")
     .replace(/&quot;/gi, '"')
     .replace(/&amp;/gi, '&');
-  const connectSrc = policy.split(';').find((d) => /^\s*connect-src\b/.test(d)) || '';
-  if (!/connect-src\s+'none'\s*$/.test(connectSrc.trim())) {
-    connectable.push(`${file.replace(OUT_DIR + '/', '')} (${connectSrc.trim() || 'missing'})`);
+  const bad = egressViolations(policy);
+  if (bad.length > 0) {
+    const detail = bad.map((d) => `${d.name}: ${d.value ?? 'missing'}`).join(', ');
+    leaky.push(`${file.replace(OUT_DIR + '/', '')} (${detail})`);
   }
 }
 
-if (connectable.length > 0) {
+if (leaky.length > 0) {
   console.error(
-    `csp-hashes: ERROR — connect-src is not 'none' in: ${connectable.join(', ')}. ` +
-      "Keymaker's zero-egress claim depends on the page being unable to open any " +
-      'connection. If a future feature genuinely needs one, change this check ' +
-      'deliberately and update the claim in README.md at the same time.'
+    `csp-hashes: ERROR — an egress directive is not 'none' in: ${leaky.join('; ')}. ` +
+      "Keymaker's zero-egress claim depends on the page being unable to reach the " +
+      'network at all: default-src, connect-src and form-action must each be ' +
+      "'none' (connect-src alone would still leave a form POST). If a future feature " +
+      'genuinely needs one, change this check deliberately and update the claim in ' +
+      'README.md at the same time.'
   );
   process.exit(1);
 }

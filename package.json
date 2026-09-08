@@ -29,6 +29,7 @@
     "test:audio-wav-bounds": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/audio-wav-bounds-test.mjs",
     "test:audio-malformed": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/audio-malformed-test.mjs",
     "test:seal-verdict": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/seal-verdict-test.mjs",
+    "test:csp-egress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/csp-egress-gate-test.mjs",
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:release-recipe": "node scripts/release-recipe-test.mjs",
     "test:release-gate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-gate-test.mjs",
