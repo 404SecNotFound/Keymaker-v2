@@ -173,6 +173,74 @@ test.describe("service worker updates wait for the user", () => {
     }
   });
 
+  test("accepting an update in one tab reloads the others (R07)", async ({ browser, browserName }) => {
+    test.skip(browserName === "webkit", "service workers are not testable in WebKit here");
+
+    // Promoting the waiting worker calls clients.claim() and evicts the old
+    // cache for every client at once, so a second tab's controller changes even
+    // though its user never clicked. Before the fix that tab kept running the
+    // old page's code against the new worker, whose cache no longer holds the
+    // old content-hashed chunks — fine online, a failed lazy import offline. The
+    // property here is that the second tab reloads onto the new version too.
+    const { dir, server } = await startOwnOrigin();
+    const context = await browser.newContext();
+
+    // Count loads per tab across reloads. sessionStorage survives a reload and
+    // is per-tab, and the init script runs on every navigation, so a tab that
+    // reloads goes from 1 to 2.
+    const countLoads = () => {
+      const n = Number(sessionStorage.getItem("swLoads") || "0") + 1;
+      sessionStorage.setItem("swLoads", String(n));
+    };
+    const loads = (page: Page) => probe(page, () => Number(sessionStorage.getItem("swLoads") || "0"));
+
+    const tabA = await context.newPage();
+    const tabB = await context.newPage();
+    try {
+      await tabA.addInitScript(countLoads);
+      await tabB.addInitScript(countLoads);
+      await tabA.goto(`${ORIGIN}${appPath("/")}`);
+      await tabB.goto(`${ORIGIN}${appPath("/")}`);
+      await expect.poll(() => swState(tabA)).toMatchObject({ controlled: true, active: "activated" });
+      await expect.poll(() => swState(tabB)).toMatchObject({ controlled: true, active: "activated" });
+      await expect.poll(() => loads(tabA)).toBe(1);
+      await expect.poll(() => loads(tabB)).toBe(1);
+
+      // A release lands and installs while both tabs are open.
+      deployNextVersion(dir);
+      await tabA.evaluate(async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        await reg?.update();
+      });
+      await expect
+        .poll(() => swState(tabA), { message: "the replacement installs and waits" })
+        .toMatchObject({ waiting: "installed", active: "activated", controlled: true });
+
+      // The user accepts in tab A only.
+      const bannerA = tabA.locator("#sw-update-banner");
+      await expect(bannerA).toBeVisible();
+      await bannerA.click();
+
+      // Tab A reloads onto the new version — the single-tab behaviour.
+      await expect.poll(() => loads(tabA), { message: "the accepting tab reloads" }).toBe(2);
+
+      // The assertion this test exists for: tab B, which no one touched, reloads
+      // too, so it is not left running old code against the promoted worker.
+      // Without the fix its controllerchange is ignored and it stays at 1.
+      await expect
+        .poll(() => loads(tabB), { message: "a second tab reloads when another accepts the update" })
+        .toBe(2);
+      await expect(tabB.getByRole("tab", { name: "Encrypt" })).toBeVisible();
+
+      // And it is genuinely on the new version: only the new cache remains.
+      await expect.poll(() => cacheNames(tabB)).toEqual([NEW_CACHE]);
+    } finally {
+      await context.close();
+      server.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("the deployed worker does not call skipWaiting on install", async () => {
     // The behavioural test above needs a second origin and a real update cycle.
     // This one is cheap, needs no browser, and catches the specific regression —
