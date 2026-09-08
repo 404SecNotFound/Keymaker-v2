@@ -167,7 +167,8 @@ wrong-share test pass-when-it-should-fail — i.e. assert it *fails* honestly.
 
 ## PR 4 — Bet 5: trust you can test, not read
 
-**Insight.** `connect-src 'none'` forbids every network request and the build
+**Insight.** the CSP forbids every network request (`default-src`, `connect-src`
+and `form-action` all `'none'`; `connect-src` alone would leave a form POST) and the build
 is reproducible with a signed manifest — and both live in a footer link and a
 document. Every competitor *says* client-side; the user cannot tell the
 difference.
