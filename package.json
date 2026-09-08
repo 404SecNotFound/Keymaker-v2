@@ -27,6 +27,7 @@
     "test:encrypt-input-erase": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/encrypt-input-erase-test.mjs",
     "test:dearmor-whitespace": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/dearmor-whitespace-test.mjs",
     "test:audio-wav-bounds": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/audio-wav-bounds-test.mjs",
+    "test:audio-malformed": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/audio-malformed-test.mjs",
     "test:seal-verdict": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/seal-verdict-test.mjs",
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:release-recipe": "node scripts/release-recipe-test.mjs",
