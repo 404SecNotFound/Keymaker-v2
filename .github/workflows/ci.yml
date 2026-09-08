@@ -84,6 +84,16 @@ jobs:
       - name: Owned secret buffers are zeroed on every path
         run: npm run test:secret-erase
 
+      # The plaintext input buffer is transferred (and so detached/erased) on the
+      # worker path, but the no-worker fallback hands it to encryptContainer
+      # in-thread and never transfers it — and neither encryptContainer nor
+      # encryptKeym2 erases its plaintext input. So a browser that fell back to
+      # the main thread left the secret in the page heap. This drives
+      # crypto-client.ts with a Worker whose constructor throws, forcing the
+      # fallback; the control bites when secureErase(data) is removed.
+      - name: Plaintext input is zeroed on the no-worker fallback
+        run: npm run test:encrypt-input-erase
+
       # §7: the armor dearmor strips ASCII whitespace only, matching keym2.py's
       # bytes.split(). A non-ASCII space (U+00A0, a BOM) inside the body is kept
       # and rejected, so a container that opens in the browser is not one the
