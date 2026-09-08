@@ -214,7 +214,7 @@ export function looksLikeSelfExtract(text: string): boolean {
  * reason the app does: hashing a stylesheet buys nothing when no untrusted
  * style can reach the document.
  */
-const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-9HitD62CnjU7w9Lg87XIXNvyspR1eoO2VNjtAksD998=";
+const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-inEHJqi1e61OpR8s6dLFBcrboDqwxu81fUCR/fn76v4=";
 
 const SELF_EXTRACT_CSP = [
   "default-src 'none'",
@@ -259,7 +259,11 @@ function lp(b) {
 }
 
 function dearmor(text) {
-  var s = text.replace(/[\\s]/g, '');
+  // section 7: trim the ends (like the reference's str.strip), then strip ASCII
+  // whitespace inside the body only. A non-ASCII space (U+00A0, a BOM) in the
+  // body is kept, so atob rejects it just as keym2.py does -- rather than being
+  // stripped here and opening a backup the durable Python path refuses.
+  var s = text.trim().replace(/[ \\t\\n\\r\\v\\f]/g, '');
   if (s.indexOf('keym2:') !== 0) throw new Error('This file does not contain a KEYM v2 backup.');
   s = s.slice(6).replace(/-/g, '+').replace(/_/g, '/');
   var bin = atob(s + '='.repeat((4 - (s.length % 4)) % 4));

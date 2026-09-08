@@ -154,6 +154,55 @@ test.describe("§7.2 self-extracting page", () => {
     await expect(notice).toContainText(/weaker/i);
   });
 
+  test("armor that gained a non-ASCII space is refused, matching keym2.py (§7)", async ({
+    page,
+    context,
+  }, testInfo) => {
+    // §7: the dearmor strips ASCII whitespace only. keym2.py keeps a non-ASCII
+    // space (U+00A0, a stray BOM) inside the body and its strict base64 refuses
+    // the file. The embedded reader must agree — otherwise a backup opens here
+    // and is rejected on the durable Python path, which is the one reader an
+    // heir with no browser is left with. The `\s` this replaced stripped the
+    // character and opened it, so this control bites when that regex comes back.
+    await encryptWith(page, "pbkdf2");
+    const [download] = await Promise.all([
+      page.waitForEvent("download"),
+      visible(page.getByTestId("selfextract-download")).click(),
+    ]);
+    const saved = testInfo.outputPath("nbsp.html");
+    await download.saveAs(saved);
+
+    const offline = await context.newPage();
+    await offline.goto(`file://${saved}`);
+
+    // Splice a U+00A0 into the middle of the base64 body, the way a notes app or
+    // mail client re-wrapping the text can. Not at the ends, which are trimmed.
+    const injected = await offline.evaluate(() => {
+      const el = document.getElementById("keym2-container");
+      if (!el) return false;
+      const t = el.textContent || "";
+      const at = t.indexOf("keym2:") + "keym2:".length + 10;
+      if (at < "keym2:".length + 10) return false;
+      el.textContent = t.slice(0, at) + " " + t.slice(at);
+      return true;
+    });
+    expect(injected, "could not find the armor body to corrupt").toBe(true);
+
+    await offline.fill("#pw", STRONG_PASSWORD);
+    await offline.click("#go");
+
+    // The reader keeps the U+00A0, atob rejects it, and the page refuses — it
+    // does not silently strip the character and reveal the secret.
+    await offline.waitForFunction(
+      () => document.querySelector("#status")?.className === "bad",
+      null,
+      { timeout: 90_000 }
+    );
+    expect(await offline.inputValue("#out")).not.toBe(SECRET);
+    expect(await offline.isHidden("#result")).toBe(true);
+    await offline.close();
+  });
+
   test("a page pasted into the decrypt box is unwrapped, not rejected", async ({
     page,
   }, testInfo) => {
