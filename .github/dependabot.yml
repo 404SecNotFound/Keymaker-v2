@@ -6,6 +6,14 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # One PR per week for minor and patch bumps rather than one per package.
+    # Seven simultaneous PRs mean seven Playwright suites competing for the
+    # same runners, and with the up-to-date requirement each merge put the
+    # rest behind again. Majors still arrive individually so each can be
+    # judged on its own.
+    groups:
+      npm-minor-and-patch:
+        update-types: ["minor", "patch"]
     ignore:
       # TypeScript 7 is the native (tsgo) port and drops the JS compiler API
       # that `next build` requires, so it cannot be adopted while Next.js
@@ -64,3 +72,7 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # Same reasoning as npm: one PR for the week's action bumps.
+    groups:
+      github-actions:
+        patterns: ["*"]
