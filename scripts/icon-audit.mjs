@@ -158,7 +158,7 @@ try {
   await page.waitForTimeout(400);
   icons.push(...(await scan(page, 'encrypt · receipt')));
 
-  for (const tab of ['Decrypt', 'Tools']) {
+  for (const tab of ['Decrypt', 'Tools', 'Docs']) {
     await page.getByRole('tab', { name: tab }).locator('visible=true').first().click();
     await page.waitForTimeout(400);
     icons.push(...(await scan(page, tab.toLowerCase())));

@@ -91,7 +91,7 @@ on mobile. Keyboard direction matches the navigation orientation. One controlled
 form, not parallel desktop/mobile secret fields. Sections: Content and Protection.
 The inspector sits alongside at desktop widths, below on narrower screens.
 
-Workspace, Encrypt, Decrypt, Recovery, Audio and Tools are distinct views.
+Workspace, Encrypt, Decrypt, Recovery, Audio, Tools and Docs are distinct views.
 No marketing hero, fabricated activity feed, accounts, cloud storage or scorecards.
 Keep advanced cryptographic options, cancellation, auto-lock and offline tools.
 

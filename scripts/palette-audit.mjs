@@ -265,7 +265,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const VIEWS = 12;
+const VIEWS = 13;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -370,7 +370,7 @@ try {
   await page.waitForTimeout(400);
   collect(await scan(page, 'encrypt · receipt'));
 
-  for (const tab of ['Decrypt', 'Tools']) {
+  for (const tab of ['Decrypt', 'Tools', 'Docs']) {
     await page.getByRole('tab', { name: tab }).locator('visible=true').first().click();
     await page.waitForTimeout(400);
     collect(await scan(page, tab.toLowerCase()));

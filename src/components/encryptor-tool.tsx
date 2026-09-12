@@ -13,6 +13,7 @@ import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperP
 import { decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import { meetsPasswordPolicy, PASSWORD_POLICY_HINT } from "@/lib/password-policy";
 import {
+  BookOpen,
   KeyRound,
   Lock,
   Unlock,
@@ -88,6 +89,7 @@ import {
 } from "@/lib/kdf-calibration";
 import { EFF_LARGE_WORDLIST, EFF_LARGE_WORDLIST_SIZE } from "@/lib/eff-wordlist";
 import { DiceEntropyTool } from "@/components/dice-entropy-tool";
+import { DocsGuide } from "@/components/docs-guide";
 import { AudioStegoTool } from "@/components/audio-stego-tool";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
@@ -967,7 +969,7 @@ async function preparePaperParts(
 
 export function EncryptorTool() {
   const [mode, setMode] = useState<Mode>("encrypt");
-  const [workspacePage, setWorkspacePage] = useState<"workbench" | "workspace" | "recovery">("workbench");
+  const [workspacePage, setWorkspacePage] = useState<"workbench" | "workspace" | "recovery" | "docs">("workbench");
   const [compactNavigation, setCompactNavigation] = useState(false);
   useEffect(() => {
     const query = window.matchMedia("(max-width: 760px)");
@@ -4971,6 +4973,18 @@ export function EncryptorTool() {
       keywords: "repository code issues",
       run: () => window.open(KEYMAKER_REPO, "_blank", "noopener,noreferrer"),
     });
+    if (workspacePage !== "docs") {
+      items.push({
+        id: "docs", group: "Reference", label: "Read the docs",
+        hint: "in the app", icon: BookOpen,
+        keywords: "help guide manual documentation how to mistakes best practices",
+        run: () => {
+          // Same exit rule as the sidebar: Audio owns secret state.
+          if (mode === "audio") handleModeChange("encrypt");
+          setWorkspacePage("docs");
+        },
+      });
+    }
     return items;
   }, [
     mode, workspacePage, currentDoor, openDoor, openInheritance, hasSecretsOnScreen, handleModeChange,
@@ -4980,7 +4994,7 @@ export function EncryptorTool() {
 
   const activePage = workspacePage === "workbench" ? mode : workspacePage;
   const navigateWorkspace = (next: string) => {
-    if (next === "workspace" || next === "recovery") {
+    if (next === "workspace" || next === "recovery" || next === "docs") {
       // Audio owns local secret state. Leaving its view must unmount it.
       if (mode === "audio") handleModeChange("encrypt");
       setWorkspacePage(next);
@@ -4995,6 +5009,7 @@ export function EncryptorTool() {
     recovery: ["Recovery", "Prepare another way in. Test it before you need it."],
     audio: ["Audio", "Hide encrypted content inside a WAV file."],
     tools: ["Tools", "Generate entropy from physical dice rolls."],
+    docs: ["Docs", "How Keymaker works, how to use it well, and what it does not protect against."],
   } as const;
   const navItems = [
     { id: "workspace", label: "Workspace", icon: FolderOpen },
@@ -5003,6 +5018,7 @@ export function EncryptorTool() {
     { id: "recovery", label: "Recovery", icon: LifeBuoy },
     { id: "audio", label: "Audio", icon: FileAudio },
     { id: "tools", label: "Tools", icon: Dices },
+    { id: "docs", label: "Docs", icon: BookOpen },
   ];
   const returnToBackupTest = (withShares: boolean) => {
     const armored = mode === "encrypt" && receipt?.onScreen ? outputText : "";
@@ -5044,7 +5060,7 @@ export function EncryptorTool() {
               <TabsTrigger
                 key={id}
                 value={id}
-                disabled={(id === "workspace" || id === "recovery") && (isLoading || qrScanBusy)}
+                disabled={(id === "workspace" || id === "recovery" || id === "docs") && (isLoading || qrScanBusy)}
                 className="km-nav-item"
               >
                 <Icon className="h-4 w-4" aria-hidden="true" />
@@ -5129,6 +5145,10 @@ export function EncryptorTool() {
                 </div>
               </section>
             </div>
+          </TabsContent>
+
+          <TabsContent value="docs" className="mt-0" tabIndex={-1}>
+            <DocsGuide onNavigate={navigateWorkspace} />
           </TabsContent>
 
           <div hidden={workspacePage !== "workbench"}>

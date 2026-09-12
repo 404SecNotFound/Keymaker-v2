@@ -102,6 +102,14 @@ test.describe("axe", () => {
       },
     ],
     [
+      // Long-form prose, tables, callouts and HTML diagrams: the one view
+      // where heading order, table headers and list semantics carry weight.
+      "docs",
+      async (page) => {
+        await visible(page.getByRole("tab", { name: "Docs" })).click();
+      },
+    ],
+    [
       "recovery kit dialog",
       async (page) => {
         await visible(page.getByRole("button", { name: /Recovery kit/i })).click();
