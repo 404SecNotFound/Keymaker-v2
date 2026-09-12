@@ -61,6 +61,11 @@ const APP_SHELL = [
   // still fetched from the network by the fetch handler — which offline means
   // a failed request on the first screen the user sees.
   `${BASE}/hero-cipher-field.webp`,
+  // The illustration plates on the Workspace, Docs and Recovery views. Same
+  // rule: listed here or offline shows a broken frame on those views.
+  `${BASE}/art-cipher-field.webp`,
+  `${BASE}/art-container-blueprint.webp`,
+  `${BASE}/art-key-shards.webp`,
   `${BASE}/favicon.ico`,
   `${BASE}/manifest.json`,
   `${BASE}/apple-touch-icon.png`,

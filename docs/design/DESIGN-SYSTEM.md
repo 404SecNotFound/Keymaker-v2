@@ -105,6 +105,16 @@ A downloaded file is only a download request; the user must confirm their saved
 copy. Recovery shares configured is not the same as shares issued. Verification
 states which method was tested and never renders or downloads plaintext.
 
+## Illustration plates
+
+Three raster plates, one each on Workspace, Docs and Recovery: a cipher field,
+a container blueprint, a key in shards. They are framed as panels (12px radius,
+line border) beside the copy, never behind text, so no text is ever measured on
+an image. They are the one place the spark colours read as atmosphere; the
+chrome around them stays neutral. Same-origin WebP, listed in the service
+worker's precache so offline shows the plate and not a broken frame. Generated
+from palette-locked prompts and re-encoded at 1400 or 2100 px wide, quality 82.
+
 ## Icons and screenshots
 
 Lucide only, default stroke 2: 14px inline, 16px controls/navigation, 20px empty
