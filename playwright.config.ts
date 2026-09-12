@@ -101,7 +101,14 @@ export default defineConfig({
   workers: process.env.CI ? 2 : 4,
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: 0,
+  // One retry on CI only. The suite is CPU-bound (see `workers` above) and
+  // runs on a 2-vCPU shared runner, where a stalled webkit or firefox worker
+  // shows up as a 30s or 120s timeout on whichever test was next. Over the
+  // last 100 browser.yml runs, 12 failed that way, four of them on main with
+  // no code change in between. A real regression still fails twice; a runner
+  // stall passes on the second attempt. Locally retries stay at 0 so a flake
+  // is seen, not hidden.
+  retries: process.env.CI ? 1 : 0,
   // `html` is what writes playwright-report/, which the browser workflow
   // uploads when the job fails. Without it that upload had nothing to find, so
   // every red run discarded its own traces and screenshots — the two artifacts
