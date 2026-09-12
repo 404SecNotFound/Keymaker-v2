@@ -51,7 +51,7 @@ test("workspace hierarchy replaces the marketing hero", async ({ page }) => {
 for (const width of [320, 393, 768, 1440]) {
   test(`workspace views fit a ${width}px viewport`, async ({ page }) => {
     await page.setViewportSize({ width, height: 1000 });
-    for (const view of ["Workspace", "Encrypt", "Decrypt", "Recovery", "Audio", "Tools"]) {
+    for (const view of ["Workspace", "Encrypt", "Decrypt", "Recovery", "Audio", "Tools", "Docs"]) {
       await page.getByRole("tab", { name: view, exact: true }).click();
       await expect(page.getByRole("tab", { name: view, exact: true })).toHaveAttribute("aria-selected", "true");
       await expect(page.getByRole("tabpanel", { name: view, exact: true })).toBeVisible();

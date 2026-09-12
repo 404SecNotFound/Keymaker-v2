@@ -696,3 +696,88 @@
     font-size: 8.5pt;
   }
 }
+
+/* ---- Docs view ------------------------------------------------------------
+   The seventh destination. Chapter panels reuse .km-form-section and the
+   numbered section heading; the rules below add only what a long-form page
+   needs (a chapter list, prose rhythm, callouts, tables, flow diagrams).
+   Colours are the existing tokens; the two spark colours the design system
+   quarantines for diagrams appear only under .km-docs-figure.              */
+.km-docs { display: grid; grid-template-columns: 200px minmax(0, 1fr); gap: 28px; align-items: start; }
+.km-docs-toc { position: sticky; top: 24px; }
+.km-docs-toc ol { display: flex; flex-direction: column; gap: 2px; }
+.km-docs-toc a { display: flex; gap: 10px; align-items: baseline; padding: 6px 10px; border-radius: 6px; font-size: 13px; color: var(--color-muted-foreground); }
+.km-docs-toc a:hover { background: var(--color-inset); color: var(--color-foreground); }
+.km-docs-toc-number { font-family: var(--font-mono); font-size: 12px; color: var(--color-structural); }
+.km-docs-body { display: flex; flex-direction: column; gap: 20px; max-width: 860px; min-width: 0; overflow-wrap: anywhere; }
+.km-docs-steps li > div, .km-docs-ranked li > div { min-width: 0; }
+.km-docs-chapter { scroll-margin-top: 24px; }
+.km-docs-chapter > p, .km-docs-chapter li, .km-docs-table td, .km-docs-table th, .km-docs-callout-body, .km-docs-scenario p { font-size: 14px; line-height: 1.75; color: var(--color-foreground); }
+.km-docs-chapter > p strong, .km-docs-chapter li strong { font-weight: 500; }
+.km-form-section > .km-docs-blurb { color: var(--color-muted-foreground); margin-top: -8px; font-size: 13px; }
+.km-docs-h3 { margin-top: 26px; font-size: 14px; font-weight: 500; color: var(--color-structural); }
+.km-docs code, .km-docs kbd { font-family: var(--font-mono); font-size: 12.5px; padding: 1px 5px; border-radius: 4px; background: var(--color-inset); border: 1px solid var(--color-border); overflow-wrap: anywhere; }
+.km-docs-steps, .km-docs-bullets, .km-docs-ranked { display: flex; flex-direction: column; gap: 10px; padding: 0; list-style: none; }
+.km-docs-steps li, .km-docs-ranked li { display: flex; gap: 12px; align-items: flex-start; }
+.km-docs-step-number { flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; margin-top: 2px; border: 1px solid var(--color-border-strong); border-radius: 5px; font-family: var(--font-mono); font-size: 12px; color: var(--color-structural); }
+.km-docs-bullets li { position: relative; padding-left: 16px; }
+.km-docs-bullets li::before { content: ""; position: absolute; left: 0; top: 11px; width: 5px; height: 5px; border-radius: 50%; background: var(--color-structural); }
+.km-docs-callout { border: 1px solid var(--color-border); border-left-width: 3px; border-radius: 8px; padding: 12px 14px; background: var(--color-inset); }
+.km-docs-callout-head { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.km-docs-callout-head strong { font-weight: 500; color: var(--color-foreground); }
+.km-docs-callout-kind { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-muted-foreground); }
+.km-docs-callout-body { margin-top: 6px; }
+.km-docs-callout-tip { border-left-color: var(--color-success); } .km-docs-callout-tip .km-docs-callout-head svg { color: var(--color-success); }
+.km-docs-callout-note { border-left-color: var(--color-structural); } .km-docs-callout-note .km-docs-callout-head svg { color: var(--color-structural); }
+.km-docs-callout-warning { border-left-color: var(--color-warning); } .km-docs-callout-warning .km-docs-callout-head svg { color: var(--color-warning); }
+.km-docs-callout-danger { border-left-color: var(--color-destructive); } .km-docs-callout-danger .km-docs-callout-head svg { color: var(--color-destructive); }
+.km-docs-scenario { border: 1px solid var(--color-border); border-radius: 8px; padding: 14px 16px; }
+.km-docs-scenario > * + * { margin-top: 8px; }
+.km-docs-scenario strong { display: block; font-size: 14px; font-weight: 500; color: var(--color-foreground); }
+.km-docs-eyebrow { display: flex; align-items: center; gap: 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-muted-foreground); }
+.km-docs-lesson { display: flex; gap: 10px; padding-top: 10px; border-top: 1px solid var(--color-border); }
+.km-docs-lesson-label { flex: 0 0 auto; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--color-action); padding-top: 3px; }
+.km-docs-lesson-text { min-width: 0; }
+.km-docs-table-wrap { overflow-x: auto; border: 1px solid var(--color-border); border-radius: 8px; }
+.km-docs-table { width: 100%; min-width: 520px; border-collapse: collapse; text-align: left; }
+.km-docs-table th, .km-docs-table td { padding: 10px 12px; vertical-align: top; border-top: 1px solid var(--color-border); }
+.km-docs-table thead th { border-top: 0; font-size: 12px; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; color: var(--color-muted-foreground); }
+.km-docs-table tbody th { font-weight: 500; white-space: nowrap; }
+.km-docs-rank { flex: 0 0 auto; width: 32px; font-family: var(--font-mono); font-size: 20px; line-height: 1.2; text-align: right; color: var(--color-muted-foreground); }
+.km-docs-ranked li:nth-child(-n+3) .km-docs-rank { color: var(--color-structural); }
+.km-docs-ranked strong { display: block; font-size: 14px; font-weight: 500; color: var(--color-foreground); }
+.km-docs-ranked p { margin-top: 3px; }
+.km-docs-goto { display: inline-flex; align-items: center; gap: 4px; padding: 0 2px; border-radius: 4px; color: var(--color-action); font-weight: 500; }
+.km-docs-goto:hover { color: var(--color-action-hover); text-decoration: underline; }
+/* Diagrams */
+.km-docs-figure { margin: 0; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-inset); padding: 16px; }
+.km-docs-figure figcaption { margin-top: 12px; font-size: 12.5px; line-height: 1.65; color: var(--color-muted-foreground); }
+.km-docs-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.km-docs-flow-note { margin-top: 10px; padding-top: 10px; border-top: 1px dashed var(--color-border); }
+.km-docs-flow-text { font-size: 12.5px; color: var(--color-muted-foreground); }
+.km-docs-arrow { color: var(--color-muted-foreground); flex: 0 0 auto; }
+.km-docs-box { display: flex; flex-direction: column; min-width: 0; padding: 8px 12px; border: 1px solid var(--color-border-strong); border-radius: 6px; background: var(--color-card); }
+.km-docs-box span { font-size: 13px; font-weight: 500; color: var(--color-foreground); }
+.km-docs-box small { font-size: 12px; font-family: var(--font-mono); color: var(--color-muted-foreground); }
+.km-docs-box-blue { border-color: #5C7FFF; box-shadow: inset 3px 0 0 #5C7FFF; }
+.km-docs-box-ember { border-color: #FF7A47; box-shadow: inset 3px 0 0 #FF7A47; }
+.km-docs-stack { display: flex; flex-direction: column; gap: 8px; }
+.km-docs-slots { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; padding: 8px; border: 1px dashed var(--color-border-strong); border-radius: 6px; }
+.km-docs-ladder { display: flex; flex-direction: column; gap: 6px; }
+.km-docs-ladder .km-docs-box:nth-child(2) { margin-left: 5%; } .km-docs-ladder .km-docs-box:nth-child(3) { margin-left: 10%; } .km-docs-ladder .km-docs-box:nth-child(4) { margin-left: 15%; }
+.km-docs-wire { display: flex; flex-wrap: wrap; gap: 3px; }
+.km-docs-cell { display: flex; flex-direction: column; align-items: center; padding: 8px 10px; border: 1px solid var(--color-border-strong); border-radius: 5px; background: var(--color-card); }
+.km-docs-cell span { font-family: var(--font-mono); font-size: 12px; color: var(--color-foreground); white-space: nowrap; }
+.km-docs-cell small { font-family: var(--font-mono); font-size: 12px; color: var(--color-muted-foreground); white-space: nowrap; }
+.km-docs-cell-grow { flex: 1 1 200px; }
+.km-docs-cell-blue { border-color: #5C7FFF; box-shadow: inset 0 -3px 0 #5C7FFF; }
+.km-docs-cell-ember { border-color: #FF7A47; box-shadow: inset 0 -3px 0 #FF7A47; }
+@media (max-width: 1150px) {
+  .km-docs { grid-template-columns: minmax(0, 1fr); }
+  .km-docs-toc { position: static; }
+  .km-docs-toc ol { flex-direction: row; flex-wrap: wrap; gap: 4px; }
+}
+@media (max-width: 760px) {
+  .km-docs-table { min-width: 420px; }
+  .km-docs-ladder .km-docs-box { margin-left: 0 !important; }
+}
