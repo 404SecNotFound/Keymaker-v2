@@ -80,11 +80,16 @@ test("callouts name their kind in words, tables have header rows, and nothing lo
     await expect(tables.nth(i).locator("thead th").first()).toBeVisible();
   }
 
-  // Diagrams are HTML; there is no <img>, <svg src>, <iframe>, <video> or
-  // external stylesheet anywhere in the guide, so the precache manifest and the
-  // CSP are untouched by this view.
-  await expect(guide.locator("img, iframe, video, audio, object, embed, link")).toHaveCount(0);
+  // Diagrams are HTML. The one raster is the banner plate: same-origin,
+  // described, and precached. Nothing else on the page loads a resource, so
+  // the CSP is untouched by this view.
+  await expect(guide.locator("iframe, video, audio, object, embed, link")).toHaveCount(0);
   await expect(guide.locator("[style*='url(']")).toHaveCount(0);
+  const images = guide.locator("img");
+  await expect(images).toHaveCount(1);
+  await expect(images.first()).toHaveAttribute("alt", /container/);
+  expect(await images.first().getAttribute("src")).toMatch(/^\/(?:[^/]+\/)?art-container-blueprint\.webp$/);
+  expect(await images.first().evaluate((el) => (el as HTMLImageElement).complete && (el as HTMLImageElement).naturalWidth > 0)).toBe(true);
 });
 
 test("the docs do not overflow at phone width and the chapter list becomes a wrapped strip", async ({ page }) => {

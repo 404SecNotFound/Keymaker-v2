@@ -16,6 +16,8 @@
  * HTML, not images, so they inherit the palette, scale with the text, and add
  * nothing to the precache manifest. The two spark colours the design system
  * quarantines for diagrams (#5C7FFF, #FF7A47) appear only inside `<figure>`.
+ * The one raster on the page is the banner plate, a same-origin precached
+ * asset framed as a panel, never behind text.
  */
 
 import type { ReactNode } from "react";
@@ -365,9 +367,12 @@ function SeedCheckDiagram() {
 // The guide
 // ---------------------------------------------------------------------------
 
-export function DocsGuide({ onNavigate }: { onNavigate?: ((target: DocsTarget) => void) | undefined }) {
+export function DocsGuide({ onNavigate, assetBase = "" }: { onNavigate?: ((target: DocsTarget) => void) | undefined; assetBase?: string }) {
   return (
     <div className="km-docs" data-testid="docs-guide">
+      <figure className="km-art km-art-wide km-docs-banner">
+        <img src={`${assetBase}/art-container-blueprint.webp`} alt="Blueprint of an encrypted container: a header block, a row of eight key slots, then a long train of sealed data chunks" width={2100} height={900} decoding="async" />
+      </figure>
       <nav className="km-docs-toc" aria-label="Chapters">
         <p className="km-nav-label">CHAPTERS</p>
         <ol>

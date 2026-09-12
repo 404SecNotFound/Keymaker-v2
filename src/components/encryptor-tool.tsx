@@ -5081,9 +5081,20 @@ export function EncryptorTool() {
           </div>
 
           <TabsContent value="workspace" className="mt-0" tabIndex={-1}>
-            <div className="km-home-intro">
-              <h2>Your files. Your keys.</h2>
-              <p>No account or upload is needed. Keymaker does not keep a library of your backups — save each encrypted container somewhere you control.</p>
+            <div className="km-home-hero">
+              <div className="km-home-intro">
+                <h2>Your files. Your keys.</h2>
+                <p>No account or upload is needed. Keymaker does not keep a library of your backups — save each encrypted container somewhere you control.</p>
+              </div>
+              {/*
+                Illustration plate, not a marketing hero: framed like a panel,
+                beside the copy and never behind it, so no text sits on an image
+                and the contrast gates keep measuring text on solid grounds.
+                Same-origin and precached like every other asset (sw.js).
+              */}
+              <figure className="km-art km-art-home">
+                <img src={`${BASE_PATH}/art-cipher-field.webp`} alt="A field of encrypted glyph blocks converging on a keyhole cut from dark metal" width={1400} height={788} decoding="async" />
+              </figure>
             </div>
             <div className="km-task-list">
               {DOORS.map(({ id, icon: Icon, title, blurb }) => (
@@ -5137,6 +5148,9 @@ export function EncryptorTool() {
                 </div>
                 <p className="km-help">Test each method you plan to rely on. A successful password test does not prove that your shares work.</p>
               </section>
+              <figure className="km-art km-art-wide">
+                <img src={`${BASE_PATH}/art-key-shards.webp`} alt="A key broken into three shards on separate plates, hairline paths leading back to a keyhole, a folded printed sheet beside one shard" width={2100} height={900} loading="lazy" decoding="async" />
+              </figure>
               <section className="km-form-section km-recovery-reference" aria-labelledby="recovery-offline-title">
                 <div><h2 id="recovery-offline-title">Recovery without this app</h2><p>The standalone recovery kit and an inheritance plan help you prepare for someone else opening your backup.</p></div>
                 <div className="km-action-row">
@@ -5148,7 +5162,7 @@ export function EncryptorTool() {
           </TabsContent>
 
           <TabsContent value="docs" className="mt-0" tabIndex={-1}>
-            <DocsGuide onNavigate={navigateWorkspace} />
+            <DocsGuide onNavigate={navigateWorkspace} assetBase={BASE_PATH} />
           </TabsContent>
 
           <div hidden={workspacePage !== "workbench"}>
