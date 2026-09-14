@@ -298,14 +298,25 @@ test("Stop does not claim to have cancelled work it could not stop", async ({ pa
   const running = startOperation(page, /^Decrypt Text$/i);
   await confirmInFlight(page);
 
-  await visible(page.getByTestId("cancel-operation")).click();
+  const stop = visible(page.getByTestId("cancel-operation"));
+  await stop.click();
+
+  // Stop is a state change first and a toast second. The button leaving is
+  // the evidence the click landed; without this step a swallowed click and a
+  // missing toast produced the same failure line, and on firefox this test
+  // failed that way three times in fifteen red runs while the toast text was
+  // never wrong. Now each cause names itself.
+  await expect(stop, "Stop was clicked but the operation is still in flight").toBeHidden({ timeout: 15_000 });
 
   // The wording has to distinguish the two cases, and has to say what actually
-  // becomes of the work rather than going quiet about it.
+  // becomes of the work rather than going quiet about it. Thirty seconds, not
+  // fifteen: the derivation this fixture asks for is still running in this
+  // realm when the toast renders, and on a shared runner that render has
+  // waited longer than the old budget without anything being wrong.
   await expect(
     page.getByText(/run to completion/i).first(),
     "Stop reported a cancellation on a page with no worker to cancel"
-  ).toBeVisible({ timeout: 15_000 });
+  ).toBeVisible({ timeout: 30_000 });
   await expect(page.getByText(/^The unlock was cancelled/)).toHaveCount(0);
 
   // Still a usable outcome: the inputs survive, as they do with a worker.

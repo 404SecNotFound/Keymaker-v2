@@ -27,10 +27,23 @@ env:
   NEXT_TELEMETRY_DISABLED: "1"
 
 jobs:
-  browser:
+  # One runner per engine. The suite is CPU-bound (playwright.config.ts caps
+  # workers at 2 for that reason), and running all three engines in one job
+  # on a 2-vCPU runner meant webkit and firefox shared a CPU with each other
+  # and with Argon2id. Of the last 100 runs, 10 failed on a timeout in a test
+  # that passed on the next attempt, four of them on main with no change in
+  # between, and every one on firefox or webkit. Three runners give each
+  # engine the machine to itself and cut wall time from about 19 minutes to
+  # the slowest single engine.
+  engine:
+    name: ${{ matrix.engine }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        engine: [chromium, firefox, webkit]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -43,8 +56,8 @@ jobs:
 
       - run: npm ci
 
-      - name: Install browsers
-        run: npx playwright install --with-deps chromium firefox webkit
+      - name: Install ${{ matrix.engine }}
+        run: npx playwright install --with-deps ${{ matrix.engine }}
 
       # Built and served under the same base path as production.
       #
@@ -68,8 +81,11 @@ jobs:
       - name: Build the production export
         run: npm run build
 
-      - name: Run browser tests
-        run: npm run test:browser
+      # `--project` selects this runner's engine from the three the config
+      # defines under CI; the config still refuses to run with a missing
+      # binary, so a broken install step fails loudly rather than skipping.
+      - name: Run browser tests on ${{ matrix.engine }}
+        run: npx playwright test --project=${{ matrix.engine }}
 
       # Only runs when the job has already failed, so a missing report is not a
       # cost worth absorbing quietly: `error` turns "nothing to upload" into a
@@ -79,7 +95,23 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.engine }}
           path: playwright-report/
           retention-days: 7
           if-no-files-found: error
+
+  # The one status the branch protection and deploy.yml wait on. Its name is
+  # the required check, so it stays `browser` while the work moves into the
+  # matrix above. `always()` so a red engine produces a red `browser` rather
+  # than a skipped one, which branch protection would otherwise wait on
+  # forever.
+  browser:
+    needs: engine
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Every engine passed
+        run: |
+          echo "engine matrix result: ${{ needs.engine.result }}"
+          test "${{ needs.engine.result }}" = "success"
