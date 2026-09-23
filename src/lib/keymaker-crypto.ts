@@ -107,14 +107,6 @@ const MAX_FILE_SIZE = MAX_PLAINTEXT_SIZE;
 export const MAX_PASSWORD_LENGTH = 1024;
 
 /**
- * Largest container we will even attempt to decrypt: the 100 MB plaintext cap
- * plus the largest possible header (71 B) and tags (32 B), rounded up.
- *
- * The file picker already refuses oversized files, but pasted base64 reaches
- * decryptData() without passing that check. A core crypto API should enforce
- * its own resource limits rather than trusting whichever UI calls it.
- */
-/**
  * What to tell someone whose backup is too big for this app to open.
  *
  * The cap is a property of *this build*, not of the format and not of their
@@ -144,7 +136,48 @@ export function oversizeRecoveryHelp(): string {
   );
 }
 
-export const MAX_CONTAINER_SIZE = MAX_PLAINTEXT_SIZE + 4096;
+/**
+ * The KEYM v2/v3 format constants the container ceiling is computed from.
+ *
+ * Restated rather than imported: this module must not depend on keym-v2.ts at
+ * evaluation time (the dependency runs one way, see `decryptData`). So each one
+ * is asserted against the format module's own exports in `keym2-dispatch.mts`,
+ * the same arrangement that holds `KEYM2_HEADER_PEEK_BYTES` to the slot table.
+ *
+ * Each is the largest value any version and cipher this build reads can take:
+ *
+ * - the slot table starts at byte 57 in v3 (9 in v2);
+ * - a chained slot is 48 + 32 + 2 x 16 = 112 bytes (96 for a single cipher);
+ * - §6 allows at most 8 slots;
+ * - a chained chunk carries 32 bytes of tag (16 for a single cipher), and the
+ *   chunk size is a format constant of 1 MiB.
+ */
+const KEYM2_MAX_SLOT_TABLE_OFFSET = 57;
+const KEYM2_MAX_SLOT_LEN = 112;
+const KEYM2_MAX_SLOT_COUNT = 8;
+const KEYM2_MAX_TAG_PER_CHUNK = 32;
+const KEYM2_PAYLOAD_CHUNK_SIZE = 1024 * 1024;
+
+/**
+ * Largest container we will even attempt to decrypt: the largest container a
+ * MAX_PLAINTEXT_SIZE plaintext can legally become.
+ *
+ * The file picker already refuses oversized files, but pasted base64 reaches
+ * decryptData() without passing that check. A core crypto API should enforce
+ * its own resource limits rather than trusting whichever UI calls it.
+ *
+ * Computed, because the hand-picked `+ 4096` it replaces was sized for v1 (a
+ * 71-byte header and 32 bytes of tags) and v2 outgrew it: a v3 chained container
+ * with 8 slots at the plaintext cap is 57 + 8 x 112 + 100 x 32 = 4153 bytes over
+ * the plaintext, so a legal backup at the cap was refused as too large. v1's 103
+ * bytes of overhead are well inside this; the chunk count is `max(1, ceil(n /
+ * chunk))`, the same rule the writer uses.
+ */
+export const MAX_CONTAINER_OVERHEAD =
+  KEYM2_MAX_SLOT_TABLE_OFFSET +
+  KEYM2_MAX_SLOT_COUNT * KEYM2_MAX_SLOT_LEN +
+  Math.max(1, Math.ceil(MAX_PLAINTEXT_SIZE / KEYM2_PAYLOAD_CHUNK_SIZE)) * KEYM2_MAX_TAG_PER_CHUNK;
+export const MAX_CONTAINER_SIZE = MAX_PLAINTEXT_SIZE + MAX_CONTAINER_OVERHEAD;
 const MAX_CIPHERTEXT_SIZE = MAX_CONTAINER_SIZE;
 
 /**
@@ -434,8 +467,11 @@ export function loadHashWasm(): Promise<typeof import("hash-wasm")> {
  * moved under them, would retype a correct password into a container that
  * was never opened. In a backup tool that is the wrong answer to send
  * someone hunting with.
+ *
+ * Exported for keym-v2.ts, whose own lazily loaded module (the Shamir code) has
+ * the same failure and owes the user the same answer.
  */
-function dependencyUnavailable(what: string, cause: unknown): KeymakerError {
+export function dependencyUnavailable(what: string, cause: unknown): KeymakerError {
   const detail = cause instanceof Error && cause.message ? ` (${cause.message})` : "";
   return new KeymakerError(
     "dependency-unavailable",
@@ -1153,6 +1189,31 @@ async function legacyDecryptWithNormalizationFallback(
   }
 }
 
+/**
+ * Hand a decrypted plaintext back as an ArrayBuffer without leaving a second
+ * copy of it behind.
+ *
+ * `buffer.slice()` always copies, and the view it copied from was never erased:
+ * every decrypt that went through it left a complete second plaintext in the
+ * heap until the collector reached it, 100 MB of it at the cap. When the view
+ * already spans its whole buffer (what `decryptKeym2` and the ChaCha path both
+ * return) the buffer itself is handed over and there is no copy. Otherwise the
+ * copy is taken and the region it came from is zeroed, so exactly one copy
+ * leaves this function either way.
+ */
+function takePlaintextBuffer(plain: Uint8Array): ArrayBuffer {
+  if (
+    plain.buffer instanceof ArrayBuffer &&
+    plain.byteOffset === 0 &&
+    plain.byteLength === plain.buffer.byteLength
+  ) {
+    return plain.buffer;
+  }
+  const copy = plain.buffer.slice(plain.byteOffset, plain.byteOffset + plain.byteLength) as ArrayBuffer;
+  secureErase(plain);
+  return copy;
+}
+
 export async function decryptData(
   encryptedBuffer: ArrayBuffer,
   password: string,
@@ -1202,10 +1263,7 @@ export async function decryptData(
         prfOutput
       );
       return {
-        data: result.data.buffer.slice(
-          result.data.byteOffset,
-          result.data.byteOffset + result.data.byteLength
-        ) as ArrayBuffer,
+        data: takePlaintextBuffer(result.data),
         format,
         keyFileUsed: result.keyFileUsed,
         slotTableAuthentic: result.slotTableAuthentic,
@@ -1273,10 +1331,7 @@ export async function decryptData(
       }
     }
 
-    const out =
-      plain instanceof Uint8Array
-        ? (plain.buffer.slice(plain.byteOffset, plain.byteOffset + plain.byteLength) as ArrayBuffer)
-        : plain;
+    const out = plain instanceof Uint8Array ? takePlaintextBuffer(plain) : plain;
     return {
       data: out,
       format,
