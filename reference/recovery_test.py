@@ -40,6 +40,7 @@ from __future__ import annotations
 import base64
 import re
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -130,8 +131,9 @@ def main() -> int:
         print("Step 2 — each script identifies its own format and refuses the other's:")
         v1_file = js_encrypt(1, SECRET, "pbkdf2", "aes", None, tmp)
         v2_file = js_encrypt(2, SECRET, "pbkdf2", "aes", None, tmp)
+        v3_file = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp)
 
-        for version, container, other in ((1, v1_file, 2), (2, v2_file, 1)):
+        for version, container, other in ((1, v1_file, 2), (2, v2_file, 1), (3, v3_file, 1)):
             r = cli(version, ["inspect", "--in", str(container)])
             check(r.returncode == 0, f"keym{'' if version == 1 else '2'}.py inspects a v{version} container",
                   r.stderr.strip()[:160])
@@ -183,7 +185,10 @@ def main() -> int:
         # Step 4: decrypt with the password supplied interactively.
         # ------------------------------------------------------------------
         print("\nStep 4 — decrypt with the password on the prompt:")
-        for version in (1, 2):
+        # v3 is what the app writes today, so it is the backup an heir is most
+        # likely to be holding. This loop covered v1 and v2 only for as long as
+        # v3 has been the default.
+        for version in (1, 2, 3):
             for kdf, cipher, kf in (
                 ("pbkdf2", "aes", None),
                 ("pbkdf2", "chacha", None),
@@ -367,6 +372,8 @@ def main() -> int:
         error_paths(tmp)
 
     recovery_version_claims()
+    recovery_examples()
+    recovery_commands()
     walkthrough()
 
     print(f"\n{passed} passed, {failed} failed")
@@ -571,6 +578,250 @@ def recovery_version_claims() -> None:
     check("two container versions" not in doc,
           "RECOVERY.md no longer claims there are two container versions",
           "there are three (v1, v2, v3) and two scripts; keym2.py reads v2 and v3")
+
+
+
+# ----------------------------------------------------------------------------
+# docs/RECOVERY.md — the sample output must be output the tools produce
+# ----------------------------------------------------------------------------
+
+# Lines whose value is random per container. Their *label* still has to match,
+# because a line the page leaves out is a line an heir sees and cannot place.
+RANDOM_VALUED = ("container", "table mac", "salt")
+
+
+def fenced_after(doc: str, marker: str) -> str | None:
+    """The first ``` block after `marker`, or None."""
+    at = doc.find(marker)
+    if at < 0:
+        return None
+    m = re.search(r"^```[^\n]*\n(.*?)^```", doc[at:], re.MULTILINE | re.DOTALL)
+    return m.group(1) if m else None
+
+
+def inspect_lines(text: str) -> list[tuple[str, str]]:
+    """(label, whole line) for each line of `inspect` output."""
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # A continuation line (v1's "time cost …") starts deep in the value
+        # column and has no label of its own.
+        indent = len(line) - len(line.lstrip())
+        label = "" if indent >= 8 else re.split(r"\s{2,}", stripped, maxsplit=1)[0]
+        out.append((label, stripped))
+    return out
+
+
+def recovery_examples() -> None:
+    """
+    Step 3's two sample outputs, compared against what `inspect` prints.
+
+    The v3 sample was typed in by hand when v3 landed and was missing two of
+    the lines the tool prints — `container` and `table mac` — so an heir
+    comparing their screen with the page saw output the page did not describe.
+    Nothing read the sample, so nothing noticed.
+
+    Each sample is compared with a container built to match it: the same KDF
+    costs, the same cipher, and a plaintext of the length the sample states.
+    Lines that are random per container are compared by label only.
+    """
+    print("\ndocs/RECOVERY.md — Step 3's sample output is real output:")
+    doc = RECOVERY.read_text(encoding="utf-8")
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        for version, marker, kdf, cipher, script in (
+            (3, "For a **v3** container", "argon2id", "aes", 3),
+            (1, "For a **v1** container", "argon2id", "chained", 1),
+        ):
+            sample = fenced_after(doc, marker)
+            check(sample is not None, f"RECOVERY.md has a v{version} inspect sample")
+            if sample is None:
+                continue
+
+            # The plaintext length the sample claims, so the chunk and
+            # ciphertext lines can be compared exactly rather than by label.
+            m = re.search(r"\((\d+) plaintext bytes\)", sample) if version != 1 \
+                else re.search(r"ciphertext\s+(\d+) bytes", sample)
+            length = int(m.group(1)) if m else 1
+            if version == 1 and cipher == "chained":
+                length -= 32  # two 16-byte tags
+            container = tmp / f"sample-v{version}.keym"
+            src = tmp / "sample-pt.bin"
+            src.write_bytes(b"x" * max(length, 1))
+            args = ["encrypt" if version == 1 else "encryptapp", "--password", PASSWORD,
+                    "--kdf", kdf, "--cipher", cipher, "--in", str(src), "--out", str(container),
+                    "--time", "3", "--mem", "65536", "--par", "4"]
+            if version != 1:
+                args += ["--version", str(version)]
+            r = subprocess.run(["node", str(BRIDGE), *args], capture_output=True, text=True, cwd=ROOT)
+            if r.returncode != 0:
+                check(False, f"built a container matching the v{version} sample", r.stderr.strip()[:160])
+                continue
+
+            r = cli(script, ["inspect", "--in", str(container)])
+            actual = inspect_lines(r.stdout)
+            shown = inspect_lines(sample)
+            check([a for a, _ in actual] == [s for s, _ in shown],
+                  f"the v{version} sample has the lines inspect prints, in order",
+                  f"page: {[s for s, _ in shown]}; tool: {[a for a, _ in actual]}")
+            tool = dict(actual)
+            for label, want in shown:
+                if label in RANDOM_VALUED or label not in tool:
+                    continue
+                check(tool[label] == want, f"  v{version} sample line {label or '(continued)'!r} matches",
+                      f"page: {want!r}; tool: {tool[label]!r}")
+
+
+# ----------------------------------------------------------------------------
+# docs/RECOVERY.md — every command on the page, executed
+# ----------------------------------------------------------------------------
+
+# The names the page uses. The runner supplies each one, the way the reader
+# already has them: their backup, their key file, the codes off their strips.
+PLACEHOLDERS = ("backup.keym", "mykey.bin", "shares.txt", "recovered.txt")
+
+
+def claimed_versions(command: str) -> set[int]:
+    """The versions a line's trailing comment says it is for: `# v3 or v2`."""
+    _, _, comment = command.partition("#")
+    return {int(v) for v in re.findall(r"\bv(\d+)\b", comment)}
+
+
+def run_doc_command(command: str, cwd: Path, stdin: str,
+                    extra: list[str] | None = None) -> subprocess.CompletedProcess:
+    argv = shlex.split(command, comments=True) + (extra or [])
+    if argv[:1] == ["python3"]:
+        argv[0] = sys.executable
+    return subprocess.run(argv, input=stdin, capture_output=True, text=True, cwd=cwd)
+
+
+def recovery_commands() -> None:
+    """
+    Run every command in RECOVERY.md's `bash` blocks, from the page.
+
+    Everything above drives the scripts with argument lists written *here*,
+    which is the copy nobody follows. This extracts the page's own lines, so a
+    renamed flag or a wrong script in the document fails the build rather than
+    an heir.
+
+    Every command must be recognised. A block added to the page that this
+    runner does not know how to check fails, rather than being skipped, because
+    an unexecuted command in a recovery document is exactly the drift this
+    exists to stop.
+
+    Each `inspect` and `decrypt` line carries a comment naming the versions it
+    is for (`# v3 or v2`). That comment is a claim, and it is checked: each
+    version must be claimed by exactly one line, that line must work on it, and
+    the others must refuse it, which is Step 2's "the wrong one refuses".
+    """
+    print("\ndocs/RECOVERY.md — every command on the page, executed:")
+    doc = RECOVERY.read_text(encoding="utf-8")
+    commands = [
+        line.strip()
+        for block in bash_blocks(doc)
+        for line in block.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    identify, decrypt, shares, unknown = [], [], [], []
+    for c in commands:
+        argv = shlex.split(c, comments=True)
+        if argv[:1] == ["pip"]:
+            print(f"  skip {c}  (needs a package index; the libraries are a prerequisite, not a step)")
+        elif argv[:1] == ["python3"] and "decrypt" in argv and "--shares-from" in argv:
+            shares.append(c)
+        # A line without a `# vN` comment cannot be checked against the version
+        # it is for, so it counts as unrecognised rather than as "for none".
+        elif argv[:1] == ["python3"] and "inspect" in argv and claimed_versions(c):
+            identify.append(c)
+        elif argv[:1] == ["python3"] and "decrypt" in argv and claimed_versions(c):
+            decrypt.append(c)
+        else:
+            unknown.append(c)
+
+    for c in unknown:
+        check(False, f"RECOVERY.md command is executed by this runner: `{c}`",
+              "add a case for it here rather than leaving it unchecked")
+    for group, name in ((identify, "inspect"), (decrypt, "decrypt")):
+        for version in (1, 2, 3):
+            owners = [c for c in group if version in claimed_versions(c)]
+            check(len(owners) == 1,
+                  f"exactly one {name} line on the page is for v{version}",
+                  f"{len(owners)} lines claim it: {owners}")
+    check(len(shares) >= 1, "the page carries a shares command")
+
+    # "Add `--key-file mykey.bin` if step 3 reported one was required."
+    m = re.search(r"Add `(--key-file [^`]+)`", doc)
+    check(m is not None, "the page says how to add a key file")
+    keyfile_args = shlex.split(m.group(1)) if m else []
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        # The page's commands run `python3 keym2.py`, a copy beside the backup,
+        # not a path into a clone.
+        for name in ("keym.py", "keym2.py"):
+            (tmp / name).write_bytes((ROOT / "reference" / name).read_bytes())
+        backup, mykey = tmp / PLACEHOLDERS[0], tmp / PLACEHOLDERS[1]
+        shares_file, recovered = tmp / PLACEHOLDERS[2], tmp / PLACEHOLDERS[3]
+        mykey.write_bytes(KEYFILE)
+
+        # Step 2: the right script describes the file, the wrong one refuses.
+        for version in (1, 2, 3):
+            backup.write_bytes(js_encrypt(version, SECRET, "pbkdf2", "aes", None, tmp).read_bytes())
+            for c in identify:
+                r = run_doc_command(c, tmp, stdin="")
+                if version in claimed_versions(c):
+                    check(r.returncode == 0 and f"KEYM v{version}" in r.stdout,
+                          f"v{version}: `{c}` describes it", (r.stderr or r.stdout).strip()[:160])
+                else:
+                    check(r.returncode != 0, f"v{version}: `{c}` refuses it", r.stdout.strip()[:160])
+
+        # Step 4: the line for this version, with the password on the prompt,
+        # and again with the key file the page tells you to add.
+        for version in (1, 2, 3):
+            for kf in (None, KEYFILE):
+                backup.write_bytes(js_encrypt(version, SECRET, "argon2id", "chained", kf, tmp,
+                                              tag="-doc").read_bytes())
+                for c in decrypt:
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin=PASSWORD + "\n",
+                                        extra=keyfile_args if kf else None)
+                    tag = f"v{version}{' +key file' if kf else ''}: `{c}`"
+                    if version in claimed_versions(c):
+                        got = recovered.read_bytes() if recovered.exists() else b""
+                        check(r.returncode == 0 and got == SECRET, f"{tag} recovers the bytes",
+                              r.stderr.strip()[:160])
+                    else:
+                        # Troubleshooting item 1: the wrong script fails, and
+                        # writes nothing a reader could mistake for a result.
+                        check(r.returncode != 0 and not recovered.exists(),
+                              f"{tag} refuses it", r.stderr.strip()[:160])
+
+        # Step 4 with shares: two of three strips, one of them copied by hand.
+        base = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp, tag="-docshares")
+        issued = tmp / "issued.txt"
+        r = subprocess.run(
+            ["node", str(BRIDGE), "addshares", "--password", PASSWORD,
+             "--in", str(base), "--out", str(backup), "--shares-out", str(issued),
+             "--threshold", "2", "--shares", "3",
+             "--salt", os.urandom(32).hex(), "--share-secret", os.urandom(32).hex(),
+             "--share-coefficients", os.urandom(32).hex()],
+            capture_output=True, text=True, cwd=ROOT)
+        strips = [ln for ln in issued.read_text().split("\n") if ln.strip()] if r.returncode == 0 else []
+        check(len(strips) == 3, "issued a share set for the shares command", r.stderr.strip()[:160])
+        if len(strips) == 3:
+            prefix, _, code = strips[2].partition(":")
+            shares_file.write_text("# strips 1 and 3\n" + strips[0] + "\n"
+                                   + prefix + ":" + code.lower().replace("-", " ") + "\n")
+            for c in shares:
+                recovered.unlink(missing_ok=True)
+                r = run_doc_command(c, tmp, stdin="")
+                got = recovered.read_bytes() if recovered.exists() else b""
+                check(r.returncode == 0 and got == SECRET, f"`{c}` recovers the bytes",
+                      r.stderr.strip()[:160])
 
 
 # ----------------------------------------------------------------------------

@@ -638,10 +638,12 @@ python3 reference/keym2.py decrypt --in backup.keym   # prompts for the password
 
 No browser, no Node, no npm, no network. `inspect` reports the container's KDF,
 cipher, and whether a key file is needed **without** asking for a password.
-Any recent version of either library works — the container format does not
-depend on them, and the conformance suite proves it by opening frozen fixtures
-under whatever is installed. `reference/requirements.txt` records the versions
-these scripts were actually run against, if you would rather pin.
+`reference/requirements.txt` pins the versions these scripts are tested
+against, and CI runs those exact versions only. The format uses standard
+primitives and nothing specific to either library, so a newer release should
+work, but that is an expectation, not something a test checks. The frozen
+fixtures in `scripts/fixtures/keymaker/` are how to check a different version
+yourself.
 
 **What it does so a recovery does not leak what it just recovered.** With
 `--out`, the plaintext is written `0600` — owner only — and an existing

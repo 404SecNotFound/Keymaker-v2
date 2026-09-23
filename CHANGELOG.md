@@ -15,6 +15,13 @@ did; the fixture corpus and both parity gates are unchanged and pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **RECOVERY.md is executed, not just tested beside.** `recovery_test.py` now
+  runs every command in the page's `bash` blocks against containers the app
+  wrote, for v1, v2 and v3, with and without a key file, and with shares. Each
+  `inspect` and `decrypt` line names the versions it is for, and that claim is
+  checked: the right script opens the file and the wrong one refuses it. A
+  command the runner does not recognise fails the suite. Step 3's two sample
+  outputs are compared line by line with what `inspect` prints.
 
 ### Fixed
 - **The paper vault printed its container symbols as a low-resolution bitmap.**
@@ -81,6 +88,12 @@ did; the fixture corpus and both parity gates are unchanged and pass.
   key files, share values and plaintext; a legal worst-case container is no
   longer refused as too large; a Shamir module that fails to load is reported
   as such, not as a wrong password.
+- **RECOVERY.md had drifted from v3.** Step 3's v3 sample was missing the
+  `container` and `table mac` lines the tool prints; the primitives table
+  described only v2's 8-byte core header; and it, and the README, said the
+  conformance suite opens the fixtures "under whatever version is installed"
+  of the two libraries, when CI installs exact pinned versions only. The Step
+  2 and Step 4 comments now say `v3 or v2`.
 - **Build and release:** a checkout path with spaces builds; deploy and release
   refuse to sign bytes the independent builds did not reproduce; the reference
   self-tests run on Python 3.10.

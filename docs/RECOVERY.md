@@ -69,10 +69,12 @@ ships beside them in the recovery kit:
 pip install -r requirements.txt
 ```
 
-Any recent version of either library should work — the container format does
-not depend on them, which the conformance suite checks by opening frozen
-fixtures under whatever version is installed. The pinned versions are simply
-the ones that were actually run.
+Those pinned versions are the only ones the project runs. The format uses
+standard primitives and nothing specific to either library, so a newer release
+should work, and the frozen fixtures in the repository are how you would check:
+they must still open. But no test runs against any version except the pinned
+one, so treat "should work" as a reasonable expectation rather than a tested
+fact. If a newer version fails, install the pinned one.
 
 **Offline.** Both libraries ship wheels you can download in advance:
 
@@ -108,7 +110,7 @@ If your backup is a **file**, ask each script in turn. Neither needs a password
 and neither can damage the file:
 
 ```bash
-python3 keym2.py inspect --in backup.keym     # v2
+python3 keym2.py inspect --in backup.keym     # v3 or v2
 python3 keym.py  inspect --in backup.keym     # v1
 ```
 
@@ -122,13 +124,20 @@ For a **v3** container — what the app writes today:
 ```
 KEYM v3
   cipher      AES-256-GCM
+  container   22dcae81ce97b6d0fd220e0b5cf48625
+  table mac   9e2aa9e87e0f1dce... (unverified: needs a secret)
   slots       1
   slot 0       type 0x00 (passphrase)
     kdf         Argon2id, t=3 m=65536KiB p=4
     key file    not used
-    salt        0f1e2d3c...
+    salt        84e893d5eccecf1a...
   chunks      1 (75 plaintext bytes)
 ```
+
+`container` is an identifier for this backup, not a secret; every copy of the
+same backup shows the same one. `table mac` protects the list of ways in
+(below). It says `unverified` here because checking it needs the password or the
+shares, and `decrypt` checks it for you. A v2 container has neither line.
 
 For a **v1** container:
 
@@ -151,7 +160,7 @@ and whether a key file is required, before doing anything else.
 Those values are authenticated: if decryption later succeeds, they were not
 tampered with. Until then, treat them as claims the file makes about itself.
 
-**About `slots`.** A v2 container can hold up to eight ways of unlocking the
+**About `slots`.** A v3 or v2 container can hold up to eight ways of unlocking the
 same data, and any one of them opens it. Containers written by the app have one
 for the password, plus one for recovery shares or a passkey if either was set
 up when it was made. If yours says more than one, any of the secrets listed will
@@ -160,7 +169,7 @@ work, and you only need one of them.
 ## Step 4 — Decrypt
 
 ```bash
-python3 keym2.py decrypt --in backup.keym --out recovered.txt     # v2
+python3 keym2.py decrypt --in backup.keym --out recovered.txt     # v3 or v2
 python3 keym.py  decrypt --in backup.keym --out recovered.txt     # v1
 ```
 
@@ -252,7 +261,8 @@ lowercase and it will.
 ## Why this works, and why it should keep working
 
 Keymaker's formats are specified byte by byte — v1 in [`FORMAT.md`](FORMAT.md),
-v2 in [`FORMAT-V2-DESIGN.md`](FORMAT-V2-DESIGN.md). Each recovery script was
+v2 in [`FORMAT-V2-DESIGN.md`](FORMAT-V2-DESIGN.md), and v3 as a short change to v2
+in [`FORMAT-V3-DESIGN.md`](FORMAT-V3-DESIGN.md). Each recovery script was
 written from its specification alone, without reference to the application's
 source. Both are tested against the real implementation on every push — v2 by
 comparing the *bytes* the two produce, not merely by checking they can read each
@@ -281,13 +291,13 @@ Shared by both versions:
 
 Where they differ:
 
-| | v1 | v2 |
+| | v1 | v2 and v3 |
 |---|---|---|
 | HKDF labels | `keymaker-aes`, `keymaker-chacha` | `keymaker-v2-aes`, `keymaker-v2-chacha`; the slot wrap uses `keymaker-v2-slot-aes` and `keymaker-v2-slot-chacha` |
 | Key file | Raw bytes appended after the password bytes | SHA-256 of `"keymaker.v2.keyfile" ‖ bytes`, then length-prefixed alongside the password |
 | Payload key | Derived from the password directly | A random 32-byte master key, carried in each slot sealed under a key derived from that slot's secret |
 | Payload | One AEAD invocation over the whole plaintext | 1 MiB chunks, counter nonces, the last chunk flagged |
-| Authentication | The whole header is AAD on every AEAD layer | The 8-byte core header is AAD for every chunk; each slot's wrap adds its own 48-byte record |
+| Authentication | The whole header is AAD on every AEAD layer | The core header is AAD for every chunk: 8 bytes in v2, 24 in v3 (which adds a random 16-byte container id). Each slot's wrap adds its own 48-byte record. v3 also stores an HMAC-SHA-256 over the core header and the whole slot table, keyed from the master key (HKDF info `keymaker.v3.slot-table`) |
 
 All standard, all implementable from public specifications.
 
