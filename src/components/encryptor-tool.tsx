@@ -266,6 +266,17 @@ function parseShareLines(text: string): string[] {
  * this to every notice told someone looking at their own paste that nothing
  * had been pasted.
  */
+/**
+ * One-press share sets, as `[needed, printed]`. 2 of 3 survives one lost or
+ * destroyed strip; 3 of 5 survives two, and no two holders can open it
+ * together. Both fit §4.6's bounds (at most 8 shares, a threshold of at least
+ * 2), and the custom fields below them reach every other legal pair.
+ */
+const SHARE_PRESETS: ReadonlyArray<readonly [number, number]> = [
+  [2, 3],
+  [3, 5],
+];
+
 const NOTHING_PASTED = "Nothing was pasted, so what you already had is still here.";
 
 const MAX_SHARE_INPUT_CHARS = 8 * 1024;
@@ -4403,6 +4414,33 @@ export function EncryptorTool() {
 
                         {shamirEnabled && (
                           <>
+                            {/*
+                              The two sets most people want, one press each. The
+                              fields below stay, and stay the source of truth:
+                              a preset only fills them, so anything it sets can
+                              be adjusted, and a preset is shown as chosen only
+                              while both fields still match it.
+                            */}
+                            <div
+                              role="group"
+                              aria-label="Common share sets"
+                              className="flex gap-0.5 rounded-xl bg-inset p-1"
+                            >
+                              {SHARE_PRESETS.map(([k, n]) => (
+                                <button
+                                  key={`${k}-of-${n}`}
+                                  type="button"
+                                  aria-pressed={shamirThreshold === k && shamirCount === n}
+                                  onClick={() => {
+                                    setShamirCount(n);
+                                    setShamirThreshold(k);
+                                  }}
+                                  className="km-input-choice km-choice"
+                                >
+                                  {k} of {n}
+                                </button>
+                              ))}
+                            </div>
                             <div className="grid grid-cols-2 gap-3">
                               <div className="space-y-1.5">
                                 <Label htmlFor="shamir-threshold" className="text-[12px] text-muted-foreground">

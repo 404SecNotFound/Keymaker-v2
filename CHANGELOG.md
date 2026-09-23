@@ -15,6 +15,9 @@ did; the fixture corpus and both parity gates are unchanged and pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **Share-set presets.** *2 of 3* and *3 of 5* buttons sit above the share
+  fields and fill both at once. The fields stay; a preset shows as chosen only
+  while both still match it.
 - **RECOVERY.md is executed, not just tested beside.** `recovery_test.py` now
   runs every command in the page's `bash` blocks against containers the app
   wrote, for v1, v2 and v3, with and without a key file, and with shares. Each

@@ -105,6 +105,42 @@ test.describe("enrolling a share set", () => {
     expect(armored.startsWith("keym2:"), "the container is not v2 armor").toBe(true);
   });
 
+  test("a preset fills both fields, and the set it issues is that set", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 4);
+
+    const presets = page.getByRole("group", { name: "Common share sets" });
+    const twoOfThree = visible(presets.getByRole("button", { name: "2 of 3" }));
+    const threeOfFive = visible(presets.getByRole("button", { name: "3 of 5" }));
+    // 2 of 4 is neither preset, so neither may claim to be chosen.
+    await expect(twoOfThree).toHaveAttribute("aria-pressed", "false");
+    await expect(threeOfFive).toHaveAttribute("aria-pressed", "false");
+
+    await threeOfFive.click();
+    await expect(page.getByLabel("Needed to open")).toHaveValue("3");
+    await expect(page.getByLabel("Shares to print")).toHaveValue("5");
+    await expect(threeOfFive).toHaveAttribute("aria-pressed", "true");
+    await expect(twoOfThree).toHaveAttribute("aria-pressed", "false");
+
+    // A preset only fills the fields. Editing one afterwards is a custom set,
+    // and the button must stop saying otherwise.
+    await visible(page.getByLabel("Needed to open")).fill("4");
+    await expect(threeOfFive).toHaveAttribute("aria-pressed", "false");
+
+    await threeOfFive.click();
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 5 shares now/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/Any 3 of them open this container/)).toBeVisible();
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+    expect(shares, "the preset did not issue five shares").toHaveLength(5);
+  });
+
   test("the honest framing is on screen, not only in the docs", async ({ page }) => {
     await page.goto("/");
     await useTextMode(page);
