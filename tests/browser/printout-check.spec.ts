@@ -1,6 +1,6 @@
 import { test, expect } from "@playwright/test";
 import type { Page } from "@playwright/test";
-import { visible, useTextMode, selectCrypto, capturePrintedSymbols, STRONG_PASSWORD } from "./helpers";
+import { visible, useTextMode, selectCrypto, capturePrintedSymbols, composePhoto, STRONG_PASSWORD } from "./helpers";
 
 /**
  * "Check a printout", on the Recovery page.
@@ -82,6 +82,19 @@ test("a printout is checked against the backup it came from, and not against ano
   expect(first[1]?.problem).toBe(false);
   expect(first[2]?.text).toMatch(/blank\.png No QR code was found/);
   expect(first[2]?.problem).toBe(true);
+
+  // The whole strips page in one photo: one line per strip, each named by the
+  // photo it came from and its place in it.
+  await page.locator("#printout-check-input").setInputFiles([
+    png("strips-page.png", await composePhoto(page, printed.strips)),
+  ]);
+  await expect(page.getByTestId("printout-results").locator("li")).toHaveCount(3, { timeout: 30_000 });
+  const page3 = await findings(page);
+  expect(page3.map((f) => f.text.match(/Recovery strip (\d)/)?.[1]).sort()).toEqual(["1", "2", "3"]);
+  for (const [i, f] of page3.entries()) {
+    expect(f.text).toContain(`strips-page.png (${i + 1} of 3)`);
+    expect(f.text).toMatch(/belongs to this backup/);
+  }
 
   // A second backup sealed in the same session. The first sheet's paper is
   // now from a different backup, and the old "belongs" lines must be gone

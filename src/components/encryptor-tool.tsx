@@ -10,7 +10,7 @@ import { InheritancePlan } from "@/components/inheritance-plan";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
-import { decodeQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
+import { decodeAllQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import { meetsPasswordPolicy, PASSWORD_POLICY_HINT } from "@/lib/password-policy";
 import {
   BookOpen,
@@ -5459,12 +5459,17 @@ export function EncryptorTool() {
       const results: { file: string; text: string; problem: boolean }[] = [];
       for (const f of files) {
         try {
-          const finding = await checkPrintoutCode(await decodeQrImage(f), backup);
-          results.push({
-            file: f.name,
-            text: describePrintoutFinding(finding),
-            problem: printoutFindingIsProblem(finding),
-          });
+          // Every code in the photo, one line each: a whole sheet can be
+          // checked in one picture.
+          const texts = await decodeAllQrImage(f);
+          for (const [i, text] of texts.entries()) {
+            const finding = await checkPrintoutCode(text, backup);
+            results.push({
+              file: texts.length > 1 ? `${f.name} (${i + 1} of ${texts.length})` : f.name,
+              text: describePrintoutFinding(finding),
+              problem: printoutFindingIsProblem(finding),
+            });
+          }
         } catch (e) {
           results.push({
             file: f.name,
@@ -5618,7 +5623,7 @@ export function EncryptorTool() {
                 <div className="km-printout-check" data-testid="printout-check">
                   <h3 id="printout-check-title" className="text-[13px] font-medium text-foreground">Check a printout</h3>
                   <p className="km-help">
-                    Photograph a printed recovery strip or container symbol. Keymaker confirms each code reads back intact
+                    Photograph printed recovery strips or container symbols, one at a time or a whole sheet at once. Keymaker confirms each code reads back intact
                     {mode === "encrypt" && receipt
                       ? " and belongs to the backup created in this session."
                       : ". There is no backup from this session to compare it with, so it cannot say which backup it belongs to."}{" "}

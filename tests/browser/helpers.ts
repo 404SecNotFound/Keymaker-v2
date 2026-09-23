@@ -194,3 +194,38 @@ export async function capturePrintedSymbols(
   const toBuffer = (d: string) => Buffer.from(d.split(",")[1] as string, "base64");
   return { parts: urls.parts.map(toBuffer), strips: urls.strips.map(toBuffer) };
 }
+
+/**
+ * Lay symbols out on one white page, in a grid with a gap between them, and
+ * return it as a single PNG: a photo of a whole sheet, standing in for the
+ * picture someone takes of the paper rather than of each code.
+ */
+export async function composePhoto(page: Page, pngs: Buffer[]): Promise<Buffer> {
+  const url = await page.evaluate(async (sources: string[]) => {
+    const images = await Promise.all(
+      sources.map(async (src) => {
+        const img = new Image();
+        img.src = src;
+        await img.decode();
+        return img;
+      })
+    );
+    const tile = 520;
+    const gap = 80;
+    const cols = Math.min(3, images.length);
+    const rows = Math.ceil(images.length / cols);
+    const canvas = document.createElement("canvas");
+    canvas.width = cols * tile + (cols + 1) * gap;
+    canvas.height = rows * tile + (rows + 1) * gap;
+    const ctx = canvas.getContext("2d")!;
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    images.forEach((img, i) => {
+      const x = gap + (i % cols) * (tile + gap);
+      const y = gap + Math.floor(i / cols) * (tile + gap);
+      ctx.drawImage(img, x, y, tile, tile);
+    });
+    return canvas.toDataURL("image/png");
+  }, pngs.map((b) => `data:image/png;base64,${b.toString("base64")}`));
+  return Buffer.from(url.split(",")[1] as string, "base64");
+}

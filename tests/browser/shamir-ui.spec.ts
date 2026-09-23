@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { visible, useTextMode, selectCrypto, capturePrintedSymbols } from "./helpers";
+import { visible, useTextMode, selectCrypto, capturePrintedSymbols, composePhoto } from "./helpers";
 
 /**
  * Phase 4.1d — recovery shares, driven the way a user reaches them.
@@ -324,6 +324,7 @@ async function encryptAndPrintWithShares(
 
 const png = (name: string, buffer: Buffer) => ({ name, mimeType: "image/png", buffer });
 
+
 async function shareBoxLines(page: import("@playwright/test").Page): Promise<string[]> {
   const value = await visible(page.locator("#share-input")).inputValue();
   return value
@@ -380,6 +381,34 @@ test.describe("scanning the printed strips", () => {
       "the scanned strips did not turn on the shares path"
     ).toBeVisible();
     expect(await shareBoxLines(page)).toEqual([backup.shares[0], backup.shares[2]]);
+
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("one photo of a whole page reads every code on it", async ({ page }) => {
+    const backup = await encryptAndPrintWithShares(page, 2, 3);
+    // Two strips and every container symbol laid out on one sheet and
+    // photographed once, which is how a person holding the paper would do it.
+    const photo = await composePhoto(page, [
+      backup.stripPngs[0] as Buffer,
+      ...backup.partPngs,
+      backup.stripPngs[2] as Buffer,
+    ]);
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await page.locator("#qr-scan-input").setInputFiles([png("the-whole-page.png", photo)]);
+
+    await expect(visible(page.locator("#text-secret"))).toHaveValue(backup.armored, {
+      timeout: 30_000,
+    });
+    await expect(
+      page.locator("#share-input"),
+      "no strip was read from the photo, so the shares box never opened"
+    ).toBeVisible({ timeout: 20_000 });
+    // jsqr finds codes in no particular order, and neither box cares.
+    expect((await shareBoxLines(page)).sort()).toEqual([backup.shares[0], backup.shares[2]].sort());
 
     await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
     await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });

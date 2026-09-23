@@ -15,6 +15,13 @@ did; the fixture corpus is unchanged, and both parity gates pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **Several QR codes from one photo.** A photo of a whole sheet, strips and
+  container symbols together, is read in one go, on the Decrypt tab and in the
+  printout check. The browser's own `BarcodeDetector` is used where it exists;
+  otherwise jsqr reads a code, paints it out and looks again, then searches
+  overlapping tiles, since with several symbols in view it can pair finder
+  patterns from different ones and read none. A photo of a single code costs
+  what it did before.
 - **Check a printout.** The Recovery page takes photos of a printed strip or
   container symbol and says, for each code, whether it read back intact and
   whether it belongs to the backup created in this session. Nothing is joined
