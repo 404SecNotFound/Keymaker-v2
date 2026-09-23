@@ -183,6 +183,13 @@ jobs:
       - name: Printout check matches codes to their backup
         run: npm run test:printout-check
 
+      # The live camera scanner's stopping rule: when enough strips and symbols
+      # are in. Controls bite: a repeated strip counted twice, a strip from
+      # another set counted, and strips alone taken as complete when container
+      # symbols have been started each fail it.
+      - name: Camera scanner stops when enough is read, and not before
+        run: npm run test:camera-progress
+
       # The build's counterpart of the sealed verdict: apply-csp-hashes.mjs fails
       # the build unless default-src, connect-src AND form-action are all 'none'
       # in every shipped page's CSP. connect-src has been gated since KM-07;

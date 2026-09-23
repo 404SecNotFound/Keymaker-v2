@@ -15,6 +15,13 @@ did; the fixture corpus is unchanged, and both parity gates pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **Scan with the camera.** On the Decrypt tab, *Use the camera* and *Scan
+  strips with the camera* open the device camera and read strips and
+  container symbols held up one after another. It says what is in and what is
+  still needed ("1 of the 2 needed. Show the next strip."), leaves out a strip
+  from a different set, stops by itself once there is enough, and hands the
+  codes to the same boxes a scanned photo fills. The camera is released when
+  the dialog closes. Frames never leave the page.
 - **Several QR codes from one photo.** A photo of a whole sheet, strips and
   container symbols together, is read in one go, on the Decrypt tab and in the
   printout check. The browser's own `BarcodeDetector` is used where it exists;

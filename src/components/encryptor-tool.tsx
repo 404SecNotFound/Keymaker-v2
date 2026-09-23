@@ -47,10 +47,12 @@ import {
   FileLock,
   FolderOpen,
   ScrollText,
+  Camera,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { CommandBar, type CommandBarItem } from "@/components/command-bar";
 import { SeedGrid, emptySeedWords, seedWordsFromText } from "@/components/seed-grid";
+import { CameraScanDialog } from "@/components/camera-scan";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -1505,6 +1507,12 @@ export function EncryptorTool() {
   >(null);
   const [printoutBusy, setPrintoutBusy] = useState(false);
   const printoutInputRef = useRef<HTMLInputElement>(null);
+  /** The live camera scanner, and whether this browser offers a camera at all. */
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const [cameraAvailable, setCameraAvailable] = useState(false);
+  useEffect(() => {
+    setCameraAvailable(typeof navigator !== "undefined" && !!navigator.mediaDevices?.getUserMedia);
+  }, []);
   /**
    * The receipt — the seal as a ceremony (10× plan, Bet 6).
    *
@@ -2340,8 +2348,13 @@ export function EncryptorTool() {
    * visible above the password, and the reveal/blur controls the output uses
    * only exist in text mode.
    */
-  const handleQrImageFiles = useCallback(async (files: readonly File[]) => {
-    if (files.length === 0) return;
+  /**
+   * Route scanned QR text to the box that can use it. From image files, which
+   * are decoded here, or from codes the camera already read (`fromCamera`),
+   * which take exactly the same path from that point on.
+   */
+  const handleQrImageFiles = useCallback(async (files: readonly File[], fromCamera?: readonly string[]) => {
+    if (files.length === 0 && !(fromCamera && fromCamera.length > 0)) return;
     setQrScanBusy(true);
     // The same staleness rule every other async path here follows. Decoding a
     // large photo takes a moment, and a tab switch or Wipe now in that moment
@@ -2350,7 +2363,7 @@ export function EncryptorTool() {
     // the wipe the user just asked for.
     const seq = opSeqRef.current;
     try {
-      const texts = await decodeQrImages(files);
+      const texts = fromCamera ? [...fromCamera] : await decodeQrImages(files);
       if (opSeqRef.current !== seq) return;
       // A printed backup opened without the password is container parts *and*
       // share strips, and the person opening it photographs all of it. Each
@@ -2383,7 +2396,11 @@ export function EncryptorTool() {
       // the problem, and the toast must not then say to type the password.
       const accepted = rest.length > 0 ? await handleTextSecretChange(rest.join("\n")) : true;
 
-      const title = files.length === 1 ? "QR image scanned" : `${files.length} QR images scanned`;
+      const title = fromCamera
+        ? `${texts.length} code${texts.length === 1 ? "" : "s"} read by the camera`
+        : files.length === 1
+          ? "QR image scanned"
+          : `${files.length} QR images scanned`;
       if (!accepted) {
         toast({
           title,
@@ -3784,6 +3801,18 @@ export function EncryptorTool() {
                   <QrCode className="mr-2 h-4 w-4" />
                   {qrScanBusy ? "Reading QR…" : "Scan a QR image"}
                 </Button>
+                {cameraAvailable ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={qrScanBusy}
+                    onClick={() => setCameraOpen(true)}
+                    className="w-full rounded-xl border-border bg-inset py-2.5 text-sm font-medium text-foreground hover:bg-raised"
+                  >
+                    <Camera className="mr-2 h-4 w-4" />
+                    Use the camera
+                  </Button>
+                ) : null}
                 <p className="text-[12px] leading-snug text-muted-foreground">
                   Upload a Keymaker QR PNG, or every part of a paper backup at
                   once, and its encrypted text fills the box above. Then type the
@@ -3933,6 +3962,18 @@ export function EncryptorTool() {
                   <QrCode className="mr-2 h-4 w-4" />
                   {qrScanBusy ? "Reading QR…" : "Scan share QR images"}
                 </Button>
+                {cameraAvailable ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={qrScanBusy}
+                    onClick={() => setCameraOpen(true)}
+                    className="w-full rounded-xl border-border bg-inset py-2 text-[13px] font-medium text-foreground hover:bg-raised"
+                  >
+                    <Camera className="mr-2 h-4 w-4" />
+                    Scan strips with the camera
+                  </Button>
+                ) : null}
                 <p className="text-[12px] leading-snug text-muted-foreground" role="status">
                   {(() => {
                     const n = shareLines.length;
@@ -6125,6 +6166,17 @@ export function EncryptorTool() {
           rehearsal={paperVault.rehearsal}
         />
       ) : null}
+
+      {/*
+        The live camera scanner. Its codes take the scanned-image path, so a
+        strip read by the camera lands in the shares box and a container
+        symbol in the container box, exactly as a photo of either would.
+      */}
+      <CameraScanDialog
+        open={cameraOpen}
+        onOpenChange={setCameraOpen}
+        onDone={(codes) => void handleQrImageFiles([], codes)}
+      />
 
       <Dialog open={isRecoveryOpen} onOpenChange={setIsRecoveryOpen}>
         <DialogContent>
