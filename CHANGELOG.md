@@ -15,6 +15,14 @@ did; the fixture corpus is unchanged, and both parity gates pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **Check a printout.** The Recovery page takes photos of a printed strip or
+  container symbol and says, for each code, whether it read back intact and
+  whether it belongs to the backup created in this session. Nothing is joined
+  or decrypted and no password is asked for. A strip is matched on its full
+  set id against the container's share slots, which works even for a backup
+  written straight to a file; a container symbol on its fingerprint and
+  length, which needs the backup on screen. A new seal or a wipe clears the
+  results.
 - **A set code on the paper vault.** FORMAT-V2-DESIGN §4.6 names the first two
   groups of a `KMSHARE2` strip, which every strip of a set already shares, the
   *set code*. The owner's sheet prints it, taken from the container, so it is

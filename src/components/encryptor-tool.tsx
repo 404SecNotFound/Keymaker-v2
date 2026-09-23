@@ -10,7 +10,7 @@ import { InheritancePlan } from "@/components/inheritance-plan";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
-import { decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
+import { decodeQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import { meetsPasswordPolicy, PASSWORD_POLICY_HINT } from "@/lib/password-policy";
 import {
   BookOpen,
@@ -36,6 +36,7 @@ import {
   ChevronDown,
   Search,
   TriangleAlert,
+  CheckCircle2,
   ShieldCheck,
   ShieldAlert,
   LifeBuoy,
@@ -1495,6 +1496,17 @@ export function EncryptorTool() {
    */
   const [sealedPeek, setSealedPeek] = useState<Uint8Array | null>(null);
   /**
+   * "Check this printout", on the Recovery page: one line per photo, saying
+   * whether its code read back and whether it belongs to the backup this
+   * session wrote. Null until a check has run. Never holds a decrypted byte:
+   * the check derives no key and combines no shares.
+   */
+  const [printoutFindings, setPrintoutFindings] = useState<
+    { file: string; text: string; problem: boolean }[] | null
+  >(null);
+  const [printoutBusy, setPrintoutBusy] = useState(false);
+  const printoutInputRef = useRef<HTMLInputElement>(null);
+  /**
    * The receipt — the seal as a ceremony (10× plan, Bet 6).
    *
    * Press Encrypt, spinner, toast, output: correct and forgettable, and the
@@ -1519,6 +1531,11 @@ export function EncryptorTool() {
     shares: { threshold: number; count: number } | null;
   };
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  // Printout findings describe one backup. A new seal or a wipe replaces or
+  // clears it, and lines saying "belongs to this backup" must go with it.
+  useEffect(() => {
+    setPrintoutFindings(null);
+  }, [receipt, sealedPeek]);
   /**
    * The wipe's acknowledgment, in place of a toast. A wipe is a deliberate
    * act, and a toast that fades in a few seconds is not an acknowledgment of
@@ -5415,6 +5432,57 @@ export function EncryptorTool() {
     { id: "tools", label: "Tools", icon: Dices },
     { id: "docs", label: "Docs", icon: BookOpen },
   ];
+  /**
+   * "Check this printout". Each photo is decoded on its own, so one blurred
+   * picture is one line saying so rather than a failed batch, and each code is
+   * compared with the backup this session wrote: the whole container when it
+   * is on screen, otherwise the header and slot table the workbench kept,
+   * which is enough for a strip but not for a container symbol.
+   */
+  const checkPrintout = async (files: readonly File[]) => {
+    if (files.length === 0) return;
+    setPrintoutBusy(true);
+    const seq = opSeqRef.current;
+    try {
+      const { checkPrintoutCode, describePrintoutFinding, printoutFindingIsProblem } = await import(
+        "@/lib/printout-check"
+      );
+      let container: Uint8Array | null = null;
+      if (mode === "encrypt" && receipt?.onScreen && outputText.startsWith("keym2:")) {
+        try {
+          const { dearmorKeym2 } = await import("@/lib/keym-v2");
+          container = dearmorKeym2(outputText);
+        } catch {
+          container = null;
+        }
+      }
+      const backup = { container, header: mode === "encrypt" && receipt ? sealedPeek : null };
+      const results: { file: string; text: string; problem: boolean }[] = [];
+      for (const f of files) {
+        try {
+          const finding = await checkPrintoutCode(await decodeQrImage(f), backup);
+          results.push({
+            file: f.name,
+            text: describePrintoutFinding(finding),
+            problem: printoutFindingIsProblem(finding),
+          });
+        } catch (e) {
+          results.push({
+            file: f.name,
+            text: e instanceof QrDecodeError ? e.message : "That image could not be read as a QR code.",
+            problem: true,
+          });
+        }
+      }
+      // A wipe or a new seal while photos were decoding means these lines
+      // describe a backup that is no longer the one on the page.
+      if (opSeqRef.current !== seq) return;
+      setPrintoutFindings(results);
+    } finally {
+      setPrintoutBusy(false);
+    }
+  };
+
   const returnToBackupTest = (withShares: boolean) => {
     const armored = mode === "encrypt" && receipt?.onScreen ? outputText : "";
     handleModeChange("decrypt");
@@ -5542,6 +5610,56 @@ export function EncryptorTool() {
                   <Button variant="outline" onClick={() => returnToBackupTest(true)}><KeyRound className="h-4 w-4" />Verify with recovery shares</Button>
                 </div>
                 <p className="km-help">Test each method you plan to rely on. A successful password test does not prove that your shares work.</p>
+                {/*
+                  "Check this printout": the step before a rehearsal. It needs
+                  no password and no strips beyond the one in the photo, and
+                  it opens nothing, so it can be run on every sheet the moment
+                  it comes out of the printer.
+                */}
+                <div className="km-printout-check" data-testid="printout-check">
+                  <h3 id="printout-check-title" className="text-[13px] font-medium text-foreground">Check a printout</h3>
+                  <p className="km-help">
+                    Photograph a printed recovery strip or container symbol. Keymaker confirms each code reads back intact
+                    {mode === "encrypt" && receipt
+                      ? " and belongs to the backup created in this session."
+                      : ". There is no backup from this session to compare it with, so it cannot say which backup it belongs to."}{" "}
+                    Nothing is opened and no password is needed.
+                  </p>
+                  <input
+                    ref={printoutInputRef}
+                    id="printout-check-input"
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    multiple
+                    className="hidden"
+                    aria-labelledby="printout-check-title"
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files ?? []);
+                      e.target.value = "";
+                      void checkPrintout(files);
+                    }}
+                  />
+                  <Button variant="outline" disabled={printoutBusy} onClick={() => printoutInputRef.current?.click()}>
+                    <QrCode className="h-4 w-4" />
+                    {printoutBusy ? "Reading photos…" : "Choose photos of the printout"}
+                  </Button>
+                  {printoutFindings ? (
+                    <ul className="km-printout-results" data-testid="printout-results" aria-live="polite">
+                      {printoutFindings.map((r, i) => (
+                        <li key={`${i}-${r.file}`} data-problem={r.problem ? "true" : "false"}>
+                          {r.problem ? (
+                            <TriangleAlert className="h-4 w-4 text-warning" aria-hidden="true" />
+                          ) : (
+                            <CheckCircle2 className="h-4 w-4 text-success" aria-hidden="true" />
+                          )}
+                          <span>
+                            <span className="km-printout-file">{r.file}</span> {r.text}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
               </section>
               <figure className="km-art km-art-wide">
                 <img src={`${BASE_PATH}/art-key-shards.webp`} alt="A key broken into three shards on separate plates, hairline paths leading back to a keyhole, a folded printed sheet beside one shard" width={2100} height={900} loading="lazy" decoding="async" />

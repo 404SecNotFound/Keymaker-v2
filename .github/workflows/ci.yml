@@ -176,6 +176,13 @@ jobs:
       - name: Sealed verdict requires the full egress directive set
         run: npm run test:seal-verdict
 
+      # "Check this printout": a printed strip or symbol reads back, and is from
+      # this backup or is said not to be, without joining or decrypting
+      # anything. Controls bite: a four-byte KMSHARE2 set-id compare, a skipped
+      # part checksum, and a header treated as a whole container each fail it.
+      - name: Printout check matches codes to their backup
+        run: npm run test:printout-check
+
       # The build's counterpart of the sealed verdict: apply-csp-hashes.mjs fails
       # the build unless default-src, connect-src AND form-action are all 'none'
       # in every shipped page's CSP. connect-src has been gated since KM-07;

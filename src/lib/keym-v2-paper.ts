@@ -282,7 +282,7 @@ async function sha256(...parts: Uint8Array[]): Promise<Uint8Array> {
 }
 
 /** §7.3. The 128-bit fingerprint that is both the id and the whole digest. */
-async function containerFingerprint(container: Uint8Array): Promise<string> {
+export async function containerFingerprint(container: Uint8Array): Promise<string> {
   return b64urlEncode((await sha256(container)).slice(0, 16));
 }
 
@@ -408,6 +408,38 @@ export async function decodePaperPartsV2(parts: readonly string[]): Promise<Uint
     throw new Error("The reassembled backup does not match its fingerprint.");
   }
   return container;
+}
+
+/**
+ * §7.3, for one part on its own: what reassembly would check of it before it
+ * had the rest. The fields it names, and whether its `part_checksum` holds,
+ * compared as text as §7.3 requires. Null for anything that is not a
+ * well-formed `KMPART2` line.
+ *
+ * For the printout check, which confirms a printed symbol reads back and says
+ * which backup it belongs to without joining or opening anything.
+ */
+export async function inspectPaperPartV2(
+  raw: string
+): Promise<{ index: number; total: number; cid: string; length: number; checksumOk: boolean } | null> {
+  const m = PART2_RE.exec(dropIgnorable(raw));
+  if (!m) return null;
+  const index = Number(m[1]);
+  const total = Number(m[2]);
+  if (total < 1 || index < 1 || index > total) return null;
+  let chunk: Uint8Array;
+  try {
+    chunk = b64urlDecode(m[5] as string);
+  } catch {
+    return null;
+  }
+  return {
+    index,
+    total,
+    cid: m[3] as string,
+    length: Number(m[4]),
+    checksumOk: timingSafeEqualStr(m[6] as string, await partChecksum(chunk)),
+  };
 }
 
 /** Dispatch on the version digit: §7.1 `KMPART1` or its v2 §7.3 `KMPART2`. */

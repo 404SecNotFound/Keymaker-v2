@@ -1673,15 +1673,25 @@ export function passkeySlotSaltsKeym2(container: Uint8Array): Uint8Array[] {
 }
 
 /**
- * §4.6. The salt of each Shamir slot, in table order, for §4.6's set code: the
- * paper vault prints it beside the container so a strip can be matched to its
- * backup by eye. Structural parse errors propagate, as above.
+ * §4.6. The salt of each Shamir slot, in table order, for §4.6's set code and
+ * set id: the paper vault prints the code beside the container, and the
+ * printout check compares a scanned strip's set id against these.
+ *
+ * Reads the header and slot table only, never the payload, so the header copy
+ * the workbench keeps of a container written straight to a file
+ * (`KEYM2_HEADER_PEEK_BYTES`) is enough. Structural errors in what it does read
+ * propagate, as above.
  */
-export function shamirSlotSaltsKeym2(container: Uint8Array): Uint8Array[] {
-  const parsed = parseKeym2Container(container);
+export function shamirSlotSaltsKeym2(data: Uint8Array): Uint8Array[] {
+  const core = parseKeym2CoreHeader(data);
+  const slotCount = data[keym2SlotCountOffset(core.version)] as number;
+  if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) reject();
+  const width = keym2SlotLen(core.cipher);
+  const table = keym2SlotTableOffset(core.version);
+  if (data.length < table + slotCount * width) reject();
   const salts: Uint8Array[] = [];
-  for (const record of parsed.records) {
-    const slot = parseKeym2Slot(record);
+  for (let i = 0; i < slotCount; i++) {
+    const slot = parseKeym2Slot(data.subarray(table + i * width, table + (i + 1) * width));
     if (slot !== null && slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) salts.push(slot.salt);
   }
   return salts;
