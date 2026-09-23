@@ -444,7 +444,7 @@ None of the three protects a compromised device. That is the next section.
 | Wrong password indistinguishable from corruption | **By design.** Errors are generic, to avoid an oracle. |
 | Key material is wiped | **Best-effort.** Buffers are zero-filled; the JavaScript GC may retain copies. |
 | A hostile container cannot burn your CPU unannounced | **Disclosed, not refused.** Unlocking derives a key for every password slot in turn, before anything is authenticated. §6 bounds each slot and caps the count at 8, so the total is bounded — but high: measured at 41 s for eight Argon2id slots at the ceiling and 315 s for eight PBKDF2 ones. The app cannot refuse such a file without also stranding a conforming backup, so it prices the header before starting, says how much longer than usual it will take, and gives you a **Stop** button that terminates the derivation and keeps what you typed. |
-| Recovered plaintext on disk | **Enforced for `--outfile`, and only there.** `reference/keym2.py` writes decrypted output at `0600` and narrows an existing file to match, so a recovery on a shared machine is not readable by other accounts. Redirecting stdout instead hands file creation to the shell, which uses your umask — usually world-readable. |
+| Recovered plaintext on disk | **Enforced for `--out`, and only there.** `reference/keym2.py` writes decrypted output at `0600` and narrows an existing file to match, so a recovery on a shared machine is not readable by other accounts. Redirecting stdout instead hands file creation to the shell, which uses your umask — usually world-readable. |
 | Clipboard is cleared | **Best-effort, and only the current entry.** The browser may refuse the write. More importantly, clipboard *history* — Windows Win+V, a clipboard manager, phone keyboard history, cloud clipboard sync — keeps its own copy that no website can reach or even detect. If you copy a seed phrase on a machine with history enabled, treat it as still there. |
 | A backup too big for the app is not a lost backup | **Bounded by this build, not by the format.** A browser tab holds the container and the recovered file at once, so the app stops at 100 MB. §5's chunking means the format has no such limit and `reference/keym2.py` has none either — a 150 MiB backup round-trips through it in about two seconds. An oversized container is refused with the command that opens it, rather than being told to pick a smaller file, which is not a thing you can do to a backup. |
 
@@ -644,9 +644,9 @@ under whatever is installed. `reference/requirements.txt` records the versions
 these scripts were actually run against, if you would rather pin.
 
 **What it does so a recovery does not leak what it just recovered.** With
-`--outfile`, the plaintext is written `0600` — owner only — and an existing
+`--out`, the plaintext is written `0600` — owner only — and an existing
 file at that path is narrowed to match rather than keeping the permissions it
-already had. That covers `--outfile` and nothing else: redirect stdout instead
+already had. That covers `--out` and nothing else: redirect stdout instead
 (`decrypt --in backup.keym > seed.txt`) and the *shell* creates the file, at
 your umask, which on most systems is world-readable. Separately, passing a
 secret as an argument — `--password`, `--share`, `--prf-output` — prints a

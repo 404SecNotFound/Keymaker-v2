@@ -209,6 +209,45 @@ def main() -> int:
                 (tmp / "out.bin").unlink(missing_ok=True)
 
         # ------------------------------------------------------------------
+        # Step 4, with recovery shares instead of the password.
+        # ------------------------------------------------------------------
+        # The share set is issued by the shipping enrolment (addShamirSlotKeym2,
+        # through the bridge) on a container the shipping encryptor wrote, and
+        # opened with the page's own command: two of three strips in a file
+        # with a comment line, one of them lower-cased with its hyphens typed
+        # as spaces, the way a person copying it by hand might, and nothing on
+        # stdin.
+        print("\nStep 4 — decrypt with recovery shares, no password:")
+        base = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp, tag="-shares")
+        shared, issued = tmp / "shared.keym", tmp / "issued.txt"
+        r = subprocess.run(
+            ["node", str(BRIDGE), "addshares", "--password", PASSWORD,
+             "--in", str(base), "--out", str(shared), "--shares-out", str(issued),
+             "--threshold", "2", "--shares", "3",
+             "--salt", os.urandom(32).hex(), "--share-secret", os.urandom(32).hex(),
+             "--share-coefficients", os.urandom(32).hex()],
+            capture_output=True, text=True, cwd=ROOT)
+        strips = [ln for ln in issued.read_text().split("\n") if ln.strip()] if r.returncode == 0 else []
+        check(len(strips) == 3, "the shipping enrolment issued three strips", r.stderr.strip()[:160])
+        if len(strips) == 3:
+            prefix, _, code = strips[2].partition(":")
+            (tmp / "shares.txt").write_text(
+                "# strips 1 and 3 of 3\n" + strips[0] + "\n"
+                + prefix + ":" + code.lower().replace("-", " ") + "\n")
+            r = cli(2, ["decrypt", "--in", str(shared), "--shares-from",
+                        str(tmp / "shares.txt"), "--out", str(tmp / "out.bin")], stdin="")
+            recovered = (tmp / "out.bin").read_bytes() if r.returncode == 0 else b""
+            check(r.returncode == 0 and recovered == SECRET,
+                  "two of three strips open the backup with no password",
+                  r.stderr.strip()[:160])
+            (tmp / "out.bin").unlink(missing_ok=True)
+            (tmp / "one.txt").write_text(strips[1] + "\n")
+            r = cli(2, ["decrypt", "--in", str(shared), "--shares-from",
+                        str(tmp / "one.txt"), "--out", str(tmp / "out.bin")], stdin="")
+            check(r.returncode != 0 and not (tmp / "out.bin").exists(),
+                  "one strip of a 2-of-3 set does not", r.stderr.strip()[:160])
+
+        # ------------------------------------------------------------------
         # Both wire forms, for both versions.
         # ------------------------------------------------------------------
         print("\nBoth backup forms the document mentions:")
@@ -232,6 +271,18 @@ def main() -> int:
         check(r.returncode == 0 and SECRET.decode() in r.stdout, "keym2: text form",
               r.stderr.strip()[:160])
         check("=" not in v2_body, "v2 armor is unpadded, as the page shows it")
+
+        # A text backup that picked up a blank first line or a leading space on
+        # the way into a notes app or an email. §7 says readers strip ASCII
+        # whitespace, and the app always has; keym2.py sniffed the prefix on
+        # the raw bytes, missed it, and fell through to "decryption failed",
+        # which sends the reader to retype a password that was never wrong.
+        padded = tmp / "v2-padded.txt"
+        padded.write_text("\n  \n\tkeym2:" + v2_body + "\n")
+        r = cli(2, ["decrypt", "--in", str(padded)], stdin=PASSWORD + "\n")
+        check(r.returncode == 0 and SECRET.decode() in r.stdout,
+              "keym2: text form after a blank line and leading spaces",
+              r.stderr.strip()[:160])
 
         # A pasted backup often arrives wrapped by whatever stored it. The page
         # says line breaks are fine; that has to be true of both.

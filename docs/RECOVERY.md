@@ -152,8 +152,9 @@ Those values are authenticated: if decryption later succeeds, they were not
 tampered with. Until then, treat them as claims the file makes about itself.
 
 **About `slots`.** A v2 container can hold up to eight ways of unlocking the
-same data, and any one of them opens it. Containers written by the app have
-exactly one — your password. If yours says more, any of the secrets listed will
+same data, and any one of them opens it. Containers written by the app have one
+for the password, plus one for recovery shares or a passkey if either was set
+up when it was made. If yours says more than one, any of the secrets listed will
 work, and you only need one of them.
 
 ## Step 4 — Decrypt
@@ -169,6 +170,24 @@ reported one was required. Omit `--out` to print to the terminal.
 **Do not pass `--password` on the command line** unless you have a reason to.
 It lands in your shell history and is visible to every other user on the
 machine while the key derivation runs — seconds, for Argon2id.
+
+### With recovery shares instead of the password
+
+If you were given recovery strips rather than the password, you need as many as
+the strip itself says ("Any 2 of them open it"). Put the code from each strip
+(the line that starts `KMSHARE2:` or `KMSHARE1:`) into a plain text file, one
+per line, then:
+
+```bash
+python3 keym2.py decrypt --in backup.keym --shares-from shares.txt --out recovered.txt
+```
+
+No password is asked for. Case, spaces and hyphens inside a code do not matter,
+lines starting with `#` are ignored, and it does not matter which strips you
+use or in what order. If it reports `decryption failed`, you have fewer strips
+than the backup needs, or one of them was mistyped. `--share KMSHARE2:…`,
+repeated once per strip, also works, but like `--password` it leaves the codes
+in your shell history.
 
 ---
 

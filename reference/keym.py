@@ -211,6 +211,12 @@ def parse(data: bytes) -> Header:
         raise KeymError(f"unknown cipher_id {cipher_id}")
 
     off = 7
+    # The KDF parameters and the flags byte must be present before anything
+    # unpacks them. Without this, an 8-12 byte file reached struct.unpack_from
+    # and escaped as a struct.error traceback instead of a KeymError, which the
+    # CLI reports cleanly: a truncated backup is what a recovery tool meets.
+    if len(data) < off + (4 if kdf_id == KDF_PBKDF2 else 7) + 1:
+        raise KeymError("too short for declared parameters")
     if kdf_id == KDF_PBKDF2:
         # section 3: 4 bytes, uint32 big-endian iteration count.
         (iterations,) = struct.unpack_from(">I", data, off)
@@ -369,6 +375,22 @@ def _selftest() -> int:
                 ok = got == pt
                 print(f"  {'ok  ' if ok else 'FAIL'} kdf={kdf_id} cipher={cipher_id} keyfile={kf is not None}")
                 failures += 0 if ok else 1
+    # Every truncation of a real header is a KeymError, never a raw struct or
+    # index error: a truncated file is the ordinary case for a recovery tool.
+    for kdf_id, params in ((KDF_PBKDF2, fast_pbkdf2), (KDF_ARGON2ID, fast_argon)):
+        ct = encrypt(b"x", "pw", None, kdf_id, params, CIPHER_AES_256_GCM)
+        escaped = []
+        for n in range(len(ct)):
+            try:
+                parse(ct[:n])
+            except KeymError:
+                pass
+            except Exception as exc:  # noqa: BLE001
+                escaped.append(f"{n}:{type(exc).__name__}")
+        ok = not escaped
+        print(f"  {'ok  ' if ok else 'FAIL'} kdf={kdf_id} every truncation is a KeymError"
+              + ("" if ok else f" (escaped: {', '.join(escaped)})"))
+        failures += 0 if ok else 1
     print("selftest passed" if not failures else f"{failures} failures")
     return 1 if failures else 0
 

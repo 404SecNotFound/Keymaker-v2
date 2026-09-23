@@ -144,6 +144,20 @@ function readAscii(view: DataView, offset: number, length: number): string {
  * refused with a message rather than misread, because the LSB scheme is defined
  * on 16-bit integers.
  */
+/**
+ * Is this a RIFF/WAVE file, going by its bytes rather than its name?
+ *
+ * The carrier path used to choose the exact WAV parser by MIME type or a
+ * `.wav` extension alone. A stego WAV sent through a messenger or saved under
+ * another name loses both, falls through to Web Audio, and is resampled to the
+ * device's rate on the way in, which destroys an LSB payload outright.
+ */
+export function isWavBytes(bytes: Uint8Array): boolean {
+  if (bytes.length < 12) return false;
+  const tag = (at: number) => String.fromCharCode(bytes[at]!, bytes[at + 1]!, bytes[at + 2]!, bytes[at + 3]!);
+  return tag(0) === "RIFF" && tag(8) === "WAVE";
+}
+
 export function parseWavToPcm16(bytes: Uint8Array): Pcm16 {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < 44 || readAscii(view, 0, 4) !== "RIFF" || readAscii(view, 8, 4) !== "WAVE") {
@@ -257,10 +271,15 @@ export async function decodeToPcm16(
   for (let c = 0; c < channels; c++) chans.push(audio.getChannelData(c));
   for (let f = 0; f < frames; f++) {
     for (let c = 0; c < channels; c++) {
-      // Clamp to [-1, 1] then scale. -32768..32767 is asymmetric, so use 32767
-      // for positives and 32768 for negatives to reach the full range.
-      const v = Math.max(-1, Math.min(1, chans[c]![f]!));
-      samples[f * channels + c] = v < 0 ? Math.round(v * 32768) : Math.round(v * 32767);
+      // One scale, 32768, both signs, then clamp. Web Audio decoders turn a
+      // 16-bit sample s into s / 32768, so this is the exact inverse and every
+      // sample, low bit included, comes back as it was written. Scaling
+      // positives by 32767 instead (to reach +1.0 exactly) moved every sample
+      // above 16384 down by one, which flips the one bit the payload lives
+      // in: a stego WAV revealed through this path lost its payload and was
+      // reported as a wrong password.
+      const v = Math.round(chans[c]![f]! * 32768);
+      samples[f * channels + c] = Math.max(-32768, Math.min(32767, v));
     }
   }
   return { sampleRate: audio.sampleRate, channels, samples };

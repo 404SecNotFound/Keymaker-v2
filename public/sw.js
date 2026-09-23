@@ -54,6 +54,9 @@ const APP_SHELL = [
   `${BASE}/recovery/RECOVERY.md`,
   `${BASE}/recovery/keym.py`,
   `${BASE}/recovery/keym2.py`,
+  // The pinned dependency list the kit dialog offers beside the scripts, and
+  // the file RECOVERY.md's install step reads.
+  `${BASE}/recovery/requirements.txt`,
   `${BASE}/logo.svg`,
   // The hero background plate. Named here rather than left to runtime caching
   // for the same reason as everything else in this list: isCacheableAsset()
@@ -106,7 +109,17 @@ self.addEventListener('install', (event) => {
       // chunks, which include the lazily imported crypto dependencies
       // (hash-wasm for Argon2id, @noble/ciphers for ChaCha, the EFF wordlist)
       // that a user may not touch until after the network is gone.
-      return cache.addAll(APP_SHELL).then(() => cache.addAll(PRECACHE_ASSETS));
+      //
+      // The shell is fetched with `cache: 'reload'`. Its URLs are not
+      // content-hashed, so the browser's HTTP cache may still hold the
+      // previous deploy's copy (GitHub Pages serves them with max-age=600),
+      // and addAll's default fetch would take that copy and freeze it into
+      // this version's cache: old HTML beside a new SHA256SUMS, which the
+      // sealed status reports as tampering, and which offline asks for chunks
+      // the activate step has already deleted. The chunks are hashed and
+      // immutable, so an HTTP-cached copy of one is the right copy.
+      const shell = APP_SHELL.map((url) => new Request(url, { cache: 'reload' }));
+      return cache.addAll(shell).then(() => cache.addAll(PRECACHE_ASSETS));
     })
   );
 

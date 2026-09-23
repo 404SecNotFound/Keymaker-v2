@@ -2817,20 +2817,29 @@ def detect(data: bytes) -> str:
 
     §7.2's self-extracting page is the exception to "prefix", and the comment at
     that branch explains why the exception costs nothing.
+
+    The text encodings are sniffed after leading ASCII whitespace, because §7
+    says every reader strips it. A backup saved with a blank first line, or
+    pasted with a stray space, was "unknown" here, so `decrypt` handed the text
+    to the binary parser and printed "decryption failed": a wrong-password
+    message for a file the app opens. Whitespace bytes start none of the
+    prefixes, so this keeps the cases disjoint. The binary checks still read
+    the raw bytes: whitespace is not part of any binary format.
     """
-    if data.startswith(ARMOR_PREFIX):
+    text = data.lstrip()
+    if text.startswith(ARMOR_PREFIX):
         return "keym2-armor"
-    if data.startswith(b"KEYM1:"):
+    if text.startswith(b"KEYM1:"):
         return "keym1-armor"
     # Both share versions route the same: the label is what the reader does with
     # it, and §4.6's KMSHARE1 and §4.6-v2's KMSHARE2 are the same box.
-    if data.startswith(SHARE_PREFIX.encode()) or data.startswith(SHARE2_PREFIX.encode()):
+    if text.startswith(SHARE_PREFIX.encode()) or text.startswith(SHARE2_PREFIX.encode()):
         return "keym2-share"
     # §7.1. A part is the likeliest wrong-box paste of them all: reassembling a
     # paper backup means scanning symbols one at a time, and the first one has
     # to go somewhere. Naming it is the only useful thing to say. KMPART2 (§7.3)
     # is the same box.
-    if data.startswith(PART_PREFIX.encode()) or data.startswith(PART2_PREFIX.encode()):
+    if text.startswith(PART_PREFIX.encode()) or text.startswith(PART2_PREFIX.encode()):
         return "keym2-part"
     if data.startswith(MAGIC):
         return f"keym-binary-v{data[4]}" if len(data) > 4 else "keym-binary"
@@ -3408,6 +3417,12 @@ def _selftest() -> int:
     check("armor round-trips", dearmor(armor(base)) == base)
     check("armor is unpadded base64url", "=" not in armor(base))
     check("armor prefix is case-sensitive", detect(b"KEYM2:abc") != "keym2-armor")
+    check("armor after a blank line and spaces is armor (§7 strips ASCII whitespace)",
+          detect(b"\n  \r\n\tkeym2:AAAA") == "keym2-armor")
+    check("a share after leading whitespace is a share",
+          detect(b"\n" + SHARE2_PREFIX.encode() + b"AAAA") == "keym2-share")
+    check("whitespace before the binary magic is not a binary container",
+          not detect(b"\n" + MAGIC + b"\x03").startswith("keym-binary"))
     check("v2 armor detected", detect(armor(base).encode()) == "keym2-armor")
     check("binary detected", detect(base) == "keym-binary-v2")
     check("v1 armor no longer collides with the magic",

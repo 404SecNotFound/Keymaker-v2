@@ -44,6 +44,7 @@ import {
   embedContainer,
   extractContainer,
   audioCapacityBytes,
+  isWavBytes,
   type Pcm16,
 } from "@/lib/audio-stego";
 
@@ -85,7 +86,7 @@ function looksLikeWav(file: File): boolean {
  *  therefore any embedded LSBs) survive; everything else goes through Web Audio. */
 async function decodeCarrier(file: File): Promise<Pcm16> {
   const buffer = await file.arrayBuffer();
-  if (looksLikeWav(file)) {
+  if (looksLikeWav(file) || isWavBytes(new Uint8Array(buffer))) {
     return parseWavToPcm16(new Uint8Array(buffer));
   }
   return decodeToPcm16(buffer);

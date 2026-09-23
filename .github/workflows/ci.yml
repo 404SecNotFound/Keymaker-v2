@@ -121,6 +121,26 @@ jobs:
       - name: Malformed audio carriers are all typed carrier errors
         run: npm run test:audio-malformed
 
+      # A carrier decoded through Web Audio must come back sample-exact. Web
+      # Audio returns a 16-bit sample s as s / 32768; scaling positives back by
+      # 32767 flipped the low bit of every sample above 16384, which is where
+      # the payload lives. A WAV is also recognised by its RIFF/WAVE bytes, not
+      # only its name, so a renamed stego file keeps the exact parser. Controls
+      # bite: the 32767 scale fails 16,383 values; a sniff that never matches
+      # fails the byte check.
+      - name: Audio decode is sample-exact, and WAVs are sniffed by content
+        run: npm run test:audio-decode-scale
+
+      # The service worker's shell URLs are not content-hashed, so install must
+      # fetch them past the HTTP cache (cache: 'reload'). Otherwise a deploy
+      # inside Pages' max-age window froze the previous index.html into the new
+      # version's cache: a false tamper report beside the new SHA256SUMS, and a
+      # blank page offline. Runs public/sw.js itself in a stub worker scope.
+      # Controls bite: plain-string addAll fails the reload check; dropping
+      # requirements.txt from the shell fails the recovery-kit check.
+      - name: Service worker precaches a fresh shell and the whole recovery kit
+        run: npm run test:sw-precache
+
       # The "sealed" verdict must rest on the whole egress-relevant CSP set, not
       # connect-src alone: connect-src 'none' stops fetch/XHR/WebSocket but a
       # form POST is governed by form-action, which does not fall back to
