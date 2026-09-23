@@ -21,9 +21,13 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { egressViolations } from './csp-egress-gate.mjs';
 
-const OUT_DIR = new URL('../out', import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: the URL form is percent-encoded, so a
+// checkout under a path with a space or a non-ASCII character would resolve
+// to a directory that does not exist (`key%20maker`).
+const OUT_DIR = fileURLToPath(new URL('../out', import.meta.url));
 
 function htmlFiles(dir) {
   const found = [];

@@ -39,8 +39,12 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const OUT_DIR = new URL('../out', import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: the URL form is percent-encoded, so a
+// checkout under a path with a space or a non-ASCII character would resolve
+// to a directory that does not exist (`key%20maker`).
+const OUT_DIR = fileURLToPath(new URL('../out', import.meta.url));
 const MANIFEST = join(OUT_DIR, 'SHA256SUMS');
 
 /** Names that must never appear in the manifest. */

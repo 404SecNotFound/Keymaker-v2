@@ -334,7 +334,12 @@ jobs:
   #
   #  - **the checkout path**, because an absolute path that leaks into a bundle
   #    or a source map is the classic way a build stops being portable, and it
-  #    is invisible to anyone who only ever builds in one directory;
+  #    is invisible to anyone who only ever builds in one directory. The
+  #    second leg's path also has a space and non-ASCII letters in it, because
+  #    a verifier's home directory might, and the build broke there once:
+  #    `new URL('../out', import.meta.url).pathname` is percent-encoded, so
+  #    the post-build scripts looked for `…/a%20checkout…/out`, which does not
+  #    exist. That leg failing is the regression test for it;
   #  - **the Node major**, because README.md tells people 22.22.2 *or newer* is
   #    supported, and a verifier on a newer major who gets different bytes has
   #    been told to expect a match.
@@ -353,9 +358,9 @@ jobs:
           - id: node22
             node: 22
             dir: keymaker
-          - id: node22-longer-checkout-path
+          - id: node22-spaced-non-ascii-checkout-path
             node: 22
-            dir: a-checkout-directory-named-nothing-like-the-other-one
+            dir: "a checkout directory named nothing like the other one ünï"
           - id: node24
             node: 24
             dir: keymaker

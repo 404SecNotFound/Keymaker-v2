@@ -38,8 +38,12 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const OUT = new URL('../src/lib/eff-wordlist.ts', import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: the URL form is percent-encoded, so a
+// checkout under a path with a space or a non-ASCII character would resolve
+// to a directory that does not exist (`key%20maker`).
+const OUT = fileURLToPath(new URL('../src/lib/eff-wordlist.ts', import.meta.url));
 
 // Pinned by exact version and, where the registry publishes one, by the
 // integrity hash of the archive itself. An unpinned fetch would make this
