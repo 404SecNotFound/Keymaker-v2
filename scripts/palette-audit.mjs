@@ -363,7 +363,9 @@ try {
   await sharesDialog.getByTestId('rehearsal-result').waitFor({ timeout: 60_000 });
   await page.waitForTimeout(400);
   collect(await scan(page, 'shares dialog · rehearsal'));
-  await page.keyboard.press('Escape');
+  // The shares dialog ignores Escape (closing it destroys the shares), so
+  // it is closed with its own button.
+  await sharesDialog.getByRole('button', { name: 'I have saved these shares' }).click();
 
   // The receipt the seal left behind, now that the dialog is out of the way.
   await page.getByTestId('seal-receipt').waitFor({ timeout: 15_000 });
