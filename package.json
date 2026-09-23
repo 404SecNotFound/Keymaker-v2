@@ -35,6 +35,7 @@
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:release-recipe": "node scripts/release-recipe-test.mjs",
     "test:release-gate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-gate-test.mjs",
+    "test:reproduced-manifest": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-reproduced-manifest-test.mjs",
     "test:verify-recipe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-recipe-test.mjs",
     "test:palette": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/palette-audit.mjs",
     "test:icons": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/icon-audit.mjs",

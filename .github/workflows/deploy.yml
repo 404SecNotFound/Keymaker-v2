@@ -52,9 +52,12 @@ jobs:
 
   build:
     # Gate the whole publish chain on verification. build -> sign -> deploy, so
-    # gating build gates all three. The bytes built here are byte-identical to
-    # the ones verify-ci built and proved reproducible, so "publish the tested
-    # artifact" holds without threading the artifact between workflows.
+    # gating build gates all three. The bytes built here should be
+    # byte-identical to the ones verify-ci built and proved reproducible, so
+    # "publish the tested artifact" holds without threading the artifact
+    # between workflows. `sign` checks that rather than assuming it: it refuses
+    # to sign unless this job's SHA256SUMS matches every reproducible-elsewhere
+    # leg's.
     needs: [verify-crypto, verify-ci, verify-conformance, verify-browser]
     runs-on: ubuntu-latest
     permissions:
@@ -97,8 +100,13 @@ jobs:
   # therefore never held while untrusted transitive install scripts execute.
   # The same reasoning gives this job `--ignore-scripts`: it holds the token,
   # so nothing it installs is allowed to run code.
+  #
+  # `verify-ci` is named here as well as through `build` because this job reads
+  # its artifacts: the SHA256SUMS each reproducible-elsewhere leg uploaded. A
+  # called workflow runs inside this run, so they download like `site` does,
+  # with no permission beyond the ones below.
   sign:
-    needs: build
+    needs: [build, verify-ci]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -121,6 +129,19 @@ jobs:
         with:
           name: site
           path: out
+
+      # Outside out/, so none of it is published.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sums-*
+          path: reproduced
+
+      # The manifest about to be signed must be the one the verified builds
+      # produced. verify-ci's legs each built this commit on their own runner;
+      # this job's `site` came from `build`, which no suite ever looked at. If
+      # they differ, the signature would certify bytes nothing tested.
+      - name: The manifest being signed is the one independent builds reproduced
+        run: node scripts/check-reproduced-manifest.mjs out/SHA256SUMS reproduced
 
       - name: Sign the build manifest
         run: node scripts/sign-manifest.mjs

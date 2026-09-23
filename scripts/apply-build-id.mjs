@@ -23,8 +23,12 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const OUT_DIR = new URL('../out', import.meta.url).pathname;
+// fileURLToPath, not `.pathname`: the URL form is percent-encoded, so a
+// checkout under a path with a space or a non-ASCII character would resolve
+// to a directory that does not exist (`key%20maker`).
+const OUT_DIR = fileURLToPath(new URL('../out', import.meta.url));
 const SW = join(OUT_DIR, 'sw.js');
 const PLACEHOLDER = '__BUILD_ID__';
 const ASSETS_PLACEHOLDER = '__PRECACHE_ASSETS__';
