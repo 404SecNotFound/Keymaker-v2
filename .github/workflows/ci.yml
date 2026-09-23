@@ -1,6 +1,8 @@
 name: CI
 
-# Build + typecheck + the KEYM v1 regression suite.
+# Typecheck, the Node-side suites (KEYM regression, fuzzing, the workflow and
+# document gates), the production build with its palette and icon audits, and
+# the checks that the build is reproducible.
 #
 # This is deliberately separate from crypto-regression.yml. That workflow
 # gates the frozen IBTZ core and runs with no `npm ci` at all, so no

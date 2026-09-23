@@ -2,8 +2,9 @@ name: Crypto regression
 
 # src/lib/crypto.ts is frozen — people hold long-horizon secrets encrypted
 # with it. This runs the fixture-based regression suite (real ciphertexts
-# from earlier releases) on every push and PR, so a dependency bump or
-# toolchain change can never silently break decryption of existing files.
+# from earlier releases) on every PR and before every deploy and release, so a
+# dependency bump or toolchain change can never silently break decryption of
+# existing files.
 
 # No `push` on main: deploy.yml calls this via `workflow_call` before it
 # publishes (R01), so main is verified once as a deploy prerequisite rather
@@ -26,11 +27,13 @@ jobs:
         with:
           persist-credentials: false
 
-      # Node 22 across every workflow — build, test and deploy. The suite is
-      # TypeScript executed directly via native type stripping (on by default
-      # since 22.18), which avoids adding a transpiler dependency. Keeping one
-      # runtime everywhere removes a class of "green in CI, different on
-      # deploy" divergence from a pipeline that ships cryptographic software.
+      # Node 22 for every build, test and deploy job; the one exception is the
+      # reproducible-elsewhere leg in ci.yml that exists to try Node 24. The
+      # suite is TypeScript executed directly via native type stripping (on by
+      # default since 22.18), which avoids adding a transpiler dependency.
+      # Keeping one runtime everywhere removes a class of "green in CI,
+      # different on deploy" divergence from a pipeline that ships
+      # cryptographic software.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22

@@ -1,7 +1,9 @@
 name: Format conformance
 
-# Cross-tests the TypeScript implementation against an independent Python
-# reference written only from docs/FORMAT.md.
+# Cross-tests the TypeScript implementation against independent Python
+# references written only from the format documents: reference/keym.py from
+# docs/FORMAT.md (v1), and reference/keym2.py from docs/FORMAT-V2-DESIGN.md and
+# the v3 delta in docs/FORMAT-V3-DESIGN.md.
 #
 # The frozen fixtures prove Keymaker stays compatible with itself. They cannot
 # prove it matches its own specification, because the implementation that
@@ -57,15 +59,15 @@ jobs:
       - name: Reference self-test (KEYM v1)
         run: python3 reference/keym.py selftest
 
-      # KEYM v2 has no TypeScript yet, so there is nothing to cross-test
-      # against — which is the point. The reference is written from
-      # docs/FORMAT-V2-DESIGN.md *first*, so the specification is what gets
-      # debugged, before an implementation exists to enshrine its gaps. It has
-      # already found four (see §11 of that document, and §A of keym2.py).
-      #
-      # Running it in CI from now keeps those findings from rotting as the
-      # proposal is edited.
-      - name: Reference self-test (KEYM v2, spec-first)
+      # The reference on its own, before it is compared with anything. Each
+      # format change is written into docs/FORMAT-V2-DESIGN.md first and
+      # implemented in keym2.py from that section alone, before the TypeScript,
+      # so the specification is what gets debugged rather than an
+      # implementation's reading of it. The findings that produced are in §11
+      # of that document and §A of keym2.py; this keeps them from rotting as
+      # the spec is edited. The byte-for-byte cross-test against the
+      # TypeScript follows.
+      - name: Reference self-test (KEYM v2 and v3, spec-first)
         run: npm run test:keym2
 
       # Byte equality, not just round-trips. For v1 a bidirectional round-trip
@@ -75,7 +77,6 @@ jobs:
       # decode correctly — so two writers could disagree, round-trip perfectly
       # in both directions, and still produce incompatible files.
       - name: Bidirectional conformance (KEYM v2 and v3, byte-for-byte)
-
         run: npm run test:conformance2
 
       - name: Bidirectional conformance
