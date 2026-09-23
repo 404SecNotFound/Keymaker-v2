@@ -17,6 +17,12 @@ did; the fixture corpus and both parity gates are unchanged and pass.
   issued by the shipping enrolment.
 
 ### Fixed
+- **The paper vault printed its container symbols as a low-resolution bitmap.**
+  A full part is a version-40 symbol, and it was drawn into a 300px canvas: at
+  a devicePixelRatio of 1 that is 1.66 pixels per module, which the printer
+  could only stretch. No scale of it decodes. The sheet now draws every symbol
+  as SVG, which the printer renders at its own resolution, and a new test scans
+  every symbol of a multi-part sheet back into the container.
 - **The Recovery kit offered only `keym.py`, which reads KEYM v1 only.** It now
   offers `keym2.py` first, plus `requirements.txt`, and labels `keym.py` as
   v1-only. `requirements.txt` is precached with the rest of the kit.

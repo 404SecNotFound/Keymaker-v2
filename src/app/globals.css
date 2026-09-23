@@ -519,7 +519,7 @@
     break-inside: avoid;
   }
 
-  .pv-qr canvas {
+  .pv-qr svg {
     width: 46mm !important;
     height: 46mm !important;
   }
@@ -679,7 +679,7 @@
     align-items: flex-start;
   }
 
-  .pv-strip-body canvas {
+  .pv-strip-body svg {
     width: 30mm !important;
     height: 30mm !important;
     flex: none;

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodePaperParts, encodePaperPartsV2 } from "../../src/lib/keym-v2-paper";
 import { dearmorKeym2, keym2SlotCountOffset, KEYM2_VERSION_V3 } from "../../src/lib/keym-v2";
-import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
+import { visible, useTextMode, selectCrypto, STRONG_PASSWORD, capturePrintedSymbols } from "./helpers";
 
 /**
  * Roadmap 4.2 — the paper vault print kit.
@@ -144,7 +144,7 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
       const strips = el ? Array.from(el.querySelectorAll(".pv-strip")) : [];
       w.__snap = {
         sheets: document.querySelectorAll(".paper-vault").length,
-        symbols: el ? el.querySelectorAll(".pv-qr canvas").length : 0,
+        symbols: el ? el.querySelectorAll(".pv-qr svg").length : 0,
         firstCaption: el?.querySelector(".pv-qr figcaption")?.textContent ?? "",
         rules: el ? el.querySelectorAll(".pv-rule").length : 0,
         text: el?.textContent ?? "",
@@ -154,7 +154,7 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
         slotSegments: el ? el.querySelectorAll('.pv-bytemap [data-kind="slot"]').length : 0,
         strips: strips.length,
         heldBy: strips.filter((s) => /Held by/.test(s.textContent ?? "")).length,
-        stripsPageSymbols: el ? el.querySelectorAll(".pv-strips .pv-qr canvas").length : 0,
+        stripsPageSymbols: el ? el.querySelectorAll(".pv-strips .pv-qr svg").length : 0,
         rehearsal: el?.querySelector(".pv-rehearsal")?.textContent ?? "",
       };
       throw new Error("print stubbed — see capturePrint()");
@@ -174,6 +174,51 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
   return page.evaluate(() => (window as unknown as { __snap: PrintSnapshot }).__snap);
 }
 
+/**
+ * The symbols a multi-part sheet prints can be scanned back in.
+ *
+ * A container bigger than one symbol is split into full version-40 parts, 181
+ * modules wide with their margin. The sheet drew them into a 300px canvas, so
+ * at a devicePixelRatio of 1 each module got 1.66 pixels and the printer could
+ * only stretch that aliased bitmap: no scale of it decodes. The existing
+ * scan-back tests pasted the parts' *text*, which is why nothing caught it.
+ * This one feeds every printed symbol, as pixels, to the app's own scanner.
+ */
+test("every symbol on a multi-part sheet scans back into the container", async ({ page }) => {
+  await page.goto("/");
+  await useTextMode(page);
+  await selectCrypto(page, "pbkdf2", "aes");
+  const secret = Array.from({ length: 900 }, (_, i) => `note line ${i}`).join("\n");
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await page.waitForFunction(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement | null)?.value.startsWith("keym2:"),
+    null,
+    { timeout: 90_000 }
+  );
+  const armored = await page.evaluate(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+  );
+
+  const printed = await capturePrintedSymbols(page, page.getByRole("button", { name: /Print paper vault/i }));
+  expect(printed.parts.length, "this test needs a backup that spans several full symbols").toBeGreaterThan(2);
+
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await page.locator("#qr-scan-input").setInputFiles(
+    printed.parts.map((buffer, i) => ({ name: `part-${i + 1}.png`, mimeType: "image/png", buffer }))
+  );
+  await expect(
+    visible(page.locator("#text-secret")),
+    "the printed symbols did not scan back into the container"
+  ).toHaveValue(armored, { timeout: 60_000 });
+
+  await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+  await expect(visible(page.locator("#output-text"))).toHaveValue(secret, { timeout: 90_000 });
+});
+
 test.describe("paper vault", () => {
   test("prints a sheet of scannable parts for the container", async ({ page }) => {
     await encryptSomething(page);
@@ -181,7 +226,7 @@ test.describe("paper vault", () => {
 
     expect(snap.sheets, "no paper vault sheet was in the document when it printed").toBe(1);
 
-    // One canvas per §7.1 part. The encoding itself is gated by the Python
+    // One symbol per §7.1 part. The encoding itself is gated by the Python
     // conformance suite comparing emitted strings; this gates the wiring.
     expect(snap.symbols).toBe(1);
     expect(snap.firstCaption).toMatch(/part 1 of 1/);

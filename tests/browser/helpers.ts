@@ -120,3 +120,77 @@ export async function decryptText(page: Page, container: string, password: strin
 
 /** A password that satisfies the strength gate. */
 export const STRONG_PASSWORD = "correct-horse-battery-staple-9271!X";
+
+/** The symbols on the printed paper vault, as PNG bytes a scan would see. */
+export interface PrintedSymbols {
+  /** Container parts, in sheet order. */
+  parts: Buffer[];
+  /** Recovery strips, in sheet order. */
+  strips: Buffer[];
+}
+
+/**
+ * Click a "Print paper vault" button and return every symbol on the sheet as
+ * a PNG, snapshotted from inside `window.print()` (the stub throws, which is
+ * what leaves the sheet mounted long enough to read).
+ *
+ * Each symbol is turned into pixels the way it would reach paper. An SVG is
+ * vector, and a printer draws it at its own resolution, so it is rasterised
+ * here at `printPx` on its longest side (800px over the sheet's 46mm is about
+ * 440dpi, below any laser printer). A canvas is already a bitmap, and a
+ * printer can only stretch it, so it is taken exactly as it is. That is the
+ * difference the scan-back test exists to see.
+ */
+export async function capturePrintedSymbols(
+  page: Page,
+  printButton: Locator,
+  printPx = 800
+): Promise<PrintedSymbols> {
+  await page.evaluate(() => {
+    const w = window as unknown as { __symbols?: unknown; print: () => void };
+    w.__symbols = null;
+    w.print = () => {
+      const sheet = document.querySelector(".paper-vault");
+      const grab = (el: Element) =>
+        el instanceof HTMLCanvasElement
+          ? { kind: "png", data: el.toDataURL("image/png") }
+          : { kind: "svg", data: new XMLSerializer().serializeToString(el) };
+      const symbols = Array.from(sheet?.querySelectorAll(".pv-qr canvas, .pv-qr svg, .pv-strip canvas, .pv-strip svg") ?? []);
+      w.__symbols = {
+        parts: symbols.filter((el) => !el.closest(".pv-strip")).map(grab),
+        strips: symbols.filter((el) => el.closest(".pv-strip")).map(grab),
+      };
+      throw new Error("print stubbed");
+    };
+  });
+  await visible(printButton).click();
+  await page.waitForFunction(
+    () => (window as unknown as { __symbols: unknown }).__symbols !== null,
+    null,
+    { timeout: 30_000 }
+  );
+  const urls = await page.evaluate(async (px: number) => {
+    type Grabbed = { kind: "png" | "svg"; data: string };
+    const got = (window as unknown as { __symbols: { parts: Grabbed[]; strips: Grabbed[] } }).__symbols;
+    const toPng = async (g: Grabbed): Promise<string> => {
+      if (g.kind === "png") return g.data;
+      const img = new Image();
+      img.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(g.data)}`;
+      await img.decode();
+      const canvas = document.createElement("canvas");
+      canvas.width = px;
+      canvas.height = px;
+      const ctx = canvas.getContext("2d")!;
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, px, px);
+      ctx.drawImage(img, 0, 0, px, px);
+      return canvas.toDataURL("image/png");
+    };
+    return {
+      parts: await Promise.all(got.parts.map(toPng)),
+      strips: await Promise.all(got.strips.map(toPng)),
+    };
+  }, printPx);
+  const toBuffer = (d: string) => Buffer.from(d.split(",")[1] as string, "base64");
+  return { parts: urls.parts.map(toBuffer), strips: urls.strips.map(toBuffer) };
+}

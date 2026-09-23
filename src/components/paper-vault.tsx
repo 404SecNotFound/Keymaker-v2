@@ -1,6 +1,6 @@
 "use client";
 
-import { QRCodeCanvas } from "qrcode.react";
+import { QRCodeSVG } from "qrcode.react";
 import { parseKeym2CoreHeader, keym2SlotCountOffset } from "@/lib/keym-v2";
 import { byteMapSpans } from "@/components/container-inspector";
 
@@ -241,9 +241,15 @@ export function PaperVault({
           <div className="pv-grid">
             {parts.map((part, i) => (
               <figure key={part.slice(0, 32)} className="pv-qr">
-                {/* Level M, and 300px so a 600dpi printer has real modules to
-                    work with rather than resampling a screen-sized bitmap. */}
-                <QRCodeCanvas value={part} size={300} level="M" marginSize={2} />
+                {/* Level M, drawn as SVG so the printer renders every module
+                    at its own resolution. This was a 300px canvas, which is a
+                    bitmap: a full part is a version-40 symbol, 181 modules
+                    wide with its margin, so at a devicePixelRatio of 1 each
+                    module got 1.66 pixels and the printer stretched that
+                    aliased bitmap to 46mm. Measured: no scale of that bitmap
+                    decodes. The old comment's premise, that 300px gave a 600dpi
+                    printer real modules, was true of vector output only. */}
+                <QRCodeSVG value={part} size={300} level="M" marginSize={2} />
                 <figcaption>
                   part {i + 1} of {parts.length}
                 </figcaption>
@@ -352,7 +358,7 @@ export function PaperVault({
                 <span className="pv-holder">Held by ______________________</span>
               </div>
               <div className="pv-strip-body">
-                <QRCodeCanvas value={share} size={190} level="M" marginSize={2} />
+                <QRCodeSVG value={share} size={190} level="M" marginSize={2} />
                 <code>{share}</code>
               </div>
               <p className="pv-strip-note">

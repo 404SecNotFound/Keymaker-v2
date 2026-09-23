@@ -1427,7 +1427,7 @@ export function EncryptorTool() {
     `window.print()` snapshots the document synchronously, so calling it in the
     same tick as setState prints the previous render — which is an empty sheet.
     The double rAF waits for React to commit and the browser to lay the QR
-    canvases out; printing between those two produces a page of blank squares.
+    symbols out; printing between those two produces a page of blank squares.
 
     The sheet is cleared afterwards so the container bytes do not sit in state
     for the rest of the session.

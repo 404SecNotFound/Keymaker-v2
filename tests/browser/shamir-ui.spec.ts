@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { visible, useTextMode, selectCrypto } from "./helpers";
+import { visible, useTextMode, selectCrypto, capturePrintedSymbols } from "./helpers";
 
 /**
  * Phase 4.1d — recovery shares, driven the way a user reaches them.
@@ -234,7 +234,7 @@ test.describe("the inheritance path", () => {
  * them into the shares box: a strip scanned on the Decrypt tab was only told it
  * was in the wrong box, and a whole printed backup scanned in one batch (parts
  * and strips together) failed as one bad paste. The images here are the strip
- * and part canvases of the real print sheet, snapshotted from inside
+ * and part symbols of the real print sheet, snapshotted from inside
  * `window.print()`, so the round trip is through the artefact a person would
  * photograph rather than a fixture that could drift from it.
  */
@@ -265,45 +265,19 @@ async function encryptAndPrintWithShares(
     s.startsWith("KMSHARE2:")
   );
 
-  // The print stub throws, which leaves the sheet mounted long enough to read
-  // its canvases; the same technique paper-vault.spec.ts uses.
-  await page.evaluate(() => {
-    const w = window as unknown as { __pngs?: unknown; print: () => void };
-    w.__pngs = null;
-    w.print = () => {
-      const sheet = document.querySelector(".paper-vault");
-      const png = (c: Element) => (c as HTMLCanvasElement).toDataURL("image/png");
-      w.__pngs = {
-        strips: Array.from(sheet?.querySelectorAll(".pv-strip canvas") ?? [], png),
-        parts: Array.from(sheet?.querySelectorAll(".pv-qr canvas") ?? [])
-          .filter((c) => !c.closest(".pv-strip"))
-          .map(png),
-      };
-      throw new Error("print stubbed");
-    };
-  });
-  await visible(page.getByRole("dialog").getByRole("button", { name: /Print paper vault/i })).click();
-  await page.waitForFunction(
-    () => (window as unknown as { __pngs: unknown }).__pngs !== null,
-    null,
-    { timeout: 30_000 }
+  // The strip and part symbols of the real print sheet, as a scan would see
+  // them; see capturePrintedSymbols.
+  const printed = await capturePrintedSymbols(
+    page,
+    page.getByRole("dialog").getByRole("button", { name: /Print paper vault/i })
   );
-  const pngs = await page.evaluate(
-    () => (window as unknown as { __pngs: { strips: string[]; parts: string[] } }).__pngs
-  );
-  const toBuffer = (d: string) => Buffer.from(d.split(",")[1] as string, "base64");
 
   await page.getByRole("button", { name: "I have saved these shares" }).click();
   await expect(page.getByText(/Save these/)).toHaveCount(0);
   const armored = await page.evaluate(
     () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
   );
-  return {
-    armored,
-    shares,
-    stripPngs: pngs.strips.map(toBuffer),
-    partPngs: pngs.parts.map(toBuffer),
-  };
+  return { armored, shares, stripPngs: printed.strips, partPngs: printed.parts };
 }
 
 const png = (name: string, buffer: Buffer) => ({ name, mimeType: "image/png", buffer });
