@@ -50,6 +50,40 @@ did; the fixture corpus and both parity gates are unchanged and pass.
 - Documentation: README's `--outfile` (the flag is `--out`); SECURITY.md's
   length-leak wording (it is exact) and format scope (the app writes v3); the
   in-app dice note (100 d6 rolls clear 256 bits, not 99).
+- **A backup saved as text and chosen as a file on Decrypt** (a .txt of armor,
+  a saved self-extracting page, paper parts, a shares file) was read as a
+  legacy blob and reported as a wrong password. It is now read as what it is.
+- **The idle lock no longer fires in the middle of an operation**, and a Stop
+  pressed while a large file is still being read now stops it.
+- **A QR scan that finishes after a tab switch or a wipe is dropped** instead
+  of landing in whatever form is showing.
+- **Notices say what happened:** no "nothing was pasted" beside a paste that
+  was kept; no "type the password" after a scan that was not a complete
+  backup; the Recovery page reports whether the container was saved and
+  whether it was rehearsed. A rehearsal no longer carries over to the next
+  backup sealed in the same session.
+- **The Decrypt password is no longer graded against the encrypt policy**, and
+  names containing `..` are accepted.
+- **Accessibility:** accessible names for the output toolbar and every toast's
+  close button; the lock warning and clipboard countdown are announced at
+  milestones instead of every second; axe now scans the result states.
+- **The inheritance plan opens where its steps can be followed** (Text mode,
+  so the paper vault is available).
+- **Offline:** `/verify.html` is precached, and the service worker only reads
+  its own cache on the shared Pages origin.
+- **The two implementations agree on which characters a reader ignores**
+  (FORMAT-V2-DESIGN §7): a Notepad-saved backup with a byte order mark opened in
+  the app and failed in `keym2.py`. Both also compare a `KMSHARE2` set id in
+  full, compare a part checksum as text, and confirm a master key against the
+  payload before using it, which stops share enrolment on a v2 container with
+  a spliced-in slot from wrapping the shares around the wrong key.
+- **Secret hygiene in the crypto core:** fewer unerased copies of passwords,
+  key files, share values and plaintext; a legal worst-case container is no
+  longer refused as too large; a Shamir module that fails to load is reported
+  as such, not as a wrong password.
+- **Build and release:** a checkout path with spaces builds; deploy and release
+  refuse to sign bytes the independent builds did not reproduce; the reference
+  self-tests run on Python 3.10.
 
 ## Keymaker v2.2.0
 
