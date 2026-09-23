@@ -168,7 +168,11 @@ v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
   2 and Step 4 comments now say `v3 or v2`.
 - **Build and release:** a checkout path with spaces builds; deploy and release
   refuse to sign bytes the independent builds did not reproduce; the reference
-  self-tests run on Python 3.10.
+  self-tests run on Python 3.10, now from a hash-pinned closure resolved for
+  3.10 as well as 3.12 (it adds typing-extensions) rather than with `--no-deps`.
+  `pin-conformance-deps.py` also stopped resolving for `manylinux_2_17` alone,
+  which cannot see the argon2-cffi-bindings wheels CI installs and would have
+  downgraded them on the next regenerate.
 
 ## Keymaker v2.2.0
 

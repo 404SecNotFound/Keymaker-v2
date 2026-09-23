@@ -123,16 +123,14 @@ jobs:
           python3 --version
           python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 10) else "expected Python 3.10, got " + sys.version)'
 
-      # Hash-checked, and --no-deps on purpose. The pinned closure is resolved
-      # for 3.12 (scripts/pin-conformance-deps.py). On 3.10 cryptography also
-      # declares typing-extensions (for python_full_version < '3.11'), which the
-      # file does not pin, so without --no-deps hash-checking mode refuses the
-      # whole install. This installs exactly the pinned bytes and nothing
-      # unpinned. It cannot hide a missing module: one the scripts need would
-      # fail the self-tests below on import. cryptography uses
-      # typing-extensions only in hazmat.asn1, which neither script imports.
+      # Hash-checked, with dependencies resolved as on any other install. On
+      # 3.10 cryptography also needs typing-extensions (it declares it for
+      # python_full_version < '3.11'); scripts/pin-conformance-deps.py now
+      # resolves the closure for 3.10 as well as 3.12, so it is pinned. This
+      # job used --no-deps until it was, which installed the pinned bytes but
+      # could not tell a missing dependency from a present one.
       - name: Install the pinned reference dependencies
-        run: pip install --require-hashes --no-deps -r reference/conformance-requirements.txt
+        run: pip install --require-hashes -r reference/conformance-requirements.txt
 
       - name: Reference self-test (KEYM v1) on Python 3.10
         run: python3 reference/keym.py selftest

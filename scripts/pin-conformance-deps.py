@@ -13,7 +13,7 @@ Run this after changing a version in requirements.txt:
     python3 scripts/pin-conformance-deps.py            # regenerate (needs a network)
     python3 scripts/pin-conformance-deps.py --check    # CI gate: have the two drifted?
 
-It resolves the full transitive closure against the interpreter CI uses, then
+It resolves the full transitive closure for each interpreter CI uses, then
 records every sha256 PyPI publishes for each pinned version, so the hash matches
 whichever wheel the runner selects. Needs a network; writes nothing on failure.
 """
@@ -25,17 +25,34 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 DIRECT = ROOT / "reference" / "requirements.txt"
 OUT = ROOT / "reference" / "conformance-requirements.txt"
 
-# The runner the conformance job uses. Kept beside the workflow's own values on
-# purpose: resolving against this container's interpreter instead would pin a
-# closure CI never installs.
-PY_VERSION = "3.12"
-PLATFORM = "manylinux_2_17_x86_64"
+# The interpreters the conformance workflow installs this file on: 3.12 for the
+# conformance job, and 3.10 for `reference-python-floor`, the RECOVERY.md floor.
+# Kept beside the workflow's own values on purpose: resolving against this
+# container's interpreter instead would pin a closure CI never installs.
+#
+# Both, and merged, because the closures differ. On 3.10 cryptography also
+# needs typing-extensions (it declares it for python_full_version < '3.11'), so
+# a file resolved for 3.12 alone could only be installed on 3.10 with
+# --no-deps, which is how the floor job had to run.
+PY_VERSIONS = ("3.12", "3.10")
+
+# Every manylinux tag an ubuntu-latest runner accepts that a pinned wheel is
+# published under, newest first. This was manylinux_2_17 alone, which cannot
+# resolve argon2-cffi-bindings 26.1.0 (published for manylinux_2_26/2_28 only):
+# regenerating quietly fell back to 21.2.0, a version CI had never run.
+PLATFORMS = (
+    "manylinux_2_28_x86_64",
+    "manylinux_2_26_x86_64",
+    "manylinux_2_17_x86_64",
+    "manylinux2014_x86_64",
+)
 
 PIN_RE = re.compile(r"^([A-Za-z0-9._-]+)==([^\s;#]+)")
 
@@ -55,21 +72,85 @@ def direct_pins() -> list[tuple[str, str]]:
     return pins
 
 
-def closure(pins: list[tuple[str, str]]) -> list[tuple[str, str]]:
-    """Every package pip would install, resolved for the CI runner."""
+def _canon(name: str) -> str:
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+def _requires(whl: Path) -> list[str]:
+    """A wheel's Requires-Dist lines, read from its own METADATA."""
+    with zipfile.ZipFile(whl) as z:
+        meta = next(n for n in z.namelist() if n.endswith(".dist-info/METADATA"))
+        text = z.read(meta).decode("utf-8", "replace")
+    return [line.split(":", 1)[1].strip() for line in text.splitlines()
+            if line.startswith("Requires-Dist:")]
+
+
+def closure_for(pins: list[tuple[str, str]], py_version: str) -> dict[str, str]:
+    """
+    Every package pip would install on one of the CI interpreters.
+
+    pip's --python-version sets `python_version` for marker evaluation but not
+    `python_full_version`, which is the one cryptography uses to require
+    typing-extensions below 3.11. Resolved from this machine's interpreter, that
+    dependency never appeared. So each wheel's own requirements are evaluated
+    here against the target interpreter, and anything missing is downloaded in
+    another round, until nothing is.
+    """
+    from pip._vendor.packaging.requirements import Requirement
+
+    env = {
+        "python_version": py_version,
+        "python_full_version": f"{py_version}.0",
+        "implementation_name": "cpython",
+        "platform_python_implementation": "CPython",
+        "sys_platform": "linux",
+        "platform_system": "Linux",
+        "platform_machine": "x86_64",
+        "os_name": "posix",
+        "extra": "",
+    }
+    wanted = [f"{n}=={v}" for n, v in pins]
     with tempfile.TemporaryDirectory() as d:
-        subprocess.run(
-            [sys.executable, "-m", "pip", "download", "--dest", d,
-             "--python-version", PY_VERSION, "--only-binary=:all:",
-             "--platform", PLATFORM,
-             *[f"{n}=={v}" for n, v in pins]],
-            check=True, stdout=subprocess.DEVNULL,
-        )
-        found = {}
-        for whl in sorted(Path(d).glob("*.whl")):
-            name, version = whl.name.split("-")[:2]
-            found[name.replace("_", "-").lower()] = version
-    return sorted(found.items())
+        while True:
+            platform_args = [a for p in PLATFORMS for a in ("--platform", p)]
+            subprocess.run(
+                [sys.executable, "-m", "pip", "download", "--dest", d,
+                 "--python-version", py_version, "--only-binary=:all:",
+                 *platform_args, *wanted],
+                check=True, stdout=subprocess.DEVNULL,
+            )
+            wheels = sorted(Path(d).glob("*.whl"))
+            found = {_canon(w.name.split("-")[0]): w.name.split("-")[1] for w in wheels}
+            missing = []
+            for whl in wheels:
+                for line in _requires(whl):
+                    req = Requirement(line)
+                    if req.marker is not None and not req.marker.evaluate(env):
+                        continue
+                    if _canon(req.name) not in found:
+                        missing.append(f"{req.name}{req.specifier}")
+            if not missing:
+                return found
+            wanted += sorted(set(missing))
+
+
+def closure(pins: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """
+    The union of every CI interpreter's closure.
+
+    A package both need must resolve to the same version on both, or one file
+    cannot serve both jobs; that is refused rather than papered over, since
+    picking either version would install something one job never resolved.
+    """
+    merged: dict[str, str] = {}
+    for py_version in PY_VERSIONS:
+        for name, version in closure_for(pins, py_version).items():
+            if merged.setdefault(name, version) != version:
+                raise SystemExit(
+                    f"{name} resolves to {merged[name]} on one CI interpreter and "
+                    f"{version} on Python {py_version}; one pinned file cannot serve both."
+                )
+    return sorted(merged.items())
 
 
 def hashes(name: str, version: str) -> list[str]:
