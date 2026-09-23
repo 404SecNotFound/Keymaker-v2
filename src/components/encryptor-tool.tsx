@@ -94,7 +94,7 @@ import { AudioStegoTool } from "@/components/audio-stego-tool";
 import { Switch } from "@/components/ui/switch";
 import { cn } from "@/lib/utils";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 
 
@@ -1904,7 +1904,13 @@ export function EncryptorTool() {
     setTextInputRejected(null);
     setShowTextSecret(false);
     setTextSecretSeedStatus("none");
-    setOutputText('');
+    // Spared with the shares, and for the same reason. Issued shares exist
+    // only on the encrypt side, where `outputText` is the sealed container,
+    // ciphertext rather than a secret, and in Text mode the only copy of it.
+    // The lock used to keep the shares and wipe this, so the dialog went on
+    // showing strips that now opened nothing, its Print paper vault button
+    // went dark, and the note under it blamed "a file container".
+    if (!(opts?.sparingIssuedShares && issuedSharesRef.current !== null)) setOutputText('');
     setShowDecryptedText(false);
     setDecryptInfo(null);
     setSlotTableWarning(false);
@@ -4846,7 +4852,11 @@ export function EncryptorTool() {
       cipherId: cipherChoice,
       keyFile: useKeyFile && keyFile !== null,
       shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
-      passkey: usePasskey,
+      // The encrypt-side enrol switch. `usePasskey` is the decrypt-side unlock
+      // choice, false on this tab, so the plan used to omit the passkey slot
+      // the worker was about to write: one way in and one byte-map segment
+      // short.
+      passkey: passkeyEnabled,
       inputBytes:
         inputType === "file"
           ? (file?.size ?? null)
@@ -4857,7 +4867,7 @@ export function EncryptorTool() {
   }, [
     mode, kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism,
     cipherChoice, useKeyFile, keyFile, shamirEnabled, shamirThreshold,
-    shamirCount, usePasskey, inputType, file, textSecret,
+    shamirCount, passkeyEnabled, inputType, file, textSecret,
   ]);
 
   /** What the next printed sheet says about rehearsal, or nothing yet. */
@@ -5437,7 +5447,22 @@ export function EncryptorTool() {
           }
         }}
       >
-        <DialogContent className="max-w-lg">
+        {/*
+          Closing this dialog destroys the only copy of the shares, so it closes
+          only when someone means it: the X or the button at the bottom. Escape
+          and a click on the backdrop are the two gestures people make without
+          deciding anything (dismissing a toast, reaching for another window),
+          and each of them used to turn a share set into scrap.
+        */}
+        <DialogContent
+          // Scrolls rather than overflowing: eight share strings plus the
+          // rehearsal panel are taller than a phone, and the dialog is fixed
+          // and centred, so without this its lower half was off-screen with no
+          // way to reach it.
+          className="max-h-[90dvh] max-w-lg overflow-y-auto"
+          onEscapeKeyDown={(e) => e.preventDefault()}
+          onInteractOutside={(e) => e.preventDefault()}
+        >
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <ShieldAlert className="h-4 w-4 text-warning" />
@@ -5685,6 +5710,14 @@ export function EncryptorTool() {
               )}
             </section>
           )}
+
+          <div className="flex justify-end">
+            <DialogClose asChild>
+              <Button type="button" variant="outline" size="sm">
+                I have saved these shares
+              </Button>
+            </DialogClose>
+          </div>
         </DialogContent>
       </Dialog>
 
@@ -5719,16 +5752,32 @@ export function EncryptorTool() {
           </DialogHeader>
 
           <div className="space-y-2.5">
+            {/*
+              keym2.py first, because it is the one that opens what this app
+              writes. The kit used to offer keym.py alone, and keym.py reads
+              KEYM v1 only: an heir who saved the kit exactly as offered held a
+              script that refuses every backup made since v2.
+            */}
             {[
               {
-                href: `${BASE_PATH}/recovery/keym.py`,
-                name: 'keym.py',
-                what: 'A standalone Python decryptor. Standard library plus one dependency for Argon2id; no browser, no npm, no network.',
+                href: `${BASE_PATH}/recovery/keym2.py`,
+                name: 'keym2.py',
+                what: `The standalone Python decryptor for KEYM v2 and v3, which covers every backup this app writes (it writes KEYM v${KEYM2_VERSION}). Opens password, key-file and recovery-share containers; no browser, no npm, no network.`,
+              },
+              {
+                href: `${BASE_PATH}/recovery/requirements.txt`,
+                name: 'requirements.txt',
+                what: 'The two libraries the scripts need, pinned. RECOVERY.md shows how to download them now so the install works offline later.',
               },
               {
                 href: `${BASE_PATH}/recovery/RECOVERY.md`,
                 name: 'RECOVERY.md',
                 what: 'The procedure in writing, including how to decrypt by hand if even the script is gone. Worth printing and storing with the backup.',
+              },
+              {
+                href: `${BASE_PATH}/recovery/keym.py`,
+                name: 'keym.py',
+                what: 'Only for older KEYM v1 backups. It refuses v2 and v3 containers; use keym2.py for those.',
               },
             ].map((item) => (
               <div
@@ -5754,11 +5803,12 @@ export function EncryptorTool() {
           <p className="text-[12px] leading-snug text-muted-foreground">
             These are the same files as in the repository, copied into this build — so
             the copy you save is the one that matches the version that encrypted your
-            data. The format itself is documented in{' '}
-            <code className="rounded bg-inset px-1 py-0.5">FORMAT.md</code>, and{' '}
-            <code className="rounded bg-inset px-1 py-0.5">keym.py</code> was written
-            from that document independently of the code running here — which is how a
-            specification bug got caught before it shipped.
+            data. The format itself is specified in{' '}
+            <code className="rounded bg-inset px-1 py-0.5">docs/FORMAT-V2-DESIGN.md</code> in
+            the repository, and{' '}
+            <code className="rounded bg-inset px-1 py-0.5">keym2.py</code> was written
+            from that document independently of the code running here, which is how
+            specification bugs got caught before they shipped.
           </p>
         </DialogContent>
       </Dialog>

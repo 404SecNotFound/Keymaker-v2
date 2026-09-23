@@ -118,17 +118,35 @@ test.describe("recovery kit", () => {
     await visible(page.getByRole("button", { name: /Recovery kit/i })).click();
 
     const dialog = page.getByRole("dialog");
-    await expect(dialog.getByText("keym.py").first()).toBeVisible();
     await expect(dialog.getByText("RECOVERY.md").first()).toBeVisible();
 
     // Same-origin and download-flagged, so saving it does not navigate away
     // from a page that may be holding a decrypted secret.
     const links = dialog.getByRole("link", { name: /Save/i });
-    await expect(links).toHaveCount(2);
+    const hrefs: string[] = [];
     for (const link of await links.all()) {
       await expect(link).toHaveAttribute("download", "");
-      expect(await link.getAttribute("href")).toMatch(/\/recovery\/(keym\.py|RECOVERY\.md)$/);
+      hrefs.push((await link.getAttribute("href")) ?? "");
     }
+    for (const href of hrefs) {
+      expect(href).toMatch(/\/recovery\/(keym2?\.py|RECOVERY\.md|requirements\.txt)$/);
+    }
+    // The script that opens what this app writes. The kit offered keym.py
+    // alone for as long as the app wrote v2 and v3, and keym.py reads KEYM v1
+    // only, so a kit saved exactly as offered could open none of them.
+    expect(hrefs.some((h) => h.endsWith("/recovery/keym2.py")), "the kit does not offer keym2.py").toBe(true);
+    expect(hrefs.some((h) => h.endsWith("/recovery/requirements.txt")), "the kit does not offer requirements.txt").toBe(true);
+    // And it is listed first, ahead of the v1-only script.
+    expect(hrefs[0]).toMatch(/\/recovery\/keym2\.py$/);
+  });
+
+  test("keym2.py and requirements.txt are served and are the real thing", async ({ page, baseURL }) => {
+    const py = await page.request.get(`${baseURL}${appPath("/recovery/keym2.py")}`);
+    expect(py.status(), "keym2.py is not being served").toBe(200);
+    expect(await py.text(), "keym2.py is not the v2 reference").toContain("KEYM v2");
+    const req = await page.request.get(`${baseURL}${appPath("/recovery/requirements.txt")}`);
+    expect(req.status(), "requirements.txt is not being served").toBe(200);
+    expect(await req.text()).toMatch(/argon2-cffi/);
   });
 
   test("the service worker precaches the kit for offline use", async ({

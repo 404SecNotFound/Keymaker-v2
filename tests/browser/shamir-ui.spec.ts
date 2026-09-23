@@ -81,12 +81,12 @@ async function encryptWithShares(
     timeout: 90_000,
   });
   const shares = await page.locator("p.font-mono").allTextContents();
-  // Escape rather than hunting for a close control. Radix's dismiss button is
-  // an icon whose accessible name and attributes are an implementation detail
-  // of the component library, and a locator built on those is a portability
-  // hazard between engines — which is precisely how the U28 clipboard test put
-  // main red on two of three.
-  await page.keyboard.press("Escape");
+  // The dialog's own labelled button, not Radix's icon X: the X's accessible
+  // name is an implementation detail of the component library, and a locator
+  // built on it is a portability hazard between engines (how the U28
+  // clipboard test put main red on two of three). Escape no longer closes this
+  // dialog at all; see "the one-time shares survive a stray Escape".
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
   await expect(page.getByText(/Save these/)).toHaveCount(0);
 
   const armored = await page.evaluate(
@@ -133,6 +133,30 @@ test.describe("enrolling a share set", () => {
       visible(page.getByLabel("Needed to open")),
       "lowering the count left a threshold above it"
     ).toHaveValue("2");
+  });
+});
+
+test.describe("the one-time shares dialog", () => {
+  test("survives a stray Escape and a backdrop click, and closes when asked", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    const title = page.getByText(/Save these 3 shares now/);
+    await expect(title).toBeVisible({ timeout: 90_000 });
+
+    // The dialog says the shares are shown once and cannot be reissued. Each
+    // of these used to close it, and closing it destroys them.
+    await page.keyboard.press("Escape");
+    await expect(title, "Escape discarded the one-time shares").toBeVisible();
+    await page.mouse.click(5, 5);
+    await expect(title, "a click on the backdrop discarded the one-time shares").toBeVisible();
+
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+    await expect(title).toHaveCount(0);
   });
 });
 
@@ -269,7 +293,7 @@ async function encryptAndPrintWithShares(
   );
   const toBuffer = (d: string) => Buffer.from(d.split(",")[1] as string, "base64");
 
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
   await expect(page.getByText(/Save these/)).toHaveCount(0);
   const armored = await page.evaluate(
     () => (document.querySelector("#output-text") as HTMLTextAreaElement).value

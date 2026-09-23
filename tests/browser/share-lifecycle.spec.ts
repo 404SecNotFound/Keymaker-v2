@@ -229,6 +229,14 @@ test.describe("issued shares survive what they must", () => {
       page.getByPlaceholder("Enter a strong password"),
       "the lock spared the shares but also spared the password"
     ).toHaveValue("");
+
+    // Sparing the shares means nothing without the container they open. In
+    // Text mode the sealed container exists only on screen, and the dialog's
+    // print button is gated on it being there.
+    await expect(
+      page.getByRole("dialog").getByRole("button", { name: /Print paper vault/i }),
+      "the lock kept the shares but wiped the only copy of the container they open"
+    ).toBeEnabled();
   });
 
   test("the idle lock fires once, not once a second", async ({ page }) => {
@@ -288,7 +296,7 @@ test.describe("issued shares survive what they must", () => {
     // The control on the test above. Sparing them from the timer must not
     // spare them from the panic button, or the button stops meaning anything.
     await issueShares(page);
-    await page.keyboard.press("Escape");
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
     await expect(page.getByText(/Save these 3 shares now/)).toHaveCount(0);
 
     await visible(page.getByPlaceholder("Enter text to encrypt")).fill("something");
