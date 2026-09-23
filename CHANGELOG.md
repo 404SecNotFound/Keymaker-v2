@@ -1,5 +1,50 @@
 # Changelog
 
+## Unreleased
+
+No container format change. Everything here reads and writes the bytes v2.2.0
+did; the fixture corpus and both parity gates are unchanged and pass.
+
+### Added
+- **Recovery strips scan back in.** The paper vault has always printed a QR on
+  every recovery strip, and nothing in the app could read one into the shares
+  box. The shares box now has *Scan share QR images*, and a scan on the Decrypt
+  tab sorts what it reads: shares to the shares box, container parts to the
+  container box, so a whole printed backup can be photographed and dropped in
+  at once. A strip scanned twice is entered once.
+- **RECOVERY.md explains recovering with shares**, with the `keym2.py
+  --shares-from` command, and `recovery_test.py` runs it against a share set
+  issued by the shipping enrolment.
+
+### Fixed
+- **The Recovery kit offered only `keym.py`, which reads KEYM v1 only.** It now
+  offers `keym2.py` first, plus `requirements.txt`, and labels `keym.py` as
+  v1-only. `requirements.txt` is precached with the rest of the kit.
+- **Escape or a click outside the one-time shares dialog discarded the
+  shares.** It now closes only from its X or *I have saved these shares*, and
+  it scrolls: with five or more shares its lower half was off-screen.
+- **The idle lock kept the shares but wiped the container they open** (Text
+  mode, where the container exists only on screen).
+- **Choosing recovery shares after a passkey left the passkey in charge**, so
+  an heir with enough shares was asked for a tap and told there was no passkey.
+- **Returning from Tools wiped the Encrypt or Decrypt form.**
+- **The QR scanner could not read the paper vault's own container symbol** off
+  its canvas; it now retries at several scales before reporting a miss.
+- **The encrypt-side inspector never showed the passkey slot** it was about to
+  write.
+- **Audio: a hidden payload revealed through Web Audio lost its low bits** on
+  every sample above 16384 and was reported as a wrong password. A WAV is also
+  recognised by its bytes now, not only its name.
+- **Service worker: a deploy inside the HTTP cache window could freeze the
+  previous `index.html` into the new cache**, which the sealed status then
+  reported as tampering. The shell is fetched with `cache: 'reload'`.
+- **`keym2.py` reported "decryption failed" for a text backup with a blank
+  first line or a leading space.** §7 says readers strip ASCII whitespace.
+- **`keym.py` crashed with a traceback on an 8 to 14 byte file.**
+- Documentation: README's `--outfile` (the flag is `--out`); SECURITY.md's
+  length-leak wording (it is exact) and format scope (the app writes v3); the
+  in-app dice note (100 d6 rolls clear 256 bits, not 99).
+
 ## Keymaker v2.2.0
 
 A design release. Nothing about the container format, the ciphers or the key

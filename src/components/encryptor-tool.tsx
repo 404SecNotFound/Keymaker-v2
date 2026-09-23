@@ -1011,6 +1011,9 @@ async function preparePaperParts(
 
 export function EncryptorTool() {
   const [mode, setMode] = useState<Mode>("encrypt");
+  /** The last mode that owns a form (anything but Tools), so a return from a
+   *  Tools peek can be told apart from a switch to a different form. */
+  const formModeRef = useRef<Mode>("encrypt");
   const [workspacePage, setWorkspacePage] = useState<"workbench" | "workspace" | "recovery" | "docs">("workbench");
   const [compactNavigation, setCompactNavigation] = useState(false);
   useEffect(() => {
@@ -2098,9 +2101,15 @@ export function EncryptorTool() {
     setMode(newMode as Mode);
     // The Tools tab has no shared state with encrypt/decrypt — resetting
     // would only wipe an in-progress form when the user peeks at Tools.
-    if (newMode !== "tools") {
-      resetState();
-    }
+    if (newMode === "tools") return;
+    // And the peek has two halves. Skipping the reset on the way *in* was
+    // not enough: coming back out was an ordinary mode change, so Encrypt,
+    // Tools, Encrypt still wiped the secret and password the first half had
+    // just spared. Returning to the form Tools was opened from is not a mode
+    // change; going anywhere else still is.
+    const returning = mode === "tools" && newMode === formModeRef.current;
+    formModeRef.current = newMode as Mode;
+    if (!returning) resetState();
   }, [mode, resetState]);
   
   const handleInputTypeChange = useCallback((newType: InputChoice) => {
