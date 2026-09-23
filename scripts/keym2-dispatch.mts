@@ -21,6 +21,7 @@ import {
   decryptData,
   detectFormat,
   MAX_CONTAINER_SIZE,
+  MAX_PLAINTEXT_SIZE,
   oversizeRecoveryHelp,
   encryptData,
   type KdfParams,
@@ -28,9 +29,11 @@ import {
 import {
   KEYM2_ARMOR_PREFIX,
   KEYM2_CORE_HEADER_LEN,
+  addPasskeySlotKeym2,
   armorKeym2,
   dearmorKeym2,
   encryptKeym2,
+  KEYM2_CHUNK_SIZE,
   KEYM2_VERSION_V2,
   KEYM2_HEADER_PEEK_BYTES,
   KEYM2_MAX_SLOTS,
@@ -481,6 +484,111 @@ check(
     KEYM2_HEADER_PEEK_BYTES <= 64 * 1024,
     "the header peek is still a prefix rather than the whole container",
     `${KEYM2_HEADER_PEEK_BYTES} bytes`
+  );
+}
+
+// ---------------------------------------------------------------------------
+// The container ceiling has to admit every legal container at the plaintext cap
+// ---------------------------------------------------------------------------
+//
+// MAX_CONTAINER_SIZE was `MAX_PLAINTEXT_SIZE + 4096`, a v1-era allowance. A v3
+// chained container with the 8 slots §6 permits, holding a plaintext at the
+// cap, is 4153 bytes over the plaintext: a legal backup this build wrote, or
+// could have, refused as "too large" by the build that has to open it.
+//
+// keymaker-crypto.ts restates the format constants rather than importing
+// keym-v2.ts, so this holds the ceiling to the format module's own exports, and
+// the per-chunk tag overhead to real bytes rather than to a second restatement.
+// Then it builds that worst case for real and opens it through decryptData.
+{
+  const CIPHERS: [string, CipherId][] = [
+    ["aes-256-gcm", CipherId.AES_256_GCM],
+    ["chacha20-poly1305", CipherId.CHACHA20_POLY1305],
+    ["chained", CipherId.CHAINED],
+  ];
+  const chunks = Math.max(1, Math.ceil(MAX_PLAINTEXT_SIZE / KEYM2_CHUNK_SIZE));
+
+  // Tag bytes per chunk, measured: a one-slot, one-chunk container is the slot
+  // table, one slot, the plaintext and one chunk's tags, so the tags are what
+  // is left over.
+  const tagPerChunk = new Map<CipherId, number>();
+  for (const [, cipher] of CIPHERS) {
+    const small = await encryptKeym2(enc.encode("tag probe"), PASSWORD, null, { kdf: FAST, cipher });
+    tagPerChunk.set(
+      cipher,
+      small.length - keym2SlotTableOffset(KEYM2_VERSION_V3) - keym2SlotLen(cipher) - enc.encode("tag probe").length
+    );
+  }
+
+  let worst = 0;
+  let worstLabel = "";
+  for (const version of [KEYM2_VERSION_V2, KEYM2_VERSION_V3]) {
+    for (const [name, cipher] of CIPHERS) {
+      const size =
+        MAX_PLAINTEXT_SIZE +
+        keym2SlotTableOffset(version) +
+        KEYM2_MAX_SLOTS * keym2SlotLen(cipher) +
+        chunks * (tagPerChunk.get(cipher) as number);
+      if (size > worst) {
+        worst = size;
+        worstLabel = `v${version} + ${name}`;
+      }
+    }
+  }
+  check(
+    MAX_CONTAINER_SIZE >= worst,
+    "the container ceiling covers the largest container a capped plaintext can become",
+    `worst case is ${worst} bytes (${worstLabel}, ${KEYM2_MAX_SLOTS} slots, ${chunks} chunks); ` +
+      `the ceiling is ${MAX_CONTAINER_SIZE}. A legal backup at the cap is refused as too large.`
+  );
+  // Covering the worst case by being enormous would pass the line above while
+  // letting an arbitrarily large paste reach the parser.
+  check(
+    MAX_CONTAINER_SIZE - MAX_PLAINTEXT_SIZE <= 64 * 1024,
+    "the container ceiling is still the plaintext cap plus overhead, not an unbounded allowance",
+    `${MAX_CONTAINER_SIZE - MAX_PLAINTEXT_SIZE} bytes over the plaintext cap`
+  );
+
+  // The worst case, built: v3, chained, a plaintext of exactly MAX_PLAINTEXT_SIZE,
+  // and seven passkey slots on top of the passphrase slot. Passkey slots because
+  // they unwrap through HKDF, so only the first enrolment pays for PBKDF2.
+  // About 3 s and 0.5 GiB here, which is the price of proving the cap holds on
+  // the one container that reaches it.
+  const plaintext = new Uint8Array(MAX_PLAINTEXT_SIZE);
+  for (let i = 0; i < plaintext.length; i += 4093) plaintext[i] = (i * 31 + 7) & 0xff;
+  let container = await encryptKeym2(plaintext, PASSWORD, null, { kdf: FAST, cipher: CipherId.CHAINED });
+  const prf = new Uint8Array(32).fill(0x5c);
+  for (let i = 1; i < KEYM2_MAX_SLOTS; i++) {
+    container = await addPasskeySlotKeym2(
+      container,
+      i === 1 ? { password: PASSWORD } : { prfOutput: prf },
+      prf,
+      webcrypto.getRandomValues(new Uint8Array(32))
+    );
+  }
+  const expected =
+    MAX_PLAINTEXT_SIZE +
+    keym2SlotTableOffset(KEYM2_VERSION_V3) +
+    KEYM2_MAX_SLOTS * keym2SlotLen(CipherId.CHAINED) +
+    chunks * (tagPerChunk.get(CipherId.CHAINED) as number);
+  check(
+    container.length === expected,
+    "a real 8-slot chained v3 container at the cap is exactly the size the arithmetic predicts",
+    `built ${container.length}, predicted ${expected}`
+  );
+
+  let opened: Uint8Array | null = null;
+  let message = "";
+  try {
+    const result = await decryptData(toArrayBuffer(container), PASSWORD, null);
+    opened = new Uint8Array(result.data);
+  } catch (e) {
+    message = e instanceof Error ? e.message.slice(0, 120) : String(e);
+  }
+  check(
+    opened !== null && opened.length === plaintext.length && Buffer.compare(opened, plaintext) === 0,
+    "decryptData opens the worst-case legal container at the plaintext cap, byte-identical",
+    message || "plaintext differs"
   );
 }
 
