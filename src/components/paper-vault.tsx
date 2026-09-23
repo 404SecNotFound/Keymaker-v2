@@ -95,6 +95,12 @@ export interface PaperVaultProps {
    * this backup by eye. Empty when the container has no share slot.
    */
   setCodes?: readonly string[] | undefined;
+  /**
+   * The backup's one paper part, when the owner chose to print it on every
+   * strip as well. Each strip then opens the backup with any k-1 others and
+   * nothing else. Absent, a strip carries its share alone.
+   */
+  stripBackupPart?: string | undefined;
   /** Shown as the label on the sheet; never the secret itself. */
   label?: string | undefined;
   /** Fixed by the caller so a re-render cannot change what "printed on" says. */
@@ -148,6 +154,7 @@ export function PaperVault({
   shares,
   threshold,
   setCodes = [],
+  stripBackupPart,
   label,
   printedOn,
   rehearsal,
@@ -197,6 +204,9 @@ export function PaperVault({
                 <>, or {k} of the {n} recovery strips held by the people named on them</>
               ) : null}
               .
+              {hasStrips && stripBackupPart ? (
+                <> Each strip also carries this backup, so {k} strips are enough on their own, without this page.</>
+              ) : null}
             </li>
             <li>
               A phone that scans QR codes, and a computer with Python 3. The
@@ -369,13 +379,24 @@ export function PaperVault({
       {hasStrips ? (
         <section className="pv-block pv-break pv-strips" data-testid="pv-strips">
           <h2>Recovery strips — cut apart, one per envelope</h2>
-          <p className="pv-note">
-            Any <strong>{k}</strong> of these {n} open the backup on the owner&rsquo;s
-            sheet <em>without the password</em>, so each strip is as sensitive as
-            the password itself. Cut along the lines, write each holder&rsquo;s
-            name on their strip, and give them to people who would not casually
-            combine them. Keep this page no longer than it takes to cut it up.
-          </p>
+          {stripBackupPart ? (
+            <p className="pv-note">
+              Any <strong>{k}</strong> of these {n} open the backup <em>on their own</em>:
+              each strip carries the backup itself as well as a share, so {k} holders
+              together need no password, no sheet and no file. Each strip is as
+              sensitive as the password. Cut along the lines, write each holder&rsquo;s
+              name on their strip, and give them to people who would not casually
+              combine them. Keep this page no longer than it takes to cut it up.
+            </p>
+          ) : (
+            <p className="pv-note">
+              Any <strong>{k}</strong> of these {n} open the backup on the owner&rsquo;s
+              sheet <em>without the password</em>, so each strip is as sensitive as
+              the password itself. Cut along the lines, write each holder&rsquo;s
+              name on their strip, and give them to people who would not casually
+              combine them. Keep this page no longer than it takes to cut it up.
+            </p>
+          )}
           {shares!.map((share, i) => (
             <div key={share} className="pv-strip" data-testid="pv-strip">
               <p className="pv-cut">&#9986; cut here</p>
@@ -392,15 +413,31 @@ export function PaperVault({
               </div>
               <div className="pv-strip-body">
                 <QRCodeSVG value={share} size={190} level="M" marginSize={2} />
+                {stripBackupPart ? (
+                  <figure className="pv-strip-backup" data-testid="pv-strip-backup">
+                    <QRCodeSVG value={stripBackupPart} size={190} level="M" marginSize={2} />
+                    <figcaption>the backup</figcaption>
+                  </figure>
+                ) : null}
                 <code>{share}</code>
               </div>
-              <p className="pv-strip-note">
-                One of {n} strips for a Keymaker backup. Any {k} of them open it
-                without the password; alone, this one reveals nothing. Keep it
-                sealed. When the backup has to be opened, bring it, or read the
-                code above to the person opening it &mdash;{" "}
-                <code>keym2.py decrypt --share</code> takes it.
-              </p>
+              {stripBackupPart ? (
+                <p className="pv-strip-note">
+                  One of {n} strips for a Keymaker backup. This strip carries the backup
+                  itself as well as a share: any {k} strips open it without the password
+                  and without anything else. Alone, this one reveals nothing. Keep it
+                  sealed. When the backup has to be opened, bring it, and scan both
+                  codes.
+                </p>
+              ) : (
+                <p className="pv-strip-note">
+                  One of {n} strips for a Keymaker backup. Any {k} of them open it
+                  without the password; alone, this one reveals nothing. Keep it
+                  sealed. When the backup has to be opened, bring it, or read the
+                  code above to the person opening it &mdash;{" "}
+                  <code>keym2.py decrypt --share</code> takes it.
+                </p>
+              )}
             </div>
           ))}
         </section>

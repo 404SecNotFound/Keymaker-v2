@@ -414,6 +414,68 @@ test.describe("scanning the printed strips", () => {
     await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
   });
 
+  test("strips that carry the backup open it with nothing else", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+
+    // Off until chosen, and the cost is on screen beside it.
+    const carry = visible(page.getByRole("switch", { name: "Put the whole backup on every strip" }));
+    await expect(carry).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByTestId("strips-carry-backup")).toContainText(
+      "2 holders who get together need nothing else"
+    );
+    await carry.click();
+    await expect(carry).toHaveAttribute("aria-checked", "true");
+
+    const printed = await capturePrintedSymbols(
+      page,
+      page.getByRole("dialog").getByRole("button", { name: /Print paper vault/i })
+    );
+    // Two codes a strip now: its share, and the backup.
+    expect(printed.strips, "each strip should carry two symbols").toHaveLength(6);
+
+    // A fresh page: no container, nothing typed, nothing from the owner.
+    // Strips 1 and 3, both codes of each, are all there is.
+    await page.reload();
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await page.locator("#qr-scan-input").setInputFiles([
+      png("strip-1-share.png", printed.strips[0] as Buffer),
+      png("strip-1-backup.png", printed.strips[1] as Buffer),
+      png("strip-3-share.png", printed.strips[4] as Buffer),
+      png("strip-3-backup.png", printed.strips[5] as Buffer),
+    ]);
+    await expect(visible(page.locator("#text-secret"))).not.toHaveValue("", { timeout: 30_000 });
+    await expect(page.locator("#share-input")).toBeVisible({ timeout: 20_000 });
+    expect((await shareBoxLines(page)).sort()).toEqual([shares[0], shares[2]].sort());
+
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("a backup too big for one symbol is not offered on the strips", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill("x".repeat(4000));
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    // Given a moment to decide, since the size check is asynchronous.
+    await page.waitForTimeout(1_000);
+    await expect(page.getByTestId("strips-carry-backup")).toHaveCount(0);
+  });
+
   test("a strip scanned twice is entered once", async ({ page }) => {
     const backup = await encryptAndPrintWithShares(page, 2, 3);
 

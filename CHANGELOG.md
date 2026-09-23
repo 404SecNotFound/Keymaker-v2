@@ -15,6 +15,13 @@ did; the fixture corpus is unchanged, and both parity gates pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **Strips that carry the backup, for a small one.** When a backup fits one
+  printed symbol, the shares dialog offers *Put the whole backup on every
+  strip*. Each strip then prints the backup beside its share, so any k strips
+  open it with no sheet and no file. The dialog says the cost in the same
+  place: k holders who get together need nothing else. Off by default, and
+  chosen again for every share set. RECOVERY.md explains the second code, and
+  its `join` command is executed by `recovery_test.py`.
 - **Scan with the camera.** On the Decrypt tab, *Use the camera* and *Scan
   strips with the camera* open the device camera and read strips and
   container symbols held up one after another. It says what is in and what is
@@ -66,6 +73,10 @@ did; the fixture corpus is unchanged, and both parity gates pass.
   writer, at the same size the app prints. `--v1` writes KMPART1.
 
 ### Fixed
+- **The shares dialog said k holders "need nothing else from you"**; they also
+  need a copy of the backup. It says so now.
+- **The same container symbol scanned twice was refused** as "supplied twice".
+  Scanned container codes are now de-duplicated, as strips already were.
 - **`keym2.py split --v2` wrote parts no level-M QR can hold.** Its default of
   1,734 bytes per part was the KMPART1 figure for a version-40 symbol; with
   KMPART2's fingerprint, length and checksum each line was 2,359 characters,

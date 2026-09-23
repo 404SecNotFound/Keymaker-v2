@@ -726,13 +726,15 @@ def recovery_commands() -> None:
         if line.strip() and not line.strip().startswith("#")
     ]
 
-    identify, decrypt, shares, unknown = [], [], [], []
+    identify, decrypt, shares, joins, unknown = [], [], [], [], []
     for c in commands:
         argv = shlex.split(c, comments=True)
         if argv[:1] == ["pip"]:
             print(f"  skip {c}  (needs a package index; the libraries are a prerequisite, not a step)")
         elif argv[:1] == ["python3"] and "decrypt" in argv and "--shares-from" in argv:
             shares.append(c)
+        elif argv[:1] == ["python3"] and "join" in argv:
+            joins.append(c)
         # A line without a `# vN` comment cannot be checked against the version
         # it is for, so it counts as unrecognised rather than as "for none".
         elif argv[:1] == ["python3"] and "inspect" in argv and claimed_versions(c):
@@ -752,6 +754,7 @@ def recovery_commands() -> None:
                   f"exactly one {name} line on the page is for v{version}",
                   f"{len(owners)} lines claim it: {owners}")
     check(len(shares) >= 1, "the page carries a shares command")
+    check(len(joins) >= 1, "the page carries a join command for strips that carry the backup")
 
     # "Add `--key-file mykey.bin` if step 3 reported one was required."
     m = re.search(r"Add `(--key-file [^`]+)`", doc)
@@ -822,6 +825,33 @@ def recovery_commands() -> None:
                 got = recovered.read_bytes() if recovered.exists() else b""
                 check(r.returncode == 0 and got == SECRET, f"`{c}` recovers the bytes",
                       r.stderr.strip()[:160])
+
+            # Strips that carry the backup: the second code on a strip is the
+            # backup's one paper part, exactly as the app prints it. Saved as
+            # parts.txt, the page's join turns it back into backup.keym, and
+            # the page's shares command then opens that with the strips.
+            shared_container = backup.read_bytes()
+            r = subprocess.run(["node", str(BRIDGE), "split", "--in", str(backup),
+                                "--out", str(tmp / "printed-parts.txt"), "--print"],
+                               capture_output=True, text=True, cwd=ROOT)
+            printed = [ln for ln in (tmp / "printed-parts.txt").read_text().splitlines() if ln.strip()] \
+                if r.returncode == 0 else []
+            check(len(printed) == 1 and printed[0].startswith("KMPART2:1/1:"),
+                  "a small backup prints as one KMPART2:1/1 part, as the page says",
+                  f"{len(printed)} parts: {r.stderr.strip()[:120]}")
+            if printed:
+                backup.unlink()
+                (tmp / "parts.txt").write_text(printed[0] + "\n")
+                for c in joins:
+                    r = run_doc_command(c, tmp, stdin="")
+                    check(r.returncode == 0 and backup.exists() and backup.read_bytes() == shared_container,
+                          f"`{c}` rebuilds the backup from a strip's second code", r.stderr.strip()[:160])
+                for c in shares:
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin="")
+                    got = recovered.read_bytes() if recovered.exists() else b""
+                    check(r.returncode == 0 and got == SECRET,
+                          f"and then `{c}` opens it with the strips alone", r.stderr.strip()[:160])
 
             # "inspect prints it on the line `set code`", and it is what every
             # strip begins with. Run with the page's own inspect line for v3.

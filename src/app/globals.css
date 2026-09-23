@@ -698,6 +698,16 @@
     flex: none;
   }
 
+  .pv-strip-backup {
+    margin: 0;
+    flex: none;
+    text-align: center;
+  }
+
+  .pv-strip-backup figcaption {
+    font-size: 7.5pt;
+  }
+
   .pv-strip-note {
     margin: 4pt 0 0;
     font-size: 8.5pt;

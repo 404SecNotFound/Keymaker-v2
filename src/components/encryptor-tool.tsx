@@ -1460,6 +1460,14 @@ export function EncryptorTool() {
   const [shamirCount, setShamirCount] = useState(3);
   const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
   /**
+   * "Put the whole backup on every strip", for a backup small enough to fit
+   * one printed symbol. Off by default and reset with every new share set: it
+   * changes who can open the backup without the owner, so it is chosen each
+   * time, never inherited.
+   */
+  const [stripsCarryBackup, setStripsCarryBackup] = useState(false);
+  const [backupFitsOnStrip, setBackupFitsOnStrip] = useState(false);
+  /**
    * The rehearsal — test the backup before you trust it.
    *
    * Shares are shown once with a strong warning, then gone, and the first
@@ -1538,6 +1546,29 @@ export function EncryptorTool() {
     shares: { threshold: number; count: number } | null;
   };
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  // Whether the backup on screen fits one printed symbol, so the shares
+  // dialog can offer to put it on every strip. Recomputed for each share set,
+  // and the choice itself starts off again with each.
+  useEffect(() => {
+    setStripsCarryBackup(false);
+    setBackupFitsOnStrip(false);
+    if (!issuedShares || !outputText.startsWith("keym2:")) return;
+    let live = true;
+    (async () => {
+      try {
+        const { dearmorKeym2 } = await import("@/lib/keym-v2");
+        const { encodePaperPartsForPrint } = await import("@/lib/keym-v2-paper");
+        const parts = await encodePaperPartsForPrint(dearmorKeym2(outputText));
+        if (live) setBackupFitsOnStrip(parts.length === 1);
+      } catch {
+        if (live) setBackupFitsOnStrip(false);
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [issuedShares, outputText]);
+
   // Printout findings describe one backup. A new seal or a wipe replaces or
   // clears it, and lines saying "belongs to this backup" must go with it.
   useEffect(() => {
@@ -1580,6 +1611,8 @@ export function EncryptorTool() {
     threshold?: number;
     /** §4.6 set codes of the container's share slots, for the owner's sheet. */
     setCodes: string[];
+    /** The backup's one paper part, printed on every strip as well, when chosen. */
+    stripBackupPart?: string | undefined;
     printedOn: string;
     /** A rehearsal that succeeded this session, to be written on the sheet. */
     rehearsal?: { on: string; strips: number[] } | undefined;
@@ -2373,7 +2406,11 @@ export function EncryptorTool() {
       // strip scanned on its own was only ever told it was in the wrong place.
       // The printed strips carry a QR precisely so this path exists.
       const shares = texts.filter(isShareText);
-      const rest = texts.filter((t) => !isShareText(t));
+      // The same code read twice is one code. Strips that each carry the
+      // backup put the same container symbol in every photo, and handing
+      // the reassembler that symbol twice made it refuse the set as
+      // "supplied twice". Shares are de-duplicated by mergeScannedShares.
+      const rest = [...new Set(texts.filter((t) => !isShareText(t)))];
       // Checked before any state changes, so a refused set leaves the form
       // exactly as it was.
       const merged = shares.length > 0 ? mergeScannedShares(shareInput, shares) : null;
@@ -5932,9 +5969,38 @@ export function EncryptorTool() {
 
           <p className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning">
             Each share is as sensitive as your password. Store them in separate
-            places, with people who would not casually combine them — anyone
-            holding {issuedShares?.threshold} needs nothing else from you.
+            places, with people who would not casually combine them. Anyone
+            holding {issuedShares?.threshold} of them and a copy of the backup
+            needs nothing else from you.
           </p>
+
+          {/*
+            Self-contained strips. Offered only when the backup fits one
+            printed symbol (§7.3 "Symbol size"), and off by default, because
+            it removes the one thing strip holders otherwise still need from
+            the owner: the backup itself. Both halves of that are on screen.
+          */}
+          {backupFitsOnStrip && issuedShares ? (
+            <div className="space-y-2 rounded-lg border border-border p-3" data-testid="strips-carry-backup">
+              <div className="flex items-center gap-3">
+                <Switch
+                  id="strips-carry-backup"
+                  checked={stripsCarryBackup}
+                  onCheckedChange={setStripsCarryBackup}
+                />
+                <Label htmlFor="strips-carry-backup" className="cursor-pointer text-sm text-foreground">
+                  Put the whole backup on every strip
+                </Label>
+              </div>
+              <p className="text-[12px] leading-snug text-muted-foreground">
+                This backup is small enough to print on each strip. Then any{" "}
+                {issuedShares.threshold} strips open it on their own, with no sheet and no
+                file from you. That is also the cost: {issuedShares.threshold} holders who
+                get together need nothing else. Leave this off to keep the backup itself
+                with you.
+              </p>
+            </div>
+          ) : null}
 
           <div className="flex flex-wrap gap-2">
             <Button
@@ -5985,6 +6051,10 @@ export function EncryptorTool() {
                     parts,
                     tooLarge,
                     setCodes,
+                    // Only a one-symbol backup can ride on a strip; the switch
+                    // is not offered otherwise, and this re-checks rather than
+                    // trusting that.
+                    stripBackupPart: stripsCarryBackup && parts.length === 1 ? parts[0] : undefined,
                     shares: issuedShares.shares,
                     threshold: issuedShares.threshold,
                     printedOn: new Date().toISOString().slice(0, 10),
@@ -6162,6 +6232,7 @@ export function EncryptorTool() {
           shares={paperVault.shares}
           threshold={paperVault.threshold}
           setCodes={paperVault.setCodes}
+          stripBackupPart={paperVault.stripBackupPart}
           printedOn={paperVault.printedOn}
           rehearsal={paperVault.rehearsal}
         />

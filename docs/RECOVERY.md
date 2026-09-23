@@ -191,6 +191,15 @@ per line, then:
 python3 keym2.py decrypt --in backup.keym --shares-from shares.txt --out recovered.txt
 ```
 
+**If each strip has two codes**, the second is the backup itself, a line
+starting `KMPART2:1/1:`, and the strips are all you need. Save that line from
+any one strip in a file called `parts.txt`, turn it back into the backup file,
+then use the command above on it:
+
+```bash
+python3 keym2.py join --in parts.txt --out backup.keym
+```
+
 **Which strips go with which backup.** Every strip for the same backup begins
 with the same two groups after `KMSHARE2:`, for example `KMSHARE2:47S0-JZGX-`.
 That is the backup's *set code*, and `inspect` prints it on the line `set code`.
