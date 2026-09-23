@@ -280,8 +280,10 @@ CIPHER_CHAINED = 0x02
 SLOT_TYPE_PASSPHRASE = 0x00
 SLOT_TYPE_PASSKEY_PRF = 0x01     # §4.7
 SLOT_TYPE_SHAMIR = 0x02          # §4.6
+SLOT_TYPE_PASSPHRASE_AND_SHARES = 0x03   # §4.8
 IMPLEMENTED_SLOT_TYPES = frozenset(
-    {SLOT_TYPE_PASSPHRASE, SLOT_TYPE_PASSKEY_PRF, SLOT_TYPE_SHAMIR})
+    {SLOT_TYPE_PASSPHRASE, SLOT_TYPE_PASSKEY_PRF, SLOT_TYPE_SHAMIR,
+     SLOT_TYPE_PASSPHRASE_AND_SHARES})
 
 # §6, and normative in both directions. A passphrase under HKDF is a password
 # with no stretching at all, and nothing in any output would reveal it; a
@@ -292,6 +294,9 @@ LEGAL_KDFS_FOR_SLOT_TYPE = {
     SLOT_TYPE_PASSPHRASE: frozenset({KDF_PBKDF2, KDF_ARGON2ID}),
     SLOT_TYPE_PASSKEY_PRF: frozenset({KDF_HKDF}),
     SLOT_TYPE_SHAMIR: frozenset({KDF_HKDF}),
+    # §4.8: the guessable half is a password, so the passphrase KDFs and never
+    # HKDF alone, exactly as for 0x00.
+    SLOT_TYPE_PASSPHRASE_AND_SHARES: frozenset({KDF_PBKDF2, KDF_ARGON2ID}),
 }
 
 # §3.3. The container flags byte is entirely reserved now; the key-file hint
@@ -332,6 +337,10 @@ INFO_SLOT_KEY = b"keymaker.v2.slot-key"
 # 32-byte share secret and a 32-byte PRF output must not be able to reach the
 # same slot key.
 CTX_PASSKEY_INPUT = b"keymaker.v2.passkey-input"
+
+# §4.8, a fourth domain string, for the slot that takes a passphrase and a share
+# set together.
+CTX_BOTH_INPUT = b"keymaker.v2.passphrase-and-shares"
 
 # §4.7. The PRF salt is derived from slot_salt rather than stored.
 #
@@ -984,8 +993,52 @@ def build_passkey_input(prf_output: bytes) -> bytes:
     return lp(CTX_PASSKEY_INPUT) + lp(prf_output)
 
 
-def derive_slot_key(slot: Slot, kdf_input: bytes) -> bytes:
+@dataclass(frozen=True)
+class BothSecret:
+    """
+    §4.8's two inputs, held together until the slot key is derived: §4.1's
+    kdf_input, which the slot's own KDF stretches, and §4.6's reconstructed
+    share secret, which it does not.
+    """
+
+    kdf_input: bytes
+    share_secret: bytes
+
+
+def build_both_input(passphrase_key: bytes, share_secret: bytes) -> bytes:
+    """
+    §4.8. The HKDF input for ``slot_type = 0x03``: the stretched passphrase and
+    the share secret, length-prefixed under their own domain string.
+    """
+    if len(passphrase_key) != SLOT_KEY_LEN:
+        raise UsageError("passphrase key must be 32 bytes")
+    if len(share_secret) != SHARE_VALUE_LEN:
+        raise UsageError("share secret must be 32 bytes")
+    return lp(CTX_BOTH_INPUT) + lp(passphrase_key) + lp(share_secret)
+
+
+def derive_slot_key(slot: Slot, kdf_input: "bytes | BothSecret") -> bytes:
     """§4.3. Assumes `slot` came from parse_slot, i.e. is already bounded."""
+    if slot.slot_type == SLOT_TYPE_PASSPHRASE_AND_SHARES:
+        # §4.8. The slot's KDF stretches the passphrase, the guessable half;
+        # HKDF then combines it with the share secret, which needs no
+        # stretching. Two stages, and only the first is memory-hard.
+        if not isinstance(kdf_input, BothSecret):
+            raise _reject()
+        passphrase_key = _stretch(slot, kdf_input.kdf_input)
+        return HKDF(
+            algorithm=hashes.SHA256(),
+            length=SLOT_KEY_LEN,
+            salt=slot.salt,
+            info=INFO_SLOT_KEY,
+        ).derive(build_both_input(passphrase_key, kdf_input.share_secret))
+    if isinstance(kdf_input, BothSecret):
+        raise _reject()
+    return _stretch(slot, kdf_input)
+
+
+def _stretch(slot: Slot, kdf_input: bytes) -> bytes:
+    """§4.3, one slot's own KDF over its input."""
     if slot.kdf_id == KDF_HKDF:
         # §3.2. No cost parameters, because the secret this stretches is
         # already 32 CSPRNG bytes and 2^256 does not get larger when multiplied
@@ -1900,6 +1953,75 @@ def build_passphrase_slot(
     return prefix + wrap_master_key(core, prefix, slot_key, master_key)
 
 
+def build_both_slot(
+    core: CoreHeader,
+    master_key: bytes,
+    password: str,
+    k: int,
+    n: int,
+    *,
+    kdf_id: int = KDF_ARGON2ID,
+    keyfile_bytes: Optional[bytes] = None,
+    iterations: int = 1_000_000,
+    time_cost: int = 3,
+    memory_kib: int = 65_536,
+    parallelism: int = 4,
+    salt: Optional[bytes] = None,
+    share_secret: Optional[bytes] = None,
+    coefficients: Optional[bytes] = None,
+    enforce_write_policy: bool = True,
+) -> tuple[bytes, list[str]]:
+    """
+    §4.8. Build one ``slot_type = 0x03`` record and the ``n`` shares that,
+    together with ``password``, open it. Returns (slot record, share texts).
+
+    The prefix is a passphrase slot's in every field but the type, and goes
+    through the same writer checks, because its parameters bound the same KDF.
+    The shares are §4.6's, named by this slot's salt.
+
+    ``salt``, ``share_secret`` and ``coefficients`` are for byte comparison only
+    (§4.5).
+    """
+    if salt is None:
+        salt = os.urandom(SALT_LEN)
+    if len(salt) != SALT_LEN:
+        raise UsageError("slot salt must be 32 bytes")
+    if len(master_key) != MASTER_KEY_LEN:
+        raise UsageError("master key must be 32 bytes")
+    if share_secret is None:
+        share_secret = os.urandom(SHARE_VALUE_LEN)
+
+    draft = Slot(
+        slot_type=SLOT_TYPE_PASSPHRASE_AND_SHARES,
+        kdf_id=kdf_id,
+        slot_flags=SLOT_FLAG_KEYFILE if keyfile_bytes is not None else 0,
+        salt=salt,
+        wrapped_key=b"",
+        iterations=iterations,
+        time_cost=time_cost,
+        memory_kib=memory_kib,
+        parallelism=parallelism,
+    )
+    check_writable_params(draft)
+    if enforce_write_policy:
+        check_write_policy(draft)
+
+    prefix = draft.pack_prefix()
+    parse_slot(prefix + b"\x00" * (MASTER_KEY_LEN + core.tag_overhead))
+
+    # Split first: shamir_split validates k and n, and a refused split should
+    # cost nothing, not an Argon2id derivation.
+    parts = shamir_split(share_secret, k, n, coefficients=coefficients)
+    slot_key = derive_slot_key(
+        draft, BothSecret(build_kdf_input(password, keyfile_bytes), share_secret))
+    record = prefix + wrap_master_key(core, prefix, slot_key, master_key)
+
+    set_id = share_set_id_v2(salt)
+    texts = [encode_share_v2(Share(set_id=set_id, threshold=k, index=x, value=value))
+             for x, value in parts]
+    return record, texts
+
+
 def assemble(core: CoreHeader, slots: list[bytes], payload: bytes,
              master_key: Optional[bytes] = None) -> bytes:
     """
@@ -2004,6 +2126,92 @@ def encrypt(
                     master_key if core.is_v3 else None)
 
 
+def encrypt_both(
+    plaintext: bytes,
+    password: str,
+    k: int,
+    n: int,
+    *,
+    kdf_id: int = KDF_ARGON2ID,
+    cipher_id: int = CIPHER_AES,
+    keyfile_bytes: Optional[bytes] = None,
+    iterations: int = 1_000_000,
+    time_cost: int = 3,
+    memory_kib: int = 65_536,
+    parallelism: int = 4,
+    salt: Optional[bytes] = None,
+    master_key: Optional[bytes] = None,
+    share_secret: Optional[bytes] = None,
+    coefficients: Optional[bytes] = None,
+    enforce_write_policy: bool = True,
+    version: int = VERSION,
+    container_id: Optional[bytes] = None,
+) -> tuple[bytes, list[str]]:
+    """
+    §4.8. A container whose only slot takes the passphrase **and** k of the n
+    shares returned. Returns (container, share texts).
+
+    §4.8 permits the 0x03 slot to stand alone, and this is the writer for that
+    case, because it is the case the type exists for: with a plain passphrase
+    slot beside it the shares would be decoration. What it costs is §4.8's to
+    state and the caller's to show: a forgotten passphrase, or fewer than k
+    strips, loses the backup.
+
+    ``salt``, ``master_key``, ``share_secret``, ``coefficients`` and
+    ``container_id`` are for byte comparison only, as in ``encrypt``.
+    """
+    if cipher_id not in (CIPHER_AES, CIPHER_CHACHA, CIPHER_CHAINED):
+        raise UsageError(f"unknown cipher_id {cipher_id}")
+    if version not in SUPPORTED_VERSIONS:
+        raise UsageError(f"unknown version {version}")
+    if version == VERSION_V3:
+        if container_id is None:
+            container_id = os.urandom(CONTAINER_ID_LEN)
+    elif container_id is not None:
+        raise UsageError("container_id is a v3 field")
+    core = CoreHeader(cipher_id=cipher_id, version=version,
+                      container_id=container_id or b"")
+    if master_key is None:
+        master_key = os.urandom(MASTER_KEY_LEN)
+    elif len(master_key) != MASTER_KEY_LEN:
+        raise UsageError("master key must be 32 bytes")
+
+    record, texts = build_both_slot(
+        core, master_key, password, k, n,
+        kdf_id=kdf_id, keyfile_bytes=keyfile_bytes, iterations=iterations,
+        time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
+        salt=salt, share_secret=share_secret, coefficients=coefficients,
+        enforce_write_policy=enforce_write_policy,
+    )
+    container = assemble(core, [record], encrypt_payload(core, master_key, plaintext),
+                         master_key if core.is_v3 else None)
+    return container, texts
+
+
+def shares_need_password(container: bytes, shares: list[str]) -> bool:
+    """
+    §4.8's MAY: do these shares belong to a slot that also takes the password?
+
+    True when their set id matches a 0x03 slot's. Computed from the slot salt,
+    which is in the clear, so saying so tells the holder nothing anyone holding
+    the container could not work out, and it saves them from being told
+    "decryption failed" about strips that were never wrong.
+    """
+    try:
+        _core, records, _payload = parse_container(container)
+        ids = {decode_share_any(t).set_id for t in shares}
+    except (KeymError, UsageError):
+        return False
+    for record in records:
+        slot = _attemptable(record)
+        if slot is None or slot.slot_type != SLOT_TYPE_PASSPHRASE_AND_SHARES:
+            continue
+        wide = share_set_id_v2(slot.salt)
+        if any(hmac.compare_digest(wide[:len(i)], i) for i in ids):
+            return True
+    return False
+
+
 def slot_secret_for(
     slot: Slot,
     *,
@@ -2011,7 +2219,7 @@ def slot_secret_for(
     keyfile_bytes: Optional[bytes],
     shares: Optional[list[str]],
     prf_output: Optional[bytes],
-) -> Optional[bytes]:
+) -> "Optional[bytes | BothSecret]":
     """
     §4.1 / §4.6. The slot secret this caller can offer *this* slot, or None if
     it holds nothing of the kind the slot wants.
@@ -2036,6 +2244,18 @@ def slot_secret_for(
         except KeymError:
             return None
         return build_shamir_input(secret)
+
+    if slot.slot_type == SLOT_TYPE_PASSPHRASE_AND_SHARES:
+        # §4.8: both, or this slot is not attempted. The set id is compared,
+        # in full, before anything is stretched, so shares for some other slot
+        # decline here rather than after an Argon2id derivation on their behalf.
+        if password is None or not shares:
+            return None
+        try:
+            secret = combine_shares(shares, expected_set_id=share_set_id_v2(slot.salt))
+        except KeymError:
+            return None
+        return BothSecret(build_kdf_input(password, keyfile_bytes), secret)
 
     if slot.slot_type == SLOT_TYPE_PASSKEY_PRF:
         if prf_output is None:
@@ -2353,6 +2573,49 @@ def add_shamir_slot(
 
     record, texts = build_shamir_slot(
         core, master, k, n,
+        salt=salt, share_secret=share_secret, coefficients=coefficients)
+    return (assemble(core, records + [record], payload,
+                     master if core.is_v3 else None), texts)
+
+
+def add_both_slot(
+    container: bytes,
+    unlock_password: Optional[str],
+    new_password: str,
+    k: int,
+    n: int,
+    *,
+    unlock_keyfile: Optional[bytes] = None,
+    unlock_shares: Optional[list[str]] = None,
+    unlock_prf_output: Optional[bytes] = None,
+    new_keyfile: Optional[bytes] = None,
+    kdf_id: int = KDF_ARGON2ID,
+    iterations: int = 1_000_000,
+    time_cost: int = 3,
+    memory_kib: int = 65_536,
+    parallelism: int = 4,
+    salt: Optional[bytes] = None,
+    share_secret: Optional[bytes] = None,
+    coefficients: Optional[bytes] = None,
+) -> tuple[bytes, list[str]]:
+    """
+    §4.8. Enrol a passphrase-and-shares slot on an existing container, holding
+    one other secret. Returns (container, share texts).
+
+    On its own this adds a way in that needs more than the existing ones, which
+    is only useful once those are removed (``remove_slot``): the point of 0x03
+    is a container nothing weaker opens.
+    """
+    core, records, payload, master = recover_master_key(
+        container, unlock_password, keyfile_bytes=unlock_keyfile,
+        shares=unlock_shares, prf_output=unlock_prf_output)
+    require_authentic_slot_table(container, core, records, master)
+    if len(records) >= SLOT_COUNT_MAX:
+        raise UsageError(f"container already has {SLOT_COUNT_MAX} slots")
+    record, texts = build_both_slot(
+        core, master, new_password, k, n,
+        kdf_id=kdf_id, keyfile_bytes=new_keyfile, iterations=iterations,
+        time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
         salt=salt, share_secret=share_secret, coefficients=coefficients)
     return (assemble(core, records + [record], payload,
                      master if core.is_v3 else None), texts)
@@ -3022,6 +3285,22 @@ def _describe_slot(index: int, record: bytes) -> list[str]:
             f"    salt        {slot.salt.hex()}",
             f"    credential  not stored — §4.7 keeps no identifier, so which "
             f"passkey opens this is not knowable from the file",
+        ]
+    if slot.slot_type == SLOT_TYPE_PASSPHRASE_AND_SHARES:
+        # §4.8. Both halves described: the passphrase's KDF and key file, and
+        # the share set's id and set code, so an heir can see from the file
+        # alone that the strips and the password are needed together.
+        kdf = (
+            f"PBKDF2-HMAC-SHA-256, iterations={slot.iterations}"
+            if slot.kdf_id == KDF_PBKDF2
+            else f"Argon2id, t={slot.time_cost} m={slot.memory_kib}KiB p={slot.parallelism}"
+        )
+        return [
+            f"  slot {index}       type 0x{slot.slot_type:02x} (password and share set, both needed)",
+            f"    kdf         {kdf}, then HKDF-SHA-256 with the shares",
+            f"    key file    {'required' if slot.keyfile_used else 'not used'}",
+            f"    set code    {share_set_code(slot.salt)}",
+            f"    salt        {slot.salt.hex()}",
         ]
     if slot.slot_type == SLOT_TYPE_SHAMIR:
         # No threshold and no share count: §4.6 keeps both out of the container,
@@ -4116,6 +4395,77 @@ def _selftest() -> int:
     check("a KMSHARE1 strip, or a truncated one, reports no set code",
           share_text_set_code(_v1_share) is None
           and share_text_set_code(SHARE2_PREFIX + _code[:4]) is None)
+    # --- §4.8 passphrase-and-shares slot (0x03) -------------------------------
+    _both_draft = Slot(slot_type=SLOT_TYPE_PASSPHRASE_AND_SHARES, kdf_id=KDF_PBKDF2,
+                       slot_flags=0, salt=bytes(range(32)), wrapped_key=b"", iterations=1)
+    check("§4.8's vector: the slot key from a password, a salt and a share secret",
+          derive_slot_key(_both_draft, BothSecret(build_kdf_input("correct horse", None),
+                                                  bytes(range(0x40, 0x60)))).hex()
+          == "558d5bd0d8e944df524cfefacad4bf4f76602ba84ebe315d29044af809be9f8c")
+    _pp_draft = Slot(slot_type=SLOT_TYPE_PASSPHRASE, kdf_id=KDF_PBKDF2, slot_flags=0,
+                     salt=bytes(range(32)), wrapped_key=b"", iterations=1)
+    check("a 0x03 slot key is not the 0x00 key for the same password and salt",
+          derive_slot_key(_pp_draft, build_kdf_input("correct horse", None))
+          != derive_slot_key(_both_draft, BothSecret(build_kdf_input("correct horse", None),
+                                                     bytes(range(0x40, 0x60)))))
+    rejects("a 0x03 slot declaring HKDF is refused (§6 pairing)",
+            lambda: parse_slot(bytes([SLOT_TYPE_PASSPHRASE_AND_SHARES, KDF_HKDF, 0])
+                               + bytes(5) + bytes(32) + bytes(8) + bytes(48)))
+
+    _pt = b"needs the executor and the family"
+    for _ver in (VERSION_V2, VERSION_V3):
+        _both, _strips = encrypt_both(_pt, "executor password", 2, 3, kdf_id=KDF_PBKDF2,
+                                      iterations=600_000, version=_ver)
+        _tag = f"v{_ver}"
+        check(f"{_tag}: a 0x03 container opens with the password and two strips",
+              decrypt(_both, "executor password", shares=[_strips[0], _strips[2]]) == _pt)
+        rejects(f"{_tag}: the password alone does not open it",
+                lambda: decrypt(_both, "executor password"))
+        rejects(f"{_tag}: the strips alone do not open it",
+                lambda: decrypt(_both, shares=_strips))
+        rejects(f"{_tag}: a wrong password with the right strips does not",
+                lambda: decrypt(_both, "not the password", shares=_strips[:2]))
+        rejects(f"{_tag}: one strip with the password does not",
+                lambda: decrypt(_both, "executor password", shares=_strips[:1]))
+    # A share set for some other slot is declined before the KDF runs, so a
+    # heap of the wrong strips costs nothing.
+    _other_container, _other_strips = add_shamir_slot(
+        encrypt(b"other", "other password", kdf_id=KDF_PBKDF2, iterations=600_000),
+        "other password", 2, 3)
+    _both_slot = parse_slot(parse_container(_both)[1][0])
+    check("strips for a different slot are declined before any stretching",
+          slot_secret_for(_both_slot, password="executor password", keyfile_bytes=None,
+                          shares=_other_strips[:2], prf_output=None) is None)
+    check("shares_need_password knows a 0x03 slot's strips",
+          shares_need_password(_both, _strips[:2])
+          and not shares_need_password(_other_container, _other_strips[:2]))
+    check("inspect says both are needed, and gives the set code",
+          "password and share set, both needed" in _inspect(_both)
+          and f"set code    {share_set_code(_both_slot.salt)}" in _inspect(_both))
+    # Enrolled beside a passphrase, then the passphrase removed: the path an
+    # app takes to turn an existing backup into one that needs both.
+    _plain = encrypt(_pt, "old password", kdf_id=KDF_PBKDF2, iterations=600_000)
+    _added, _add_strips = add_both_slot(_plain, "old password", "executor password", 2, 3,
+                                        kdf_id=KDF_PBKDF2, iterations=600_000)
+    _only = remove_slot(_added, 0, unlock_password="old password")
+    check("add_both_slot then remove_slot leaves a container that needs both",
+          decrypt(_only, "executor password", shares=_add_strips[1:])
+          == _pt and decrypt_report(_only, "executor password",
+                                    shares=_add_strips[1:]).slot_table_authentic)
+    rejects("and the old password no longer opens it",
+            lambda: decrypt(_only, "old password"))
+    # §4.4: a reader that predates §4.8 skips 0x03. Beside a passphrase slot
+    # it opens as before; alone, it is refused like any other unopenable file.
+    _saved = IMPLEMENTED_SLOT_TYPES
+    try:
+        globals()["IMPLEMENTED_SLOT_TYPES"] = _saved - {SLOT_TYPE_PASSPHRASE_AND_SHARES}
+        check("a pre-§4.8 reader still opens {passphrase, 0x03} by passphrase",
+              decrypt(_added, "old password") == _pt)
+        rejects("a pre-§4.8 reader refuses a container whose only slot is 0x03",
+                lambda: decrypt(_only, "executor password", shares=_add_strips[1:]))
+    finally:
+        globals()["IMPLEMENTED_SLOT_TYPES"] = _saved
+
     _other_code = share_set_code(bytes(range(1, 33)))
     check("a different slot salt gives a different set code", _other_code != _code)
 
@@ -5567,6 +5917,14 @@ def main(argv: Optional[list[str]] = None) -> int:
         password = (args.password if (shares or prf_output)
                     else resolve_password(args.password,
                                           confirm=(args.cmd == "encrypt")))
+        # §4.8. Strips for a slot that takes the password as well: they alone
+        # can never open it, so asking is the only useful next step, and the
+        # sentence says why rather than leaving a bare prompt to be puzzled over.
+        if (args.cmd == "decrypt" and shares and password is None
+                and shares_need_password(data, shares)):
+            print("These strips open this backup together with its password.",
+                  file=sys.stderr)
+            password = resolve_password(None)
     except UsageError as e:
         print(f"error: {e}", file=sys.stderr)
         return 1

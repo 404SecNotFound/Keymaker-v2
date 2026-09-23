@@ -3,7 +3,7 @@
   "version": 1,
   "password": "correct horse battery staple — test only",
   "keyFileHex": "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff",
-  "note": "APPEND-ONLY corpus. Test-only credentials — never use for real data. A fixture with no `version` field is v1; the field was added when v2 vectors joined the corpus and the v1 entries were left untouched. `slotTableAuthentic` appears only on v3 vectors, which are the only ones carrying a slot_table_mac: true where the table is intact, false for the one vector whose slot was stripped (v3 §5.2 — it must still open, and the reader must still report the table has changed).",
+  "note": "APPEND-ONLY corpus. Test-only credentials — never use for real data. A fixture with no `version` field is v1; the field was added when v2 vectors joined the corpus and the v1 entries were left untouched. `slotTableAuthentic` appears only on v3 vectors, which are the only ones carrying a slot_table_mac: true where the table is intact, false for the one vector whose slot was stripped (v3 §5.2 — it must still open, and the reader must still report the table has changed). A `both` vector (§4.8) opens only with the password and its shares together.",
   "fixtures": [
     {
       "name": "pbkdf2-aes256gcm",
@@ -381,6 +381,66 @@
       "keyFile": false,
       "plaintext": "Keymaker fixture — v2 self-extracting page / aes-256-gcm",
       "selfextract": true
+    },
+    {
+      "name": "v3-both-aes256gcm",
+      "file": "v3-both-aes256gcm.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 password and shares 3-of-5 / aes-256-gcm",
+      "both": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE2:TBHW-EHEQ-P84N-PNBE-RWB4-AGA5-JG1G-3MEC-M8WR-Z44Z-8HAT-7NQ8-GPDA-XNGS-8PPJ-QS71-SSX3-3P5V-ZNTD-9CSZ-M138-6XTP-3Z15-JSBR-DYSA-R5MQ-7C",
+          "KMSHARE2:TBHW-EHEQ-P84N-PNBE-RWB4-AGA5-JG1G-4S3J-0RQX-MX86-R0S8-K32R-25B4-T2WA-Z2S4-3XNW-PT38-PGT2-6T4T-KZ22-QN5G-FNMR-G89X-MMBN-RGX5-FX3T-84",
+          "KMSHARE2:TBHW-EHEQ-P84N-PNBE-RWB4-AGA5-JG1G-6XMT-HDG4-ABNE-QB70-QAE3-PQWP-GMSN-PD4Q-MYV7-HB9V-ARPX-2BY2-1WE6-9SG2-7J0E-W2E6-G7JD-7V13-64RP-H4",
+          "KMSHARE2:TBHW-EHEQ-P84N-PNBE-RWB4-AGA5-JG1G-9B6A-VQTG-X356-Y5ZR-1P9X-TSNH-MJY1-CAGJ-W0M1-H9ND-2PZZ-PTCQ-EGEQ-JB6P-XK3B-NXKE-GJRQ-Y6H7-HJTT-58",
+          "KMSHARE2:TBHW-EHEQ-P84N-PNBE-RWB4-AGA5-JG1G-BFH2-A2X9-3NRE-HE1G-5Z56-EB23-Y4VY-55D1-B3TT-PRZY-YYK0-JBPF-WK2K-61GD-22CY-Z4BY-2G1P-M0CE-2MVN-DG"
+        ]
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-both-chacha20poly1305",
+      "file": "v3-both-chacha20poly1305.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 password and shares 3-of-5 / chacha20-poly1305",
+      "both": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE2:M1T4-RPBJ-PR97-81JA-HR5J-BVDM-2G1G-3BQT-NJWT-RWAR-RKV7-ZRZ1-ZJ76-HYKM-QYJW-AQ3X-Q3Z1-N7WC-SMZA-8JWY-SR73-1D8T-6QYX-FGDY-MZRC-J8YJ-PG",
+          "KMSHARE2:M1T4-RPBJ-PR97-81JA-HR5J-BVDM-2G1G-50JF-V59E-5YG1-K304-JTH7-4NBD-9M94-E70W-2EQH-VY00-W86Z-3GEX-14JB-HCJX-PHZ4-2EM4-1P64-EXPS-QHNZ-50",
+          "KMSHARE2:M1T4-RPBJ-PR97-81JA-HR5J-BVDM-2G1G-6EM7-Y2KE-WFNH-G38E-YF2E-BEA0-SM4Z-Z0GG-C369-GP7T-PB6M-MQHB-R3Z4-469P-PKR7-AEGP-6291-D64S-95RB-G0",
+          "KMSHARE2:M1T4-RPBJ-PR97-81JA-HR5J-BVDM-2G1G-9X1X-0QQ5-EXJZ-KYSD-7HS2-M1D6-J3SC-KCRX-REGB-HAT6-PX0M-M23D-BM9S-6WA4-6132-Y7V7-HEBY-YA2F-HW1Y-0W",
+          "KMSHARE2:M1T4-RPBJ-PR97-81JA-HR5J-BVDM-2G1G-AK7N-5GD5-QCQF-GYH7-B4AB-VTCB-23MQ-2B8H-P31K-T2XW-WY0Z-35WV-JK4P-SM7K-E233-7KNG-P5YW-0YY4-WJ18-MC"
+        ]
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-both-chained",
+      "file": "v3-both-chained.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 password and shares 3-of-5 / chained",
+      "both": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE2:TQ45-46JC-VH8D-6714-2MG2-TB4A-CW1G-2C56-MJ36-1PAE-CV4H-Y9HQ-C6RW-NHFS-XT4Y-ZD77-T4BN-CBBZ-KWN8-ZMHX-9HYN-K8A9-7MB5-DH12-RENZ-PF8S-XM",
+          "KMSHARE2:TQ45-46JC-VH8D-6714-2MG2-TB4A-CW1G-53RS-564G-RTVG-0CYD-CM79-DQVD-8SDS-3M8Z-DHGJ-9WSV-90XY-DM5S-BNX4-8SEW-7X31-VKF9-M267-4VR2-FVMD-2M",
+          "KMSHARE2:TQ45-46JC-VH8D-6714-2MG2-TB4A-CW1G-7PDS-SG7T-RA4X-TF2X-1CDM-CX58-NWSM-F301-QTBP-HXM3-5TKD-A1TK-PPPT-GRXB-H0MR-1B57-H1DK-NQ5N-X599-X8",
+          "KMSHARE2:TQ45-46JC-VH8D-6714-2MG2-TB4A-CW1G-981K-8D3J-K92P-ZY8V-VMCK-5YVC-JEZ8-TWKJ-ABE5-JJXW-Z182-RN8B-6HQT-FJKE-YPT8-55GE-97V9-H71X-SZ2C-8C",
+          "KMSHARE2:TQ45-46JC-VH8D-6714-2MG2-TB4A-CW1G-BXMK-MV0R-KSXV-5XMB-PC6E-4M59-FBB5-PBVC-G0N1-AKG4-KV6H-Z0Q1-VJW4-FV2Q-0YY8-4R72-10D2-GJK0-WWNM-7C"
+        ]
+      },
+      "slotTableAuthentic": true
     }
   ]
 }

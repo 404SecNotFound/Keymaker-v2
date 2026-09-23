@@ -22,6 +22,7 @@
 
 import {
   encryptContainer,
+  encryptContainerWithSharesRequired,
   decryptData,
   secureErase,
   KeymakerError,
@@ -334,7 +335,7 @@ export async function encryptViaWorker(
   password: string,
   keyFile: ArrayBuffer | null,
   options: KeymakerOptions,
-  shamir?: { threshold: number; count: number },
+  shamir?: { threshold: number; count: number; withPassword?: boolean },
   passkey?: { prfOutput: Uint8Array; salt: Uint8Array }
 ): Promise<EncryptOutcome> {
   try {
@@ -359,7 +360,7 @@ async function encryptViaWorkerInner(
   password: string,
   keyFile: ArrayBuffer | null,
   options: KeymakerOptions,
-  shamir?: { threshold: number; count: number },
+  shamir?: { threshold: number; count: number; withPassword?: boolean },
   passkey?: { prfOutput: Uint8Array; salt: Uint8Array }
 ): Promise<EncryptOutcome> {
   const w = (await ready()) ? spawn() : null;
@@ -370,9 +371,24 @@ async function encryptViaWorkerInner(
     // needs its own copy, taken before the call. Reading `keyFile` afterwards
     // yields zeros, the slot key derives from the wrong material, and the
     // enrolment fails with "Decryption failed." in the middle of an encryption.
+    // Not taken for §4.8's single-slot write, which returns before any
+    // enrolment could read it, and so before anything would erase it.
     const keyFileForSlots =
-      keyFile && (shamir || passkey) ? new Uint8Array(keyFile.slice(0)) : null;
+      keyFile && (shamir || passkey) && !shamir?.withPassword ? new Uint8Array(keyFile.slice(0)) : null;
     try {
+      // §4.8, the same branch the worker takes: one slot that needs the
+      // password and the strips together, and nothing beside it.
+      if (shamir?.withPassword) {
+        if (passkey) {
+          throw new KeymakerError(
+            "invalid-input",
+            "A passkey would open this backup on its own, and it was set to need the password and the strips together."
+          );
+        }
+        return await encryptContainerWithSharesRequired(
+          data, password, keyFile, options, shamir.threshold, shamir.count
+        );
+      }
       let out = await encryptContainer(data, password, keyFile, options);
       let shares: string[] | undefined;
       try {

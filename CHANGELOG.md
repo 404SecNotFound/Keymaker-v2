@@ -2,8 +2,10 @@
 
 ## Unreleased
 
-No container format change. Everything here reads and writes the bytes v2.2.0
-did; the fixture corpus is unchanged, and both parity gates pass.
+One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),
+which a container carries only when its owner chooses it. Every container
+v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
+(three vectors are added), and both parity gates pass.
 
 ### Added
 - **Recovery strips scan back in.** The paper vault has always printed a QR on
@@ -15,6 +17,19 @@ did; the fixture corpus is unchanged, and both parity gates pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **Strips that need the password too.** A new slot type, `0x03` (FORMAT-V2-DESIGN
+  §4.8), takes the password *and* k strips together: the executor holds one,
+  the family the other, and neither opens the backup alone. The switch sits
+  under Recovery shares, off by default, and states the cost where the choice
+  is made: a forgotten password or too few strips loses the backup, and older
+  readers cannot open it. No passkey can be added beside it. The shares
+  dialog, its rehearsal, the paper vault and the receipt all say which kind
+  of strip it is; the Decrypt tab tells someone with strips and no password
+  that the password is needed too, instead of "decryption failed", and so
+  does `keym2.py`, which then asks for it. Specified first, implemented in
+  `keym2.py` from the spec, then TypeScript; byte-identical across both
+  versions, three ciphers and both KDFs; three frozen fixtures; RECOVERY.md
+  explains it and `recovery_test.py` runs it.
 - **Strips that carry the backup, for a small one.** When a backup fits one
   printed symbol, the shares dialog offers *Put the whole backup on every
   strip*. Each strip then prints the backup beside its share, so any k strips

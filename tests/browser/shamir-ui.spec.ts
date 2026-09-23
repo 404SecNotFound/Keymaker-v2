@@ -522,3 +522,88 @@ test.describe("one unlock path at a time", () => {
     await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
   });
 });
+
+/**
+ * §4.8, "the strips need the password too": one slot that takes both, and
+ * nothing beside it. What a person sees at each step has to match what the
+ * format now does: the choice states its cost, the passkey goes away, the
+ * strips alone are told they need the password rather than "decryption
+ * failed", the password alone fails, and the two together open it.
+ */
+test.describe("strips that need the password too", () => {
+  test("neither half opens it alone, and together they do", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+
+    const both = visible(page.getByRole("switch", { name: "The strips need the password too" }));
+    await expect(both).toHaveAttribute("aria-checked", "false");
+    await both.click();
+    await expect(both).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("shares-need-password-cost")).toContainText(
+      "loses the backup for good"
+    );
+    const passkeySwitch = page.getByRole("switch", { name: "Passkey quick access" });
+    if ((await passkeySwitch.count()) > 0) await expect(passkeySwitch).toBeDisabled();
+
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/open this container together with the\s+password, and only with it/)).toBeVisible();
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+    const armored = await page.evaluate(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+    );
+    await expect(page.getByTestId("receipt-ways")).toContainText("both needed");
+
+    // The strips alone: named for what they are, before any work.
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
+    await visible(page.locator("#share-input")).fill(`${shares[0]}\n${shares[2]}`);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(
+      page.getByText(/These strips open this backup together with its password/).first()
+    ).toBeVisible({ timeout: 30_000 });
+    // A refused unlock renders no output at all.
+    await expect(page.locator("#output-text")).toHaveCount(0);
+
+    // Both together.
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("the password alone does not open it", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByRole("switch", { name: "The strips need the password too" })).click();
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+    const armored = await page.evaluate(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+    );
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(page.getByText(/decryption failed|could not be decrypted|password may be incorrect/i).first()).toBeVisible({
+      timeout: 90_000,
+    });
+    // A refused unlock renders no output at all.
+    await expect(page.locator("#output-text")).toHaveCount(0);
+  });
+});

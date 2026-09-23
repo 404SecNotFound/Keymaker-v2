@@ -40,6 +40,7 @@ import {
   addShamirSlotKeym2,
   addPasskeySlotKeym2,
   encryptKeym2,
+  encryptKeym2WithSharesRequired,
   keym2SlotLen,
   KEYM2_VERSION_V3,
 } from "../src/lib/keym-v2.ts";
@@ -489,6 +490,46 @@ async function main() {
     }
   }
 
+  // §4.8, a container whose only slot takes the password *and* the shares.
+  // Frozen for the same reason the share-set vectors are, twice over: the
+  // strings on the paper and the password in a head both have to keep opening
+  // this, and neither may ever open it alone. Added after the page so every
+  // entry before it keeps its place in fixtures.json.
+  for (const cipher of CIPHERS) {
+    const name = `v3-both-${cipher.slug}`;
+    const file = `${name}.keym`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+      continue;
+    }
+    const plaintext = `Keymaker fixture — v3 password and shares 3-of-5 / ${cipher.name}`;
+    const { container, shares } = await encryptKeym2WithSharesRequired(
+      new TextEncoder().encode(plaintext),
+      PASSWORD,
+      null,
+      { kdf: PBKDF2_V2_PARAMS, cipher: cipher.id },
+      3,
+      5,
+      KEYM2_VERSION_V3
+    );
+    writeFileSync(join(DIR, file), Buffer.from(container));
+    fixtures.push({
+      name,
+      file,
+      version: 3,
+      kdf: "pbkdf2",
+      cipher: cipher.name,
+      keyFile: false,
+      plaintext,
+      both: { threshold: 3, shares },
+      slotTableAuthentic: true,
+    });
+    wrote++;
+    console.log(`wrote ${file} (${container.byteLength} bytes, password and 5 shares)`);
+  }
+
   writeFileSync(
     metaPath,
     JSON.stringify(
@@ -504,7 +545,8 @@ async function main() {
           "`slotTableAuthentic` appears only on v3 vectors, which are the only " +
           "ones carrying a slot_table_mac: true where the table is intact, " +
           "false for the one vector whose slot was stripped (v3 §5.2 — it must " +
-          "still open, and the reader must still report the table has changed).",
+          "still open, and the reader must still report the table has changed). " +
+          "A `both` vector (§4.8) opens only with the password and its shares together.",
         fixtures,
       },
       null,

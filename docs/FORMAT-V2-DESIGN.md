@@ -502,7 +502,8 @@ a slot is 96 or 112 bytes.
 | 0x00 | Passphrase, optionally with a key file (§4.1) | Implemented |
 | 0x01 | Passkey / WebAuthn PRF (§4.7) | Implemented |
 | 0x02 | Shamir share set (§4.6) | Implemented |
-| 0x03–0xFF | Unassigned | Reserved |
+| 0x03 | Passphrase **and** a Shamir share set (§4.8) | Implemented |
+| 0x04–0xFF | Unassigned | Reserved |
 
 The wire layout for 0x01 is deliberately **not** written here. This project's
 rule is that a specification is tested by an implementation written from it, and
@@ -1197,6 +1198,101 @@ origin. Convenience and phishing resistance. Saying "hardware-grade security"
 over a file that a 12-character password also opens would be the KM-02
 overstatement in a new place.
 
+### 4.8 Slot secret for a passphrase-and-shares slot (`slot_type = 0x03`)
+
+Every other slot is one secret, and any one slot opens the container. This slot
+is two: it opens only for someone holding **both** the passphrase **and** enough
+shares. It exists for the case the other slots cannot express, an estate where
+the executor knows the password and the family holds the strips, and neither
+should be able to open the backup alone.
+
+```
+passphrase_key = KDF(kdf_input, slot_salt, slot_params)       32 bytes
+                 -- §4.1's kdf_input, this slot's slot_kdf_id and parameters
+
+share_secret   = §4.6's, reconstructed from k shares whose set id is
+                 share_set_id_v2(slot_salt)                     32 bytes
+
+both_input     = LP("keymaker.v2.passphrase-and-shares")
+               || LP(passphrase_key)
+               || LP(share_secret)
+
+slot_key       = HKDF-SHA-256(both_input, slot_salt, "keymaker.v2.slot-key", 32)
+```
+
+`LP` is §4.1's, and the domain string differs from §4.1's, §4.6's and §4.7's, so
+this slot's key can never equal a key another slot type would derive from the
+same bytes.
+
+**The shape of the record does not change**, as it did not for 0x01 and 0x02.
+Same 48-byte prefix, same `wrapped_key`, bytes 3..7 reserved and zero. The
+parameter block and `slot_kdf_id` are the passphrase's, bounded by §6 exactly as
+for 0x00, and `slot_flags` bit 0 means what it means for 0x00: a key file is part
+of `kdf_input`. `slot_kdf_id` is 0x00 or 0x01, **never** 0x02 (§6's pairing
+table): the guessable half of this secret is a password, and a password under
+HKDF alone is a password with no stretching.
+
+**The shares are §4.6's, unchanged.** A writer splits `share_secret` exactly as
+§4.6 does and writes `KMSHARE2` records whose set id is
+`share_set_id_v2(slot_salt)`, so a strip for this slot looks like any other strip
+and carries a set code (§4.6) like any other.
+
+**Why two stages, and why in this order.** The memory-hard cost belongs on the
+guessable input, so the passphrase goes through the slot's own KDF first, as it
+would in a 0x00 slot. The share secret is 32 CSPRNG bytes and needs no
+stretching, so the two are combined by HKDF, which is §4.6's construction for an
+unguessable input. Feeding the share secret into Argon2id instead would pay a
+memory-hard cost to defend a value that cannot be guessed; XOR-ing the two would
+need its own argument for domain separation, where length-prefixed concatenation
+under a domain string is the argument every other slot already uses.
+
+**Reading.** A reader attempts a 0x03 slot only when it holds a passphrase *and*
+shares, and only after the shares' set id matches this slot's
+`share_set_id_v2(slot_salt)`, compared in full (§6), **before** the KDF runs. A
+set for a different slot is then declined without paying for an Argon2id
+derivation on its behalf. Every other outcome is §4.4's: a wrong passphrase, too
+few shares or a mistyped strip disqualifies this slot and the walk continues.
+
+A reader holding shares whose set id matches a 0x03 slot, but no passphrase,
+**MAY** say that these shares open this backup together with the password. That
+is not an oracle: the set id is derived from `slot_salt`, which is in the clear,
+so the statement tells the holder nothing anyone holding the container could not
+compute. It is the difference between "decryption failed", which sends an heir
+to retype strips that were never wrong, and the one sentence they need.
+
+**Writing.** A container **MAY** have a 0x03 slot as its only slot. That is the
+point of the type: a plain 0x00 slot beside it would open the container with the
+passphrase alone and make the shares decoration. The cost has to be stated where
+the choice is made, not discovered later:
+
+- **Both halves are needed, forever.** A forgotten passphrase or fewer than `k`
+  strips loses the backup, and no other secret can stand in for either.
+- **A reader that predates this section cannot open it.** §4.4 has it skip the
+  unknown type, which is correct and means a container whose only slot is 0x03
+  opens only in readers that implement this section.
+
+A writer **SHOULD** say both before writing such a container. §4.7's "never
+travels alone" rule does not apply: that rule exists because a passkey is
+hardware that cannot be backed up, and both halves of this slot are archival,
+one in a head or a password manager and the other on paper.
+
+v3's `slot_table_mac` covers this slot as it covers any other (FORMAT-V3-DESIGN
+§5), so removing a 0x03 slot from a v3 container is reported like any other
+change to the table.
+
+Vector. PBKDF2 with one iteration, which §6's reader bounds admit and its
+writer policy does not, so that a third implementation can check the
+construction without waiting for a real derivation:
+
+| | |
+|---|---|
+| password | `correct horse` (no key file) |
+| `slot_salt` | `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f` |
+| `slot_kdf_id`, parameters | 0x00 (PBKDF2), 1 iteration |
+| `share_secret` | `404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f` |
+| `passphrase_key` | `894e1ee6ba584197c33cfae7f050fe3691e8d79a9899caa8c71b206d604ddc21` |
+| `slot_key` | `558d5bd0d8e944df524cfefacad4bf4f76602ba84ebe315d29044af809be9f8c` |
+
 ## 5. Payload: chunked AEAD
 
 The change that removes the **format's** reason for a 100 MB cap. The app still
@@ -1431,6 +1527,7 @@ is the whole of its validation.
 |---|---|
 | 0x00 passphrase | 0x00, 0x01 — **never 0x02** |
 | 0x02 Shamir | 0x02 — **only** |
+| 0x03 passphrase and shares | 0x00, 0x01 — **never 0x02** (§4.8) |
 
 A reader MUST disqualify a slot that violates either direction, before invoking
 any KDF. The forbidden combinations are the two that would be silently wrong
@@ -1934,6 +2031,15 @@ is the one that closed the document.
    by a test edit makes the printed procedure false.
 5. New fixtures are **added** to `scripts/fixtures/keymaker/`, never
    substituted, and the v1 fixtures stay exactly as they are.
+
+**What "frozen" still admits: a new slot type.** Frozen means no byte a reader
+already interprets changes meaning. A new `slot_type` changes none: §4.4 has
+every existing reader skip a type it does not implement, so a container carrying
+one still opens through its other slots in every reader ever shipped, and one
+whose only slot is the new type is refused by an old reader with the same
+generic failure as any other unopenable file. §4.8 was added on exactly those
+terms, and any future type must be too: a fixed-width record, the same prefix,
+and nothing outside the slot that an old reader would read differently.
 
 ## 10. Review checklist
 

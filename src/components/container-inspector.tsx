@@ -25,6 +25,7 @@ import {
   KEYM2_KDF_HKDF,
   KEYM2_SLOT_TYPE_PASSKEY,
   KEYM2_SLOT_TYPE_SHAMIR,
+  KEYM2_SLOT_TYPE_BOTH,
   KEYM2_VERSION,
   KEYM2_VERSION_V2,
   KEYM2_VERSION_V3,
@@ -244,6 +245,16 @@ function parsePeek(peek: Uint8Array): ParsedPeek | "legacy" | null {
       } else if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) {
         // No k or n: §4.6 stores neither, and this pane never invents.
         slots.push({ index: i, label: "Share set", detail: "Shamir · HKDF-SHA-256" });
+      } else if (slot.slotType === KEYM2_SLOT_TYPE_BOTH) {
+        // §4.8. Both named, because "Passphrase" alone would tell someone the
+        // password opens it, and it does not without the strips.
+        const kdf =
+          slot.kdf.kdf === KdfId.PBKDF2
+            ? `PBKDF2 · ${slot.kdf.params.iterations.toLocaleString("en-US")} iterations`
+            : slot.kdf.kdf === KdfId.ARGON2ID
+              ? `Argon2id · ${Math.round(slot.kdf.params.memoryKiB / 1024)} MiB`
+              : "";
+        slots.push({ index: i, label: "Password and shares", detail: `both needed · ${kdf}` });
       } else if (slot.kdf.kdf === KEYM2_KDF_HKDF) {
         slots.push({ index: i, label: "HKDF slot", detail: "HKDF-SHA-256" });
       } else if (slot.kdf.kdf === KdfId.PBKDF2) {

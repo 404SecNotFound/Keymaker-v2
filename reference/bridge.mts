@@ -56,6 +56,7 @@ import {
 import {
   encryptKeym2,
   encryptKeym2WithExplicitSecrets,
+  encryptKeym2WithSharesRequired,
   decryptKeym2,
   KEYM2_VERSION_V2,
   KEYM2_VERSION_V3,
@@ -182,6 +183,46 @@ try {
       containerId === undefined ? new Uint8Array(0) : Uint8Array.from(Buffer.from(containerId, "hex"))
     );
     writeFileSync(outFile, Buffer.from(out));
+
+  } else if (cmd === "encryptboth") {
+    // §4.8. A container whose only slot takes the password and k of n shares,
+    // every random input pinned (salt, master key, share secret, coefficients,
+    // container id), so crosstest2.py can compare the bytes and the share
+    // strings each implementation writes.
+    const kdf: KdfParams =
+      flag("kdf") === "argon2id"
+        ? {
+            kdf: KdfId.ARGON2ID,
+            params: {
+              timeCost: Number(flag("time") ?? 2),
+              memoryKiB: Number(flag("mem") ?? 16384),
+              parallelism: Number(flag("par") ?? 2),
+            },
+          }
+        : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
+    const hex = (name: string) => {
+      const v = flag(name);
+      return v === undefined ? undefined : Uint8Array.from(Buffer.from(v, "hex"));
+    };
+    const containerId = hex("container-id");
+    const { container, shares } = await encryptKeym2WithSharesRequired(
+      new Uint8Array(inputBuf),
+      password,
+      keyFile ? new Uint8Array(keyFile) : null,
+      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
+      Number(flag("threshold")),
+      Number(flag("shares")),
+      containerId === undefined ? KEYM2_VERSION_V2 : KEYM2_VERSION_V3,
+      {
+        salt: hex("salt"),
+        masterKey: hex("master-key"),
+        containerId,
+        shareSecret: hex("share-secret"),
+        coefficients: hex("share-coefficients"),
+      }
+    );
+    writeFileSync(outFile, Buffer.from(container));
+    writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
 
   } else if (cmd === "encryptapp") {
     const kdf: KdfParams =

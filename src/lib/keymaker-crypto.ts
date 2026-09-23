@@ -900,6 +900,57 @@ export async function encryptContainer(
   }
 }
 
+/**
+ * §4.8. A container whose only slot takes the password *and* `threshold` of
+ * the `count` shares returned, with `encryptContainer`'s validation and its
+ * key-file contract (the caller's buffer is zeroed once used).
+ *
+ * The worker and its no-worker fallback both call this, so a browser without a
+ * Worker writes the same kind of backup.
+ */
+export async function encryptContainerWithSharesRequired(
+  dataBuffer: ArrayBuffer,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null,
+  options: KeymakerOptions,
+  threshold: number,
+  count: number
+): Promise<{ data: ArrayBuffer; shares: string[] }> {
+  validateCommon(dataBuffer, password, true);
+  if (!password) {
+    throw new KeymakerError("credential-required", "A password is required for encryption.");
+  }
+  if (!options || !options.kdf || options.cipher === undefined) {
+    throw new Error(
+      "encryptContainerWithSharesRequired requires explicit kdf and cipher options."
+    );
+  }
+  validateKdfParams(options.kdf, "encrypt");
+  try {
+    const { encryptKeym2WithSharesRequired } = await import("./keym-v2");
+    const { container, shares } = await encryptKeym2WithSharesRequired(
+      new Uint8Array(dataBuffer),
+      password,
+      keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+      { kdf: options.kdf, cipher: options.cipher },
+      threshold,
+      count
+    );
+    return {
+      data: container.buffer.slice(container.byteOffset, container.byteOffset + container.byteLength) as ArrayBuffer,
+      shares,
+    };
+  } catch (error) {
+    if (isUserFacingError(error)) throw error;
+    if (error instanceof Error && /required|too (large|long)|invalid characters|not available|threshold|count/i.test(error.message)) {
+      throw error;
+    }
+    throw new Error("Encryption failed. Please try again.");
+  } finally {
+    if (keyFileBuffer) secureErase(keyFileBuffer);
+  }
+}
+
 interface ParsedKeym {
   kdf: KdfParams;
   cipher: CipherId;

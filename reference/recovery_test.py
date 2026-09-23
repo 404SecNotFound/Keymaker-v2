@@ -853,6 +853,50 @@ def recovery_commands() -> None:
                     check(r.returncode == 0 and got == SECRET,
                           f"and then `{c}` opens it with the strips alone", r.stderr.strip()[:160])
 
+            # "If the strips need the password as well": a §4.8 container the
+            # shipping writer made, opened with the page's own shares command,
+            # which reads the strips and then asks for the password on stdin.
+            both_src = tmp / "both-pt.bin"
+            both_src.write_bytes(SECRET)
+            both_issued = tmp / "both-issued.txt"
+            r = subprocess.run(
+                ["node", str(BRIDGE), "encryptboth", "--password", PASSWORD,
+                 "--in", str(both_src), "--out", str(backup), "--shares-out", str(both_issued),
+                 "--threshold", "2", "--shares", "3", "--kdf", "pbkdf2", "--iterations", "600000",
+                 "--salt", os.urandom(32).hex(), "--master-key", os.urandom(32).hex(),
+                 "--container-id", os.urandom(16).hex(),
+                 "--share-secret", os.urandom(32).hex(), "--share-coefficients", os.urandom(32).hex()],
+                capture_output=True, text=True, cwd=ROOT)
+            both_strips = [ln for ln in both_issued.read_text().split("\n") if ln.strip()] \
+                if r.returncode == 0 else []
+            check(len(both_strips) == 3, "wrote a backup whose strips need the password",
+                  r.stderr.strip()[:160])
+            if both_strips:
+                v3_line = [c for c in identify if 3 in claimed_versions(c)]
+                if v3_line:
+                    r = run_doc_command(v3_line[0], tmp, stdin="")
+                    check("password and share set, both needed" in r.stdout,
+                          "inspect says the strips and the password are both needed",
+                          r.stdout.strip()[-200:])
+                shares_file.write_text(both_strips[1] + "\n" + both_strips[2] + "\n")
+                for c in shares:
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin="")
+                    check(r.returncode != 0 and not recovered.exists(),
+                          f"`{c}` with no password typed does not open it", r.stderr.strip()[-160:])
+                    check("together with its password" in r.stderr,
+                          "and says the strips need the password", r.stderr.strip()[-160:])
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin=PASSWORD + "\n")
+                    got = recovered.read_bytes() if recovered.exists() else b""
+                    check(r.returncode == 0 and got == SECRET,
+                          f"`{c}` asks for the password and opens it", r.stderr.strip()[-160:])
+            check("password and share set, both needed" in doc,
+                  "the page quotes inspect's words for such a backup")
+            # Back to the share-set backup the checks below are about.
+            backup.write_bytes(shared_container)
+            shares_file.write_text("# strips 1 and 3\n" + strips[0] + "\n" + strips[2] + "\n")
+
             # "inspect prints it on the line `set code`", and it is what every
             # strip begins with. Run with the page's own inspect line for v3.
             v3_inspect = [c for c in identify if 3 in claimed_versions(c)]

@@ -90,6 +90,12 @@ export interface PaperVaultProps {
   /** The k of k-of-n, needed to say what a share is worth. */
   threshold?: number | undefined;
   /**
+   * §4.8: the strips open the backup only together with the password. Every
+   * sentence on the sheet that says what strips do has to say it this way
+   * instead, or the paper tells an heir the wrong procedure.
+   */
+  sharesNeedPassword?: boolean | undefined;
+  /**
    * §4.6 set codes of the container's share slots, derived from the container
    * by the caller. Printed on the owner's sheet so a strip can be matched to
    * this backup by eye. Empty when the container has no share slot.
@@ -153,6 +159,7 @@ export function PaperVault({
   tooLarge,
   shares,
   threshold,
+  sharesNeedPassword = false,
   setCodes = [],
   stripBackupPart,
   label,
@@ -189,7 +196,8 @@ export function PaperVault({
             {label ? <> and labelled &ldquo;{label}&rdquo;</> : null}. The squares on
             this page are the backup itself, printed so a phone camera can read
             them. Without the password
-            {hasStrips ? <> &mdash; or {k} of its {n} recovery strips &mdash;</> : null}{" "}
+            {hasStrips && !sharesNeedPassword ? <> &mdash; or {k} of its {n} recovery strips &mdash;</> : null}
+            {hasStrips && sharesNeedPassword ? <> and {k} of its {n} recovery strips</> : null}{" "}
             they reveal nothing, so this page is safe to keep and useless to
             steal.
           </p>
@@ -200,8 +208,11 @@ export function PaperVault({
             <li>This page, whole, with every square readable.</li>
             <li>
               The password its owner set
-              {hasStrips ? (
+              {hasStrips && !sharesNeedPassword ? (
                 <>, or {k} of the {n} recovery strips held by the people named on them</>
+              ) : null}
+              {hasStrips && sharesNeedPassword ? (
+                <>, <strong>and</strong> {k} of the {n} recovery strips held by the people named on them. Both are needed; neither opens it alone</>
               ) : null}
               .
               {hasStrips && stripBackupPart ? (
@@ -381,20 +392,32 @@ export function PaperVault({
           <h2>Recovery strips — cut apart, one per envelope</h2>
           {stripBackupPart ? (
             <p className="pv-note">
-              Any <strong>{k}</strong> of these {n} open the backup <em>on their own</em>:
+              Any <strong>{k}</strong> of these {n} open the backup
+              {sharesNeedPassword ? <> <em>with the password</em></> : <> <em>on their own</em></>}:
               each strip carries the backup itself as well as a share, so {k} holders
-              together need no password, no sheet and no file. Each strip is as
-              sensitive as the password. Cut along the lines, write each holder&rsquo;s
+              together need {sharesNeedPassword ? "only the password" : "no password"}, no sheet and
+              no file.{sharesNeedPassword ? "" : " Each strip is as sensitive as the password."} Cut along the lines, write each holder&rsquo;s
               name on their strip, and give them to people who would not casually
               combine them. Keep this page no longer than it takes to cut it up.
             </p>
           ) : (
             <p className="pv-note">
-              Any <strong>{k}</strong> of these {n} open the backup on the owner&rsquo;s
-              sheet <em>without the password</em>, so each strip is as sensitive as
-              the password itself. Cut along the lines, write each holder&rsquo;s
-              name on their strip, and give them to people who would not casually
-              combine them. Keep this page no longer than it takes to cut it up.
+              {sharesNeedPassword ? (
+                <>
+                  Any <strong>{k}</strong> of these {n} open the backup on the owner&rsquo;s
+                  sheet <em>together with the password</em>, and never without it. Keep
+                  the strips apart from each other and from the password.
+                </>
+              ) : (
+                <>
+                  Any <strong>{k}</strong> of these {n} open the backup on the owner&rsquo;s
+                  sheet <em>without the password</em>, so each strip is as sensitive as
+                  the password itself.
+                </>
+              )}{" "}
+              Cut along the lines, write each holder&rsquo;s name on their strip, and
+              give them to people who would not casually combine them. Keep this page
+              no longer than it takes to cut it up.
             </p>
           )}
           {shares!.map((share, i) => (
@@ -424,18 +447,19 @@ export function PaperVault({
               {stripBackupPart ? (
                 <p className="pv-strip-note">
                   One of {n} strips for a Keymaker backup. This strip carries the backup
-                  itself as well as a share: any {k} strips open it without the password
-                  and without anything else. Alone, this one reveals nothing. Keep it
-                  sealed. When the backup has to be opened, bring it, and scan both
-                  codes.
+                  itself as well as a share: any {k} strips open it
+                  {sharesNeedPassword ? " with the password" : " without the password"} and
+                  without anything else. Alone, this one reveals nothing. Keep it sealed.
+                  When the backup has to be opened, bring it, and scan both codes.
                 </p>
               ) : (
                 <p className="pv-strip-note">
                   One of {n} strips for a Keymaker backup. Any {k} of them open it
-                  without the password; alone, this one reveals nothing. Keep it
-                  sealed. When the backup has to be opened, bring it, or read the
-                  code above to the person opening it &mdash;{" "}
-                  <code>keym2.py decrypt --share</code> takes it.
+                  {sharesNeedPassword ? " together with its password, never without it" : " without the password"};
+                  alone, this one reveals nothing. Keep it sealed. When the backup has to
+                  be opened, bring it, or read the code above to the person opening it
+                  &mdash; <code>keym2.py decrypt --share</code> takes it
+                  {sharesNeedPassword ? " and then asks for the password" : ""}.
                 </p>
               )}
             </div>
@@ -469,9 +493,18 @@ export function PaperVault({
           </li>
           <li>
             <code>python3 keym2.py decrypt --in vault.keym --out recovered</code>{" "}
-            — asks for the password, or use{" "}
-            <code>--share</code> once per strip if you have {threshold ?? "k"} of
-            them.
+            {sharesNeedPassword ? (
+              <>
+                &mdash; add <code>--share</code> once per strip, {threshold ?? "k"} of them;
+                it then asks for the password, which is needed as well.
+              </>
+            ) : (
+              <>
+                — asks for the password, or use{" "}
+                <code>--share</code> once per strip if you have {threshold ?? "k"} of
+                them.
+              </>
+            )}
           </li>
         </ol>
         <p className="pv-note">

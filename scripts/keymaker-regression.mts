@@ -341,7 +341,17 @@ async function main() {
       const version = fx.version ?? 1;
       const expected = version === 3 ? "keym-v3" : version === 2 ? "keym-v2" : "keym-v1";
       try {
-        const res = await decryptData(ab, meta.password, keyFile);
+        // §4.8. A `both` vector opens with the password *and* its shares and
+        // with nothing less, so it goes through the v2 module with both; the
+        // password alone is asserted to fail below.
+        const res = fx.both
+          ? {
+              ...(await (await import("../src/lib/keym-v2.ts")).decryptKeym2(
+                new Uint8Array(blob), meta.password, null, fx.both.shares.slice(-fx.both.threshold)
+              )),
+              format: expected,
+            }
+          : await decryptData(ab, meta.password, keyFile);
         check(
           res.format === expected && dec.decode(res.data) === fx.plaintext,
           `v${version} ${fx.name} (${fx.kdf} / ${fx.cipher}${fx.keyFile ? " / +keyfile" : ""})`
@@ -381,6 +391,26 @@ async function main() {
           refused = true;
         }
         check(refused, `v${version} ${fx.name} — ${k - 1} shares still do not`);
+      }
+
+      // §4.8. Neither half alone, and not k-1 strips with the password.
+      if (fx.both) {
+        const { decryptKeym2 } = await import("../src/lib/keym-v2.ts");
+        const all: string[] = fx.both.shares;
+        const k: number = fx.both.threshold;
+        for (const [label, attempt] of [
+          ["the password alone", () => decryptKeym2(new Uint8Array(blob), meta.password, null)],
+          ["the shares alone", () => decryptKeym2(new Uint8Array(blob), "", null, all.slice(0, k))],
+          [`the password and ${k - 1} shares`, () => decryptKeym2(new Uint8Array(blob), meta.password, null, all.slice(0, k - 1))],
+        ] as const) {
+          let refused = false;
+          try {
+            await attempt();
+          } catch {
+            refused = true;
+          }
+          check(refused, `v${version} ${fx.name} — ${label} still does not open it`);
+        }
       }
 
       // §4.7. Same promise in the other shape: the recorded PRF output is the
@@ -440,13 +470,15 @@ async function main() {
     const passkeyCount = meta.fixtures.filter((f: any) => f.passkey).length;
     const pageCount = meta.fixtures.filter((f: any) => f.selfextract).length;
     const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
+    const bothCount = meta.fixtures.filter((f: any) => f.both).length;
     check(
-      fixtureCount === 32 && v1Count === 6 && v2Count === 13 && v3Count === 13 &&
-        shamirCount === 6 && passkeyCount === 6 && pageCount === 1 && strippedCount === 1,
+      fixtureCount === 35 && v1Count === 6 && v2Count === 13 && v3Count === 16 &&
+        shamirCount === 6 && passkeyCount === 6 && pageCount === 1 && strippedCount === 1 &&
+        bothCount === 3,
       `corpus covers all three versions and all three ciphers per slot type ` +
         `(${v1Count} v1 + ${v2Count} v2 + ${v3Count} v3, of which ${shamirCount} share ` +
-        `sets, ${passkeyCount} passkey slots, ${pageCount} self-extracting page and ` +
-        `${strippedCount} stripped slot table = ${fixtureCount}/32)`
+        `sets, ${passkeyCount} passkey slots, ${bothCount} password-and-shares slots, ` +
+        `${pageCount} self-extracting page and ${strippedCount} stripped slot table = ${fixtureCount}/35)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);

@@ -1458,7 +1458,18 @@ export function EncryptorTool() {
   const [passkeySupported, setPasskeySupported] = useState(false);
   const [shamirThreshold, setShamirThreshold] = useState(2);
   const [shamirCount, setShamirCount] = useState(3);
-  const [issuedShares, setIssuedShares] = useState<{ threshold: number; shares: string[] } | null>(null);
+  /**
+   * §4.8. The strips open the backup only together with the password: one slot
+   * that takes both, and nothing beside it. Off by default, because it makes a
+   * forgotten password, or too few strips, the end of the backup.
+   */
+  const [sharesNeedPassword, setSharesNeedPassword] = useState(false);
+  const [issuedShares, setIssuedShares] = useState<{
+    threshold: number;
+    shares: string[];
+    /** §4.8: these strips open the backup only together with the password. */
+    withPassword?: boolean;
+  } | null>(null);
   /**
    * "Put the whole backup on every strip", for a backup small enough to fit
    * one printed symbol. Off by default and reset with every new share set: it
@@ -1493,6 +1504,8 @@ export function EncryptorTool() {
     | { kind: "failed"; message: string };
   const [rehearsalOpen, setRehearsalOpen] = useState(false);
   const [rehearsalInput, setRehearsalInput] = useState("");
+  /** §4.8: the password, for rehearsing strips that open the backup only with it. */
+  const [rehearsalPassword, setRehearsalPassword] = useState("");
   const [rehearsalInputRejected, setRehearsalInputRejected] = useState<string | null>(null);
   const [rehearsal, setRehearsal] = useState<RehearsalState>({ kind: "idle" });
   const rehearsalLines = useMemo(() => parseShareLines(rehearsalInput), [rehearsalInput]);
@@ -1589,7 +1602,7 @@ export function EncryptorTool() {
    * and this decides which of two toasts the user is told, so it has to be
    * current rather than nearly current.
    */
-  const issuedSharesRef = useRef<{ threshold: number; shares: string[] } | null>(null);
+  const issuedSharesRef = useRef<{ threshold: number; shares: string[]; withPassword?: boolean } | null>(null);
   useEffect(() => {
     issuedSharesRef.current = issuedShares;
   }, [issuedShares]);
@@ -1609,6 +1622,8 @@ export function EncryptorTool() {
     tooLarge: boolean;
     shares?: string[];
     threshold?: number;
+    /** §4.8: the strips open the backup only together with the password. */
+    sharesNeedPassword?: boolean;
     /** §4.6 set codes of the container's share slots, for the owner's sheet. */
     setCodes: string[];
     /** The backup's one paper part, printed on every strip as well, when chosen. */
@@ -2141,6 +2156,7 @@ export function EncryptorTool() {
     // is the ink on the printed sheet, never state.
     setRehearsalOpen(false);
     setRehearsalInput("");
+    setRehearsalPassword("");
     setRehearsalInputRejected(null);
     setRehearsal({ kind: "idle" });
 
@@ -2997,7 +3013,8 @@ export function EncryptorTool() {
         // salt derives from it, so the question put to the key depends on a
         // value the container does not yet contain.
         let passkey: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
-        if (passkeyEnabled) {
+        // §4.8 rules a passkey out: it would open the backup on its own.
+        if (passkeyEnabled && !(shamirEnabled && sharesNeedPassword)) {
           const { derivePrfSalt } = await import("@/lib/keym-v2");
           const { enrolPasskey } = await import("@/lib/webauthn-prf");
           const slotSalt = crypto.getRandomValues(new Uint8Array(32));
@@ -3014,7 +3031,9 @@ export function EncryptorTool() {
           mutablePassword,
           keyFileBuffer,
           { kdf, cipher: cipherChoice },
-          shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : undefined,
+          shamirEnabled
+            ? { threshold: shamirThreshold, count: shamirCount, withPassword: sharesNeedPassword }
+            : undefined,
           passkey
         );
         resultBuffer = encrypted.data;
@@ -3034,11 +3053,16 @@ export function EncryptorTool() {
           setRehearsal({ kind: "idle" });
           setRehearsalOpen(false);
           setRehearsalInput("");
+          setRehearsalPassword("");
         }
         if (encrypted.shares && !isStale()) {
           // Straight to the modal. These exist exactly once — nothing can
           // reissue them — so they must not be left to be noticed.
-          setIssuedShares({ threshold: shamirThreshold, shares: encrypted.shares });
+          setIssuedShares({
+            threshold: shamirThreshold,
+            shares: encrypted.shares,
+            withPassword: sharesNeedPassword,
+          });
         }
         // **Do not put an `await` between here and the delivery below.**
         //
@@ -3066,11 +3090,17 @@ export function EncryptorTool() {
           to,
           kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
           cipher: cipherLabelOf(cipherChoice),
-          waysIn: [
-            useKeyFile && keyFile ? "Passphrase + key file" : "Passphrase",
-            ...(shamirEnabled ? [`${shamirThreshold}-of-${shamirCount} recovery shares`] : []),
-            ...(passkeyEnabled ? ["passkey"] : []),
-          ],
+          waysIn:
+            shamirEnabled && sharesNeedPassword
+              ? [
+                  `${useKeyFile && keyFile ? "Passphrase + key file" : "Passphrase"} and ` +
+                    `${shamirThreshold}-of-${shamirCount} recovery shares, both needed`,
+                ]
+              : [
+                  useKeyFile && keyFile ? "Passphrase + key file" : "Passphrase",
+                  ...(shamirEnabled ? [`${shamirThreshold}-of-${shamirCount} recovery shares`] : []),
+                  ...(passkeyEnabled ? ["passkey"] : []),
+                ],
           bytes: resultBuffer.byteLength,
           onScreen,
           shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
@@ -3227,6 +3257,21 @@ export function EncryptorTool() {
             );
           }
           prfOutput = await assertPasskeyPrf(await derivePrfSalt(salts[0]!));
+        }
+
+        // §4.8's MAY, taken: strips for a slot that also takes the password,
+        // with no password typed, can never open it. Said before any work, in
+        // the one sentence an heir needs, rather than after a derivation as
+        // "decryption failed" about strips that were never wrong. From the slot
+        // salts, which are in the clear, so it tells nobody anything new.
+        if (suppliedShares.length > 0 && !mutablePassword) {
+          const { sharesNeedPasswordKeym2 } = await import("@/lib/keym-v2");
+          if (await sharesNeedPasswordKeym2(new Uint8Array(inputBuffer), suppliedShares)) {
+            throw new KeymakerError(
+              "credential-required",
+              "These strips open this backup together with its password. Type the password as well, then try again."
+            );
+          }
         }
 
         if (isStale()) return;
@@ -3466,7 +3511,7 @@ export function EncryptorTool() {
     // the render before the user touched any of them, so the share path took
     // the no-credential exit while every control leading to it looked live —
     // a click that did nothing at all, with no error to explain it.
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, shamirThreshold, shamirCount, passkeyEnabled, usePasskey]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -4459,8 +4504,9 @@ export function EncryptorTool() {
                         <div className="flex items-center gap-3">
                           <Switch
                             id="passkey-enabled"
-                            checked={passkeyEnabled}
+                            checked={passkeyEnabled && !(shamirEnabled && sharesNeedPassword)}
                             onCheckedChange={setPasskeyEnabled}
+                            disabled={shamirEnabled && sharesNeedPassword}
                           />
                           <div className="flex items-center gap-1.5">
                             <Label htmlFor="passkey-enabled" className="cursor-pointer text-sm text-foreground">
@@ -4488,7 +4534,7 @@ export function EncryptorTool() {
                             </InfoTip>
                           </div>
                         </div>
-                        {passkeyEnabled && (
+                        {passkeyEnabled && !(shamirEnabled && sharesNeedPassword) && (
                           <p className="text-[12px] leading-relaxed text-muted-foreground">
                             You will be asked to tap twice — once to create the
                             passkey, once to use it. Some keys only produce what
@@ -4607,11 +4653,48 @@ export function EncryptorTool() {
                               share is as sensitive as the password itself. That
                               belongs on the screen, not only in the docs.
                             */}
-                            <p className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning">
-                              Each share is as sensitive as your password. Anyone holding{" "}
-                              {shamirThreshold} of them opens this container without knowing it.
-                              Store them apart, with people who would not combine them casually.
-                            </p>
+                            {/*
+                              §4.8. The other way to use strips: together with
+                              the password rather than instead of it. The costs
+                              §4.8 says a writer should state are stated here,
+                              where the choice is made.
+                            */}
+                            <div className="space-y-2 rounded-md border border-border p-2.5">
+                              <div className="flex items-center gap-3">
+                                <Switch
+                                  id="shares-need-password"
+                                  checked={sharesNeedPassword}
+                                  onCheckedChange={(v) => {
+                                    setSharesNeedPassword(v);
+                                    if (v) setPasskeyEnabled(false);
+                                  }}
+                                />
+                                <Label htmlFor="shares-need-password" className="cursor-pointer text-sm text-foreground">
+                                  The strips need the password too
+                                </Label>
+                              </div>
+                              {sharesNeedPassword ? (
+                                <p className="text-[12px] leading-snug text-muted-foreground" data-testid="shares-need-password-cost">
+                                  Then neither opens it alone: it takes the password and{" "}
+                                  {shamirThreshold} strips together. A forgotten password, or fewer than{" "}
+                                  {shamirThreshold} strips, loses the backup for good, and nothing else can
+                                  stand in for either. Versions of Keymaker and keym2.py from before this
+                                  option cannot open it. No passkey can be added.
+                                </p>
+                              ) : null}
+                            </div>
+                            {sharesNeedPassword ? (
+                              <p className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning">
+                                Keep the password and the strips in different hands. Anyone holding
+                                the password and {shamirThreshold} strips opens this container.
+                              </p>
+                            ) : (
+                              <p className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning">
+                                Each share is as sensitive as your password. Anyone holding{" "}
+                                {shamirThreshold} of them opens this container without knowing it.
+                                Store them apart, with people who would not combine them casually.
+                              </p>
+                            )}
                           </>
                         )}
                       </div>
@@ -5313,7 +5396,14 @@ export function EncryptorTool() {
       const { dearmorKeym2 } = await import("@/lib/keym-v2");
       // A copy: the worker takes ownership of the buffer it is handed.
       const container = dearmorKeym2(outputText).slice();
-      const result = await decryptViaWorker(container.buffer as ArrayBuffer, "", null, strips);
+      // §4.8. Strips that need the password are rehearsed with it, the way an
+      // heir would have to open the backup.
+      const result = await decryptViaWorker(
+        container.buffer as ArrayBuffer,
+        issuedShares.withPassword ? rehearsalPassword : "",
+        null,
+        strips
+      );
       // The plaintext exists on this thread for exactly this long.
       const bytes = result.data.byteLength;
       new Uint8Array(result.data).fill(0);
@@ -5331,6 +5421,7 @@ export function EncryptorTool() {
       });
       // The pasted strips have done their job; the ones above are still there.
       setRehearsalInput("");
+      setRehearsalPassword("");
     } catch {
       if (isStale()) return;
       setRehearsal({
@@ -5338,10 +5429,11 @@ export function EncryptorTool() {
         message:
           `These strips did not open the backup. Check each one against the sheet ` +
           `— a single wrong character is enough — and that at least ` +
-          `${issuedShares.threshold} of the ${issuedShares.shares.length} are here.`,
+          `${issuedShares.threshold} of the ${issuedShares.shares.length} are here` +
+          (issuedShares.withPassword ? `, and that the password is the one you set.` : `.`),
       });
     }
-  }, [issuedShares, outputText, rehearsalInput]);
+  }, [issuedShares, outputText, rehearsalInput, rehearsalPassword]);
 
   /**
    * What the command bar offers, and when.
@@ -5907,6 +5999,7 @@ export function EncryptorTool() {
             // and the encrypt-side Print button is still on the page.
             setRehearsalOpen(false);
             setRehearsalInput("");
+            setRehearsalPassword("");
             setRehearsalInputRejected(null);
           }
         }}
@@ -5933,9 +6026,18 @@ export function EncryptorTool() {
               Save these {issuedShares?.shares.length} shares now
             </DialogTitle>
             <DialogDescription>
-              Any {issuedShares?.threshold} of them open this container without the
-              password. They are shown once and cannot be reissued — closing this
-              window loses them.
+              {issuedShares?.withPassword ? (
+                <>
+                  Any {issuedShares?.threshold} of them open this container together with the
+                  password, and only with it.
+                </>
+              ) : (
+                <>
+                  Any {issuedShares?.threshold} of them open this container without the
+                  password.
+                </>
+              )}{" "}
+              They are shown once and cannot be reissued. Closing this window loses them.
             </DialogDescription>
           </DialogHeader>
 
@@ -5967,12 +6069,21 @@ export function EncryptorTool() {
             ))}
           </div>
 
-          <p className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning">
-            Each share is as sensitive as your password. Store them in separate
-            places, with people who would not casually combine them. Anyone
-            holding {issuedShares?.threshold} of them and a copy of the backup
-            needs nothing else from you.
-          </p>
+          {issuedShares?.withPassword ? (
+            <p className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning">
+              Keep the strips apart from each other and from the password. Anyone
+              holding {issuedShares.threshold} of them, the password and a copy of the
+              backup opens it. With fewer strips, or without the password, nobody
+              does, you included.
+            </p>
+          ) : (
+            <p className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning">
+              Each share is as sensitive as your password. Store them in separate
+              places, with people who would not casually combine them. Anyone
+              holding {issuedShares?.threshold} of them and a copy of the backup
+              needs nothing else from you.
+            </p>
+          )}
 
           {/*
             Self-contained strips. Offered only when the backup fits one
@@ -5994,10 +6105,11 @@ export function EncryptorTool() {
               </div>
               <p className="text-[12px] leading-snug text-muted-foreground">
                 This backup is small enough to print on each strip. Then any{" "}
-                {issuedShares.threshold} strips open it on their own, with no sheet and no
-                file from you. That is also the cost: {issuedShares.threshold} holders who
-                get together need nothing else. Leave this off to keep the backup itself
-                with you.
+                {issuedShares.threshold} strips{issuedShares.withPassword ? " and the password" : ""} open it,
+                with no sheet and no file from you. That is also the cost:{" "}
+                {issuedShares.threshold} holders who get together
+                {issuedShares.withPassword ? " and have the password" : ""} need nothing else. Leave
+                this off to keep the backup itself with you.
               </p>
             </div>
           ) : null}
@@ -6057,6 +6169,7 @@ export function EncryptorTool() {
                     stripBackupPart: stripsCarryBackup && parts.length === 1 ? parts[0] : undefined,
                     shares: issuedShares.shares,
                     threshold: issuedShares.threshold,
+                    sharesNeedPassword: issuedShares.withPassword ?? false,
                     printedOn: new Date().toISOString().slice(0, 10),
                     rehearsal: rehearsalStamp,
                   });
@@ -6120,9 +6233,23 @@ export function EncryptorTool() {
               <p className="text-[12px] leading-snug text-muted-foreground">
                 Do what an heir would do: pick any {issuedShares?.threshold} of the{" "}
                 {issuedShares?.shares.length} strips above and paste them here, one per
-                line. The backup is opened with them alone — no password — and closed
-                again without showing anything.
+                line.{" "}
+                {issuedShares?.withPassword
+                  ? "The backup is opened with them and the password, and closed again without showing anything."
+                  : "The backup is opened with them alone — no password — and closed again without showing anything."}
               </p>
+              {issuedShares?.withPassword ? (
+                <Input
+                  id="rehearsal-password"
+                  type="password"
+                  autoComplete="off"
+                  value={rehearsalPassword}
+                  onChange={(e) => setRehearsalPassword(e.target.value)}
+                  placeholder="The password, typed again"
+                  aria-label="Password to rehearse with"
+                  className="h-10 rounded-xl border-border bg-inset"
+                />
+              ) : null}
               <Textarea
                 id="rehearsal-input"
                 value={rehearsalInput}
@@ -6231,6 +6358,7 @@ export function EncryptorTool() {
           tooLarge={paperVault.tooLarge}
           shares={paperVault.shares}
           threshold={paperVault.threshold}
+          sharesNeedPassword={paperVault.sharesNeedPassword}
           setCodes={paperVault.setCodes}
           stripBackupPart={paperVault.stripBackupPart}
           printedOn={paperVault.printedOn}

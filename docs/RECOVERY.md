@@ -191,6 +191,11 @@ per line, then:
 python3 keym2.py decrypt --in backup.keym --shares-from shares.txt --out recovered.txt
 ```
 
+**If the strips need the password as well.** A backup can be made so that the
+strips open it only together with the password, and never alone. `inspect`
+then says `password and share set, both needed`, and the command above asks
+for the password after reading the strips. Type it as usual.
+
 **If each strip has two codes**, the second is the backup itself, a line
 starting `KMPART2:1/1:`, and the strips are all you need. Save that line from
 any one strip in a file called `parts.txt`, turn it back into the backup file,

@@ -219,8 +219,12 @@ def main() -> int:
                 # two inseparable: a stripped container that opens is only
                 # correct if the reader also says the table changed, and one that
                 # says so but refuses to open is worse than v2.
+                # §4.8's vectors open with the password and their shares both.
+                both_shares = (f["both"]["shares"][-f["both"]["threshold"]:]
+                               if "both" in f else None)
                 got = keym2.decrypt_report(blob, fx_pw,
-                                           keyfile_bytes=fx_kf if f["keyFile"] else None)
+                                           keyfile_bytes=fx_kf if f["keyFile"] else None,
+                                           shares=both_shares)
                 check(f["name"], got.plaintext.decode() == f["plaintext"])
                 # `slotTableAuthentic` is recorded only on v3 entries, which are
                 # the only containers carrying a slot_table_mac. Absent means the
@@ -271,6 +275,19 @@ def main() -> int:
                 except keym2.KeymError:
                     check(f"{f['name']}: a wrong PRF output is still refused", True)
 
+            # §4.8. The TypeScript wrote these; the reference must refuse each
+            # half alone, as well as open the two together above.
+            if "both" in f:
+                both_all = f["both"]["shares"]
+                for half, attempt in (
+                        ("the password alone", lambda: keym2.decrypt(blob, fx_pw)),
+                        ("the js-written shares alone", lambda: keym2.decrypt(blob, shares=both_all[:3]))):
+                    try:
+                        attempt()
+                        check(f"{f['name']}: {half} is refused", False)
+                    except keym2.KeymError:
+                        check(f"{f['name']}: {half} is refused", True)
+
             if "shamir" in f:
                 k = f["shamir"]["threshold"]
                 shares = f["shamir"]["shares"]
@@ -291,18 +308,20 @@ def main() -> int:
         shamir_fixtures = [f for f in modern if "shamir" in f]
         passkey_fixtures = [f for f in modern if "passkey" in f]
         stripped_fixtures = [f for f in modern if "strippedPasskey" in f]
+        both_fixtures = [f for f in modern if "both" in f]
         # Counted rather than assumed, because the corpus is append-only and a
         # fixture that silently stopped being listed would otherwise just stop
         # being tested. Update deliberately when the corpus grows.
-        check("v2+v3 corpus has all twenty-six vectors: six share sets, six "
-              "passkeys, one page, one stripped table",
-              len(v2_fixtures) == 13 and len(v3_fixtures) == 13
+        check("v2+v3 corpus has all twenty-nine vectors: six share sets, six "
+              "passkeys, three password-and-shares, one page, one stripped table",
+              len(v2_fixtures) == 13 and len(v3_fixtures) == 16
               and len(shamir_fixtures) == 6 and len(passkey_fixtures) == 6
+              and len(both_fixtures) == 3
               and len([f for f in v2_fixtures if f.get("selfextract")]) == 1
               and len(stripped_fixtures) == 1,
               f"found {len(v2_fixtures)} v2, {len(v3_fixtures)} v3, "
               f"{len(shamir_fixtures)} shamir, {len(passkey_fixtures)} passkey, "
-              f"{len(stripped_fixtures)} stripped")
+              f"{len(both_fixtures)} both, {len(stripped_fixtures)} stripped")
 
         # ---------------------------------------------------------------
         # 1. Byte equality — the check that catches a writer disagreement
@@ -1691,6 +1710,66 @@ def main() -> int:
         check("§4.6 set code: every strip either implementation issued starts with its set code",
               all(t.startswith(keym2.SHARE2_PREFIX + keym2.share_text_set_code(t) + "-")
                   for t in (*shares_t, *js_strips)) and len(js_strips) > 0)
+
+        # §4.8: a container whose only slot takes the password and the shares.
+        # Every random input pinned, so the two writers are compared on the
+        # bytes they emit and the share strings they print, then each opens
+        # the other's, and neither opens it with only one half.
+        print("\n§4.8 password-and-shares slot:")
+        for both_ver, both_cid in ((2, None), (3, os.urandom(16))):
+            for both_cipher, both_cid_name in ((keym2.CIPHER_AES, "aes"), (keym2.CIPHER_CHACHA, "chacha"),
+                                               (keym2.CIPHER_CHAINED, "chained")):
+                for both_kdf in ("pbkdf2", "argon2id"):
+                    tag = f"v{both_ver} {both_cid_name} {both_kdf}"
+                    pins = dict(salt=os.urandom(32), master_key=os.urandom(32),
+                                share_secret=os.urandom(32), coefficients=os.urandom(32 * 2))
+                    pt = f"both halves, {tag}".encode()
+                    kdf_kw = (dict(kdf_id=keym2.KDF_PBKDF2, iterations=600_000) if both_kdf == "pbkdf2"
+                              else dict(kdf_id=keym2.KDF_ARGON2ID, time_cost=1, memory_kib=8192, parallelism=1))
+                    py_c, py_s = keym2.encrypt_both(
+                        pt, PASSWORD, 3, 5, cipher_id=both_cipher, version=both_ver,
+                        container_id=both_cid, **kdf_kw, **pins)
+                    src, js_out, js_sh = tmp / "both-pt.bin", tmp / "both-js.keym", tmp / "both-js.txt"
+                    src.write_bytes(pt)
+                    args = ["encryptboth", "--password", PASSWORD, "--in", str(src), "--out", str(js_out),
+                            "--shares-out", str(js_sh), "--threshold", "3", "--shares", "5",
+                            "--cipher", both_cid_name, "--salt", pins["salt"].hex(),
+                            "--master-key", pins["master_key"].hex(),
+                            "--share-secret", pins["share_secret"].hex(),
+                            "--share-coefficients", pins["coefficients"].hex()]
+                    args += (["--kdf", "pbkdf2", "--iterations", "600000"] if both_kdf == "pbkdf2"
+                             else ["--kdf", "argon2id", "--time", "1", "--mem", "8192", "--par", "1"])
+                    if both_cid is not None:
+                        args += ["--container-id", both_cid.hex()]
+                    try:
+                        bridge(*args)
+                        js_c = js_out.read_bytes()
+                        js_s = [ln for ln in js_sh.read_text().splitlines() if ln.strip()]
+                    except BridgeError as e:
+                        js_c, js_s = b"", [f"bridge: {e}"]
+                    check(f"{tag}: the container is byte-identical", py_c == js_c,
+                          f"py={len(py_c)}B js={len(js_c)}B")
+                    check(f"{tag}: the five strips are the same strings", py_s == js_s)
+                    check_call(f"{tag}: the reference opens it with the password and three strips",
+                               lambda: keym2.decrypt(js_c, PASSWORD, shares=[js_s[0], js_s[2], js_s[4]]), pt)
+                    share_file = tmp / "both-three.txt"
+                    share_file.write_text("\n".join(py_s[1:4]) + "\n")
+                    try:
+                        bridge("decrypt2", "--in", str(js_out), "--out", str(tmp / "both.out"),
+                               "--password", PASSWORD, "--share-file", str(share_file))
+                        js_opened = (tmp / "both.out").read_bytes()
+                    except BridgeError as e:
+                        js_opened = str(e).encode()
+                    check(f"{tag}: the TypeScript opens it with the password and three strips",
+                          js_opened == pt, js_opened[:80])
+                    for half_args, half in ((["--password", PASSWORD], "the password alone"),
+                                            (["--share-file", str(share_file)], "the strips alone")):
+                        try:
+                            bridge("decrypt2", "--in", str(js_out), "--out", str(tmp / "half.out"), *half_args)
+                            half_opened = True
+                        except BridgeError:
+                            half_opened = False
+                        check(f"{tag}: the TypeScript refuses {half}", not half_opened)
 
         # §6: a share set whose id matches the container's only in its first
         # four bytes. The values are this set's own, so a reader comparing four
