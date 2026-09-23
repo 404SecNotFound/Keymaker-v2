@@ -1839,6 +1839,38 @@ reassemble. A writer emits `KMPART2`; a reader dispatches on the version digit
 and accepts either, and a set is single-version by construction because one split
 writes one version.
 
+#### Symbol size (writer guidance)
+
+A reader accepts parts of any size: reassembly never asks how many bytes a part
+holds. How much a writer puts in each symbol is therefore not a wire rule, but it
+decides whether the printed page can be read at all, so it is written down here.
+
+**A writer SHOULD size each part to fit a version-25 symbol at level M, 997
+bytes, and not fill a version-40 symbol.** The paper vault prints each symbol 46
+mm wide. A full version-40 symbol is 177 modules, 181 with its quiet zone, so
+each module is 0.254 mm, a quarter of a millimetre. A phone camera has to hold
+focus close to the page to resolve that, and a fold, a toner streak or a
+photocopy can erase a whole module. Version 25 is 117 modules, 121 with the
+quiet zone, which is 0.38 mm per module at the same printed width: half as wide
+again, and more than twice the area.
+
+The cost is more symbols. At 997 bytes, with §7.3's widest overhead reserved
+(four-digit counts, a ten-digit length, the fingerprint and the checksum), a
+`KMPART2` part carries 702 container bytes where a version-40 part carried
+1,704. A typical backup of a few kilobytes goes from two or three symbols to five
+to eight, which is a page, and each one is far easier to read.
+
+| | version 40, M | version 25, M |
+|---|---|---|
+| symbol capacity | 2,331 bytes | 997 bytes |
+| `KMPART2` payload per part | 1,704 bytes | 702 bytes |
+| modules, with quiet zone | 181 | 121 |
+| module width at 46 mm | 0.254 mm | 0.38 mm |
+
+`keym2.py split` uses the same size by default, and writes `KMPART2`, as this
+section already requires of a writer; `--v1` writes §7.1's `KMPART1` for an
+older reader, and `--capacity` still overrides the size.
+
 ## 8. What this does not fix
 
 - **Chained mode remains unproven as a combiner.** v2 does not change that and

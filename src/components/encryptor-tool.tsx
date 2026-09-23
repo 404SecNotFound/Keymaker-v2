@@ -1110,14 +1110,13 @@ const FEATURE_CARDS = [
 async function preparePaperParts(
   container: Uint8Array
 ): Promise<{ parts: string[]; tooLarge: boolean; setCodes: string[] }> {
-  const { encodePaperPartsV2, paperCapacityV2, PAPER_QR_MAX_BYTES } = await import(
-    "@/lib/keym-v2-paper"
-  );
+  const { encodePaperPartsForPrint } = await import("@/lib/keym-v2-paper");
   const setCodes = await containerSetCodes(container);
   try {
-    const parts = await encodePaperPartsV2(container, paperCapacityV2(PAPER_QR_MAX_BYTES));
-    // 300 symbols is ~500 kB of container and a ream of paper. Past that the
-    // honest answer is "this is not a paper backup", not pages no one will scan.
+    const parts = await encodePaperPartsForPrint(container);
+    // 300 symbols is ~200 kB of container at §7.3's version-25 size, and a
+    // ream of paper. Past that the honest answer is "this is not a paper
+    // backup", not pages no one will scan.
     return { parts, tooLarge: parts.length > 300, setCodes };
   } catch {
     return { parts: [], tooLarge: true, setCodes };

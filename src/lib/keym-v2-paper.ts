@@ -25,15 +25,30 @@ export const KEYM2_PART_PREFIX = "KMPART1:";
 const PART_RE = /^KMPART1:(\d{1,4})\/(\d{1,4}):([A-Za-z0-9_-]+)$/;
 
 /**
- * Byte-mode capacity of a version-40 QR at error-correction level **M**.
+ * Byte-mode capacity of the QR symbol each printed part is sized for:
+ * **version 25** at error-correction level **M** (§7.3 "Symbol size").
  *
- * Deliberately not level L, which the on-screen QR uses. L recovers 7% of a
+ * Level M rather than L, which the on-screen QR uses. L recovers 7% of a
  * damaged symbol and is the right trade when the "paper" is a phone screen two
  * feet away. This code is going in a drawer for a decade, where it will be
  * folded, stained, photocopied and sun-bleached, and 15% recovery for a third
  * fewer bytes is the trade that actually matches the medium.
+ *
+ * Version 25 rather than 40. A full version-40 symbol printed 46 mm wide is
+ * 0.254 mm a module, which a phone has to hold focus close to the page to
+ * resolve; version 25 at the same width is 0.38 mm. The price is more symbols
+ * per backup: 702 container bytes a part instead of 1,704.
  */
-export const PAPER_QR_MAX_BYTES = 2_331;
+export const PAPER_QR_VERSION = 25;
+export const PAPER_QR_MAX_BYTES = 997;
+
+/**
+ * §7.3, the paper vault's own parts: KMPART2, sized by §7.3 "Symbol size". One
+ * function so the app and the conformance bridge cannot size them differently.
+ */
+export async function encodePaperPartsForPrint(container: Uint8Array): Promise<string[]> {
+  return encodePaperPartsV2(container, paperCapacityV2(PAPER_QR_MAX_BYTES));
+}
 
 function b64urlEncode(bytes: Uint8Array): string {
   let binary = "";
@@ -74,9 +89,11 @@ export function paperCapacity(qrByteCapacity: number, totalHint = 9999): number 
  * overhead a run can emit (four-digit counts, a ten-digit length, the fixed
  * fingerprint and checksum), so every part it sizes fits inside one symbol.
  *
- * At the paper budget this yields 1,704 raw bytes per part; a full part is then
- * 2,331 chars exactly, the ceiling and not over it. `scripts/recovery-envelopes-test.mjs`
- * asserts that bound rather than trusting this comment.
+ * At the version-40 budget (2,331 bytes) this yields 1,704 raw bytes per part,
+ * and at the paper vault's version-25 budget (`PAPER_QR_MAX_BYTES`, 997) 702; a
+ * full part is then the budget exactly, the ceiling and not over it.
+ * `scripts/recovery-envelopes-test.mjs` asserts that bound rather than trusting
+ * this comment.
  */
 export function paperCapacityV2(qrByteCapacity: number, totalHint = 9999): number {
   const overhead =

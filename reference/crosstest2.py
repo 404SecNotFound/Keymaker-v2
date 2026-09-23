@@ -1104,7 +1104,7 @@ def main() -> int:
         check("js reassembles the CLI's own split output, comments and all",
               joined == good, js_join_detail)
         check("py reassembles it too, from the same file",
-              keym2.decode_parts([ln for ln in cli_text.splitlines()
+              keym2.decode_parts_any([ln for ln in cli_text.splitlines()
                                   if ln.strip() and not ln.lstrip().startswith("#")]) == good)
 
         py_parts_file = tmp / "py-parts.txt"
@@ -1136,6 +1136,28 @@ def main() -> int:
               js_rejoined2.read_bytes() == good)
         check("a v2 part is a part to detect(), like v1",
               keym2.detect(py_parts2[0].encode()) == "keym2-part")
+
+        # §7.3 "Symbol size": what the paper vault prints and what `keym2.py
+        # split` writes by default are the same strings, so a sheet reprinted
+        # from the CLI is the sheet the app would have printed. A container big
+        # enough for several symbols, so a boundary disagreement would show.
+        big_src = tmp / "paper-big.bin"
+        big_src.write_bytes(good[:5000] if len(good) >= 5000 else good * (1 + 5000 // len(good)))
+        cli_default = subprocess.run(
+            [sys.executable, str(HERE / "keym2.py"), "split", "--in", str(big_src)],
+            capture_output=True, text=True)
+        cli_lines = [ln for ln in cli_default.stdout.splitlines() if ln and not ln.startswith("#")]
+        js_print_file = tmp / "js-print-parts.txt"
+        try:
+            bridge("split", "--in", str(big_src), "--out", str(js_print_file), "--print")
+            js_print = [ln for ln in js_print_file.read_text().splitlines() if ln.strip()]
+        except BridgeError as e:
+            js_print = [f"bridge: {e}"]
+        check("keym2.py split's default parts are the paper vault's, string for string",
+              cli_lines == js_print and len(cli_lines) > 1,
+              f"py {len(cli_lines)} parts, js {len(js_print)}")
+        check("every printed part fits a version-25 level-M symbol (997 bytes)",
+              all(len(ln) <= keym2.PAPER_QR_MAX_BYTES == 997 for ln in js_print))
 
         # ---------------------------------------------------------------
         # 9. §7.2 self-extracting pages agree

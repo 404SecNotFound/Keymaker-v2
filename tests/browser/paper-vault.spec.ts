@@ -46,6 +46,8 @@ interface PrintSnapshot {
   /** The set code each strip's head prints, and the share code under it. */
   stripSetCodes: string[];
   stripShareCodes: string[];
+  /** Each container symbol's width in modules, quiet zone included (its viewBox). */
+  symbolModules: number[];
 }
 
 async function encryptSomething(page: Page) {
@@ -166,6 +168,11 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
           : [],
         stripSetCodes: strips.map((s) => s.querySelector(".pv-strip-head .pv-code")?.textContent ?? ""),
         stripShareCodes: strips.map((s) => s.querySelector(".pv-strip-body code")?.textContent ?? ""),
+        symbolModules: el
+          ? Array.from(el.querySelectorAll(".pv-qr svg"), (svg) =>
+              Number((svg.getAttribute("viewBox") ?? "").split(/\s+/)[2] ?? NaN)
+            )
+          : [],
       };
       throw new Error("print stubbed — see capturePrint()");
     };
@@ -187,8 +194,9 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
 /**
  * The symbols a multi-part sheet prints can be scanned back in.
  *
- * A container bigger than one symbol is split into full version-40 parts, 181
- * modules wide with their margin. The sheet drew them into a 300px canvas, so
+ * A container bigger than one symbol is split into several parts. When they were
+ * full version-40 symbols, 181 modules wide with their margin, the sheet drew
+ * them into a 300px canvas, so
  * at a devicePixelRatio of 1 each module got 1.66 pixels and the printer could
  * only stretch that aliased bitmap: no scale of it decodes. The existing
  * scan-back tests pasted the parts' *text*, which is why nothing caught it.
@@ -198,7 +206,9 @@ test("every symbol on a multi-part sheet scans back into the container", async (
   await page.goto("/");
   await useTextMode(page);
   await selectCrypto(page, "pbkdf2", "aes");
-  const secret = Array.from({ length: 900 }, (_, i) => `note line ${i}`).join("\n");
+  // About six symbols at §7.3's version-25 size: enough that order and a
+  // missing page both matter, and each is scanned three times below.
+  const secret = Array.from({ length: 300 }, (_, i) => `note line ${i}`).join("\n");
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
   await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
   await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
@@ -245,6 +255,33 @@ test("every symbol on a multi-part sheet scans back into the container", async (
   await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
   await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
   await expect(visible(page.locator("#output-text"))).toHaveValue(secret, { timeout: 90_000 });
+});
+
+/**
+ * §7.3 "Symbol size": a printed part is at most a version-25 symbol, 117
+ * modules and 121 with the sheet's two-module margin, so each module is 0.38 mm
+ * at the sheet's 46 mm rather than a full version-40 symbol's 0.254 mm.
+ */
+test("a multi-part sheet prints no symbol denser than version 25", async ({ page }) => {
+  await page.goto("/");
+  await useTextMode(page);
+  await selectCrypto(page, "pbkdf2", "aes");
+  const secret = Array.from({ length: 300 }, (_, i) => `note line ${i}`).join("\n");
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await page.waitForFunction(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement | null)?.value.startsWith("keym2:"),
+    null,
+    { timeout: 90_000 }
+  );
+  const snap = await capturePrint(page);
+  expect(snap.symbolModules.length, "this needs a backup that spans several symbols").toBeGreaterThan(2);
+  for (const width of snap.symbolModules) {
+    expect(width, "a printed symbol is denser than version 25").toBeLessThanOrEqual(121);
+  }
+  // The full parts are version 25 exactly: sized to the budget, not under it.
+  expect(snap.symbolModules[0]).toBe(121);
 });
 
 test.describe("paper vault", () => {

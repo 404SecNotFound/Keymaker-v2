@@ -65,7 +65,14 @@ import {
   derivePrfSalt,
   dearmorKeym2,
 } from "../src/lib/keym-v2.ts";
-import { encodePaperParts, encodePaperPartsV2, decodePaperParts, decodePaperPartsAny, splitPaperParts } from "../src/lib/keym-v2-paper.ts";
+import {
+  encodePaperParts,
+  encodePaperPartsV2,
+  encodePaperPartsForPrint,
+  decodePaperParts,
+  decodePaperPartsAny,
+  splitPaperParts,
+} from "../src/lib/keym-v2-paper.ts";
 import {
   encodeShareV2,
   shareSetIdV2,
@@ -254,10 +261,16 @@ try {
     // §7.1 / §7.3. Emitted so crosstest2.py can compare the *strings*, not only
     // the reassembled container: transposing a slice boundary leaves reassembly
     // correct and the two implementations' printed pages mutually unusable.
+    //
+    // `--print` is the paper vault's own sizing, through the function the app
+    // calls, so the cross-test compares what the sheet prints with what
+    // `keym2.py split` writes by default (§7.3 "Symbol size").
     const cap = Number(flag("capacity") ?? 1734);
-    const parts = process.argv.includes("--v2")
-      ? await encodePaperPartsV2(new Uint8Array(inputBuf), cap)
-      : encodePaperParts(new Uint8Array(inputBuf), cap);
+    const parts = process.argv.includes("--print")
+      ? await encodePaperPartsForPrint(new Uint8Array(inputBuf))
+      : process.argv.includes("--v2")
+        ? await encodePaperPartsV2(new Uint8Array(inputBuf), cap)
+        : encodePaperParts(new Uint8Array(inputBuf), cap);
     writeFileSync(outFile, parts.join("\n") + "\n");
   } else if (cmd === "sharev2") {
     // §4.6 v2. One KMSHARE2 string from pinned inputs, so crosstest2.py can

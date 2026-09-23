@@ -184,7 +184,8 @@ have to trust, beyond a file you can read in an afternoon.
 ### Step 7 — if your backup is on paper
 
 If you printed the paper vault instead of keeping a file, scan every symbol.
-Each one decodes to a line starting `KMPART1:`. Put them all in one file, one
+Each one decodes to a line starting `KMPART2:` (`KMPART1:` on a sheet printed
+before that envelope existed; `join` reads both). Put them all in one file, one
 per line, and join them — order does not matter, each part says which it is:
 
 ```bash

@@ -42,7 +42,20 @@ did; the fixture corpus is unchanged, and both parity gates pass.
   command the runner does not recognise fails the suite. Step 3's two sample
   outputs are compared line by line with what `inspect` prints.
 
+### Changed
+- **Paper vault symbols are larger-moduled.** A printed container symbol is
+  now at most a version-25 QR (FORMAT-V2-DESIGN §7.3 "Symbol size"), 0.38 mm a
+  module at the sheet's 46 mm, where a full version-40 symbol was 0.254 mm.
+  Each symbol carries 702 container bytes instead of 1,704, so a backup takes
+  more of them. Readers are unaffected: any part size reassembles.
+- **`keym2.py split` writes KMPART2 by default**, as §7.3 already required of a
+  writer, at the same size the app prints. `--v1` writes KMPART1.
+
 ### Fixed
+- **`keym2.py split --v2` wrote parts no level-M QR can hold.** Its default of
+  1,734 bytes per part was the KMPART1 figure for a version-40 symbol; with
+  KMPART2's fingerprint, length and checksum each line was 2,359 characters,
+  over the 2,331 a version-40 level-M symbol holds.
 - **The paper vault printed its container symbols as a low-resolution bitmap.**
   A full part is a version-40 symbol, and it was drawn into a 300px canvas: at
   a devicePixelRatio of 1 that is 1.66 pixels per module, which the printer

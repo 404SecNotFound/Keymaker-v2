@@ -2834,6 +2834,27 @@ def decode_parts_any(parts: Iterable[str]) -> bytes:
     return decode_parts(items)
 
 
+# §7.3 "Symbol size". What a writer fills, not what a reader accepts: a version-25
+# symbol at level M holds 997 bytes, printed at 0.38 mm a module where a full
+# version-40 symbol (2,331 bytes) is 0.254 mm.
+PAPER_QR_VERSION = 25
+PAPER_QR_MAX_BYTES = 997
+
+
+def paper_capacity_v2(qr_byte_capacity: int, total_hint: int = 9999) -> int:
+    """
+    §7.3. Raw container bytes that fit one KMPART2 symbol of
+    ``qr_byte_capacity`` bytes, reserving the widest overhead a run can emit:
+    the prefix, four-digit counts, the 22-character fingerprint, a ten-digit
+    length, the 6-character checksum and the five separators.
+    """
+    overhead = (len(PART2_PREFIX) + 2 * len(str(total_hint)) + 22 + 10 + 6 + 5)
+    usable = qr_byte_capacity - overhead
+    if usable < 4:
+        raise ValueError("symbol too small to hold a v2 part")
+    return (usable // 4) * 3
+
+
 def paper_capacity(qr_byte_capacity: int, total_hint: int = 9999) -> int:
     """
     Raw container bytes that fit in one symbol of ``qr_byte_capacity`` bytes.
@@ -3616,6 +3637,19 @@ def _selftest() -> int:
 
     check("paper_capacity leaves room for the prefix",
           len(encode_parts(long_container, paper_capacity(2_331))[0]) <= 2_331)
+
+    # §7.3 "Symbol size": a full part fills a version-25 symbol and no more,
+    # for both envelopes, and the capacities are the section's figures.
+    check("§7.3 symbol size: 702 bytes a KMPART2 part, 732 a KMPART1 part",
+          paper_capacity_v2(PAPER_QR_MAX_BYTES) == 702
+          and paper_capacity(PAPER_QR_MAX_BYTES) == 732)
+    _big = os.urandom(20_000)
+    check("a full KMPART2 part fits a version-25 level-M symbol",
+          max(len(x) for x in encode_parts_v2(_big, paper_capacity_v2(PAPER_QR_MAX_BYTES)))
+          <= PAPER_QR_MAX_BYTES)
+    check("a full KMPART1 part fits one too",
+          max(len(x) for x in encode_parts(_big, paper_capacity(PAPER_QR_MAX_BYTES)))
+          <= PAPER_QR_MAX_BYTES)
 
     # --- §7.3: paper parts, version 2 (KMPART2) ---
     parts2 = encode_parts_v2(long_container, 1_734)
@@ -4457,9 +4491,27 @@ def _selftest() -> int:
               _code == 0 and _out.startswith("KEYM v") and "slots       1" in _out)
         _code, _out, _err = _cli(["split", "--in", _page])
         check("split reads the container out of a page, not the page itself",
-              _code == 0 and decode_parts(
+              _code == 0 and decode_parts_any(
                   [ln for ln in _out.splitlines() if ln and not ln.startswith("#")]
               ) == subset)
+
+        # §7.3 "Symbol size", through the CLI: KMPART2 by default, every line
+        # inside a version-25 level-M symbol, --v1 for the old envelope, and
+        # the old --v2 flag still accepted rather than an error.
+        _blob = os.path.join(_d, "big.keym")
+        open(_blob, "wb").write(os.urandom(6000))
+        _code, _out, _err = _cli(["split", "--in", _blob])
+        _lines = [ln for ln in _out.splitlines() if ln and not ln.startswith("#")]
+        check("split writes KMPART2 by default, each part inside a version-25 symbol",
+              _code == 0 and len(_lines) > 1 and all(ln.startswith(PART2_PREFIX) for ln in _lines)
+              and max(len(ln) for ln in _lines) <= PAPER_QR_MAX_BYTES)
+        _code, _out, _err = _cli(["split", "--in", _blob, "--v1"])
+        _lines = [ln for ln in _out.splitlines() if ln and not ln.startswith("#")]
+        check("split --v1 writes KMPART1, also inside a version-25 symbol",
+              _code == 0 and all(ln.startswith(PART_PREFIX) for ln in _lines)
+              and max(len(ln) for ln in _lines) <= PAPER_QR_MAX_BYTES)
+        _code, _out, _err = _cli(["split", "--in", _blob, "--v2"])
+        check("split --v2 is still accepted", _code == 0 and PART2_PREFIX in _out)
 
         # The marker an editor is likeliest to eat: the END one sits after the
         # armor, where a "trailing garbage" clean-up lands.
@@ -5187,13 +5239,19 @@ def main(argv: Optional[list[str]] = None) -> int:
     spl.add_argument("--in", dest="infile", help="input path (default: stdin)")
     spl.add_argument("--out", dest="outfile", help="output path (default: stdout)")
     spl.add_argument("--armor", action="store_true", help="input is keym2: text")
-    spl.add_argument("--capacity", type=int, default=1734, metavar="BYTES",
-                     help="container bytes per part (default 1734: a version-40 "
-                          "QR at ECC level M, which is what paper needs)")
-    spl.add_argument("--v2", action="store_true",
-                     help="write the §7.3 KMPART2 envelope, which carries a "
-                          "container fingerprint, length and per-part checksum "
-                          "so a mis-scan or mixed set is diagnosed by name")
+    spl.add_argument("--capacity", type=int, default=None, metavar="BYTES",
+                     help="container bytes per part (default: what fits a "
+                          "version-25 QR at ECC level M, §7.3 \"Symbol size\": "
+                          f"{paper_capacity_v2(PAPER_QR_MAX_BYTES)} for KMPART2, "
+                          f"{paper_capacity(PAPER_QR_MAX_BYTES)} with --v1)")
+    spl.add_argument("--v1", action="store_true",
+                     help="write §7.1's KMPART1 for an older reader. The default "
+                          "is §7.3's KMPART2, which carries a container "
+                          "fingerprint, length and per-part checksum so a "
+                          "mis-scan or mixed set is diagnosed by name")
+    # Accepted and ignored: KMPART2 is the default now. A script written when it
+    # had to be asked for must not start failing on an unknown flag.
+    spl.add_argument("--v2", action="store_true", help=argparse.SUPPRESS)
 
     jn = sub.add_parser(
         "join", help="reassemble paper parts into a container (§7.1)")
@@ -5323,9 +5381,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     # §7.1, before the key-file lookup: neither of these takes a credential.
     if args.cmd == "split":
         try:
-            # v1 by default so docs/WALKTHROUGH.md's example stays exact; --v2
-            # opts into the §7.3 envelope. `join` reads either.
-            parts = (encode_parts_v2 if args.v2 else encode_parts)(data, args.capacity)
+            # §7.3: "a writer emits KMPART2", and this was the one writer that
+            # did not. Its default capacity was also 1,734 bytes, the KMPART1
+            # figure for a version-40 symbol, which as KMPART2 made a 2,359-char
+            # line that no level-M symbol holds. Both now follow §7.3 "Symbol
+            # size". `join` reads either version.
+            if args.v1:
+                capacity = args.capacity or paper_capacity(PAPER_QR_MAX_BYTES)
+                parts = encode_parts(data, capacity)
+            else:
+                capacity = args.capacity or paper_capacity_v2(PAPER_QR_MAX_BYTES)
+                parts = encode_parts_v2(data, capacity)
         except ValueError as e:
             print(f"error: {e}", file=sys.stderr)
             return 1
