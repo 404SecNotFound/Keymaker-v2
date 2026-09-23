@@ -1627,6 +1627,49 @@ def main() -> int:
             check(f"{kind} {label}: both {'accept' if py['ok'] else 'reject'}, and read the same",
                   py == js, f"py={py} js={js}")
 
+        # §4.6 "The set code": from a salt and from a strip's text, compared as
+        # the strings each implementation emits. The TypeScript's strips are
+        # included, so the code both print is the code its strips start with.
+        js_strips = js_v3_shares if js_v3_enrolled is not None else []
+        # Strips whose set codes are all 0s and all 1s, then copied with the
+        # look-alikes §4.6 folds. A random set code rarely contains either, so
+        # without these the folding was never exercised: a negative control
+        # that removed O-to-0 passed.
+        zeros = keym2.encode_share_v2(keym2.Share(set_id=bytes(16), threshold=2, index=1,
+                                                  value=bytes(32)))
+        ones = keym2.encode_share_v2(keym2.Share(
+            set_id=bytes([0x08, 0x42, 0x10, 0x84, 0x21]) + bytes(11), threshold=2, index=1,
+            value=bytes(32)))
+        folded = [zeros.replace("0000-0000", "oOo0-O0oo", 1),
+                  ones.replace("1111-1111", "lIi1-L1il", 1)]
+        code_cases: list[dict] = [{"salt": bytes(range(32)).hex()}]
+        code_cases += [{"salt": os.urandom(32).hex()} for _ in range(16)]
+        code_cases += [{"text": t} for t in (
+            *shares_t, *js_strips, zeros, ones, *folded, sh.lower(), sh.replace("-", " "), "\ufeff" + sh,
+            sh.replace("0", "o"), "\u00a0" + sh.replace("-", "\u00a0"),
+            keym2.SHARE2_PREFIX + sh[len(keym2.SHARE2_PREFIX):][:6],
+            keym2.encode_share(keym2.Share(set_id=bytes(4), threshold=2, index=1, value=bytes(32))),
+            "KM\u017fHARE2:" + sh[len(keym2.SHARE2_PREFIX):], sh[:12] + "\u0131" + sh[13:],
+            "not a share at all",
+        )]
+        py_codes = [keym2.share_set_code(bytes.fromhex(c["salt"])) if "salt" in c
+                    else keym2.share_text_set_code(c["text"]) for c in code_cases]
+        codes_in, codes_out = tmp / "setcode-cases.json", tmp / "setcodes.json"
+        codes_in.write_text(json.dumps(code_cases))
+        try:
+            bridge("setcodes", "--in", str(codes_in), "--out", str(codes_out))
+            js_codes = json.loads(codes_out.read_text())
+        except BridgeError as e:
+            js_codes = [f"bridge: {e}"] * len(code_cases)
+        check("§4.6 set code: the vector, from both", py_codes[0] == js_codes[0] == "47S0-JZGX",
+              f"py={py_codes[0]} js={js_codes[0]}")
+        mismatched = [(c, p, j) for c, p, j in zip(code_cases, py_codes, js_codes) if p != j]
+        check(f"§4.6 set code: {len(code_cases)} salts and strip texts, the same string from both",
+              not mismatched, f"first disagreement {mismatched[:1]}")
+        check("§4.6 set code: every strip either implementation issued starts with its set code",
+              all(t.startswith(keym2.SHARE2_PREFIX + keym2.share_text_set_code(t) + "-")
+                  for t in (*shares_t, *js_strips)) and len(js_strips) > 0)
+
         # §6: a share set whose id matches the container's only in its first
         # four bytes. The values are this set's own, so a reader comparing four
         # bytes reconstructs the right secret and opens the container.

@@ -673,6 +673,13 @@
     font-weight: 400;
   }
 
+  /* §4.6 set code: monospace, so 0/O and 1/I/L read as the characters the
+     strip's own code uses. */
+  .pv-code {
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+  }
+
   .pv-strip-body {
     display: flex;
     gap: 8pt;

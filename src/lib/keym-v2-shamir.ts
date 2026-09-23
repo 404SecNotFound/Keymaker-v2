@@ -486,6 +486,49 @@ export async function shareSetIdV2(slotSalt: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(digest).slice(0, SHARE2_SET_ID_LEN);
 }
 
+/** §4.6 "The set code": eight base32 characters, as two groups of four. */
+export const SET_CODE_CHARS = 8;
+
+/**
+ * §4.6 "The set code". The first eight base32 characters of the v2 set id,
+ * written `XXXX-XXXX`. Every `KMSHARE2` strip of the set begins with exactly
+ * these two groups, since its text is base32 of a record that starts with the
+ * set id. For people to compare by eye: a reader still compares all sixteen
+ * bytes of the set id (§6).
+ */
+export async function shareSetCode(slotSalt: Uint8Array): Promise<string> {
+  const code = b32Encode(await shareSetIdV2(slotSalt)).slice(0, SET_CODE_CHARS);
+  return `${code.slice(0, SHARE_GROUP)}-${code.slice(SHARE_GROUP)}`;
+}
+
+/**
+ * The set code a `KMSHARE2` strip's own text carries: its first two groups,
+ * read with §4.6's folding (case, `I`/`L` to `1`, `O` to `0`, hyphens and §7's
+ * ignorable characters dropped). Null for anything that is not `KMSHARE2` text,
+ * including a `KMSHARE1` strip, which carries only six characters of it.
+ *
+ * Reads the text and nothing else: no checksum, so a strip with a typo later in
+ * its code still reports its set code. That is what a person comparing codes
+ * by eye would see too. Whether the strip is intact is `decodeShareV2`'s job.
+ */
+export function shareTextSetCode(text: string): string | null {
+  const stripped = stripIgnorable(text);
+  if (!asciiUpper(stripped).startsWith(SHARE2_PREFIX)) return null;
+  let code = "";
+  for (const ch of stripped.slice(SHARE2_PREFIX.length)) {
+    if (ch === "-" || isIgnorable(ch)) continue;
+    let u = asciiUpper(ch);
+    if (u === "I" || u === "L") u = "1";
+    else if (u === "O") u = "0";
+    if (!B32_ALPHABET.includes(u)) return null;
+    code += u;
+    if (code.length === SET_CODE_CHARS) {
+      return `${code.slice(0, SHARE_GROUP)}-${code.slice(SHARE_GROUP)}`;
+    }
+  }
+  return null;
+}
+
 async function shareChecksumV2(body: Uint8Array): Promise<Uint8Array> {
   const digest = await crypto.subtle.digest("SHA-256", concat([CTX_SHARE_CHECKSUM, body]) as BufferSource);
   return new Uint8Array(digest).slice(0, SHARE2_CHECKSUM_LEN);

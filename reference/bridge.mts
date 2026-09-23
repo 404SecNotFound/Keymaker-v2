@@ -66,7 +66,14 @@ import {
   dearmorKeym2,
 } from "../src/lib/keym-v2.ts";
 import { encodePaperParts, encodePaperPartsV2, decodePaperParts, decodePaperPartsAny, splitPaperParts } from "../src/lib/keym-v2-paper.ts";
-import { encodeShareV2, shareSetIdV2, decodeShareAny, isKeym2Share } from "../src/lib/keym-v2-shamir.ts";
+import {
+  encodeShareV2,
+  shareSetIdV2,
+  decodeShareAny,
+  isKeym2Share,
+  shareSetCode,
+  shareTextSetCode,
+} from "../src/lib/keym-v2-shamir.ts";
 import {
   buildSelfExtractingPage,
   embedSelfExtract,
@@ -355,6 +362,20 @@ try {
       }
     }
     writeFileSync(outFile, JSON.stringify(verdicts));
+  } else if (cmd === "setcodes") {
+    // §4.6 "The set code". From a slot salt (what inspect and the owner's sheet
+    // print) and from a strip's own text (what a person reads off the paper),
+    // so the cross-test compares the string each emits, not a decode of it.
+    const cases = JSON.parse(readFileSync(inFile, "utf8")) as { salt?: string; text?: string }[];
+    const codes: (string | null)[] = [];
+    for (const c of cases) {
+      codes.push(
+        c.salt !== undefined
+          ? await shareSetCode(Uint8Array.from(Buffer.from(c.salt, "hex")))
+          : shareTextSetCode(c.text ?? "")
+      );
+    }
+    writeFileSync(outFile, JSON.stringify(codes));
   } else {
     throw new Error(`unknown command: ${cmd}`);
   }

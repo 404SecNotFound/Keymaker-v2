@@ -950,6 +950,60 @@ on the prefix's version digit. A set is single-version by construction, since on
 enrolment writes one version, and a set that mixes versions is refused: the two
 record lengths give set ids of different lengths that cannot compare equal.
 
+#### The set code
+
+A share set also has a short name for people to compare by eye:
+
+```
+set_code = Crockford-base32(share_set_id_v2(slot_salt))[0:8]
+           written as two groups of four: XXXX-XXXX
+```
+
+`share_set_id_v2` is the sixteen-byte set id above, derived from the slot's
+`slot_salt`, so a reader computes the set code from the container alone,
+holding no share. The alphabet and the bit order are §4.6's.
+
+**Every `KMSHARE2` strip already begins with it.** The share text is base32 of
+a record whose first sixteen bytes are the set id, and base32 spends five bits
+per character from the most significant bit, so the first eight characters
+after the prefix encode the first forty bits of the set id and nothing else.
+The text of every strip in a set therefore starts `KMSHARE2:XXXX-XXXX-`, and
+those two groups are the set code. Nothing new is printed that the strip did
+not already say; the set code gives those eight characters a name, so a sheet
+or `inspect` can print them beside the container they belong to.
+
+Read off a strip, the set code is text, not a decoded record: §4.6's folding
+applies (case, `I` and `L` as `1`, `O` as `0`, hyphens and §7's ignorable
+characters dropped), and no checksum is needed, because a person comparing
+codes by eye does not have one either. Whether the strip is intact is a
+separate question, answered by decoding it.
+
+That is the point of it. Someone holding a drawer of strips from several
+backups can tell which strips go with which backup without a tool, by
+comparing the first two groups of a strip with the set code on the owner's
+sheet or in `inspect`'s output.
+
+**It is a label, not a check.** Forty bits make an accidental match between two
+particular sets a 2⁻⁴⁰ event. By the birthday bound, a collision anywhere in a
+collection reaches even odds only at about 1.2 million sets, far beyond one
+person's or one estate's archive. It is not secret, because `slot_salt` is in the clear. A
+reader **MUST NOT** use the set code in place of §6's full sixteen-byte
+comparison; the set code is for people, the set id is for readers.
+
+A `KMSHARE1` strip matches in its first **six** base32 characters only: the
+first group, and the first two characters of the second. Its set id is four
+bytes, so its text carries thirty bits of set id before the threshold byte
+starts in the seventh character. Those six characters are the first six of
+the set code, because both ids are prefixes of the same hash.
+
+Vector:
+
+| | |
+|---|---|
+| `slot_salt` | `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f` |
+| `share_set_id_v2` | `21f2097e1d1107bdf7c15732669d7476` |
+| set code | `47S0-JZGX` |
+
 ### 4.7 Slot secret for a passkey slot (`slot_type = 0x01`)
 
 > **Implemented.** `reference/keym2.py` was written from this section, the

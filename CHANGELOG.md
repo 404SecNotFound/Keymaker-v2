@@ -3,7 +3,7 @@
 ## Unreleased
 
 No container format change. Everything here reads and writes the bytes v2.2.0
-did; the fixture corpus and both parity gates are unchanged and pass.
+did; the fixture corpus is unchanged, and both parity gates pass.
 
 ### Added
 - **Recovery strips scan back in.** The paper vault has always printed a QR on
@@ -15,6 +15,14 @@ did; the fixture corpus and both parity gates are unchanged and pass.
 - **RECOVERY.md explains recovering with shares**, with the `keym2.py
   --shares-from` command, and `recovery_test.py` runs it against a share set
   issued by the shipping enrolment.
+- **A set code on the paper vault.** FORMAT-V2-DESIGN §4.6 names the first two
+  groups of a `KMSHARE2` strip, which every strip of a set already shares, the
+  *set code*. The owner's sheet prints it, taken from the container, so it is
+  there even on a sheet printed later without strips; each strip prints it in
+  its heading; `keym2.py inspect` prints it for a share slot; and RECOVERY.md
+  says how to use it to sort strips by backup. Both implementations compute it
+  and the parity gate compares the strings. It is a label for people and
+  opens nothing.
 - **Share-set presets.** *2 of 3* and *3 of 5* buttons sit above the share
   fields and fill both at once. The fields stay; a preset shows as chosen only
   while both still match it.

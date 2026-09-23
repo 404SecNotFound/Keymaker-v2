@@ -191,6 +191,11 @@ per line, then:
 python3 keym2.py decrypt --in backup.keym --shares-from shares.txt --out recovered.txt
 ```
 
+**Which strips go with which backup.** Every strip for the same backup begins
+with the same two groups after `KMSHARE2:`, for example `KMSHARE2:47S0-JZGX-`.
+That is the backup's *set code*, and `inspect` prints it on the line `set code`.
+A strip that begins with a different code belongs to a different backup.
+
 No password is asked for. Case, spaces and hyphens inside a code do not matter,
 lines starting with `#` are ignored, and it does not matter which strips you
 use or in what order. If it reports `decryption failed`, you have fewer strips

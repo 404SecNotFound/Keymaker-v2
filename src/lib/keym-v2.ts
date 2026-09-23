@@ -1673,6 +1673,21 @@ export function passkeySlotSaltsKeym2(container: Uint8Array): Uint8Array[] {
 }
 
 /**
+ * §4.6. The salt of each Shamir slot, in table order, for §4.6's set code: the
+ * paper vault prints it beside the container so a strip can be matched to its
+ * backup by eye. Structural parse errors propagate, as above.
+ */
+export function shamirSlotSaltsKeym2(container: Uint8Array): Uint8Array[] {
+  const parsed = parseKeym2Container(container);
+  const salts: Uint8Array[] = [];
+  for (const record of parsed.records) {
+    const slot = parseKeym2Slot(record);
+    if (slot !== null && slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) salts.push(slot.salt);
+  }
+  return salts;
+}
+
+/**
  * True when every slot a reader could attempt is a passkey slot.
  *
  * An unparseable record counts as *not* a passkey slot, which is the

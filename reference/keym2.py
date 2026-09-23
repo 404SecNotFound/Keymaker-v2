@@ -1545,6 +1545,49 @@ def share_set_id_v2(slot_salt: bytes) -> bytes:
     return hashlib.sha256(CTX_SHARE_SET + slot_salt).digest()[:SHARE2_SET_ID_LEN]
 
 
+SET_CODE_CHARS = 8
+
+
+def share_set_code(slot_salt: bytes) -> str:
+    """
+    §4.6 "The set code". The first eight base32 characters of the v2 set id,
+    as two groups of four.
+
+    Forty bits, which is exactly the first two groups of every KMSHARE2 strip
+    in the set, since the strip's text is base32 of a record that starts with
+    the set id. For people to compare by eye; a reader still compares all
+    sixteen bytes (§6).
+    """
+    code = _b32_encode(share_set_id_v2(slot_salt))[:SET_CODE_CHARS]
+    return code[:SHARE_GROUP] + "-" + code[SHARE_GROUP:]
+
+
+def share_text_set_code(text: str) -> Optional[str]:
+    """
+    §4.6 "The set code", read off a KMSHARE2 strip's text: its first eight
+    base32 characters, with §4.6's folding. No checksum, as the section says —
+    this is what a person comparing by eye sees. None for anything that is not
+    KMSHARE2 text, including a KMSHARE1 strip, which carries only six of them.
+    """
+    stripped = _strip_ignorable(text)
+    if not _ascii_upper(stripped).startswith(SHARE2_PREFIX):
+        return None
+    code = ""
+    for ch in stripped[len(SHARE2_PREFIX):]:
+        if ch == "-" or ch in IGNORABLE:
+            continue
+        # _ascii_upper folds ASCII only, so a non-ASCII look-alike stays
+        # outside the alphabet and is refused below (§7).
+        u = _ascii_upper(ch)
+        u = "1" if u in ("I", "L") else "0" if u == "O" else u
+        if u not in B32_ALPHABET:
+            return None
+        code += u
+        if len(code) == SET_CODE_CHARS:
+            return code[:SHARE_GROUP] + "-" + code[SHARE_GROUP:]
+    return None
+
+
 def _share_checksum_v2(body: bytes) -> bytes:
     """§4.6 v2. Sixteen bytes of SHA-256 over v2 share bytes [0, 50)."""
     return hashlib.sha256(CTX_SHARE_CHECKSUM + body).digest()[:SHARE2_CHECKSUM_LEN]
@@ -2967,6 +3010,9 @@ def _describe_slot(index: int, record: bytes) -> list[str]:
             f"  slot {index}       type 0x{slot.slot_type:02x} (Shamir share set)",
             f"    kdf         HKDF-SHA-256",
             f"    set id      {share_set_id(slot.salt).hex()}",
+            # §4.6 "The set code": what every strip of this set starts with,
+            # so a strip can be matched to this file by eye.
+            f"    set code    {share_set_code(slot.salt)}",
             f"    salt        {slot.salt.hex()}",
         ]
     kdf = (
@@ -4009,6 +4055,35 @@ def _selftest() -> int:
                                    index=1, value=v2_parts[0][1]))
     rejects("a set mixing KMSHARE1 and KMSHARE2 is refused",
             lambda: combine_shares([_v1_share, v2_shares[1]]))
+
+    # --- §4.6 "The set code" --------------------------------------------------
+    check("the set code matches §4.6's vector",
+          share_set_code(v2_salt) == "47S0-JZGX")
+    _code = share_set_code(v2_salt)
+    check("every KMSHARE2 strip of the set begins with its set code",
+          all(s.startswith(SHARE2_PREFIX + _code + "-") for s in v2_shares))
+    check("a KMSHARE1 strip matches the set code in its first six characters only",
+          _v1_share[len(SHARE_PREFIX):].replace("-", "")[:6] == _code.replace("-", "")[:6]
+          and _v1_share[len(SHARE_PREFIX):].replace("-", "")[:8] != _code.replace("-", ""))
+    check("a strip's own text reports its set code, however it was copied",
+          share_text_set_code(v2_shares[0]) == _code
+          and share_text_set_code(v2_shares[1].lower().replace("-", " ")) == _code
+          and share_text_set_code("\ufeff" + v2_shares[2].replace("0", "o")) == _code)
+    # Set codes of all 0s and all 1s, copied with the look-alikes §4.6 folds.
+    # A random set code rarely contains either character.
+    _zeros = encode_share_v2(Share(set_id=bytes(16), threshold=2, index=1, value=bytes(32)))
+    _ones = encode_share_v2(Share(set_id=bytes([0x08, 0x42, 0x10, 0x84, 0x21]) + bytes(11),
+                                  threshold=2, index=1, value=bytes(32)))
+    check("a set code copied with O for 0 and I, i, L, l for 1 reads the same",
+          share_text_set_code(_zeros.replace("0000-0000", "oOo0-O0oo", 1)) == "0000-0000"
+          and share_text_set_code(_ones.replace("1111-1111", "lIi1-L1il", 1)) == "1111-1111")
+    check("a dotless i is not folded into a 1",
+          share_text_set_code(_ones.replace("1111", "\u0131111", 1)) is None)
+    check("a KMSHARE1 strip, or a truncated one, reports no set code",
+          share_text_set_code(_v1_share) is None
+          and share_text_set_code(SHARE2_PREFIX + _code[:4]) is None)
+    _other_code = share_set_code(bytes(range(1, 33)))
+    check("a different slot salt gives a different set code", _other_code != _code)
 
     # --- §7 "Characters a reader ignores", and the full v2 set id -----------
     # A v2 share from a different set whose id shares only the first four

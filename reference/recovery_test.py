@@ -823,6 +823,19 @@ def recovery_commands() -> None:
                 check(r.returncode == 0 and got == SECRET, f"`{c}` recovers the bytes",
                       r.stderr.strip()[:160])
 
+            # "inspect prints it on the line `set code`", and it is what every
+            # strip begins with. Run with the page's own inspect line for v3.
+            v3_inspect = [c for c in identify if 3 in claimed_versions(c)]
+            if v3_inspect:
+                r = run_doc_command(v3_inspect[0], tmp, stdin="")
+                m = re.search(r"^\s*set code\s+(\S+)$", r.stdout, re.MULTILINE)
+                check(m is not None and all(t.startswith("KMSHARE2:" + m.group(1) + "-") for t in strips),
+                      "inspect's `set code` is what every strip of the set begins with",
+                      r.stdout.strip()[-200:])
+            check(re.search(r"KMSHARE2:[0-9A-Z]{4}-[0-9A-Z]{4}-`", doc) is not None
+                  and "`set code`" in doc,
+                  "the page shows a set code and names inspect's `set code` line")
+
 
 # ----------------------------------------------------------------------------
 # docs/WALKTHROUGH.md — Part 3, executed rather than transcribed

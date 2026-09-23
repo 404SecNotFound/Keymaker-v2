@@ -41,6 +41,11 @@ interface PrintSnapshot {
   stripsPageSymbols: number;
   /** The rehearsal box's text. */
   rehearsal: string;
+  /** §4.6 set codes the owner's sheet prints, one per share slot. */
+  sheetSetCodes: string[];
+  /** The set code each strip's head prints, and the share code under it. */
+  stripSetCodes: string[];
+  stripShareCodes: string[];
 }
 
 async function encryptSomething(page: Page) {
@@ -156,6 +161,11 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
         heldBy: strips.filter((s) => /Held by/.test(s.textContent ?? "")).length,
         stripsPageSymbols: el ? el.querySelectorAll(".pv-strips .pv-qr svg").length : 0,
         rehearsal: el?.querySelector(".pv-rehearsal")?.textContent ?? "",
+        sheetSetCodes: el
+          ? Array.from(el.querySelectorAll(".pv-setcode .pv-code"), (c) => c.textContent ?? "")
+          : [],
+        stripSetCodes: strips.map((s) => s.querySelector(".pv-strip-head .pv-code")?.textContent ?? ""),
+        stripShareCodes: strips.map((s) => s.querySelector(".pv-strip-body code")?.textContent ?? ""),
       };
       throw new Error("print stubbed — see capturePrint()");
     };
@@ -401,6 +411,43 @@ test.describe("the sheet as a procedure", () => {
     expect(snap.text).toContain("keym2.py decrypt --share");
     // The rehearsal line asks which strips were used, one blank per strip needed.
     expect(snap.rehearsal).toMatch(/with strips ______ and ______/);
+  });
+
+  test("the set code on the owner's sheet is the one every strip begins with", async ({ page }) => {
+    await encryptWithShares(page, 2, 3);
+    const snap = await capturePrint(page, "dialog");
+
+    // The sheet derives its code from the container's slot salt; each strip's
+    // head derives its own from the strip's text. Two routes to one value,
+    // which is what §4.6 says they are.
+    expect(snap.sheetSetCodes, "one share slot, one set code").toHaveLength(1);
+    const code = snap.sheetSetCodes[0] as string;
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
+    expect(snap.stripSetCodes).toEqual([code, code, code]);
+    for (const share of snap.stripShareCodes) {
+      expect(share.startsWith(`KMSHARE2:${code}-`), `${share} does not begin with ${code}`).toBe(true);
+    }
+    expect(snap.text).toMatch(/A strip that begins differently belongs to a different backup/);
+  });
+
+  test("the set code is on a sheet printed later, with no strips on it", async ({ page }) => {
+    await encryptWithShares(page, 2, 3);
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+
+    const snap = await capturePrint(page, "form");
+    expect(snap.strips, "the strips were not printed this time").toBe(0);
+    expect(snap.sheetSetCodes).toHaveLength(1);
+    expect(shares[0]?.startsWith(`KMSHARE2:${snap.sheetSetCodes[0]}-`)).toBe(true);
+  });
+
+  test("a backup without shares prints no set code", async ({ page }) => {
+    await encryptSomething(page);
+    const snap = await capturePrint(page);
+    expect(snap.sheetSetCodes).toEqual([]);
+    expect(snap.text).not.toMatch(/Set code/);
   });
 
   test("carries a rehearsal box to be filled in ink", async ({ page }) => {

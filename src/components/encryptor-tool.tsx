@@ -1108,17 +1108,36 @@ const FEATURE_CARDS = [
  */
 async function preparePaperParts(
   container: Uint8Array
-): Promise<{ parts: string[]; tooLarge: boolean }> {
+): Promise<{ parts: string[]; tooLarge: boolean; setCodes: string[] }> {
   const { encodePaperPartsV2, paperCapacityV2, PAPER_QR_MAX_BYTES } = await import(
     "@/lib/keym-v2-paper"
   );
+  const setCodes = await containerSetCodes(container);
   try {
     const parts = await encodePaperPartsV2(container, paperCapacityV2(PAPER_QR_MAX_BYTES));
     // 300 symbols is ~500 kB of container and a ream of paper. Past that the
     // honest answer is "this is not a paper backup", not pages no one will scan.
-    return { parts, tooLarge: parts.length > 300 };
+    return { parts, tooLarge: parts.length > 300, setCodes };
   } catch {
-    return { parts: [], tooLarge: true };
+    return { parts: [], tooLarge: true, setCodes };
+  }
+}
+
+/**
+ * §4.6 "The set code" of each share set this container carries, from its slot
+ * salts, so the owner's sheet can say which strips belong to it. Derived from
+ * the container rather than from strips, because the sheet is also printed
+ * later, from the receipt, when the strips are no longer on screen. Empty for a
+ * container with no share slot or one this build cannot parse: a sheet with no
+ * set code is honest, one with an invented code is not.
+ */
+async function containerSetCodes(container: Uint8Array): Promise<string[]> {
+  try {
+    const { shamirSlotSaltsKeym2 } = await import("@/lib/keym-v2");
+    const { shareSetCode } = await import("@/lib/keym-v2-shamir");
+    return await Promise.all(shamirSlotSaltsKeym2(container).map((salt) => shareSetCode(salt)));
+  } catch {
+    return [];
   }
 }
 
@@ -1535,6 +1554,8 @@ export function EncryptorTool() {
     tooLarge: boolean;
     shares?: string[];
     threshold?: number;
+    /** §4.6 set codes of the container's share slots, for the owner's sheet. */
+    setCodes: string[];
     printedOn: string;
     /** A rehearsal that succeeded this session, to be written on the sheet. */
     rehearsal?: { on: string; strips: number[] } | undefined;
@@ -5129,11 +5150,12 @@ export function EncryptorTool() {
     if (!outputText.startsWith("keym2:")) return;
     const { dearmorKeym2 } = await import("@/lib/keym-v2");
     const container = dearmorKeym2(outputText);
-    const { parts, tooLarge } = await preparePaperParts(container);
+    const { parts, tooLarge, setCodes } = await preparePaperParts(container);
     setPaperVault({
       container,
       parts,
       tooLarge,
+      setCodes,
       printedOn: new Date().toISOString().slice(0, 10),
       rehearsal: rehearsalStamp,
     });
@@ -5794,11 +5816,12 @@ export function EncryptorTool() {
                 try {
                   const { dearmorKeym2 } = await import("@/lib/keym-v2");
                   const container = dearmorKeym2(outputText);
-                  const { parts, tooLarge } = await preparePaperParts(container);
+                  const { parts, tooLarge, setCodes } = await preparePaperParts(container);
                   setPaperVault({
                     container,
                     parts,
                     tooLarge,
+                    setCodes,
                     shares: issuedShares.shares,
                     threshold: issuedShares.threshold,
                     printedOn: new Date().toISOString().slice(0, 10),
@@ -5975,6 +5998,7 @@ export function EncryptorTool() {
           tooLarge={paperVault.tooLarge}
           shares={paperVault.shares}
           threshold={paperVault.threshold}
+          setCodes={paperVault.setCodes}
           printedOn={paperVault.printedOn}
           rehearsal={paperVault.rehearsal}
         />

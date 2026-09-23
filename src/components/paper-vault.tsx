@@ -2,6 +2,7 @@
 
 import { QRCodeSVG } from "qrcode.react";
 import { parseKeym2CoreHeader, keym2SlotCountOffset } from "@/lib/keym-v2";
+import { shareTextSetCode } from "@/lib/keym-v2-shamir";
 import { byteMapSpans } from "@/components/container-inspector";
 
 /**
@@ -88,6 +89,12 @@ export interface PaperVaultProps {
   shares?: readonly string[] | undefined;
   /** The k of k-of-n, needed to say what a share is worth. */
   threshold?: number | undefined;
+  /**
+   * §4.6 set codes of the container's share slots, derived from the container
+   * by the caller. Printed on the owner's sheet so a strip can be matched to
+   * this backup by eye. Empty when the container has no share slot.
+   */
+  setCodes?: readonly string[] | undefined;
   /** Shown as the label on the sheet; never the secret itself. */
   label?: string | undefined;
   /** Fixed by the caller so a re-render cannot change what "printed on" says. */
@@ -140,6 +147,7 @@ export function PaperVault({
   tooLarge,
   shares,
   threshold,
+  setCodes = [],
   label,
   printedOn,
   rehearsal,
@@ -218,6 +226,26 @@ export function PaperVault({
           </ol>
         </div>
       </section>
+
+      {/*
+        §4.6 "The set code". Every strip that opens this backup begins with it,
+        so whoever holds a drawer of strips can sort them by eye. Printed from
+        the container, not from strips, so the sheet says it even when printed
+        later with no strips on it.
+      */}
+      {setCodes.length > 0 ? (
+        <section className="pv-block pv-setcode" data-testid="pv-setcode">
+          <h2>Which recovery strips belong to this backup</h2>
+          {setCodes.map((code) => (
+            <p key={code} className="pv-note">
+              Set code <strong className="pv-code">{code}</strong>. Every recovery strip for
+              this backup begins <code>KMSHARE2:{code}-</code>. A strip that begins
+              differently belongs to a different backup. The code is not a secret and
+              opens nothing.
+            </p>
+          ))}
+        </section>
+      ) : null}
 
       {tooLarge ? (
         <section className="pv-block">
@@ -354,6 +382,11 @@ export function PaperVault({
               <div className="pv-strip-head">
                 <span>
                   Recovery strip {i + 1} of {n}
+                  {shareTextSetCode(share) ? (
+                    <>
+                      {" "}&middot; set <span className="pv-code">{shareTextSetCode(share)}</span>
+                    </>
+                  ) : null}
                 </span>
                 <span className="pv-holder">Held by ______________________</span>
               </div>
@@ -413,7 +446,8 @@ export function PaperVault({
       </section>
 
       <footer className="pv-foot">
-        Format KEYM v2 · specified in <code>docs/FORMAT-V2-DESIGN.md</code> ·
+        Format KEYM v{layout?.version ?? 2} · specified in <code>docs/FORMAT-V2-DESIGN.md</code>
+        {layout?.version === 3 ? <> and <code>docs/FORMAT-V3-DESIGN.md</code></> : null} ·
         paper parts are §7.3 · this page prints no secret except what you write
         on it.
       </footer>
