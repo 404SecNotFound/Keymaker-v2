@@ -16,6 +16,16 @@ name: CI
 on:
   pull_request:
   workflow_call:
+    inputs:
+      # release.yml passes the tag it is about to build, so the
+      # reproducible-elsewhere legs below build the same channel it publishes
+      # and its sign job compares like with like. Empty (every PR, and
+      # deploy.yml) builds the development channel, which is what deploy.yml
+      # publishes.
+      release-tag:
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
 
 permissions: {}
@@ -173,6 +183,15 @@ jobs:
       # guards its own wiring.
       - name: Publication is gated on the test suites
         run: npm run test:release-gate
+
+      # The step in deploy.yml and release.yml that refuses to sign a manifest
+      # the reproducible-elsewhere legs below did not reproduce byte for byte.
+      # It only ever runs inside a publish, which is too late to learn it
+      # accepts a mismatch, so its refusals are exercised here on every PR. The
+      # control bites: a comparison that always agrees passes a differing,
+      # extra or missing file, and a minimum of zero signs on no evidence.
+      - name: Signing refuses a manifest no independent build reproduced
+        run: npm run test:reproduced-manifest
 
       - name: KEYM v1 regression suite
         run: npm run test:keymaker
@@ -387,13 +406,23 @@ jobs:
       # reason verify-reproducible.mjs pins it: a PR checkout is a merge commit
       # that does not exist upstream, and letting each leg resolve it from git
       # would be comparing git rather than the build.
+      #
+      # The channel is the caller's: empty on a PR and under deploy.yml, the
+      # tag under release.yml. It arrives through `env`, never interpolated into
+      # a script, because a tag name is text its author controls.
       - name: Build
         run: npm run build
         working-directory: ${{ matrix.dir }}
         env:
           KEYMAKER_BASE_PATH: /Keymaker-v2
           KEYMAKER_BUILD_ID: ${{ github.sha }}
+          KEYMAKER_RELEASE_TAG: ${{ inputs.release-tag }}
 
+      # Consumed twice: by the comparison job below, and, when deploy.yml or
+      # release.yml called this workflow, by their sign job, which refuses to
+      # sign a manifest these legs did not reproduce
+      # (scripts/check-reproduced-manifest.mjs). Keep the `sums-` prefix; both
+      # download by it.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sums-${{ matrix.id }}
