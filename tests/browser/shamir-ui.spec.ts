@@ -171,6 +171,12 @@ test.describe("a share pasted into the wrong box", () => {
     // §7's wrong-box paste. Without this it reaches the parser and comes back
     // as a generic decryption failure.
     await expect(page.getByText(/recovery share, not an encrypted container/i)).toBeVisible();
+    // The paste is kept, so the notice must not say nothing was pasted.
+    await expect(
+      page.locator("#text-secret-size-error"),
+      "the notice said nothing was pasted, beside the paste it had kept"
+    ).not.toContainText(/Nothing was pasted/);
+    await expect(visible(page.getByPlaceholder("Enter text to decrypt"))).toHaveValue(shares[0] as string);
   });
 });
 

@@ -190,3 +190,41 @@ test("the following print carries the filled stamp", async ({ page }) => {
   expect(box).toContain(`rehearse again by ${aYearAfter(today)}`);
   expect(box).not.toContain("☐");
 });
+
+test("a rehearsal belongs to its container: the next seal starts unrehearsed", async ({ page }) => {
+  // Rehearse backup A, then seal backup B in the same session. Only a wipe
+  // used to clear the result, so B's dialog showed A's "opened" line and B's
+  // sheet was stamped as rehearsed with strips nobody had tried against it.
+  const shares = await sealWithShares(page, 2, 3);
+  await rehearsalInput(page).fill(`${shares[0]}\n${shares[1]}`);
+  await openButton(page).click();
+  await expect(result(page)).toContainText(/with strips 1 and 2/, { timeout: 60_000 });
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
+  await expect(dialog(page)).toHaveCount(0);
+
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill("a different backup");
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await expect(dialog(page).getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+
+  await expect(result(page), "the new dialog showed the previous backup's rehearsal").toHaveCount(0);
+  const box = await printedRehearsalBox(page);
+  expect(box, "the new sheet was stamped with the previous backup's rehearsal").toContain("☐");
+  expect(box).not.toContain("☑");
+});
+
+test("the Recovery page reports what actually happened to this backup", async ({ page }) => {
+  // It said "Confirm in your downloads" for a container that was never
+  // downloaded (Text mode keeps it on screen), and "No result shown" after a
+  // rehearsal had opened it.
+  const shares = await sealWithShares(page, 2, 3);
+  await rehearsalInput(page).fill(`${shares[0]}\n${shares[1]}`);
+  await openButton(page).click();
+  await expect(result(page)).toContainText(/with strips 1 and 2/, { timeout: 60_000 });
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
+
+  await visible(page.getByRole("tab", { name: "Recovery", exact: true })).click();
+  await expect(page.getByText(/Not saved yet/)).toBeVisible();
+  await expect(page.getByText(/Confirm in your downloads/)).toHaveCount(0);
+  await expect(page.getByText(/Rehearsed on \d{4}-\d{2}-\d{2} with strips 1 and 2/)).toBeVisible();
+});

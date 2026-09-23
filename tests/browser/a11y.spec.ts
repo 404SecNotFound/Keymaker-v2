@@ -1,6 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { visible, useTextMode } from "./helpers";
+import { visible, useTextMode, selectCrypto, encryptText, decryptText, STRONG_PASSWORD } from "./helpers";
 
 /**
  * Accessibility, in two halves — because the automated half is the smaller one.
@@ -107,6 +107,25 @@ test.describe("axe", () => {
       "docs",
       async (page) => {
         await visible(page.getByRole("tab", { name: "Docs" })).click();
+      },
+    ],
+    [
+      // The result toolbar under a sealed text container: copy, QR, download.
+      // Never scanned before, and three of its icon-only buttons had no name.
+      "encrypt result in text mode",
+      async (page) => {
+        await useTextMode(page);
+        await selectCrypto(page, "pbkdf2", "aes");
+        await encryptText(page, "for the scan", STRONG_PASSWORD);
+      },
+    ],
+    [
+      "decrypt result in text mode",
+      async (page) => {
+        await useTextMode(page);
+        await selectCrypto(page, "pbkdf2", "aes");
+        const armored = await encryptText(page, "for the scan", STRONG_PASSWORD);
+        await decryptText(page, armored, STRONG_PASSWORD);
       },
     ],
     [

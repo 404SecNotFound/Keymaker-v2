@@ -361,6 +361,22 @@ test.describe("U2b — the dice log survives a tab switch", () => {
     ).toHaveValue("64");
   });
 
+  test("the decrypt password is not graded against the encrypt policy", async ({ page }) => {
+    // The right password is whatever the container was sealed with, so on
+    // Decrypt a short, old password was painted red as if it were wrong.
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    const field = visible(page.getByPlaceholder("Enter decryption password"));
+    await field.fill("hunter2");
+    await expect(field, "the decrypt password was painted as failing the encrypt policy")
+      .not.toHaveClass(/border-destructive/);
+    // Encrypt still grades it.
+    await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+    const enc = visible(page.getByPlaceholder("Enter a strong password"));
+    await enc.fill("hunter2");
+    await expect(enc).toHaveClass(/border-destructive/);
+  });
+
   test("the encrypt form survives a peek at Tools", async ({ page }) => {
     await page.goto("/");
     await useTextMode(page);

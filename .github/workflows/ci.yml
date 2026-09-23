@@ -135,9 +135,12 @@ jobs:
       # fetch them past the HTTP cache (cache: 'reload'). Otherwise a deploy
       # inside Pages' max-age window froze the previous index.html into the new
       # version's cache: a false tamper report beside the new SHA256SUMS, and a
-      # blank page offline. Runs public/sw.js itself in a stub worker scope.
+      # blank page offline. Runs public/sw.js itself in a stub worker scope,
+      # and also checks offline lookups use the worker's own cache (Pages puts
+      # every project site on one origin) and that /verify.html opens offline.
       # Controls bite: plain-string addAll fails the reload check; dropping
-      # requirements.txt from the shell fails the recovery-kit check.
+      # requirements.txt from the shell fails the recovery-kit check; going
+      # back to caches.match fails the three offline lookups.
       - name: Service worker precaches a fresh shell and the whole recovery kit
         run: npm run test:sw-precache
 

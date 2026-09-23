@@ -66,9 +66,12 @@ const ToastClose = React.forwardRef<
       className
     )}
     toast-close=""
+    // Icon-only, so it needs a name: without one a screen reader announced an
+    // anonymous "button" on every notification.
+    aria-label="Dismiss notification"
     {...props}
   >
-    <X className="h-4 w-4" />
+    <X className="h-4 w-4" aria-hidden="true" />
   </ToastPrimitives.Close>
 ))
 ToastClose.displayName = ToastPrimitives.Close.displayName

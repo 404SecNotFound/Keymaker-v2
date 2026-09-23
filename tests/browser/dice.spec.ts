@@ -37,6 +37,8 @@ test("refuses to compute entropy for a die that was not specified", async ({ pag
   // Bits per roll must not be log2(6) = 2.58 for a die that does not exist.
   const body = (await page.locator("body").textContent()) ?? "";
   expect(body, "entropy was computed for an unspecified die").not.toContain("2.58");
+  // Nor may the roll counts divide by that die's zero bits per roll.
+  expect(body, "the roll counts printed Infinity for a die that does not exist").not.toContain("Infinity");
 
   // A real die brings the numbers back.
   await sides.fill("6");

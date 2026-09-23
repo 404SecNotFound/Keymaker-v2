@@ -214,6 +214,24 @@ test("every symbol on a multi-part sheet scans back into the container", async (
     "the printed symbols did not scan back into the container"
   ).toHaveValue(armored, { timeout: 60_000 });
 
+  // One symbol short is not a backup yet, and the toast must not say to type
+  // the password as if it were.
+  await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await page.locator("#qr-scan-input").setInputFiles(
+    printed.parts.slice(1).map((buffer, i) => ({ name: `part-${i + 2}.png`, mimeType: "image/png", buffer }))
+  );
+  await expect(page.getByText(/not a complete backup yet/i).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Type the password to open it/i)).toHaveCount(0);
+  await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await page.locator("#qr-scan-input").setInputFiles(
+    printed.parts.map((buffer, i) => ({ name: `part-${i + 1}.png`, mimeType: "image/png", buffer }))
+  );
+  await expect(visible(page.locator("#text-secret"))).toHaveValue(armored, { timeout: 60_000 });
+
   await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
   await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
   await expect(visible(page.locator("#output-text"))).toHaveValue(secret, { timeout: 90_000 });

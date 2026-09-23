@@ -116,7 +116,12 @@ test("following the plan, encrypting issues the heir's shares", async ({ page })
   await openPlan(page);
   await expect(sharesSwitch(page)).toBeChecked();
 
-  await visible(page.getByRole("button", { name: "Text", exact: true })).click();
+  // No click on Text: the plan opens on the input its paper-vault step needs.
+  // It used to leave the form on File, where that step could not be followed.
+  await expect(
+    visible(page.getByPlaceholder("Enter text to encrypt")),
+    "the plan opened on File mode, where the paper vault it asks for is unavailable"
+  ).toBeVisible();
   await visible(page.getByPlaceholder("Enter text to encrypt")).fill(
     "the vault code is 4417 and the will is with Naz"
   );

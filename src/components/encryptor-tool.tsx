@@ -147,11 +147,22 @@ function LockWarning({
   secondsLeft: number;
   onKeepOpen: () => void;
 }) {
+  // The visible count ticks every second; the announcement does not. A live
+  // region around the whole banner re-read "Locking in 29s", "28s", ... thirty
+  // times over, which buries the one thing a screen-reader user needs from
+  // it: that there is a Keep open button. So the live text changes twice,
+  // when the warning appears and at ten seconds.
+  const announcement =
+    secondsLeft > 10
+      ? "Nothing has been touched for a while. Secrets will be cleared in 30 seconds unless you choose Keep open."
+      : "Secrets will be cleared in 10 seconds unless you choose Keep open.";
   return (
     <div
-      role="alert"
       className="flex items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/10 px-3 py-2 text-[12px]"
     >
+      <span role="alert" className="sr-only" data-testid="lock-announcement">
+        {announcement}
+      </span>
       <span className="flex min-w-0 items-center gap-1.5 text-warning">
         <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
         <span className="truncate">
@@ -249,6 +260,14 @@ function parseShareLines(text: string): string[] {
  * 8 KiB is several times the text they occupy. Past that it is a paste into the
  * wrong box, which is what §7 is for.
  */
+/**
+ * Said only when a paste was refused. The container box also shows notices
+ * for pastes it keeps (a share, a paper part, a damaged page), and appending
+ * this to every notice told someone looking at their own paste that nothing
+ * had been pasted.
+ */
+const NOTHING_PASTED = "Nothing was pasted, so what you already had is still here.";
+
 const MAX_SHARE_INPUT_CHARS = 8 * 1024;
 const MAX_SHARE_LINES = 16;
 const MAX_SHARE_LINE_CHARS = 200;
@@ -456,7 +475,11 @@ function exportCanvasPng(canvas: HTMLCanvasElement, filename: string) {
 }
 
 const validateAndSanitizeFile = (file: File) => {
-  if (file.name.includes('..') ||
+  // A browser's File.name is a leaf name and never carries a path, so `..`
+  // inside it is only punctuation: "Notes... draft.txt" was refused as an
+  // invalid filename. What would still mean a directory is a name that is
+  // nothing but dots, and the separators below.
+  if (/^\.+$/.test(file.name) ||
       file.name.includes('/') ||
       file.name.includes('\\') ||
       file.name.length > 255) {
@@ -787,6 +810,85 @@ function qrByteLength(text: string): number {
 // collision straight back while looking like leniency.
 const KEYM_V1_TEXT_PREFIX = "KEYM1:";
 const KEYM_V2_TEXT_PREFIX = "keym2:";
+
+/**
+ * A file chosen on Decrypt that holds a backup as *text*: `keym2:` or
+ * `KEYM1:` armor saved to a .txt, a self-extracting page, or a set of paper
+ * parts. Returns the container bytes, or null when the file is not one of
+ * these (a binary container, a legacy blob, or anything else), in which case
+ * it goes to the container reader as it is.
+ *
+ * File mode used to hand every file to the reader as raw bytes. None of these
+ * starts with the binary magic, so each fell through to the headerless legacy
+ * path, ran a million PBKDF2 iterations, and was reported as a wrong password:
+ * the heir holding a saved .txt or the page itself was told to retype a
+ * password that was right. The text box already reads all of these; this is
+ * the same set of readers, reached from the other input.
+ */
+async function containerFromTextFile(bytes: Uint8Array): Promise<Uint8Array | null> {
+  const ascii = (at: number, n: number) => String.fromCharCode(...bytes.subarray(at, at + n));
+  // Binary containers: KEYM magic with a version byte (not the "1:" of v1
+  // armor, which shares the first four bytes), and legacy IBTZ.
+  if (ascii(0, 4) === "IBTZ") return null;
+  if (ascii(0, 4) === "KEYM" && ascii(4, 2) !== "1:") return null;
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return null;
+  }
+  text = text.replace(/^\uFEFF/, "").trim();
+  const unreadable = (what: string) =>
+    new KeymakerError(
+      "invalid-input",
+      `That file holds ${what}, but it is not intact, so it cannot be opened. ` +
+        "Nothing was tried against your password. Recover from another copy."
+    );
+  if (text.startsWith(KEYM_V2_TEXT_PREFIX)) {
+    const { dearmorKeym2 } = await import("@/lib/keym-v2");
+    try {
+      return dearmorKeym2(text);
+    } catch {
+      throw unreadable("keym2: text");
+    }
+  }
+  if (text.toUpperCase().startsWith(KEYM_V1_TEXT_PREFIX)) {
+    try {
+      return base64ToUint8Array(text.slice(KEYM_V1_TEXT_PREFIX.length).replace(/\s+/g, ""));
+    } catch {
+      throw unreadable("KEYM1: text");
+    }
+  }
+  if (looksLikeSelfExtract(text)) {
+    try {
+      return extractSelfExtract(text);
+    } catch (e) {
+      throw new KeymakerError("invalid-input", (e as Error).message);
+    }
+  }
+  if (looksLikePaperPart(text)) {
+    try {
+      return await decodePaperPartsAny(splitPaperParts(text));
+    } catch (e) {
+      throw new KeymakerError("invalid-input", (e as Error).message);
+    }
+  }
+  // Shares files usually open with a comment ("# strips 1 and 2"), so the
+  // test is on the first line that is not one.
+  const firstLine = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find((line) => line !== "" && !line.startsWith("#"));
+  if (firstLine !== undefined && isShareText(firstLine)) {
+    throw new KeymakerError(
+      "invalid-input",
+      "That file holds recovery shares, not an encrypted backup. Choose the backup " +
+        'here, then choose "Use recovery shares" beside the password field and put ' +
+        "the shares there."
+    );
+  }
+  return null;
+}
 
 /**
  * How long a copied secret is allowed to sit in the clipboard.
@@ -1130,6 +1232,11 @@ export function EncryptorTool() {
   const [useKeyFile, setUseKeyFile] = useState(false);
   const [keyFile, setKeyFile] = useState<File | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  /** Read by the idle-lock interval, which is not re-created on every change. */
+  const isLoadingRef = useRef(false);
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
   /** Set before the derivation starts when this container will be slow. */
   const [unlockCostNotice, setUnlockCostNotice] = useState<string | null>(null);
   const [isCryptoAvailable, setIsCryptoAvailable] = useState(true);
@@ -1691,16 +1798,17 @@ export function EncryptorTool() {
    * is on UTF-8 bytes, and a field measured in UTF-16 code units would disagree
    * with it for any non-ASCII secret.
    */
-  const handleTextSecretChange = useCallback(async (next: string) => {
+  const handleTextSecretChange = useCallback(async (next: string): Promise<boolean> => {
     const decrypting = mode === 'decrypt';
     if (decrypting) {
       if (next.length > MAX_TEXT_ARMOR_CHARS) {
         setTextInputRejected(
           `That is ${Math.round(next.length / 1024).toLocaleString()} KB of text. ` +
           `Encrypted text is accepted up to ${MAX_TEXT_ARMOR_CHARS / 1024} KB — ` +
-          `for anything larger, decrypt the .keym file itself in File mode.`
+          `for anything larger, decrypt the .keym file itself in File mode. ` +
+          NOTHING_PASTED
         );
-        return;
+        return false;
       }
     } else {
       const bytes = new Blob([next]).size;
@@ -1708,9 +1816,10 @@ export function EncryptorTool() {
         setTextInputRejected(
           `That is ${Math.round(bytes / 1024).toLocaleString()} KB. ` +
           `Text mode is for secrets up to ${MAX_TEXT_PLAINTEXT_BYTES / 1024} KB — ` +
-          `switch to File mode to encrypt something this size.`
+          `switch to File mode to encrypt something this size. ` +
+          NOTHING_PASTED
         );
-        return;
+        return false;
       }
     }
     // §7 as amended by §4.6 — the wrong-box paste, with a real second encoding
@@ -1729,7 +1838,7 @@ export function EncryptorTool() {
         'then choose "Use recovery shares" beside the password field to enter it.'
       );
       setTextSecret(next);
-      return;
+      return false;
     }
 
     // §7.2. A self-extracting page pasted here is the wrong-box paste that
@@ -1752,6 +1861,7 @@ export function EncryptorTool() {
             "That was a self-extracting Keymaker page. The container has been taken " +
             "out of it — type the password to open it.",
         });
+        return true;
       } catch (e) {
         // Structural, never routed through the AEAD: a page problem reported as
         // a decryption failure sends someone to retype a password that was
@@ -1759,7 +1869,7 @@ export function EncryptorTool() {
         setTextInputRejected((e as Error).message);
         setTextSecret(next);
       }
-      return;
+      return false;
     }
 
     // §7.1/§7.3. Paper parts, and the same rule §7.2 sets for a self-extracting
@@ -1790,6 +1900,7 @@ export function EncryptorTool() {
           title: `Paper backup reassembled from ${lines.length} ${lines.length === 1 ? "part" : "parts"}`,
           description: "Type the password to open it.",
         });
+        return true;
       } catch (e) {
         // Every one of these names what is actually wrong — which part is
         // missing, which was scanned twice, which does not belong to this set.
@@ -1804,11 +1915,12 @@ export function EncryptorTool() {
         );
         setTextSecret(next);
       }
-      return;
+      return false;
     }
 
     setTextInputRejected(null);
     setTextSecret(next);
+    return true;
   }, [mode, toast]);
 
   const handlePasswordChange = useCallback((pwd: string) => {
@@ -2063,6 +2175,16 @@ export function EncryptorTool() {
     }
 
     const id = setInterval(() => {
+      // An operation in progress is the user waiting on this tab, not a tab
+      // left alone. A container may ask for minutes of derivation (the §6
+      // ceiling measured at 315 s), and the lock used to fire in the middle:
+      // it cancelled the unlock the user was sitting through and wiped the
+      // password they had just typed. The idle clock starts when it finishes.
+      if (isLoadingRef.current) {
+        lastActivityRef.current = Date.now();
+        setLockSecondsLeft(null);
+        return;
+      }
       const left = Math.ceil((AUTO_LOCK_MS - (Date.now() - lastActivityRef.current)) / 1000);
       if (left <= 0) {
         // Re-arm before wiping. When issued shares are spared the secrets stay
@@ -2173,8 +2295,15 @@ export function EncryptorTool() {
   const handleQrImageFiles = useCallback(async (files: readonly File[]) => {
     if (files.length === 0) return;
     setQrScanBusy(true);
+    // The same staleness rule every other async path here follows. Decoding a
+    // large photo takes a moment, and a tab switch or Wipe now in that moment
+    // moves opSeqRef: the result then belongs to a form that no longer exists,
+    // and writing it would put a container into the Encrypt field, or undo
+    // the wipe the user just asked for.
+    const seq = opSeqRef.current;
     try {
       const texts = await decodeQrImages(files);
+      if (opSeqRef.current !== seq) return;
       // A printed backup opened without the password is container parts *and*
       // share strips, and the person opening it photographs all of it. Each
       // string goes to the box that can use it: shares to the shares box,
@@ -2201,10 +2330,19 @@ export function EncryptorTool() {
         setShareInputRejected(null);
         setShareInput(merged.text);
       }
-      if (rest.length > 0) handleTextSecretChange(rest.join("\n"));
+      // Whether the container box took what was scanned. A lone paper part,
+      // or a set with a page missing, is kept in the box with a note naming
+      // the problem, and the toast must not then say to type the password.
+      const accepted = rest.length > 0 ? await handleTextSecretChange(rest.join("\n")) : true;
 
       const title = files.length === 1 ? "QR image scanned" : `${files.length} QR images scanned`;
-      if (!merged) {
+      if (!accepted) {
+        toast({
+          title,
+          description: "It is not a complete backup yet. The note under the box says what is missing.",
+          variant: "destructive",
+        });
+      } else if (!merged) {
         toast({
           title,
           description:
@@ -2228,6 +2366,7 @@ export function EncryptorTool() {
       // the same discipline the paper-part and self-extract branches keep, for
       // the same reason: a bad scan reported as a decryption failure sends
       // someone to retype a password that was never wrong.
+      if (opSeqRef.current !== seq) return;
       const description =
         e instanceof QrDecodeError
           ? e.message
@@ -2313,10 +2452,15 @@ export function EncryptorTool() {
   const openInheritance = useCallback(() => {
     setWorkspacePage("workbench");
     if (mode !== "encrypt") handleModeChange("encrypt");
+    // Text, because step 4 is the paper vault, and the paper vault prints a
+    // container that is on screen: a sealed *file* is downloaded instead, so
+    // the plan used to open on the one input where its own step 4 could not be
+    // followed. Only switched when needed, since the switch clears a result.
+    if (mode !== "encrypt" || inputType !== "text") handleInputTypeChange("text");
     setShamirEnabled(true);
     setIsAdvancedOpen(true);
     setInheritanceOpen(true);
-  }, [mode, handleModeChange]);
+  }, [mode, inputType, handleModeChange, handleInputTypeChange]);
 
   /**
    * @param maxBytes Ceiling for this particular picker. Encrypting caps the
@@ -2738,6 +2882,13 @@ export function EncryptorTool() {
 
         const encoder = new TextEncoder();
         const inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
+        // Stop, a tab switch or the lock can land while a large file is still
+        // being read. Every await from here to the worker is a point where the
+        // operation may already be disowned, and going on would start a fresh
+        // worker and a full derivation whose result is then thrown away (and,
+        // after a Stop had terminated the worker, announce that the browser
+        // could not start one).
+        if (isStale()) return;
         // §4.7. The authenticator has to be asked *here*, on the main thread,
         // before any work is handed over: a Worker cannot reach
         // navigator.credentials. The slot salt is chosen first because the PRF
@@ -2752,6 +2903,7 @@ export function EncryptorTool() {
           passkey = { prfOutput, salt: slotSalt };
         }
 
+        if (isStale()) return;
         // §4.6. Requested in the same call that writes the container, so the
         // share secret is generated and dropped inside the worker and the
         // password is not held past the operation that already needed it.
@@ -2771,6 +2923,15 @@ export function EncryptorTool() {
           setSealedPeek(
             new Uint8Array(resultBuffer.slice(0, Math.min(KEYM2_HEADER_PEEK_BYTES, resultBuffer.byteLength)))
           );
+        }
+        if (!isStale()) {
+          // A rehearsal describes the container it was run against. Only a
+          // wipe used to clear it, so after rehearsing one backup and sealing
+          // another, the new dialog showed the old result and the new paper
+          // vault was stamped as rehearsed when it never had been.
+          setRehearsal({ kind: "idle" });
+          setRehearsalOpen(false);
+          setRehearsalInput("");
         }
         if (encrypted.shares && !isStale()) {
           // Straight to the modal. These exist exactly once — nothing can
@@ -2842,6 +3003,10 @@ export function EncryptorTool() {
         let inputBuffer: ArrayBuffer;
         if (inputType === 'file') {
             inputBuffer = await file!.arrayBuffer();
+            const fromText = await containerFromTextFile(new Uint8Array(inputBuffer));
+            // Copied rather than `.buffer`: a reader may hand back a view into
+            // a larger buffer, and the container must be exactly its bytes.
+            if (fromText) inputBuffer = new Uint8Array(fromText).buffer as ArrayBuffer;
         } else {
             let blobText = textSecret.trim();
 
@@ -2944,6 +3109,10 @@ export function EncryptorTool() {
         // a failure the user already understands. Containers with more than one
         // enrolled passkey are the case this does not serve; enrol the second
         // key on its own copy until that changes.
+        // As on the encrypt side: the file read and the header peek above are
+        // awaits, and a disowned operation must not ask for a passkey tap or
+        // start a derivation.
+        if (isStale()) return;
         let prfOutput: Uint8Array | undefined;
         if (usePasskey) {
           const { passkeySlotSaltsKeym2, derivePrfSalt } = await import("@/lib/keym-v2");
@@ -2958,6 +3127,7 @@ export function EncryptorTool() {
           prfOutput = await assertPasskeyPrf(await derivePrfSalt(salts[0]!));
         }
 
+        if (isStale()) return;
         const decryptResult = await decryptViaWorker(
           inputBuffer,
           mutablePassword,
@@ -3203,11 +3373,16 @@ export function EncryptorTool() {
       }
   }, []);
 
+  // Encrypt only, and from the same verdict the button uses. On Decrypt the
+  // policy does not apply: the right password is whatever the container was
+  // sealed with, so a valid legacy password was painted red as if it were
+  // wrong. And calling meetsPasswordPolicy without the generated flag
+  // disagreed with the button about a generated passphrase.
   const getPasswordStrengthColor = useCallback(() => {
-    if (!password) return "border-input";
-    if (meetsPasswordPolicy(password)) return "border-success";
+    if (!password || mode !== "encrypt") return "border-input";
+    if (passwordMeetsPolicy) return "border-success";
     return "border-destructive";
-  }, [password]);
+  }, [password, mode, passwordMeetsPolicy]);
 
   /**
    * U15. The button is disabled by policy and says nothing about why.
@@ -3517,8 +3692,7 @@ export function EncryptorTool() {
                 role="alert"
                 className="animate-in fade-in-50 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-[12px] leading-snug text-destructive"
               >
-                {textInputRejected} Nothing was pasted, so what you already had is
-                still here.
+                {textInputRejected}
               </p>
             )}
             {/*
@@ -4494,17 +4668,32 @@ export function EncryptorTool() {
             />
             <div className="absolute right-1 top-1 flex flex-col items-center">
               {currentMode === 'decrypt' && inputType === 'text' && (
-                <Button type="button" variant="ghost" size="icon" className="h-auto p-2" onClick={() => setShowDecryptedText(!showDecryptedText)}>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-auto p-2"
+                  onClick={() => setShowDecryptedText(!showDecryptedText)}
+                  aria-label={showDecryptedText ? "Hide decrypted text" : "Show decrypted text"}
+                  aria-pressed={showDecryptedText}
+                >
                   {showDecryptedText ? <EyeOff /> : <Eye />}
                 </Button>
               )}
-              <Button type="button" variant="ghost" size="icon" className="h-auto p-2" onClick={() => handleCopy(outputText)}>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-auto p-2"
+                onClick={() => handleCopy(outputText)}
+                aria-label={currentMode === 'encrypt' ? "Copy encrypted text" : "Copy decrypted text"}
+              >
                 <Copy />
               </Button>
               {currentMode === 'encrypt' && inputType === 'text' && (
                 <Dialog open={isQrModalOpen} onOpenChange={setIsQrModalOpen}>
                   <DialogTrigger asChild>
-                    <Button type="button" variant="ghost" size="icon" className="h-auto p-2">
+                    <Button type="button" variant="ghost" size="icon" className="h-auto p-2" aria-label="Show encrypted text as a QR code">
                       <QrCode />
                     </Button>
                   </DialogTrigger>
@@ -4655,9 +4844,15 @@ export function EncryptorTool() {
       */}
       {(clipboardSecondsLeft !== null || clipboardClearPending) && (
         <div
-          role="status"
           className="flex items-center justify-between gap-3 rounded-xl border border-border bg-inset px-3 py-2 text-[12px]"
         >
+          {/* Announced once, not once a second for a minute: the ticking
+              count below is for sighted users and is not a live region. */}
+          <span role="status" className="sr-only" data-testid="clipboard-announcement">
+            {clipboardClearPending
+              ? "Clipboard not cleared yet, because the tab was in the background. It will be cleared when you come back to this tab."
+              : "The clipboard will be cleared in about a minute. Choose Clear now to clear it sooner."}
+          </span>
           <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
             {clipboardClearPending ? (
               // The countdown ran out while the tab was in the background and
@@ -5262,8 +5457,8 @@ export function EncryptorTool() {
                     <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{receipt.cipher} · {receipt.kdf}</p>
                     <dl className="km-recovery-facts">
                       <div><dt>Recovery shares</dt><dd>{receipt.shares ? `${receipt.shares.threshold} of ${receipt.shares.count} needed` : "Not included"}</dd></div>
-                      <div><dt>Saved copy</dt><dd>Confirm in your downloads</dd></div>
-                      <div><dt>Recovery test</dt><dd>No result shown for this backup</dd></div>
+                      <div><dt>Saved copy</dt><dd>{receipt.onScreen ? "Not saved yet. It is on screen: download it or print the paper backup" : "Downloaded when encryption finished. Check your downloads folder"}</dd></div>
+                      <div><dt>Recovery test</dt><dd>{rehearsal.kind === "ok" ? `Rehearsed on ${rehearsal.on}${rehearsal.strips.length > 0 ? ` with strips ${rehearsal.strips.join(" and ")}` : ""}` : "Not tested yet in this session"}</dd></div>
                     </dl>
                     {receipt.onScreen ? (
                       <div className="km-action-row">

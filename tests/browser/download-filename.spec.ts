@@ -67,3 +67,31 @@ test("a non-ASCII filename survives into the download the app offers", async ({ 
     })
     .toEqual([`${NAME}.keym`]);
 });
+
+test("a filename with dots in it is a filename, not a path", async ({ page }) => {
+  // File.name is a leaf name; a browser never puts a path in it. The old check
+  // refused any name containing "..", so an ordinary "Notes... draft.txt"
+  // could not be encrypted at all.
+  await page.goto("/");
+  await captureDownloadNames(page);
+
+  const NAME = "Notes... draft..v2.txt";
+  await visible(page.getByRole("button", { name: "File", exact: true })).first().click();
+  await page.setInputFiles('input[type="file"]', {
+    name: NAME,
+    mimeType: "text/plain",
+    buffer: Buffer.from("an ordinary note"),
+  });
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  const downloadPromise = page.waitForEvent("download", { timeout: 90_000 }).catch(() => null);
+  await visible(page.getByRole("button", { name: /^Encrypt File$/i })).click();
+  await downloadPromise;
+
+  await expect(page.getByText(/Invalid filename/i)).toHaveCount(0);
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __downloadNames: string[] }).__downloadNames), {
+      message: "a name containing dots was refused instead of encrypted",
+      timeout: 30_000,
+    })
+    .toEqual([`${NAME}.keym`]);
+});

@@ -1,4 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { appPath, visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
 
 /**
@@ -216,6 +218,46 @@ test.describe("auto-lock and clipboard", () => {
     await expect(page.getByText(/Locking in/i)).toHaveCount(0);
   });
 
+  test("the lock waits for an operation in progress instead of cancelling it", async ({ page }) => {
+    // An operation that stays in progress for as long as the test needs: a
+    // passkey unlock whose authenticator prompt never answers, which is what a
+    // person reading the prompt, or hunting for their key, looks like to the
+    // page. (A slow derivation was tried first and was a race: whether it
+    // outlasted six minutes of fake clock depended on the CPU.)
+    const fixture = readFileSync(
+      join(process.cwd(), "scripts/fixtures/keymaker/v3-passkey-aes256gcm.keym")
+    );
+    const armor = "keym2:" + fixture.toString("base64url");
+    await page.addInitScript(() => {
+      if (navigator.credentials) {
+        navigator.credentials.get = () => new Promise<null>(() => {});
+      }
+    });
+    await page.clock.install();
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armor);
+    const usePasskey = page.getByRole("button", { name: /^Use a passkey$/ });
+    test.skip((await usePasskey.count()) === 0, "this engine offers no passkey control");
+    await decryptPassword(page).fill(STRONG_PASSWORD);
+    await visible(usePasskey).click();
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    const stop = visible(page.getByRole("button", { name: /^Stop$/i }));
+    await expect(stop, "the unlock never started").toBeVisible({ timeout: 15_000 });
+
+    await page.clock.runFor("06:00");
+
+    await expect(
+      stop,
+      "the idle lock cancelled an unlock the user was waiting on"
+    ).toBeVisible();
+    await expect(
+      page.getByPlaceholder("Enter text to decrypt").first(),
+      "the idle lock wiped the container in the middle of an unlock"
+    ).toHaveValue(armor);
+  });
+
   test("Keep open cancels the pending lock", async ({ page }) => {
     await page.clock.install();
     await page.goto("/");
@@ -309,6 +351,43 @@ test.describe("auto-lock and clipboard", () => {
       await page.evaluate(() => navigator.clipboard.readText()),
       "the clipboard still held the secret after its stated lifetime"
     ).toBe("");
+  });
+
+  test("the lock and clipboard countdowns are not live regions that tick", async ({
+    page,
+    context,
+    browserName,
+  }) => {
+    // A live region is re-read whenever its text changes. Both banners used to
+    // put the ticking count inside one ("Clipboard clears in 57s", "Locking in
+    // 28s"), so a screen reader announced a number every second for a minute,
+    // and thirty times before a lock. The visible count still ticks; what is
+    // announced must not.
+    test.skip(browserName !== "chromium", "clipboard permissions are Chromium-only here");
+    await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+    await page.clock.install();
+    await page.goto("/");
+    const tickingLiveText = () =>
+      page.evaluate(() =>
+        Array.from(document.querySelectorAll('[role="alert"], [role="status"], [aria-live]'))
+          .map((el) => el.textContent ?? "")
+          .filter((text) => /\b\d+s\b/.test(text))
+      );
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await decryptPassword(page).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Copy$/i })).click();
+    await expect(page.getByText(/Clipboard clears in/i)).toBeVisible();
+    await page.clock.runFor("00:02");
+    expect(await tickingLiveText(), "the clipboard countdown is announced every second").toEqual([]);
+
+    await page.clock.runFor("04:35");
+    await expect(page.getByText(/Locking in/i)).toBeVisible();
+    expect(await tickingLiveText(), "the lock countdown is announced every second").toEqual([]);
+    await expect(
+      page.getByTestId("lock-announcement"),
+      "the lock warning is no longer announced at all"
+    ).toContainText(/Keep open/);
   });
 
   test("a clear refused in the background stays armed and lands on return", async ({
