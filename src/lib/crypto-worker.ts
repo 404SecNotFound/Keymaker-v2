@@ -218,48 +218,55 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
         req.keyFile && (req.shamir || req.passkey)
           ? new Uint8Array(req.keyFile.slice(0))
           : null;
-      let out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
+      let out: ArrayBuffer;
       let shares: string[] | undefined;
+      try {
+        out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
 
-      if (req.shamir) {
-        // §4.6. Enrolled here rather than in the page so the share secret and
-        // the coefficients are generated, used and dropped inside the worker's
-        // heap — the same reason the derivation lives here.
-        const { addShamirSlotKeym2 } = await import("./keym-v2");
-        const enrolled = await addShamirSlotKeym2(
-          new Uint8Array(out),
-          { password: req.password, keyFile: keyFileForSlots },
-          req.shamir.threshold,
-          req.shamir.count
-        );
-        out = enrolled.container.buffer.slice(
-          enrolled.container.byteOffset,
-          enrolled.container.byteOffset + enrolled.container.byteLength
-        ) as ArrayBuffer;
-        shares = enrolled.shares;
+        if (req.shamir) {
+          // §4.6. Enrolled here rather than in the page so the share secret and
+          // the coefficients are generated, used and dropped inside the worker's
+          // heap — the same reason the derivation lives here.
+          const { addShamirSlotKeym2 } = await import("./keym-v2");
+          const enrolled = await addShamirSlotKeym2(
+            new Uint8Array(out),
+            { password: req.password, keyFile: keyFileForSlots },
+            req.shamir.threshold,
+            req.shamir.count
+          );
+          out = enrolled.container.buffer.slice(
+            enrolled.container.byteOffset,
+            enrolled.container.byteOffset + enrolled.container.byteLength
+          ) as ArrayBuffer;
+          shares = enrolled.shares;
+        }
+
+        if (req.passkey) {
+          // §4.7. Added after encryption for the same reason a share set is: the
+          // container has to exist before a slot can be added to it. The rule
+          // that a passkey never travels alone is satisfied structurally here —
+          // `out` already carries the passphrase slot encryptContainer wrote.
+          const { addPasskeySlotKeym2 } = await import("./keym-v2");
+          const enrolled = await addPasskeySlotKeym2(
+            new Uint8Array(out),
+            { password: req.password, keyFile: keyFileForSlots },
+            req.passkey.prfOutput,
+            req.passkey.salt
+          );
+          out = enrolled.buffer.slice(
+            enrolled.byteOffset,
+            enrolled.byteOffset + enrolled.byteLength
+          ) as ArrayBuffer;
+        }
+      } finally {
+        // The copy taken above so the enrolments could still read it. Same
+        // standard encryptContainer applies to the original. In a `finally`,
+        // as crypto-client.ts's fallback already does: the copy outlives three
+        // awaits that can each throw, and the `catch` below turns a throw into
+        // an ordinary response, so an enrolment that failed part-way left half
+        // the key material in this heap with nothing left to erase it.
+        secureErase(keyFileForSlots);
       }
-
-      if (req.passkey) {
-        // §4.7. Added after encryption for the same reason a share set is: the
-        // container has to exist before a slot can be added to it. The rule
-        // that a passkey never travels alone is satisfied structurally here —
-        // `out` already carries the passphrase slot encryptContainer wrote.
-        const { addPasskeySlotKeym2 } = await import("./keym-v2");
-        const enrolled = await addPasskeySlotKeym2(
-          new Uint8Array(out),
-          { password: req.password, keyFile: keyFileForSlots },
-          req.passkey.prfOutput,
-          req.passkey.salt
-        );
-        out = enrolled.buffer.slice(
-          enrolled.byteOffset,
-          enrolled.byteOffset + enrolled.byteLength
-        ) as ArrayBuffer;
-      }
-
-      // The copy taken above so the enrolments could still read it. Same
-      // standard encryptContainer applies to the original.
-      if (keyFileForSlots) secureErase(keyFileForSlots);
 
       const response: CryptoResponse = { id: req.id, ok: true, op: "encrypt", data: out, shares };
       ctx.postMessage(response, [out]);

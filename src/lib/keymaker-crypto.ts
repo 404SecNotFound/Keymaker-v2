@@ -434,8 +434,11 @@ export function loadHashWasm(): Promise<typeof import("hash-wasm")> {
  * moved under them, would retype a correct password into a container that
  * was never opened. In a backup tool that is the wrong answer to send
  * someone hunting with.
+ *
+ * Exported for keym-v2.ts, whose own lazily loaded module (the Shamir code) has
+ * the same failure and owes the user the same answer.
  */
-function dependencyUnavailable(what: string, cause: unknown): KeymakerError {
+export function dependencyUnavailable(what: string, cause: unknown): KeymakerError {
   const detail = cause instanceof Error && cause.message ? ` (${cause.message})` : "";
   return new KeymakerError(
     "dependency-unavailable",
@@ -1153,6 +1156,31 @@ async function legacyDecryptWithNormalizationFallback(
   }
 }
 
+/**
+ * Hand a decrypted plaintext back as an ArrayBuffer without leaving a second
+ * copy of it behind.
+ *
+ * `buffer.slice()` always copies, and the view it copied from was never erased:
+ * every decrypt that went through it left a complete second plaintext in the
+ * heap until the collector reached it, 100 MB of it at the cap. When the view
+ * already spans its whole buffer (what `decryptKeym2` and the ChaCha path both
+ * return) the buffer itself is handed over and there is no copy. Otherwise the
+ * copy is taken and the region it came from is zeroed, so exactly one copy
+ * leaves this function either way.
+ */
+function takePlaintextBuffer(plain: Uint8Array): ArrayBuffer {
+  if (
+    plain.buffer instanceof ArrayBuffer &&
+    plain.byteOffset === 0 &&
+    plain.byteLength === plain.buffer.byteLength
+  ) {
+    return plain.buffer;
+  }
+  const copy = plain.buffer.slice(plain.byteOffset, plain.byteOffset + plain.byteLength) as ArrayBuffer;
+  secureErase(plain);
+  return copy;
+}
+
 export async function decryptData(
   encryptedBuffer: ArrayBuffer,
   password: string,
@@ -1202,10 +1230,7 @@ export async function decryptData(
         prfOutput
       );
       return {
-        data: result.data.buffer.slice(
-          result.data.byteOffset,
-          result.data.byteOffset + result.data.byteLength
-        ) as ArrayBuffer,
+        data: takePlaintextBuffer(result.data),
         format,
         keyFileUsed: result.keyFileUsed,
         slotTableAuthentic: result.slotTableAuthentic,
@@ -1273,10 +1298,7 @@ export async function decryptData(
       }
     }
 
-    const out =
-      plain instanceof Uint8Array
-        ? (plain.buffer.slice(plain.byteOffset, plain.byteOffset + plain.byteLength) as ArrayBuffer)
-        : plain;
+    const out = plain instanceof Uint8Array ? takePlaintextBuffer(plain) : plain;
     return {
       data: out,
       format,

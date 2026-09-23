@@ -84,6 +84,16 @@ jobs:
       - name: Owned secret buffers are zeroed on every path
         run: npm run test:secret-erase
 
+      # The copies the crypto core makes for itself: the length-prefixed KDF
+      # input, the joined key file behind its digest, a second plaintext left
+      # by decryptData, share values decoded before a malformed share rejected
+      # the set, and the worker's key-file copy when an enrolment throws. None
+      # is visible to a caller, so this takes a census of every Uint8Array the
+      # core allocates during a call and searches what survives. Also pins a
+      # Shamir chunk that fails to load as a typed dependency error.
+      - name: Internal secret copies are zeroed by the crypto core
+        run: npm run test:secret-erase-core
+
       # The plaintext input buffer is transferred (and so detached/erased) on the
       # worker path, but the no-worker fallback hands it to encryptContainer
       # in-thread and never transfers it — and neither encryptContainer nor

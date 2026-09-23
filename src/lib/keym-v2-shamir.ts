@@ -408,7 +408,7 @@ export async function decodeShare(text: string): Promise<Share> {
  */
 export async function combineShares(texts: string[], expectedSetId?: Uint8Array): Promise<Uint8Array> {
   if (texts.length === 0) reject();
-  const shares = await Promise.all(texts.map((t) => decodeShareAny(t)));
+  const shares: Share[] = [];
 
   // Everything from here is inside the `finally`, because a decoded share value
   // is key material of the same class as the secret it reconstructs — k of them
@@ -418,6 +418,19 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
   // holds a reference to them. `shamirCombine` allocates its own output, so
   // erasing the parts afterwards cannot reach it.
   try {
+    // Decoding is inside the `try` too. It used to be a `Promise.all` above it,
+    // and one malformed share rejected that before the `try` was entered: the
+    // shares that had decoded were never erased, and the ones still decoding
+    // resolved afterwards into nothing that could erase them. `allSettled`
+    // waits for every decode, so each value that exists is in `shares` by the
+    // time any failure is raised.
+    const settled = await Promise.allSettled(texts.map((t) => decodeShareAny(t)));
+    for (const result of settled) {
+      if (result.status === "fulfilled") shares.push(result.value);
+    }
+    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+
     const thresholds = new Set(shares.map((s) => s.threshold));
     if (thresholds.size !== 1) reject();
     const k = shares[0]?.threshold as number;

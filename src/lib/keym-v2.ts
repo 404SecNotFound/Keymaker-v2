@@ -47,6 +47,7 @@
 
 import {
   CipherId,
+  dependencyUnavailable,
   describeWeakKdf,
   isUserFacingError,
   KdfId,
@@ -725,11 +726,24 @@ async function requireAuthenticSlotTable(parsed: Keym2Container, master: Uint8Ar
 // Key derivation (§4)
 // ---------------------------------------------------------------------------
 
-/** §4.1 `LP(x) = uint32_be(len(x)) || x`. */
-function lp(x: Uint8Array): Uint8Array {
-  const out = new Uint8Array(4 + x.length);
-  new DataView(out.buffer).setUint32(0, x.length, false);
-  out.set(x, 4);
+/**
+ * §4.1 `LP(x0) || LP(x1) || ...`, where `LP(x) = uint32_be(len(x)) || x`.
+ *
+ * Written straight into one buffer rather than as `concat(fields.map(lp))`.
+ * The fields are secrets (a password, a share secret, a PRF output), and the
+ * two-step form allocated a length-prefixed copy of each one that nobody held a
+ * reference to and so nobody erased. One buffer means the caller's
+ * `secureErase` on the result reaches every copy this function made.
+ */
+function lpConcat(fields: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(fields.reduce((n, f) => n + 4 + f.length, 0));
+  const view = new DataView(out.buffer);
+  let at = 0;
+  for (const field of fields) {
+    view.setUint32(at, field.length, false);
+    out.set(field, at + 4);
+    at += 4 + field.length;
+  }
   return out;
 }
 
@@ -738,10 +752,19 @@ function lp(x: Uint8Array): Uint8Array {
  *
  * This is the half of KM-05 that length prefixes alone do not solve, and it is
  * what makes a large key file free: the KDF sees 32 bytes, not 100 MB.
+ *
+ * Web Crypto has no streaming digest, so the domain string and the key file
+ * have to be joined first, and that join is a complete copy of the key file.
+ * Erased in a `finally`: it is half the key material, it is made once per slot
+ * the walk attempts, and nothing else holds a reference to it.
  */
 async function keyfileDigest(keyFile: Uint8Array): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_KEYFILE, keyFile]) as BufferSource);
-  return new Uint8Array(digest);
+  const input = concat([CTX_KEYFILE, keyFile]);
+  try {
+    return new Uint8Array(await crypto.subtle.digest("SHA-256", input as BufferSource));
+  } finally {
+    secureErase(input);
+  }
 }
 
 /**
@@ -751,18 +774,30 @@ async function keyfileDigest(keyFile: Uint8Array): Promise<Uint8Array> {
  * Worth being precise about what closes KM-05, because the obvious answer is
  * wrong: for this particular pair it is §4.2's *hashing*, not the length
  * prefixes. A fixed-width 32-byte field cannot slide, so `("ab","c")` and
- * `("a","bc")` differ either way. What `lp()` buys is injectivity of the
+ * `("a","bc")` differ either way. What `LP` buys is injectivity of the
  * concatenation as a whole, which is what keeps the encoding sound as fields
  * are added. (Established by a negative control on the Python reference:
  * stubbing `LP` to the identity left every injectivity test green.)
+ *
+ * The returned buffer is the caller's to erase, and it is the only copy of the
+ * password bytes that survives this function. `normalized` and the key-file
+ * digest are erased here, in a `finally` so a failed digest cannot skip it; the
+ * same pattern as v1's `buildBaseMaterial`. This runs once per passphrase slot
+ * the walk attempts, on every unlock and every enrolment.
  */
 async function buildKdfInput(password: string, keyFile: Uint8Array | null): Promise<Uint8Array> {
   const normalized = textEncoder.encode(password.normalize("NFC"));
-  // "No key file" is LP("") rather than an omitted field — one shape, one code
-  // path, and the absent case explicitly encoded. It cannot collide with a
-  // present-but-empty key file, which hashes to 32 bytes.
-  const digest = keyFile ? await keyfileDigest(keyFile) : new Uint8Array(0);
-  return concat([lp(CTX_KDF_INPUT), lp(normalized), lp(digest)]);
+  let digest: Uint8Array | null = null;
+  try {
+    // "No key file" is LP("") rather than an omitted field — one shape, one code
+    // path, and the absent case explicitly encoded. It cannot collide with a
+    // present-but-empty key file, which hashes to 32 bytes.
+    digest = keyFile ? await keyfileDigest(keyFile) : new Uint8Array(0);
+    return lpConcat([CTX_KDF_INPUT, normalized, digest]);
+  } finally {
+    secureErase(normalized);
+    secureErase(digest);
+  }
 }
 
 /**
@@ -774,7 +809,7 @@ async function buildKdfInput(password: string, keyFile: Uint8Array | null): Prom
  */
 function buildShamirInput(shareSecret: Uint8Array): Uint8Array {
   if (shareSecret.length !== MASTER_KEY_LEN) reject();
-  return concat([lp(CTX_SHAMIR_INPUT), lp(shareSecret)]);
+  return lpConcat([CTX_SHAMIR_INPUT, shareSecret]);
 }
 
 /** §4.7. WebAuthn's PRF extension returns 32 bytes. */
@@ -811,7 +846,7 @@ export async function derivePrfSalt(slotSalt: Uint8Array): Promise<Uint8Array> {
  */
 function buildPasskeyInput(prfOutput: Uint8Array): Uint8Array {
   if (prfOutput.length !== KEYM2_PRF_OUTPUT_LEN) reject();
-  return concat([lp(CTX_PASSKEY_INPUT), lp(prfOutput)]);
+  return lpConcat([CTX_PASSKEY_INPUT, prfOutput]);
 }
 
 /** §4.3. The slot key, from that slot's own KDF, salt and parameters. */
@@ -1102,6 +1137,29 @@ export interface Keym2Secrets {
 }
 
 /**
+ * The Shamir module, loaded on first use and typed when it cannot be.
+ *
+ * On the worker path this is bundled inline and cannot fail. On the main-thread
+ * fallback it is a separate chunk, and a chunk can be unreachable: offline
+ * before the precache has landed, or a deploy that moved under the page. The
+ * bare `import()` rejected with the browser's own error, `decryptData` passed it
+ * through untyped, and the UI reported "the password or key file may be
+ * incorrect" for a share set that was never read. Same failure, same answer as
+ * `loadHashWasm` and `loadNoble`: a typed `dependency-unavailable` error, and the
+ * rejection is not cached, so a later attempt imports again.
+ */
+let shamirModulePromise: Promise<typeof import("./keym-v2-shamir")> | null = null;
+function loadShamir(): Promise<typeof import("./keym-v2-shamir")> {
+  if (!shamirModulePromise) {
+    shamirModulePromise = import("./keym-v2-shamir").catch((cause: unknown) => {
+      shamirModulePromise = null;
+      throw dependencyUnavailable("the recovery-share decoder", cause);
+    });
+  }
+  return shamirModulePromise;
+}
+
+/**
  * §4.1 / §4.6. The slot secret this caller can offer *this* slot, or null if it
  * holds nothing of the kind the slot wants.
  *
@@ -1117,15 +1175,21 @@ async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Ui
 
   if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) {
     if (!secrets.shares || secrets.shares.length === 0) return null;
-    const { combineShares, shareSetId } = await import("./keym-v2-shamir");
+    // Outside the `try` below, deliberately: that `catch` means "these shares
+    // do not fit this slot", and a module that failed to load says nothing
+    // about the shares. `loadShamir` types the failure so it reaches the user
+    // as a missing component rather than as a wrong password.
+    const { combineShares, shareSetId } = await loadShamir();
     try {
       // Checked against *this* slot's salt, so a share set belonging to a
       // different Shamir slot declines rather than reconstructing a clean
       // secret that is simply the wrong one.
       const shareSecret = await combineShares(secrets.shares, await shareSetId(slot.salt));
-      const input = buildShamirInput(shareSecret);
-      secureErase(shareSecret);
-      return input;
+      try {
+        return buildShamirInput(shareSecret);
+      } finally {
+        secureErase(shareSecret);
+      }
     } catch {
       return null;
     }
