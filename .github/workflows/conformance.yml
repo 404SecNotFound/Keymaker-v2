@@ -87,6 +87,58 @@ jobs:
       - name: Recovery procedure works as documented
         run: npm run test:recovery
 
+  # ---------------------------------------------------------------- oldest supported Python
+  #
+  # docs/RECOVERY.md tells whoever is recovering a backup that the scripts need
+  # "Python 3.10 or newer", and every other job here runs 3.12, so nothing
+  # tested the floor of that promise. A 3.11-only construct in keym.py or
+  # keym2.py (`except*`, `tomllib`, `typing.Self`) would pass the job above and
+  # fail on exactly the old machine the page is written for. The pinned wheels
+  # sit on the same floor: cffi 2.1.1 and argon2-cffi-bindings 26.1.0 both
+  # declare Requires-Python >=3.10, so a routine bump could drop 3.10 with
+  # nothing else noticing.
+  #
+  # The self-tests only: they are the scripts' own known-answer vectors, which
+  # is the part an heir's interpreter has to run. The cross-tests drive the
+  # TypeScript and add nothing about the Python version.
+  reference-python-floor:
+    name: Reference self-tests on Python 3.10 (the RECOVERY.md floor)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      # A job that quietly ran the runner's default interpreter would pass while
+      # testing 3.12 a second time.
+      - name: The interpreter is the documented floor
+        run: |
+          python3 --version
+          python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 10) else "expected Python 3.10, got " + sys.version)'
+
+      # Hash-checked, and --no-deps on purpose. The pinned closure is resolved
+      # for 3.12 (scripts/pin-conformance-deps.py). On 3.10 cryptography also
+      # declares typing-extensions (for python_full_version < '3.11'), which the
+      # file does not pin, so without --no-deps hash-checking mode refuses the
+      # whole install. This installs exactly the pinned bytes and nothing
+      # unpinned. It cannot hide a missing module: one the scripts need would
+      # fail the self-tests below on import. cryptography uses
+      # typing-extensions only in hazmat.asn1, which neither script imports.
+      - name: Install the pinned reference dependencies
+        run: pip install --require-hashes --no-deps -r reference/conformance-requirements.txt
+
+      - name: Reference self-test (KEYM v1) on Python 3.10
+        run: python3 reference/keym.py selftest
+
+      - name: Reference self-test (KEYM v2 and v3) on Python 3.10
+        run: python3 reference/keym2.py selftest
+
   # ---------------------------------------------------------------- dependency audit
   #
   # Its own job, not a step in `conformance`. The two answer different
