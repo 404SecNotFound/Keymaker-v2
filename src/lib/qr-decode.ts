@@ -31,6 +31,22 @@
  */
 const MAX_DECODE_EDGE = 2000;
 
+/**
+ * Scales tried, relative to the first attempt's size, when a symbol is not
+ * found. jsqr's sampling grid is sensitive to how a module's width falls on
+ * whole pixels, not only to how many pixels it gets: the paper vault's own
+ * symbol, read straight off its 300px canvas, failed at 1x and decoded at
+ * 0.75x, 1.25x, 1.5x and 2x. And a phone photo capped to 2000px can leave a
+ * version-40 part near 2.5 px per module, which it cannot read, where the
+ * photo's own resolution would have been enough. So a miss is retried at a
+ * handful of scales before being reported, first upward, then down.
+ */
+const RETRY_SCALES = [1, 2, 1.5, 0.75, 1.25] as const;
+
+/** The largest edge any retry may reach: twice the first attempt's cap, which
+ *  covers a 12-megapixel photo at close to its native resolution. */
+const MAX_RETRY_EDGE = 2 * MAX_DECODE_EDGE;
+
 /** Thrown when an image carries no readable QR, named so the UI can tell the
  *  two apart: a file that is not an image at all, versus an image with no code
  *  the decoder could find. */
@@ -60,20 +76,14 @@ async function loadJsqr(): Promise<typeof import("jsqr").default> {
 }
 
 /**
- * Draw an image bitmap onto a 2D canvas and hand back its pixels.
- *
- * Scales down proportionally once the longest edge exceeds `MAX_DECODE_EDGE`.
- * Kept separate so the test can reason about the pixel path without a jsqr in
- * the way.
+ * Draw an image bitmap onto a 2D canvas, `longestEdge` pixels on its longest
+ * side, and hand back its pixels. Smoothing stays on: resampling with it is
+ * what lets a retry at another scale read a symbol the first size could not.
  */
-function bitmapToImageData(bitmap: ImageBitmap): ImageData {
-  let { width, height } = bitmap;
-  const longest = Math.max(width, height);
-  if (longest > MAX_DECODE_EDGE) {
-    const scale = MAX_DECODE_EDGE / longest;
-    width = Math.max(1, Math.round(width * scale));
-    height = Math.max(1, Math.round(height * scale));
-  }
+function bitmapToImageData(bitmap: ImageBitmap, longestEdge: number): ImageData {
+  const scale = longestEdge / Math.max(bitmap.width, bitmap.height);
+  const width = Math.max(1, Math.round(bitmap.width * scale));
+  const height = Math.max(1, Math.round(bitmap.height * scale));
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -81,8 +91,25 @@ function bitmapToImageData(bitmap: ImageBitmap): ImageData {
   if (!ctx) {
     throw new QrDecodeError("This browser would not give a 2D canvas to read the image.");
   }
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.drawImage(bitmap, 0, 0, width, height);
   return ctx.getImageData(0, 0, width, height);
+}
+
+/**
+ * The longest-edge sizes to try, in order: the image as it is (capped at
+ * `MAX_DECODE_EDGE`), then the retry scales, each clamped and deduplicated.
+ * Pure.
+ */
+function decodeAttemptEdges(longest: number): number[] {
+  const base = Math.min(longest, MAX_DECODE_EDGE);
+  const out: number[] = [];
+  for (const factor of RETRY_SCALES) {
+    const edge = Math.max(1, Math.min(Math.round(base * factor), MAX_RETRY_EDGE));
+    if (!out.includes(edge)) out.push(edge);
+  }
+  return out;
 }
 
 /**
@@ -101,23 +128,21 @@ export async function decodeQrImage(file: File): Promise<string> {
     );
   }
 
-  let imageData: ImageData;
   try {
-    imageData = bitmapToImageData(bitmap);
+    const jsqr = await loadJsqr();
+    for (const edge of decodeAttemptEdges(Math.max(bitmap.width, bitmap.height))) {
+      const imageData = bitmapToImageData(bitmap, edge);
+      const code = jsqr(imageData.data, imageData.width, imageData.height, {
+        inversionAttempts: "attemptBoth",
+      });
+      if (code && code.data) return code.data;
+    }
   } finally {
     bitmap.close();
   }
-
-  const jsqr = await loadJsqr();
-  const code = jsqr(imageData.data, imageData.width, imageData.height, {
-    inversionAttempts: "attemptBoth",
-  });
-  if (!code || !code.data) {
-    throw new QrDecodeError(
-      `No QR code was found in "${file.name}". Crop the picture to the code, or scan it more squarely.`
-    );
-  }
-  return code.data;
+  throw new QrDecodeError(
+    `No QR code was found in "${file.name}". Crop the picture to the code, or scan it more squarely.`
+  );
 }
 
 /**

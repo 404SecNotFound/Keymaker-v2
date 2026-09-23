@@ -285,6 +285,48 @@ function shareInputRejection(next: string): string | null {
   return null;
 }
 
+/** §4.6 share text, either version. A prefix test, not a parse: the parser is
+ *  the authority, this only decides which box a string belongs in. */
+function isShareText(text: string): boolean {
+  return /^KMSHARE[12]:/.test(text.trimStart().toUpperCase());
+}
+
+/**
+ * Append scanned shares to what is already in the shares box, skipping any
+ * that are already there.
+ *
+ * Scanning the same strip twice is the ordinary mistake with a stack of
+ * photos, and a duplicate is not harmless: `combineShares` refuses a repeated
+ * index outright (§4.6), so k-1 strips plus one scanned twice would fail with
+ * nothing to say which photo was the repeat. Case-insensitive because the
+ * share alphabet is, and a phone's QR reader may hand back either.
+ */
+function mergeScannedShares(
+  existing: string,
+  scanned: readonly string[]
+): { text: string; added: number; repeated: number } {
+  const seen = new Set(parseShareLines(existing).map((line) => line.toUpperCase()));
+  const fresh: string[] = [];
+  let repeated = 0;
+  for (const raw of scanned) {
+    const line = raw.trim();
+    const key = line.toUpperCase();
+    if (seen.has(key)) {
+      repeated++;
+      continue;
+    }
+    seen.add(key);
+    fresh.push(line);
+  }
+  if (fresh.length === 0) return { text: existing, added: 0, repeated };
+  const base = existing.replace(/\s+$/, "");
+  return {
+    text: `${base ? `${base}\n` : ""}${fresh.join("\n")}\n`,
+    added: fresh.length,
+    repeated,
+  };
+}
+
 // Minimum password policy — deliberately NOT called a strength measurement.
 //
 // This check has been wrong twice, in the same way each time. First it accepted
@@ -999,6 +1041,7 @@ export function EncryptorTool() {
   // exports but can be longer for a large phone photo.
   const [qrScanBusy, setQrScanBusy] = useState(false);
   const qrInputRef = useRef<HTMLInputElement>(null);
+  const shareQrInputRef = useRef<HTMLInputElement>(null);
   const [textSecret, setTextSecret] = useState('');
   const [outputText, setOutputText] = useState('');
   const [password, setPassword] = useState('');
@@ -1677,7 +1720,7 @@ export function EncryptorTool() {
     //
     // The text is kept, not refused. Throwing away what they just pasted would
     // be the second unhelpful thing to do; the notice says where it belongs.
-    if (decrypting && /^KMSHARE[12]:/.test(next.trimStart().toUpperCase())) {
+    if (decrypting && isShareText(next)) {
       setTextInputRejected(
         'That is a recovery share, not an encrypted container. Put the container here, ' +
         'then choose "Use recovery shares" beside the password field to enter it.'
@@ -2117,13 +2160,53 @@ export function EncryptorTool() {
     setQrScanBusy(true);
     try {
       const texts = await decodeQrImages(files);
-      if (inputType !== 'text') handleInputTypeChange('text');
-      handleTextSecretChange(texts.join("\n"));
-      toast({
-        title: files.length === 1 ? "QR image scanned" : `${files.length} QR images scanned`,
-        description:
-          "The encrypted text is in the box below. Type the password to open it.",
-      });
+      // A printed backup opened without the password is container parts *and*
+      // share strips, and the person opening it photographs all of it. Each
+      // string goes to the box that can use it: shares to the shares box,
+      // everything else to the container box. Joining them all into the
+      // container box instead failed the whole set as one bad paste, and a
+      // strip scanned on its own was only ever told it was in the wrong place.
+      // The printed strips carry a QR precisely so this path exists.
+      const shares = texts.filter(isShareText);
+      const rest = texts.filter((t) => !isShareText(t));
+      // Checked before any state changes, so a refused set leaves the form
+      // exactly as it was.
+      const merged = shares.length > 0 ? mergeScannedShares(shareInput, shares) : null;
+      const rejection = merged ? shareInputRejection(merged.text) : null;
+      if (rejection) throw new QrDecodeError(rejection);
+
+      // Only a container needs text mode. Shares scanned while a .keym file
+      // is selected in File mode belong beside that file, and switching mode
+      // would drop the very container they are meant to open.
+      if (rest.length > 0 && inputType !== 'text') handleInputTypeChange('text');
+      if (merged) {
+        // Shares and a passkey are exclusive unlock paths; see the toggle.
+        setUsePasskey(false);
+        setUseShares(true);
+        setShareInputRejected(null);
+        setShareInput(merged.text);
+      }
+      if (rest.length > 0) handleTextSecretChange(rest.join("\n"));
+
+      const title = files.length === 1 ? "QR image scanned" : `${files.length} QR images scanned`;
+      if (!merged) {
+        toast({
+          title,
+          description:
+            "The encrypted text is in the box below. Type the password to open it.",
+        });
+      } else {
+        const where =
+          merged.added === 0
+            ? "Every share scanned was already in the recovery-shares box."
+            : `${merged.added} recovery ${merged.added === 1 ? "share is" : "shares are"} now in the recovery-shares box` +
+              (merged.repeated > 0 ? ` (${merged.repeated} scanned twice, counted once).` : ".");
+        const next =
+          rest.length > 0 || (inputType === 'file' ? !!file : !!textSecret.trim())
+            ? " With enough of them no password is needed. If the container needs more, the attempt will simply fail."
+            : " The encrypted backup itself goes in the box above: scan or paste it too.";
+        toast({ title, description: where + next });
+      }
     } catch (e) {
       // A QR that will not read is a scanning problem, never an AEAD one, so it
       // is reported here and never allowed to reach the password path. That is
@@ -2138,7 +2221,7 @@ export function EncryptorTool() {
     } finally {
       setQrScanBusy(false);
     }
-  }, [inputType, handleInputTypeChange, handleTextSecretChange, toast]);
+  }, [inputType, handleInputTypeChange, handleTextSecretChange, toast, shareInput, textSecret, file]);
 
   /** Is this file an image, and so a QR to scan rather than a container to open?
    *  MIME first, extension as the fallback for a drag that carried no type. */
@@ -3467,7 +3550,8 @@ export function EncryptorTool() {
                 <p className="text-[12px] leading-snug text-muted-foreground">
                   Upload a Keymaker QR PNG, or every part of a paper backup at
                   once, and its encrypted text fills the box above. Then type the
-                  password.
+                  password. Recovery-share strips can go in the same batch: they
+                  are moved to the recovery-shares box.
                 </p>
               </div>
             )}
@@ -3514,15 +3598,22 @@ export function EncryptorTool() {
               {currentMode === "decrypt" && (
                 <button
                   type="button"
-                  onClick={() =>
+                  onClick={() => {
+                    // One unlock path at a time. The passkey control is hidden
+                    // while shares are on, so a passkey choice left set behind
+                    // it would still win in processData: the heir pastes k
+                    // shares and is asked to tap a key, and on a container
+                    // with no passkey slot is told to use a password they do
+                    // not have, with no visible control to undo it.
+                    if (!useShares) setUsePasskey(false);
                     setUseShares((v) => {
                       // KM-R03. Leaving them in state behind a hidden control
                       // is the worst of both: invisible to the user, and still
                       // there for the auto-lock to have to think about.
                       if (v) setShareInput('');
                       return !v;
-                    })
-                  }
+                    });
+                  }}
                   aria-pressed={useShares}
                   className="km-action ml-auto rounded-md px-2 py-1 text-[12px] transition-colors hover:bg-inset"
                 >
@@ -3575,10 +3666,40 @@ export function EncryptorTool() {
                     still there.
                   </p>
                 )}
+                {/*
+                  The printed strips each carry a QR. Without this the only way
+                  in from paper was retyping a ~140-character code per strip,
+                  by the person least equipped to get one character right. Same
+                  handler as the container scan, which routes by prefix, so a
+                  container photo picked here still lands in its own box.
+                */}
+                <input
+                  ref={shareQrInputRef}
+                  id="share-qr-scan-input"
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  multiple
+                  className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files ?? []);
+                    e.target.value = "";
+                    void handleQrImageFiles(files);
+                  }}
+                />
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={qrScanBusy}
+                  onClick={() => shareQrInputRef.current?.click()}
+                  className="w-full rounded-xl border-border bg-inset py-2 text-[13px] font-medium text-foreground hover:bg-raised"
+                >
+                  <QrCode className="mr-2 h-4 w-4" />
+                  {qrScanBusy ? "Reading QR…" : "Scan share QR images"}
+                </Button>
                 <p className="text-[12px] leading-snug text-muted-foreground" role="status">
                   {(() => {
                     const n = shareLines.length;
-                    if (n === 0) return "Paste the shares, one per line. Comment lines starting with # are ignored.";
+                    if (n === 0) return "Paste the shares, one per line, or scan the QR on each strip. Comment lines starting with # are ignored.";
                     // Deliberately does not say whether this is enough: the
                     // threshold lives on the shares, not in the container, and
                     // guessing it here would mean either reading it out of
