@@ -15,6 +15,9 @@
  * error-correction is arithmetic rather than eyesight.
  */
 
+// §7, "Characters a reader ignores": the same set as keym2.py, not `\s`.
+import { dropIgnorable, stripIgnorable } from "./keym-text";
+
 /** §7.1. `KMS` is a share, `KMP` is a paper part; the family splits at byte 2. */
 export const KEYM2_PART_PREFIX = "KMPART1:";
 
@@ -144,7 +147,7 @@ export function decodePaperParts(parts: readonly string[]): Uint8Array {
   const totals = new Set<number>();
 
   for (const raw of parts) {
-    const text = raw.replace(/\s+/g, "");
+    const text = dropIgnorable(raw);
     if (!text) continue;
     const m = PART_RE.exec(text);
     if (!m) {
@@ -212,7 +215,7 @@ export function decodePaperParts(parts: readonly string[]): Uint8Array {
 export function splitPaperParts(text: string): string[] {
   return text
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => stripIgnorable(line))
     .filter((line) => line !== "" && !line.startsWith("#"));
 }
 
@@ -240,7 +243,7 @@ export function looksLikePaperPart(text: string): boolean {
  * validate it. Reads either version's prefix.
  */
 export function describePaperPart(text: string): { index: number; total: number } | null {
-  const stripped = text.replace(/\s+/g, "");
+  const stripped = dropIgnorable(text);
   const m = PART_RE.exec(stripped) ?? PART2_RE.exec(stripped);
   if (!m) return null;
   return { index: Number(m[1]), total: Number(m[2]) };
@@ -342,7 +345,7 @@ export async function decodePaperPartsV2(parts: readonly string[]): Promise<Uint
   const corrupt: number[] = [];
 
   for (const raw of parts) {
-    const text = raw.replace(/\s+/g, "");
+    const text = dropIgnorable(raw);
     if (!text) continue;
     const m = PART2_RE.exec(text);
     if (!m) {
@@ -409,7 +412,7 @@ export async function decodePaperPartsV2(parts: readonly string[]): Promise<Uint
 
 /** Dispatch on the version digit: §7.1 `KMPART1` or its v2 §7.3 `KMPART2`. */
 export async function decodePaperPartsAny(parts: readonly string[]): Promise<Uint8Array> {
-  const items = parts.map((p) => p.replace(/\s+/g, "")).filter((p) => p !== "");
+  const items = parts.map((p) => dropIgnorable(p)).filter((p) => p !== "");
   if (items.some((p) => p.startsWith(KEYM2_PART2_PREFIX))) {
     return decodePaperPartsV2(items);
   }

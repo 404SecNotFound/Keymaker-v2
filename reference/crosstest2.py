@@ -1560,6 +1560,131 @@ def main() -> int:
                        lambda: keym2.decrypt(js_v3_enrolled, shares=js_v3_shares[:K3]),
                        b"v3 enrolment base")
 
+        # ------------------------------------------------------------------
+        # §7 "Characters a reader ignores", §6's full set-id comparison, and
+        # §4.4's confirmation of a master key against the payload.
+        #
+        # The readers are compared on verdict *and* on what they read, because
+        # two readers that both accept a string can still decode it
+        # differently. Every case below is one the two implementations used to
+        # judge differently, or a control that neither may accept.
+        # ------------------------------------------------------------------
+        print("\n§7 text readers, §6 set id, §4.4 master-key confirmation:")
+        base_t = keym2.encrypt(b"text readers", PASSWORD, kdf_id=keym2.KDF_PBKDF2,
+                               cipher_id=keym2.CIPHER_AES, iterations=600_000)
+        arm = keym2.armor(base_t)
+        enrolled_t, shares_t = keym2.add_shamir_slot(base_t, PASSWORD, 2, 3)
+        sh = shares_t[0]
+        one_at = sh.find("1", len(keym2.SHARE2_PREFIX))
+        parts_t = keym2.encode_parts_v2(base_t, 64)
+        spare = keym2._B64URL_ALPHABET[keym2._B64URL_ALPHABET.index(parts_t[0][-1]) ^ 1]
+        cases = [
+            ("armor", arm), ("armor", "\ufeff" + arm), ("armor", "\u0085" + arm + "\u00a0"),
+            ("armor", "\u3000" + arm + "\u2028"), ("armor", arm[:12] + "\u00a0" + arm[12:]),
+            ("armor", arm[:12] + "\ufeff" + arm[12:]), ("armor", arm + "\x1c"),
+            ("armor", arm + "\x1f"), ("armor", "\u200b" + arm), ("armor", arm[:12] + "\u200b" + arm[12:]),
+            ("share", sh), ("share", "\ufeff" + sh), ("share", sh.lower()),
+            ("share", sh.replace("-", "\u00a0", 1)), ("share", "\u2003" + sh + "\u0085"),
+            ("share", sh + "\x1c"),
+            ("share", sh[:one_at] + "\u0131" + sh[one_at + 1:] if one_at >= 0 else sh + "!"),
+            ("share", "KM\u017fHARE2:" + sh[len(keym2.SHARE2_PREFIX):]),
+            ("parts", "\n".join(parts_t)), ("parts", "\ufeff" + "\n".join(parts_t) + "\u00a0"),
+            ("parts", "\n".join(parts_t) + "\u0085"),
+            ("parts", "\n".join([parts_t[0][:12] + "\u0085" + parts_t[0][12:]] + parts_t[1:])),
+            ("parts", "\n".join([parts_t[0][:-1] + spare] + parts_t[1:])),
+            ("parts", "\n".join([parts_t[0].replace("KMPART2:1/", "KMPART2:\u0661/", 1)] + parts_t[1:])),
+            ("isshare", "\ufeff" + sh), ("isshare", "KM\u017fHARE2:" + sh[len(keym2.SHARE2_PREFIX):]),
+        ]
+
+        def py_verdict(kind: str, text: str) -> dict:
+            try:
+                if kind == "armor":
+                    return {"ok": True, "hex": keym2.dearmor(text).hex()}
+                if kind == "share":
+                    x = keym2.decode_share_any(text)
+                    return {"ok": True,
+                            "hex": f"{x.set_id.hex()}:{x.threshold}:{x.index}:{x.value.hex()}"}
+                if kind == "parts":
+                    lines = [keym2._strip_ignorable(ln) for ln in text.split("\n")]
+                    lines = [ln for ln in lines if ln and not ln.startswith("#")]
+                    return {"ok": True, "hex": keym2.decode_parts_any(lines).hex()}
+                if kind == "isshare":
+                    return {"ok": keym2.is_share_text(text)}
+            except (keym2.KeymError, ValueError, UnicodeError):
+                return {"ok": False}
+            raise AssertionError(kind)
+
+        cases_path, verdicts_path = tmp / "text-cases.json", tmp / "text-verdicts.json"
+        cases_path.write_text(json.dumps([{"kind": k, "text": t} for k, t in cases]))
+        try:
+            bridge("textverdicts", "--in", str(cases_path), "--out", str(verdicts_path))
+            js_verdicts = json.loads(verdicts_path.read_text())
+        except BridgeError as e:
+            js_verdicts = [{"bridge": str(e)}] * len(cases)
+        for (kind, text), js in zip(cases, js_verdicts):
+            py = py_verdict(kind, text)
+            label = ascii(text[:3] + "…" + text[-3:])
+            check(f"{kind} {label}: both {'accept' if py['ok'] else 'reject'}, and read the same",
+                  py == js, f"py={py} js={js}")
+
+        # §6: a share set whose id matches the container's only in its first
+        # four bytes. The values are this set's own, so a reader comparing four
+        # bytes reconstructs the right secret and opens the container.
+        near_path = tmp / "near-shares.txt"
+        near = []
+        for text in shares_t[:2]:
+            x = keym2.decode_share_v2(text)
+            flipped = x.set_id[:4] + bytes(b ^ 0xFF for b in x.set_id[4:])
+            near.append(keym2.encode_share_v2(keym2.Share(set_id=flipped, threshold=x.threshold,
+                                                          index=x.index, value=x.value)))
+        near_path.write_text("\n".join(near) + "\n")
+        enrolled_t_path = tmp / "enrolled-t.keym"
+        enrolled_t_path.write_bytes(enrolled_t)
+        try:
+            bridge("decrypt2", "--in", str(enrolled_t_path), "--out", str(tmp / "near.out"),
+                   "--share-file", str(near_path))
+            js_near_opened = True
+        except BridgeError:
+            js_near_opened = False
+        check("the TypeScript refuses a v2 set whose id matches only its first four bytes",
+              not js_near_opened)
+        try:
+            keym2.decrypt(enrolled_t, shares=near)
+            py_near_opened = True
+        except keym2.KeymError:
+            py_near_opened = False
+        check("the reference refuses it too", not py_near_opened)
+
+        # §4.4: enrolment behind a spliced slot. Two v2 containers under one
+        # password, B's slot spliced in ahead of A's. The TypeScript enrols a
+        # share set on it; the reference must then open A with those shares.
+        a_v2 = keym2.encrypt(b"A" * 64, PASSWORD, kdf_id=keym2.KDF_PBKDF2,
+                             cipher_id=keym2.CIPHER_AES, iterations=600_000, version=2)
+        b_v2 = keym2.encrypt(b"B" * 64, PASSWORD, kdf_id=keym2.KDF_PBKDF2,
+                             cipher_id=keym2.CIPHER_AES, iterations=600_000, version=2)
+        core_a, slots_a, payload_a = keym2.parse_container(a_v2)
+        _core_b, slots_b, _payload_b = keym2.parse_container(b_v2)
+        spliced = keym2.assemble(core_a, [slots_b[0], slots_a[0]], payload_a)
+        spliced_path = tmp / "spliced.keym"
+        spliced_path.write_bytes(spliced)
+        js_sp_path, js_sp_shares = tmp / "spliced-enrolled.keym", tmp / "spliced-shares.txt"
+        try:
+            bridge("addshares", "--password", PASSWORD, "--in", str(spliced_path),
+                   "--out", str(js_sp_path), "--shares-out", str(js_sp_shares),
+                   "--threshold", "2", "--shares", "3",
+                   "--salt", os.urandom(32).hex(), "--share-secret", os.urandom(32).hex(),
+                   "--share-coefficients", os.urandom(32).hex())
+            sp_enrolled = js_sp_path.read_bytes()
+            sp_shares = [ln for ln in js_sp_shares.read_text().split("\n") if ln.strip()]
+        except BridgeError as e:
+            sp_enrolled, sp_shares = b"", []
+            check("the TypeScript enrols on a container with a spliced slot", False, str(e))
+        check_call("shares the TypeScript enrolled behind a spliced slot open the right container",
+                   lambda: keym2.decrypt(sp_enrolled, shares=sp_shares[:2]) if sp_shares else None,
+                   b"A" * 64)
+        check_call("the reference opens the spliced container with its own slot",
+                   lambda: keym2.decrypt(spliced, PASSWORD), b"A" * 64)
+
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

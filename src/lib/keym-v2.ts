@@ -57,6 +57,7 @@ import {
   validateKdfParams,
   type KdfParams,
 } from "./keymaker-crypto";
+import { dropIgnorable, stripIgnorable } from "./keym-text";
 
 // ---------------------------------------------------------------------------
 // Constants (§3, §4.4, §5.1, §7)
@@ -1117,12 +1118,12 @@ async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Ui
 
   if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) {
     if (!secrets.shares || secrets.shares.length === 0) return null;
-    const { combineShares, shareSetId } = await import("./keym-v2-shamir");
+    const { combineShares, shareSetIdV2 } = await import("./keym-v2-shamir");
     try {
       // Checked against *this* slot's salt, so a share set belonging to a
       // different Shamir slot declines rather than reconstructing a clean
       // secret that is simply the wrong one.
-      const shareSecret = await combineShares(secrets.shares, await shareSetId(slot.salt));
+      const shareSecret = await combineShares(secrets.shares, await shareSetIdV2(slot.salt));
       const input = buildShamirInput(shareSecret);
       secureErase(shareSecret);
       return input;
@@ -1261,21 +1262,54 @@ async function* unwrapCandidates(
 }
 
 /**
- * The first slot the caller's secrets open.
+ * The first slot the caller's secrets open whose key opens this payload.
  *
- * What the enrolment paths want: they need *a* master key, and any slot that
- * yields one is proof the caller may edit this container. Only `decryptKeym2`
- * has a second opinion about which one is right, because only it has a payload
- * to check the answer against.
+ * What the enrolment paths want: the container's own master key, confirmed
+ * against chunk 0 the way `decryptKeym2` confirms its candidates.
  */
 async function unwrapMasterKey(
   container: Keym2Container,
   secrets: Keym2Secrets
 ): Promise<{ master: Uint8Array; slot: Keym2Slot }> {
+  // §4.4, "A master key is recovered only when it opens the payload". This
+  // took the first candidate, on the reasoning above that any unwrap proves
+  // the caller may edit the container. It proves the caller knows *a*
+  // password, not that the key belongs here: behind a slot spliced in from
+  // another v2 container, enrolment wrapped a new share set around that other
+  // container's key, and every share printed for this one opened nothing.
   for await (const candidate of unwrapCandidates(container, secrets)) {
-    return candidate;
+    if (await opensFirstChunk(container, candidate.master)) return candidate;
+    secureErase(candidate.master);
   }
   reject();
+}
+
+/** §4.4: does this candidate master key open chunk 0 of this container? */
+async function opensFirstChunk(container: Keym2Container, master: Uint8Array): Promise<boolean> {
+  let sizes: number[];
+  try {
+    sizes = chunkLayout(container.payload.length, container.core.tagOverhead);
+  } catch {
+    return false;
+  }
+  const firstLen = (sizes[0] as number) + container.core.tagOverhead;
+  const firstBlob = container.payload.subarray(0, firstLen);
+  if (firstBlob.length !== firstLen) return false;
+  const keys = await payloadKeys(master, container.core.cipher);
+  try {
+    const first = await open(
+      container.core.cipher,
+      keys,
+      nonceFor(0, sizes.length === 1),
+      firstBlob,
+      container.coreBytes
+    );
+    if (first === null) return false;
+    secureErase(first);
+    return true;
+  } finally {
+    secureErase(keys.chachaKey);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1523,8 +1557,8 @@ export async function addShamirSlotKeym2(
 
   // New share sets are written v2 (KMSHARE2): a 128-bit set id and checksum,
   // and diagnostics a v1 share cannot carry. The container slot is unchanged, so
-  // the set id's first four bytes still equal `shareSetId(salt)` and the unwrap
-  // guard (which compares that prefix) opens either version.
+  // the set id's first four bytes still equal `shareSetId(salt)`, and the unwrap
+  // guard compares each share over its own full length against the 16-byte id.
   const setId = await shareSetIdV2(salt);
 
   const shares: string[] = [];
@@ -1881,16 +1915,15 @@ export function armorKeym2Compact(container: Uint8Array): string {
  * bug v1's `KEYM1:` armor had.
  */
 export function dearmorKeym2(text: string): Uint8Array {
-  const trimmed = text.trim();
+  const trimmed = stripIgnorable(text);
   if (!trimmed.startsWith(KEYM2_ARMOR_PREFIX)) reject();
   try {
-    // §7: ASCII whitespace only inside the body, matching keym2.py's
-    // `bytes.split()` (the ends are trimmed above, as its `str.strip()` does). A
-    // non-ASCII space — U+00A0, a stray BOM — is *kept*, so `fromBase64Url`
-    // rejects it exactly as the reference does. Stripping it here with `\s`
-    // instead opened a container the durable Python decryptor refuses, which
-    // strands the heir on the one path that has no browser.
-    return fromBase64Url(trimmed.slice(KEYM2_ARMOR_PREFIX.length).replace(/[ \t\n\r\v\f]/g, ""));
+    // §7, "Characters a reader ignores": the same IGNORABLE set at the ends
+    // and inside the body, in both implementations. This used ASCII-only
+    // inside and `trim()` at the ends, which differs from Python's `strip()`
+    // in both directions (U+FEFF, U+0085, U+001C..U+001F); matching the other
+    // implementation's accident is not a rule, so the rule is now written down.
+    return fromBase64Url(dropIgnorable(trimmed.slice(KEYM2_ARMOR_PREFIX.length)));
   } catch {
     reject();
   }

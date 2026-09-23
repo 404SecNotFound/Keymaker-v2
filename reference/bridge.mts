@@ -63,9 +63,10 @@ import {
   addShamirSlotKeym2,
   addPasskeySlotKeym2,
   derivePrfSalt,
+  dearmorKeym2,
 } from "../src/lib/keym-v2.ts";
 import { encodePaperParts, encodePaperPartsV2, decodePaperParts, decodePaperPartsAny, splitPaperParts } from "../src/lib/keym-v2-paper.ts";
-import { encodeShareV2, shareSetIdV2 } from "../src/lib/keym-v2-shamir.ts";
+import { encodeShareV2, shareSetIdV2, decodeShareAny, isKeym2Share } from "../src/lib/keym-v2-shamir.ts";
 import {
   buildSelfExtractingPage,
   embedSelfExtract,
@@ -324,6 +325,36 @@ try {
       }`
     );
 
+  } else if (cmd === "textverdicts") {
+    // §7, "Characters a reader ignores". Every case the cross-test hands over,
+    // judged by the shipping readers: accept or reject, and on accept the
+    // bytes read, so the two implementations are compared on what they
+    // decoded and not only on whether they decoded something.
+    const cases = JSON.parse(readFileSync(inFile, "utf8")) as { kind: string; text: string }[];
+    const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+    const verdicts: { ok: boolean; hex?: string }[] = [];
+    for (const c of cases) {
+      try {
+        if (c.kind === "armor") {
+          verdicts.push({ ok: true, hex: hex(dearmorKeym2(c.text)) });
+        } else if (c.kind === "share") {
+          const sh = await decodeShareAny(c.text);
+          verdicts.push({
+            ok: true,
+            hex: hex(sh.setId) + ":" + sh.threshold + ":" + sh.index + ":" + hex(sh.value),
+          });
+        } else if (c.kind === "parts") {
+          verdicts.push({ ok: true, hex: hex(await decodePaperPartsAny(splitPaperParts(c.text))) });
+        } else if (c.kind === "isshare") {
+          verdicts.push({ ok: isKeym2Share(c.text) });
+        } else {
+          throw new Error(`unknown case kind ${c.kind}`);
+        }
+      } catch {
+        verdicts.push({ ok: false });
+      }
+    }
+    writeFileSync(outFile, JSON.stringify(verdicts));
   } else {
     throw new Error(`unknown command: ${cmd}`);
   }

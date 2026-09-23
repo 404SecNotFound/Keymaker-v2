@@ -567,6 +567,28 @@ The last two sentences are finding F6, and the middle one is F7. Both came from
 implementing this section, and both are cases where the first wording of the
 amendment said something that fell apart on contact with a second slot.
 
+**A master key is recovered only when it opens the payload.**
+
+> A slot that unwraps yields *a* 32-byte key, not necessarily *the* container's
+> key. A reader **MUST** confirm a candidate by opening chunk 0 of the payload
+> (§5) with it, and on failure **MUST** discard it and continue the walk, exactly
+> as for any other per-slot rejection.
+>
+> A writer that adds, replaces or re-wraps a slot **MUST** use a master key
+> confirmed this way.
+
+The case is a v2 container with a slot spliced in ahead of the owner's from a
+second container whose password the owner also uses. The spliced slot unwraps
+first, to the other container's key. A reader that committed to the first
+unwrap rejected a container whose own slot 1 was valid; a writer that did so
+wrapped a new share set around the wrong key, so the owner went on opening the
+backup normally while every share printed for it opened nothing, which nobody
+finds out until the owner is gone. v3 binds `container_id` into each slot's AAD
+(FORMAT-V3-DESIGN §4), so a foreign slot no longer unwraps there, but v2 stays
+readable and writable forever. The cost is one chunk-0 AEAD per candidate, which
+is not a KDF. The TypeScript reader did this from the start; its enrolment path
+and the Python reference did not, and this paragraph is the finding.
+
 **Why failure is slot-scoped and not container-scoped.** §3.3's "reject" was
 written for a format with one unlock path, where rejecting the slot and
 rejecting the container are the same event. They stop being the same event here.
@@ -804,8 +826,10 @@ character carries non-zero padding bits, so that one share has exactly one
 encoding.
 
 Alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ` — Crockford's, which omits I, L, O
-and U. A reader is case-insensitive, maps `I`/`L` to `1` and `O` to `0`, and
-ignores hyphens and ASCII whitespace; every other character is rejected.
+and U. A reader is case-insensitive over ASCII letters, maps `I`/`L` to `1` and
+`O` to `0`, and ignores hyphens and the IGNORABLE characters of §7; every other
+character is rejected. (This said "ASCII whitespace" until §7 pinned the set
+down; see "Characters a reader ignores" there.)
 
 **Why base32 and not the base64url used everywhere else in this document.** The
 whole string — uppercase letters, digits, `-` and `:` — lies inside QR code
@@ -892,7 +916,17 @@ checksum     = SHA-256("keymaker.v2.share-checksum" || body)[0:16]
 These are the §4.6 derivations with a wider truncation and no other change. A
 `KMSHARE2` set id is therefore the `KMSHARE1` set id extended: the first four
 bytes are byte-identical, because both are a prefix of the same hash of the same
-`slot_salt`. The value, the field arithmetic, `threshold`, `index` and the
+`slot_salt`.
+
+**A reader compares the whole set id a share carries.** §6's rule is that a
+share's `share_set_id` must match the one derived from the slot's `slot_salt`,
+and for a `KMSHARE2` share that is all sixteen bytes. Both implementations first
+compared only the four-byte `KMSHARE1` prefix against the container, which kept
+one comparison for both versions and threw away the twelve bytes this record
+exists to add. (Harmless to confidentiality, since a share from the wrong set
+reconstructs a key the unwrap then refuses, but it turns the named "share from a
+different set" rejection back into a generic failure one time in 2^32, and it is
+not what §6 says.) The value, the field arithmetic, `threshold`, `index` and the
 `2..16` bounds are §4.6's, untouched. `KMSHARE2` is an envelope change, not a
 cryptographic one: it does not reach `shamirSplit`, `shamirCombine`, or the slot
 the shares unwrap.
@@ -1499,6 +1533,34 @@ The prefix is **case-sensitive** and matched byte-for-byte. A reader that
 accepted `KEYM2:` would reintroduce the exact collision this section removes,
 while believing it was being lenient.
 
+#### Characters a reader ignores
+
+Every text form in this document (armor here, §4.6 share text, and §7.1/§7.3
+paper parts) is copied, saved and retyped by people using whatever editor is to
+hand, so a reader has to agree with every other reader about which characters
+are not part of the text. The set is:
+
+```
+IGNORABLE = U+0009..U+000D  U+0020  U+0085  U+00A0  U+1680  U+2000..U+200A
+            U+2028  U+2029  U+202F  U+205F  U+3000  U+FEFF
+```
+
+That is Unicode `White_Space` plus U+FEFF, the byte order mark a Windows editor
+puts at the start of a UTF-8 file. A reader removes IGNORABLE characters from
+both ends of the text before looking for a prefix, and ignores them inside
+armor, share and part bodies. Any other character outside an encoding's
+alphabet is rejected. Case-folding, where an encoding allows it (§4.6), applies
+to ASCII letters only: a non-ASCII character is never folded into the alphabet,
+so `ı` (U+0131) is not `I` and `ſ` (U+017F) is not `S`.
+
+This was written down after the two implementations were found to disagree on
+it, each by inheriting its language's idea of whitespace: JavaScript's `trim`
+removes U+FEFF and Python's `strip` does not, while Python's removes U+0085 and
+U+001C..U+001F and JavaScript's does not, and each language's `upper()` folds a
+few non-ASCII letters into ASCII ones. A saved backup that opened in the app and
+failed in `keym2.py` was the concrete case. U+001C..U+001F are control
+characters, not spacing, and are rejected.
+
 Base64url without padding, so the armored form survives being pasted into a
 URL, a filename, or a QR code without escaping — and so `=` never has to be
 stripped by hand from a backup someone is trying to recover.
@@ -1698,7 +1760,12 @@ KMPART2:<index>/<total>:<cid>:<length>:<base64url-unpadded slice>:<part_checksum
   `base64url(SHA-256("keymaker.v2.part-checksum" || slice)[0:4])`, 6 characters.
   It localises damage: a part whose checksum fails is named, so the reader points
   at "part 3" rather than at the set. Four bytes is a diagnosis, not a guarantee.
-  The fingerprint and the AEAD are the guarantees.
+  The fingerprint and the AEAD are the guarantees. A reader compares it **as
+  text**: it recomputes the checksum, encodes it, and requires the six characters
+  to be equal. Six base64 characters carry 36 bits for 32, so the last one has
+  four spare bits, and a reader that compared decoded bytes accepted sixteen
+  spellings of each checksum where the other accepted one. One part, one
+  encoding, the rule §4.6 already set for shares.
 
 Reassembly, in order: parse each part; require all parts to agree on `total`,
 `cid` and `length`; require exactly one of each index in `1..total`; verify each
