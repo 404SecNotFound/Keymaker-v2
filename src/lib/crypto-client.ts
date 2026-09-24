@@ -29,6 +29,7 @@ import {
   type KeymakerErrorCode,
   type KeymakerOptions,
   type DetectedFormat,
+  loadKeym2,
 } from "./keymaker-crypto";
 import type { CryptoRequest, CryptoResponse } from "./crypto-worker";
 import { ProbePolicy, PROBE_TIMEOUT_MS } from "./worker-probe-policy";
@@ -407,7 +408,7 @@ async function encryptViaWorkerInner(
           // would silently produce a container with no share slot on a browser
           // where the Worker failed to start — a backup the heirs cannot open,
           // reported as success.
-          const { addShamirSlotKeym2 } = await import("./keym-v2");
+          const { addShamirSlotKeym2 } = await loadKeym2();
           const enrolled = await addShamirSlotKeym2(
             new Uint8Array(out),
             { password, keyFile: keyFileForSlots },
@@ -425,7 +426,7 @@ async function encryptViaWorkerInner(
         // must not quietly produce a container with no passkey slot, reported as
         // success.
         if (passkey) {
-          const { addPasskeySlotKeym2 } = await import("./keym-v2");
+          const { addPasskeySlotKeym2 } = await loadKeym2();
           const enrolled = await addPasskeySlotKeym2(
             new Uint8Array(out),
             { password, keyFile: keyFileForSlots },
