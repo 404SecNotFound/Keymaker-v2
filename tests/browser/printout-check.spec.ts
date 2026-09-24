@@ -88,7 +88,13 @@ test("a printout is checked against the backup it came from, and not against ano
   await page.locator("#printout-check-input").setInputFiles([
     png("strips-page.png", await composePhoto(page, printed.strips)),
   ]);
-  await expect(page.getByTestId("printout-results").locator("li")).toHaveCount(3, { timeout: 30_000 });
+  // Wait for this photo's lines, not for three lines: the batch above also left
+  // three, so a count alone is satisfied before the new results land, and under
+  // load the read below then saw the old strip-2/symbol-1/blank findings.
+  await expect(
+    page.getByTestId("printout-results").locator("li").filter({ hasText: "strips-page.png" })
+  ).toHaveCount(3, { timeout: 30_000 });
+  await expect(page.getByTestId("printout-results").locator("li")).toHaveCount(3);
   const page3 = await findings(page);
   expect(page3.map((f) => f.text.match(/Recovery strip (\d)/)?.[1]).sort()).toEqual(["1", "2", "3"]);
   for (const [i, f] of page3.entries()) {
