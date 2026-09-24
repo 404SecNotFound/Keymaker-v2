@@ -134,14 +134,24 @@ jobs:
         run: npm run test:audio-wav-bounds
 
       # Every other malformed carrier is a typed AudioStegoError too, on both the
-      # WAV parse (not RIFF, no data chunk, non-PCM, non-16-bit, zero channels)
+      # WAV parse (not RIFF, no data chunk, an unread encoding, zero channels)
       # and the KAUD extract path (no marker, unreadable version/depth, empty or
       # over-long declared payload). A carrier fault must never reach the AEAD as
       # "decryption failed". Controls bite: removing the payload-length bound
-      # returns garbage instead of throwing; removing the format/bit-depth check
-      # misreads a 24-bit file instead of refusing it.
+      # returns garbage instead of throwing; removing the encoding check misreads
+      # an ADPCM file instead of refusing it.
       - name: Malformed audio carriers are all typed carrier errors
         run: npm run test:audio-malformed
+
+      # A WAV carrier at 8, 24 or 32-bit PCM or 32/64-bit float, plain or
+      # WAVE_FORMAT_EXTENSIBLE, is read at its own rate and scaled to 16 bits by
+      # a power of two, so a stego WAV re-saved losslessly at a greater depth
+      # still reveals. It used to be refused as "Only 16-bit PCM WAV" while the
+      # format doc promised any WAV. Control bites: restoring the refusal fails
+      # every conversion case; dropping the SubFormat GUID check reads a foreign
+      # EXTENSIBLE header as PCM.
+      - name: WAV carriers of any common depth are read without resampling
+        run: npm run test:audio-wav-depths
 
       # A carrier decoded through Web Audio must come back sample-exact. Web
       # Audio returns a 16-bit sample s as s / 32768; scaling positives back by

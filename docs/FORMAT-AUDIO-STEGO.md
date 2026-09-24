@@ -48,10 +48,17 @@ The payload lives in the least-significant bit of each PCM sample. Lossy codecs
 quantisation, so a container embedded and then MP3-encoded is destroyed (measured
 bit-error near 0.5, i.e. total loss). Therefore:
 
-- **Input** may be any format the browser can decode (MP3, WAV, FLAC, Ogg). A
-  lossy input is decoded to PCM first; its compression artefacts are already
-  baked into those samples, which is fine because they become the new lossless
-  master.
+- **Input** may be MP3, FLAC, Ogg or anything else the browser can decode, or a
+  WAV. A lossy input is decoded to PCM first; its compression artefacts are
+  already baked into those samples, which is fine because they become the new
+  lossless master.
+- **A WAV is read directly, not by the browser's decoder**, because the browser
+  resamples to the device's rate and that destroys the low bit. Integer PCM at
+  8, 16, 24 or 32 bits and float at 32 or 64 bits are accepted, plain or
+  `WAVE_FORMAT_EXTENSIBLE`, at their own sample rate. Anything other than 16-bit
+  is scaled to 16 bits by a power of two, so a 16-bit carrier re-saved
+  losslessly at a greater depth still gives back its payload. Other WAV
+  encodings (ADPCM, A-law, µ-law) are refused with a message.
 - **Output** is always lossless. Phase 1 writes **16-bit PCM WAV**. FLAC output
   is a later addition and uses the same stream defined here.
 

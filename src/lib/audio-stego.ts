@@ -128,7 +128,7 @@ export function extractContainer(pcm: Pcm16): Uint8Array {
   return payload;
 }
 
-// ---- WAV (16-bit PCM) read and write ----
+// ---- WAV read (any integer PCM or float depth) and write (16-bit PCM) ----
 
 function readAscii(view: DataView, offset: number, length: number): string {
   let s = "";
@@ -136,14 +136,6 @@ function readAscii(view: DataView, offset: number, length: number): string {
   return s;
 }
 
-/**
- * Parse a 16-bit PCM WAV into interleaved samples.
- *
- * Only the one encoding the writer below produces is accepted: RIFF/WAVE, PCM
- * (format 1), 16 bits per sample. Anything else (float, 24-bit, ADPCM) is
- * refused with a message rather than misread, because the LSB scheme is defined
- * on 16-bit integers.
- */
 /**
  * Is this a RIFF/WAVE file, going by its bytes rather than its name?
  *
@@ -158,6 +150,28 @@ export function isWavBytes(bytes: Uint8Array): boolean {
   return tag(0) === "RIFF" && tag(8) === "WAVE";
 }
 
+const WAVE_FORMAT_PCM = 1;
+const WAVE_FORMAT_IEEE_FLOAT = 3;
+const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
+/** The 14 bytes after the format code in a KSDATAFORMAT_SUBTYPE_* GUID. */
+const KSDATAFORMAT_SUFFIX = [0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x80, 0x00, 0x00, 0xaa, 0x00, 0x38, 0x9b, 0x71];
+
+const clamp16 = (v: number) => Math.max(-32768, Math.min(32767, v));
+
+/**
+ * Parse a WAV into interleaved 16-bit samples, without resampling.
+ *
+ * 16-bit PCM, the one encoding the writer below produces and the only one a
+ * payload is embedded in, is read sample for sample. Other integer depths (8,
+ * 24, 32) and 32- or 64-bit float, plain or WAVE_FORMAT_EXTENSIBLE, are scaled
+ * to 16 bits here rather than refused. Each is scaled by a power of two, so a
+ * 16-bit file re-saved losslessly at a greater depth comes back to the same
+ * samples, low bit included, and a payload it carried is still there.
+ *
+ * This is not left to Web Audio because Web Audio resamples to the device rate,
+ * which destroys the low bit. Encodings this does not read (ADPCM, A-law,
+ * mu-law, unusual depths) are refused with a message rather than misread.
+ */
 export function parseWavToPcm16(bytes: Uint8Array): Pcm16 {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   if (bytes.length < 44 || readAscii(view, 0, 4) !== "RIFF" || readAscii(view, 8, 4) !== "WAVE") {
@@ -189,6 +203,16 @@ export function parseWavToPcm16(bytes: Uint8Array): Pcm16 {
       channels = view.getUint16(body + 2, true);
       sampleRate = view.getUint32(body + 4, true);
       bitsPerSample = view.getUint16(body + 14, true);
+      if (format === WAVE_FORMAT_EXTENSIBLE) {
+        // The real encoding is the first two bytes of the SubFormat GUID at
+        // body+24, and the rest of the GUID has to be the KSDATAFORMAT one for
+        // those two bytes to mean anything.
+        if (size < 40 || body + 40 > bytes.length) {
+          throw new AudioStegoError("This WAV's format chunk is malformed or truncated.");
+        }
+        const suffixOk = KSDATAFORMAT_SUFFIX.every((b, i) => bytes[body + 26 + i] === b);
+        format = suffixOk ? view.getUint16(body + 24, true) : 0;
+      }
     } else if (id === "data") {
       dataOffset = body;
       dataLength = Math.min(size, bytes.length - body);
@@ -198,14 +222,37 @@ export function parseWavToPcm16(bytes: Uint8Array): Pcm16 {
   }
 
   if (dataOffset < 0) throw new AudioStegoError("This WAV has no audio data.");
-  if (format !== 1 || bitsPerSample !== 16) {
-    throw new AudioStegoError("Only 16-bit PCM WAV is supported. Re-export the audio as 16-bit PCM WAV.");
+  const pcm = format === WAVE_FORMAT_PCM && [8, 16, 24, 32].includes(bitsPerSample);
+  const float = format === WAVE_FORMAT_IEEE_FLOAT && (bitsPerSample === 32 || bitsPerSample === 64);
+  if (!pcm && !float) {
+    throw new AudioStegoError(
+      "This WAV's encoding cannot be read. Re-export it as PCM (8, 16, 24 or 32-bit) or float WAV."
+    );
   }
   if (channels < 1) throw new AudioStegoError("This WAV declares no channels.");
 
-  const sampleCount = Math.floor(dataLength / 2);
+  const width = bitsPerSample / 8;
+  const sampleCount = Math.floor(dataLength / width);
   const samples = new Int16Array(sampleCount);
-  for (let i = 0; i < sampleCount; i++) samples[i] = view.getInt16(dataOffset + i * 2, true);
+  for (let i = 0; i < sampleCount; i++) {
+    const at = dataOffset + i * width;
+    let v: number;
+    if (float) {
+      // The same single scale decodeToPcm16 uses, and its inverse of s / 32768.
+      const f = width === 4 ? view.getFloat32(at, true) : view.getFloat64(at, true);
+      v = Number.isFinite(f) ? Math.round(f * 32768) : 0;
+    } else if (width === 2) {
+      v = view.getInt16(at, true);
+    } else if (width === 1) {
+      v = (view.getUint8(at) - 128) * 256; // 8-bit WAV is unsigned
+    } else if (width === 3) {
+      const u = view.getUint8(at) | (view.getUint8(at + 1) << 8) | (view.getUint8(at + 2) << 16);
+      v = Math.round((u & 0x800000 ? u - 0x1000000 : u) / 256);
+    } else {
+      v = Math.round(view.getInt32(at, true) / 65536);
+    }
+    samples[i] = clamp16(v);
+  }
   return { sampleRate, channels, samples };
 }
 
@@ -243,8 +290,9 @@ export function writePcm16Wav(pcm: Pcm16): Uint8Array {
  *
  * A lossy input (MP3, Ogg, AAC) is decoded to float PCM and re-quantised to
  * 16-bit here; those samples become the lossless master the payload is embedded
- * into. WAV that is already 16-bit PCM is parsed directly by `parseWavToPcm16`
- * so its exact samples survive; this path is for everything else.
+ * into. A WAV is parsed directly by `parseWavToPcm16` whatever its depth, so
+ * its sample rate is kept and 16-bit samples survive exactly; this path is for
+ * everything else.
  *
  * `ctxFactory` is injected so a test can supply an AudioContext; in the app it
  * defaults to the platform one.

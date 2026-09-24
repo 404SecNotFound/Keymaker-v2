@@ -8,15 +8,15 @@
  * is never routed to the AEAD (where "decryption failed" would send someone to
  * retype a password that was never wrong). scripts/audio-wav-bounds-test.mjs
  * pins the fmt-bounds case; this pins the rest of the surface:
- *   - parseWavToPcm16: not RIFF/WAVE, no data chunk, non-PCM format, non-16-bit,
- *     zero channels;
+ *   - parseWavToPcm16: not RIFF/WAVE, no data chunk, an encoding it does not
+ *     read (ADPCM, 12-bit PCM, 16-bit float), zero channels;
  *   - extractContainer: no KAUD marker, an unreadable version or bit depth, an
  *     empty declared payload, and a payload length that runs past the carrier.
  *
  * esbuild bundles the TS the way the rest of the project reaches its `.ts`.
  * Controls shown to bite (see the two reverts documented inline): removing the
  * payload-length bound makes the over-long-payload case return garbage instead
- * of throwing, and removing the format/bit-depth check makes a 24-bit file be
+ * of throwing, and removing the format/bit-depth check makes an ADPCM file be
  * misread rather than refused.
  */
 import esbuild from "esbuild";
@@ -73,11 +73,16 @@ rejectsAudioStego(() => parseWavToPcm16(new Uint8Array(64).fill(0x41)), "a non-R
 // RIFF/WAVE with a fmt chunk but no data chunk.
 rejectsAudioStego(() => parseWavToPcm16(riff(fmtChunk({}))), "a WAV with no data chunk is refused");
 
-// Non-PCM format (3 = IEEE float) — must be refused, not misread.
-rejectsAudioStego(() => parseWavToPcm16(riff(fmtChunk({ format: 3 }), dataChunk())), "a non-PCM (float) WAV is refused");
+// An encoding the parser does not read (2 = ADPCM) — refused, not misread.
+// Float and 24-bit used to be refused here too; they are converted now, and
+// scripts/audio-wav-depths-test.mjs pins that.
+rejectsAudioStego(() => parseWavToPcm16(riff(fmtChunk({ format: 2 }), dataChunk())), "an ADPCM WAV is refused");
 
-// 24-bit PCM — the LSB scheme is defined on 16-bit ints.
-rejectsAudioStego(() => parseWavToPcm16(riff(fmtChunk({ bits: 24 }), dataChunk())), "a 24-bit WAV is refused");
+// A PCM depth with no whole-byte sample width to read.
+rejectsAudioStego(() => parseWavToPcm16(riff(fmtChunk({ bits: 12 }), dataChunk())), "a 12-bit WAV is refused");
+
+// Float at a width that is not 32 or 64.
+rejectsAudioStego(() => parseWavToPcm16(riff(fmtChunk({ format: 3, bits: 16 }), dataChunk())), "a 16-bit float WAV is refused");
 
 // Zero channels.
 rejectsAudioStego(() => parseWavToPcm16(riff(fmtChunk({ channels: 0 }), dataChunk())), "a WAV declaring no channels is refused");

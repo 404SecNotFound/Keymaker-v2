@@ -82,8 +82,9 @@ function looksLikeWav(file: File): boolean {
   return /audio\/(wav|x-wav|wave|vnd\.wave)/i.test(file.type) || /\.wav$/i.test(file.name);
 }
 
-/** Decode any carrier to 16-bit PCM. WAV is parsed exactly so its samples (and
- *  therefore any embedded LSBs) survive; everything else goes through Web Audio. */
+/** Decode any carrier to 16-bit PCM. WAV of any PCM or float depth is parsed
+ *  directly, never resampled, so 16-bit samples (and therefore any embedded
+ *  LSBs) survive; everything else goes through Web Audio. */
 async function decodeCarrier(file: File): Promise<Pcm16> {
   const buffer = await file.arrayBuffer();
   if (looksLikeWav(file) || isWavBytes(new Uint8Array(buffer))) {
