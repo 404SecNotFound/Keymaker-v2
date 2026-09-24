@@ -133,7 +133,9 @@ v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
   a saved self-extracting page, paper parts, a shares file) was read as a
   legacy blob and reported as a wrong password. It is now read as what it is.
 - **The idle lock no longer fires in the middle of an operation**, and a Stop
-  pressed while a large file is still being read now stops it.
+  pressed while a large file is still being read now stops it. With Passkey
+  quick access on, that Stop never asks the authenticator or mints a passkey,
+  and a test now covers it.
 - **A QR scan that finishes after a tab switch or a wipe is dropped** instead
   of landing in whatever form is showing.
 - **Notices say what happened:** no "nothing was pasted" beside a paste that
@@ -166,6 +168,40 @@ v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
   conformance suite opens the fixtures "under whatever version is installed"
   of the two libraries, when CI installs exact pinned versions only. The Step
   2 and Step 4 comments now say `v3 or v2`.
+- **The self-extracting page kept what it had recovered.** A later failed
+  attempt left the plaintext in the hidden text box, a binary result left the
+  previous text there, and the save link's blob URL was never revoked. Each
+  attempt now clears all three first. The password box no longer asks the
+  browser to save the backup's password. Pages written earlier carry their own
+  copy of the decryptor and are unchanged.
+- **The self-extract refusal gave the wrong reason.** A chained backup was
+  described as ChaCha20-Poly1305, and a backup opened only by shares or a
+  passkey was told its password slot used Argon2id. It now says chained, and
+  that the backup has no password slot.
+- **Audio Hide refused 24-bit, 32-bit, float and `WAVE_FORMAT_EXTENSIBLE`
+  WAVs** as "Only 16-bit PCM WAV is supported", while FORMAT-AUDIO-STEGO.md
+  promised any WAV. They are now read directly at their own sample rate and
+  scaled to 16 bits, never through Web Audio, which resamples. A stego WAV
+  re-saved losslessly at a greater depth still reveals. ADPCM, A-law and µ-law
+  WAVs are still refused, and the document says so.
+- **The sealed panel claimed more than the policy enforces.** "Forbidden to
+  talk to any server, for every request to anywhere" is not something a page
+  CSP can do. The panel now says what is blocked and names what is not
+  covered (sending the tab to another address, WebRTC, requests for the site's
+  own files, workers), and a test fails if it goes back to the total claim.
+- **A module that failed to load could still read as a wrong password.** The
+  KEYM v2 module itself, and the Shamir code used when adding shares, were
+  imported without the typed "could not be loaded" error the other lazily
+  loaded modules use.
+- **Decoded share records were not erased.** The record a share decodes to,
+  the checksum input built from it, a record refused for its padding bits, and
+  the value dropped by two callers that needed only a share's set id or index
+  (the password-and-shares check and the printout check) are now zeroed.
+- **`keym2.py` comments said v2 is what it writes** (v3 is the default) and
+  named `--outfile` (the flag is `--out`). The comment calling the slot walk's
+  error guard "defence in depth" was wrong. §6's range admits
+  `memory_kib=1` with `parallelism=8`, and that guard is what keeps such a slot
+  from blocking a valid one. The self-test now builds that container.
 - **Build and release:** a checkout path with spaces builds; deploy and release
   refuse to sign bytes the independent builds did not reproduce; the reference
   self-tests run on Python 3.10, now from a hash-pinned closure resolved for
