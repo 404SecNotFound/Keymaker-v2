@@ -231,8 +231,9 @@ VERSION = VERSION_V3
 # header is authenticated by the payload, each slot prefix by its own wrap, and
 # slot_count by neither.
 #
-# The unsuffixed names are v2's, kept because v2 is still what this file writes
-# and what most of the selftest exercises. v3 widens the core header and inserts
+# The unsuffixed names are v2's, kept because most of the selftest and the
+# frozen corpus exercise v2, though v3 is what this file writes by default
+# (VERSION above) and `--v2` opts back into v2. v3 widens the core header and inserts
 # the slot-table MAC ahead of the table, so every offset past byte 4 moves;
 # `core_header_len`, `slot_count_offset` and `slot_table_offset` below are the
 # version-dependent forms, and code that can see either version uses those.
@@ -1149,12 +1150,15 @@ def unwrap_master_key_from_slot(core: CoreHeader, record: bytes, slot: Slot,
     """
     # §4.4/F6: a slot that cannot be used disqualifies itself, never the walk.
     #
-    # Defence in depth here rather than a live bug. This reader's §6 floor on
-    # memory_kib already rejects the case that broke the TypeScript one — a
-    # slot declaring mem=1 with p=8, each inside §6's independent ranges and
-    # together illegal for Argon2id, which raises inside the KDF. There the
-    # exception escaped the whole slot walk, so six rewritten bytes in slot 0
-    # made a container unopenable through an untouched, valid slot 1.
+    # This is the live guard, not defence in depth. §6's range for memory_kib
+    # starts at 1 (ARGON2_MEM_MIN), so parse_slot accepts the case that broke
+    # the TypeScript reader: a slot declaring mem=1 with p=8, each inside §6's
+    # independent ranges and together illegal for Argon2id, which raises inside
+    # the KDF. check_writable_params refuses to *write* that pair; nothing
+    # refuses to read it. In the TypeScript reader the exception escaped the
+    # whole slot walk, so six rewritten bytes in slot 0 made a container
+    # unopenable through an untouched, valid slot 1. The self-test builds that
+    # container and fails if this try/except goes.
     #
     # Worth noting what that divergence means: the two implementations disagree
     # about whether such a container is readable at all, and the byte-for-byte
@@ -2083,11 +2087,11 @@ def encrypt(
     container_id: Optional[bytes] = None,
 ) -> bytes:
     """
-    Write a single-slot container — v2 by default, v3 on request.
+    Write a single-slot container, v3 by default and v2 on request.
 
-    ``version=VERSION_V3`` is the opt-in described at ``VERSION`` above: the
-    format is specified and implemented here, and stays off by default until the
-    TypeScript core can be held to the same bytes.
+    The default is ``VERSION`` above, which moved to v3 once the TypeScript core
+    was held to the same bytes. ``version=VERSION_V2`` still writes v2, for the
+    frozen corpus or a reader that predates v3.
 
     ``salt``, ``master_key`` and ``container_id`` exist for cross-implementation
     byte comparison and nothing else. §4.5 forbids caller-supplied values for
@@ -3680,6 +3684,29 @@ def _selftest() -> int:
     rejects("container whose every slot type is unknown",
             lambda: decrypt(retype(alien_first, 1, 0x7F), pw2))
 
+    # §4.4/F6, the case that broke the TypeScript reader: slot 0 declares
+    # Argon2id with memory_kib=1 and parallelism=8. Each value is inside §6's
+    # independent ranges (ARGON2_MEM_MIN is 1), so parse_slot accepts the slot,
+    # and the pair is illegal for Argon2id, so the KDF raises. The try/except in
+    # unwrap_master_key_from_slot is the only thing keeping that exception out
+    # of the walk. Caught broadly here, because what escapes without it is the
+    # argon2 library's own error rather than a KeymError.
+    argon_first = add_slot(
+        encrypt(b"tamper me", pw, kdf_id=KDF_ARGON2ID, cipher_id=CIPHER_AES,
+                version=VERSION_V2, **fast),
+        pw, pw2, kdf_id=KDF_PBKDF2, **fast)
+    bad_pair = bytearray(argon_first)
+    struct.pack_into(">HIB", bad_pair, SLOT_TABLE_OFFSET + 40, 1, 1, 8)
+    bad_slot = _attemptable(bytes(bad_pair[SLOT_TABLE_OFFSET:SLOT_TABLE_OFFSET + slot_len(CIPHER_AES)]))
+    check("a slot declaring memory_kib=1, parallelism=8 is inside §6's ranges",
+          bad_slot is not None and bad_slot.memory_kib == 1 and bad_slot.parallelism == 8)
+    try:
+        opened = decrypt(bytes(bad_pair), pw2)
+    except Exception as e:  # noqa: BLE001 - the point is to report, not crash
+        opened = f"{type(e).__name__}: {e}"
+    check("an Argon2id slot with memory_kib < 8 × parallelism does not stop the "
+          "walk reaching a valid slot", opened == b"tamper me")
+
     # Finding A6: a per-slot failure is scoped to the slot, never to the
     # container.
     #
@@ -4757,7 +4784,7 @@ def _selftest() -> int:
     check("armor accepts a standard-alphabet slash, as the browser does",
           dearmor("keym2:AAAA//AA") == bytes.fromhex("000000fff000"))
 
-    # `--outfile` must not leave a secret world-readable. The decrypt path
+    # `--out` must not leave a secret world-readable. The decrypt path
     # writes the plaintext through this helper, so on a shared machine the mode
     # is the only thing between an heir's seed phrase and every other account.
     import stat as _stat
@@ -4768,9 +4795,9 @@ def _selftest() -> int:
         with open_private(_fresh) as _fh:
             _fh.write(b"seed phrase")
         _mode = _stat.S_IMODE(os.stat(_fresh).st_mode)
-        check("a new --outfile is not readable by group or other",
+        check("a new --out file is not readable by group or other",
               _mode & 0o077 == 0)
-        check("a new --outfile is still readable by its owner", _mode & 0o400 != 0)
+        check("a new --out file is still readable by its owner", _mode & 0o400 != 0)
         check("open_private actually wrote the bytes",
               open(_fresh, "rb").read() == b"seed phrase")
 
@@ -4784,7 +4811,7 @@ def _selftest() -> int:
               _stat.S_IMODE(os.stat(_existing).st_mode) == 0o644)
         with open_private(_existing) as _fh:
             _fh.write(b"new plaintext")
-        check("an existing world-readable --outfile is narrowed, not left alone",
+        check("an existing world-readable --out file is narrowed, not left alone",
               _stat.S_IMODE(os.stat(_existing).st_mode) & 0o077 == 0)
 
     # Key material passed as an argument is in the shell history and was in the
@@ -4925,9 +4952,9 @@ def _selftest() -> int:
         # =====================================================================
         #
         # Only the delta: the widened core header, container_id, and the slot-table
-        # MAC. Everything above this line is v2 and stays v2 — this file still
-        # *writes* v2 by default, so those checks are testing the shipping writer,
-        # not a legacy path.
+        # MAC. Everything above this line is v2 and stays v2. v3 is the default
+        # writer now (VERSION), but v2 is still written on request and read
+        # forever, so those checks test a shipping path, not a legacy one.
 
         def strip_slot(container: bytes, index: int) -> bytes:
             """
@@ -5313,7 +5340,7 @@ def open_private(path: str):
     the plaintext, so an heir following RECOVERY.md on a shared machine writes
     a seed phrase every other account can read, and nothing tells them.
 
-    Applied to every `--outfile` write, not only the plaintext one. A container
+    Applied to every `--out` write, not only the plaintext one. A container
     is not secret, so this is stricter than it needs to be there; one rule with
     no exceptions is the version that survives the next subcommand being added,
     where a conditional is the thing someone forgets. Widening afterwards is
