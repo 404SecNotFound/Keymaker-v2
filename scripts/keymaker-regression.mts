@@ -1102,6 +1102,86 @@ async function main() {
     );
   }
 
+  // ---- 9. §7.2's refusal names what the container actually uses ----
+  //
+  // webcryptoProfileViolations is shown to the owner as the reason their backup
+  // cannot become a page. It used to call every non-AES cipher ChaCha20-Poly1305,
+  // chained mode included, and to tell a backup with no password slot at all
+  // that its "password slot uses Argon2id". Both sent the owner looking for a
+  // setting they had not chosen.
+  {
+    console.log("\n9. The self-extract refusal describes this container");
+    const { webcryptoProfileViolations } = await import("../src/lib/keym-v2-selfextract.ts");
+    const {
+      encryptKeym2,
+      addPasskeySlotKeym2,
+      addShamirSlotKeym2,
+      keym2SlotLen,
+      KEYM2_VERSION_V2,
+    } = await import("../src/lib/keym-v2.ts");
+    const pt = enc.encode("self-extract reasons");
+    const secrets = { password: PASSWORD, keyFile: null };
+
+    // v2 carries no slot_table_mac, so dropping slot 0 leaves a container whose
+    // only way in is the slot that was added after it. That is the shape a
+    // share-only or passkey-only backup has; this function reads structure only.
+    const withoutSlot0 = (c: Uint8Array, cipher: CipherId): Uint8Array => {
+      const TABLE = 9;
+      const w = keym2SlotLen(cipher);
+      const out = new Uint8Array(c.length - w);
+      out.set(c.subarray(0, TABLE));
+      out.set(c.subarray(TABLE + w), TABLE);
+      out[8] = (c[8] as number) - 1;
+      return out;
+    };
+    const aes = { kdf: PBKDF2_FAST, cipher: CipherId.AES_256_GCM };
+    const pbkdf2Aes = await encryptKeym2(pt, PASSWORD, null, aes, KEYM2_VERSION_V2);
+
+    const accepted = webcryptoProfileViolations(pbkdf2Aes);
+    check(accepted.length === 0, `a PBKDF2/AES backup is inside the subset (got ${JSON.stringify(accepted)})`);
+
+    const chained = webcryptoProfileViolations(
+      await encryptKeym2(pt, PASSWORD, null, { kdf: PBKDF2_FAST, cipher: CipherId.CHAINED }, KEYM2_VERSION_V2)
+    );
+    check(
+      chained.length === 1 && /chained/i.test(chained[0]!),
+      `a chained backup is called chained (got ${JSON.stringify(chained)})`
+    );
+
+    const chacha = webcryptoProfileViolations(
+      await encryptKeym2(pt, PASSWORD, null, { kdf: PBKDF2_FAST, cipher: CipherId.CHACHA20_POLY1305 }, KEYM2_VERSION_V2)
+    );
+    check(
+      chacha.length === 1 && /ChaCha20-Poly1305/.test(chacha[0]!) && !/chained/i.test(chacha[0]!),
+      `a ChaCha20-Poly1305 backup is called that, not chained (got ${JSON.stringify(chacha)})`
+    );
+
+    const argon = webcryptoProfileViolations(
+      await encryptKeym2(pt, PASSWORD, null, { kdf: ARGON_FAST, cipher: CipherId.AES_256_GCM }, KEYM2_VERSION_V2)
+    );
+    check(
+      argon.length === 1 && /Argon2id/.test(argon[0]!),
+      `an Argon2id password still names Argon2id (got ${JSON.stringify(argon)})`
+    );
+
+    const prf = new Uint8Array(32).fill(7);
+    const prfSalt = new Uint8Array(32).fill(9);
+    const passkeyOnly = webcryptoProfileViolations(
+      withoutSlot0(await addPasskeySlotKeym2(pbkdf2Aes, secrets, prf, prfSalt), CipherId.AES_256_GCM)
+    );
+    check(
+      passkeyOnly.length === 1 && !/Argon2id/.test(passkeyOnly[0]!) && /passkey/.test(passkeyOnly[0]!),
+      `a passkey-only backup is not told its password uses Argon2id (got ${JSON.stringify(passkeyOnly)})`
+    );
+
+    const { container: withShares } = await addShamirSlotKeym2(pbkdf2Aes, secrets, 2, 3);
+    const sharesOnly = webcryptoProfileViolations(withoutSlot0(withShares, CipherId.AES_256_GCM));
+    check(
+      sharesOnly.length === 1 && !/Argon2id/.test(sharesOnly[0]!) && /shares/.test(sharesOnly[0]!),
+      `a share-only backup is not told its password uses Argon2id (got ${JSON.stringify(sharesOnly)})`
+    );
+  }
+
   // ---- Summary ----
   console.log(`\n${passed} passed, ${failures} failed`);
   if (failures > 0) {

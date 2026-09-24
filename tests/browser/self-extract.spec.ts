@@ -352,4 +352,98 @@ test.describe("§7.2 self-extracting page", () => {
     expect(await offline.isHidden("#result")).toBe(true);
     await offline.close();
   });
+
+  test("nothing an earlier attempt recovered outlives the next one", async ({
+    context,
+  }, testInfo) => {
+    // Hiding #result is what the tests above check, and it is not the same as
+    // forgetting: a hidden textarea keeps its value, a binary result used to
+    // leave the previous text in it, and a blob URL nobody revokes keeps
+    // serving the plaintext. Each assertion below is the one that fails when
+    // its line in forget() is removed.
+    const textPt = testInfo.outputPath("forget-text.txt");
+    const textC = testInfo.outputPath("forget-text.keym2");
+    const textPage = testInfo.outputPath("forget-text.html");
+    writeFileSync(textPt, SECRET, "utf8");
+    bridge("encrypt2", "--password", STRONG_PASSWORD, "--in", textPt, "--out", textC,
+      "--cipher", "aes", "--salt", SE_SALT, "--master-key", SE_MASTER_KEY,
+      "--kdf", "pbkdf2", "--iterations", "600000");
+    bridge("selfextract", "--in", textC, "--out", textPage);
+
+    // Not valid UTF-8, so the page shows no text for it and offers the file only.
+    const binPt = testInfo.outputPath("forget-bin.bin");
+    const binC = testInfo.outputPath("forget-bin.keym2");
+    const binPage = testInfo.outputPath("forget-bin.html");
+    writeFileSync(binPt, Buffer.from([0xff, 0xfe, 0x00, 0x80, 0xc3, 0x28, 0x01]));
+    bridge("encrypt2", "--password", STRONG_PASSWORD, "--in", binPt, "--out", binC,
+      "--cipher", "aes", "--salt", SE_PK_SALT, "--master-key", SE_PK_PRF,
+      "--kdf", "pbkdf2", "--iterations", "600000");
+    bridge("selfextract", "--in", binC, "--out", binPage);
+    const binArmor = (readFileSync(binPage, "utf8")
+      .match(/<pre id="keym2-container">([\s\S]*?)<\/pre>/)?.[1] ?? "")
+      .replace(/<!--KEYM2-(BEGIN|END)-->/g, "");
+    expect(binArmor.trim().startsWith("keym2:"), "could not read the binary page's armor").toBe(true);
+
+    const offline = await context.newPage();
+    const pageErrors: string[] = [];
+    offline.on("pageerror", (e) => pageErrors.push(e.message));
+    await offline.addInitScript(() => {
+      const w = window as unknown as { __revoked: string[] };
+      w.__revoked = [];
+      const revoke = URL.revokeObjectURL.bind(URL);
+      URL.revokeObjectURL = (u: string) => {
+        w.__revoked.push(u);
+        revoke(u);
+      };
+    });
+    await offline.goto(`file://${textPage}`);
+
+    // The backup's password is not something the heir's machine should keep.
+    expect(await offline.getAttribute("#pw", "autocomplete")).toBe("off");
+
+    const open = async () => {
+      await offline.fill("#pw", STRONG_PASSWORD);
+      await offline.click("#go");
+      await offline.waitForSelector("#result:not([hidden])", { timeout: 90_000 });
+    };
+    const refuse = async () => {
+      await offline.fill("#pw", "not the password");
+      await offline.click("#go");
+      await offline.waitForFunction(
+        () => document.querySelector("#status")?.className === "bad",
+        null,
+        { timeout: 90_000 }
+      );
+    };
+    const revoked = () =>
+      offline.evaluate(() => (window as unknown as { __revoked: string[] }).__revoked);
+
+    await open();
+    expect(await offline.inputValue("#out")).toBe(SECRET);
+    const firstUrl = (await offline.getAttribute("#save", "href")) ?? "";
+    expect(firstUrl.startsWith("blob:"), `the save link is ${firstUrl}`).toBe(true);
+
+    await refuse();
+    expect(await offline.isHidden("#result")).toBe(true);
+    expect(await offline.inputValue("#out"), "a failed attempt left the plaintext in #out").toBe("");
+    expect(await revoked(), "the earlier blob URL was never revoked").toContain(firstUrl);
+    expect(await offline.getAttribute("#save", "href")).toBe("#");
+
+    // Text again, then a binary result: the binary one must not show, or keep,
+    // the text before it.
+    await open();
+    expect(await offline.inputValue("#out")).toBe(SECRET);
+    const secondUrl = (await offline.getAttribute("#save", "href")) ?? "";
+    await offline.evaluate((armor) => {
+      document.getElementById("keym2-container")!.textContent = armor;
+    }, binArmor);
+    await open();
+    expect(await offline.isHidden("#out")).toBe(true);
+    expect(await offline.inputValue("#out"), "a binary result kept the earlier text").toBe("");
+    expect(await revoked()).toContain(secondUrl);
+    expect(((await offline.getAttribute("#save", "href")) ?? "").startsWith("blob:")).toBe(true);
+
+    expect(pageErrors).toEqual([]);
+    await offline.close();
+  });
 });
