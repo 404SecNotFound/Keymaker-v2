@@ -255,8 +255,14 @@ export async function shareSetId(slotSalt: Uint8Array): Promise<Uint8Array> {
 }
 
 async function shareChecksum(body: Uint8Array): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_SHARE_CHECKSUM, body]) as BufferSource);
-  return new Uint8Array(digest).slice(0, SHARE_CHECKSUM_LEN);
+  // The body carries the share value, so its copy here is erased like the value.
+  const input = concat([CTX_SHARE_CHECKSUM, body]);
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", input as BufferSource);
+    return new Uint8Array(digest).slice(0, SHARE_CHECKSUM_LEN);
+  } finally {
+    secureErase(input);
+  }
 }
 
 export interface Share {
@@ -370,9 +376,13 @@ export function b32Decode(text: string, nbytes: number): Uint8Array {
       bits -= 8;
     }
   }
-  // Whatever is left is padding, and §4.6 requires it to be zero.
-  if (bits > 0 && (acc & ((1 << bits) - 1)) !== 0) reject();
-  if (at !== nbytes) reject();
+  // Whatever is left is padding, and §4.6 requires it to be zero. A record
+  // refused here has already been decoded in full, share value included, and
+  // nobody else holds it to erase.
+  if ((bits > 0 && (acc & ((1 << bits) - 1)) !== 0) || at !== nbytes) {
+    secureErase(out);
+    reject();
+  }
   return out;
 }
 
@@ -388,7 +398,15 @@ export async function encodeShare(share: Share): Promise<string> {
 export async function decodeShare(text: string): Promise<Share> {
   const stripped = stripIgnorable(text);
   if (!asciiUpper(stripped).startsWith(SHARE_PREFIX)) reject();
-  return parseShare(b32Decode(stripped.slice(SHARE_PREFIX.length), SHARE_LEN));
+  // The decoded record carries the share value, and parseShare copies what it
+  // keeps. So the record is erased here, whether it parsed or not; the value in
+  // the returned Share is the caller's to erase (combineShares does).
+  const record = b32Decode(stripped.slice(SHARE_PREFIX.length), SHARE_LEN);
+  try {
+    return await parseShare(record);
+  } finally {
+    secureErase(record);
+  }
 }
 
 /**
@@ -530,8 +548,13 @@ export function shareTextSetCode(text: string): string | null {
 }
 
 async function shareChecksumV2(body: Uint8Array): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_SHARE_CHECKSUM, body]) as BufferSource);
-  return new Uint8Array(digest).slice(0, SHARE2_CHECKSUM_LEN);
+  const input = concat([CTX_SHARE_CHECKSUM, body]);
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", input as BufferSource);
+    return new Uint8Array(digest).slice(0, SHARE2_CHECKSUM_LEN);
+  } finally {
+    secureErase(input);
+  }
 }
 
 export async function packShareV2(share: Share): Promise<Uint8Array> {
@@ -577,7 +600,13 @@ export async function encodeShareV2(share: Share): Promise<string> {
 export async function decodeShareV2(text: string): Promise<Share> {
   const stripped = stripIgnorable(text);
   if (!asciiUpper(stripped).startsWith(SHARE2_PREFIX)) reject();
-  return parseShareV2(b32Decode(stripped.slice(SHARE2_PREFIX.length), SHARE2_LEN));
+  // As decodeShare: the record is erased, the returned value is the caller's.
+  const record = b32Decode(stripped.slice(SHARE2_PREFIX.length), SHARE2_LEN);
+  try {
+    return await parseShareV2(record);
+  } finally {
+    secureErase(record);
+  }
 }
 
 /** Dispatch on the version digit: §4.6 `KMSHARE1` or its v2 `KMSHARE2`. */

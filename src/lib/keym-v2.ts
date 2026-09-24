@@ -1726,7 +1726,13 @@ export async function sharesNeedPasswordKeym2(data: Uint8Array, shares: string[]
     const width = keym2SlotLen(core.cipher);
     const table = keym2SlotTableOffset(core.version);
     const ids: Uint8Array[] = [];
-    for (const text of shares) ids.push((await decodeShareAny(text)).setId);
+    for (const text of shares) {
+      // Only the set id is wanted. The value is key material, so it is erased
+      // rather than dropped.
+      const share = await decodeShareAny(text);
+      ids.push(share.setId);
+      secureErase(share.value);
+    }
     for (let i = 0; i < slotCount; i++) {
       const slot = parseKeym2Slot(data.subarray(table + i * width, table + (i + 1) * width));
       if (slot === null || slot.slotType !== KEYM2_SLOT_TYPE_BOTH) continue;
@@ -1768,7 +1774,7 @@ export async function addShamirSlotKeym2(
   count: number,
   explicit?: { salt?: Uint8Array; shareSecret?: Uint8Array; coefficients?: Uint8Array }
 ): Promise<Keym2ShareSet> {
-  const { shamirSplit, shareSetIdV2, encodeShareV2, SHARE_VALUE_LEN } = await import("./keym-v2-shamir");
+  const { shamirSplit, shareSetIdV2, encodeShareV2, SHARE_VALUE_LEN } = await loadShamir();
 
   const parsed = parseKeym2Container(container);
   if (parsed.records.length >= KEYM2_MAX_SLOTS) {

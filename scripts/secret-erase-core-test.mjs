@@ -6,8 +6,9 @@
  * `secret-erase-test.mjs` checks buffers the caller can see. The ones here are
  * internal: the length-prefixed copy of a password inside the KDF input, the
  * joined key file a digest is taken over, a share value decoded from a set that
- * then turned out to contain a malformed share. None of them is reachable from
- * outside the call that made it, so this takes a census instead.
+ * then turned out to contain a malformed share, the decoded share record itself.
+ * None of them is reachable from outside the call that made it, so this takes a
+ * census instead.
  *
  * ## The census
  *
@@ -246,7 +247,8 @@ for (const [name, password, keyFile] of [
 //
 // Matched exactly (a buffer that *is* a share value), because the decoded
 // record b32Decode returns also carries the value inside it, and that buffer
-// belongs to decodeShare, not to combineShares. It is not asserted here.
+// belongs to decodeShare, not to combineShares. The finding-7 block below
+// asserts it.
 // ---------------------------------------------------------------------------
 {
   const { entry } = fixture("v3-shamir-aes256gcm");
@@ -357,6 +359,182 @@ for (const [name, password, keyFile] of [
   ok(second === null && Buffer.from(opened.data).toString() === entry.plaintext,
      "once the chunk is reachable the same call opens the container (the failure was not cached)",
      second ? String(second.message).slice(0, 100) : "");
+}
+
+// ---------------------------------------------------------------------------
+// Finding 7: the record b32Decode returns is the whole share, value included,
+// and parseShare copies what it keeps. Nothing erased the record, nor the
+// checksum input built from it, nor a record b32Decode itself refused for its
+// padding bits. And two callers decoded a share only for its set id or index
+// and dropped the value unerased: sharesNeedPasswordKeym2 and the printout
+// check. The finding-4 block above could not assert any of this because the
+// record was nobody's to erase; decodeShare owns it now.
+// ---------------------------------------------------------------------------
+{
+  const extra = await bundle(
+    "share-callers",
+    `export { sharesNeedPasswordKeym2 } from "./keym-v2";
+     export { checkPrintoutCode } from "./printout-check";`
+  );
+  const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  const { entry: v1Entry, bytes: v1Bytes } = fixture("v3-shamir-aes256gcm");
+  const { entry: bothEntry, bytes: bothBytes } = fixture("v3-both-aes256gcm");
+  const v1Shares = v1Entry.shamir.shares.slice(0, v1Entry.shamir.threshold);
+  const v2Shares = bothEntry.both.shares.slice(0, bothEntry.both.threshold);
+  const valueOf = async (text) => (await m.decodeShareAny(text)).value; // census off
+  const survivors = (seen, values, except = []) =>
+    values.flatMap((v) => holders(seen, v, { except }));
+
+  for (const [label, text] of [["KMSHARE1", v1Shares[0]], ["KMSHARE2", v2Shares[0]]]) {
+    const value = await valueOf(text);
+    const run = await observe(() => m.decodeShareAny(text));
+    ok(run.error === null, `${label}: decodes`, String(run.error));
+    const left = run.error ? [] : holders(run.seen, value, { except: [run.value.value.buffer] });
+    ok(left.length === 0, `${label}: decoding leaves no copy of the value but the one returned`, none(left));
+  }
+
+  for (const [label, shares] of [["KMSHARE1", v1Shares], ["KMSHARE2", v2Shares]]) {
+    const values = await Promise.all(shares.map(valueOf));
+    const run = await observe(() => m.combineShares(shares));
+    ok(run.error === null, `${label}: a good set combines`, String(run.error));
+    const left = survivors(run.seen, values);
+    ok(left.length === 0, `${label}: no share value survives a successful combine`, none(left));
+  }
+
+  // A checksum character changed: the record decodes, parseShare refuses it,
+  // and the value in it is still the genuine one. Group 5 onward is past the
+  // 4-byte set id, the two header bytes and the 32-byte value.
+  {
+    const text = v1Shares[0];
+    const value = await valueOf(text);
+    const at = text.length - 3;
+    const swapped = text.slice(0, at) + (text[at] === "0" ? "1" : "0") + text.slice(at + 1);
+    const run = await observe(() => m.combineShares([swapped, ...v1Shares.slice(1)]), 100);
+    ok(run.error !== null, "a share whose checksum no longer matches is refused");
+    const left = holders(run.seen, value);
+    ok(left.length === 0, "the refused share's value is erased with its record", none(left));
+  }
+
+  // Padding bits set in the last character: b32Decode has decoded the whole
+  // record, value included, before it looks at them.
+  {
+    const text = v1Shares[0];
+    const value = await valueOf(text);
+    const last = B32.indexOf(text[text.length - 1]);
+    const padded = text.slice(0, -1) + B32[last | 1];
+    ok(padded !== text, "the padding-bit share really differs from the original");
+    const run = await observe(() => m.combineShares([padded, ...v1Shares.slice(1)]), 100);
+    ok(run.error !== null, "a share with non-zero padding bits is refused");
+    const left = holders(run.seen, value);
+    ok(left.length === 0, "b32Decode erases a record it refuses for its padding", none(left));
+  }
+
+  {
+    const values = await Promise.all(v2Shares.map(valueOf));
+    const run = await observe(() => extra.sharesNeedPasswordKeym2(bothBytes, v2Shares));
+    ok(run.error === null && run.value === true, "sharesNeedPasswordKeym2 sees the password-and-shares slot",
+       String(run.error ?? run.value));
+    const left = survivors(run.seen, values);
+    ok(left.length === 0, "sharesNeedPasswordKeym2 keeps no share value", none(left));
+  }
+
+  {
+    const value = await valueOf(v1Shares[0]);
+    const run = await observe(() => extra.checkPrintoutCode(v1Shares[0], { container: v1Bytes, header: null }));
+    ok(run.error === null && run.value?.kind === "strip" && run.value?.belongs === "yes",
+       "the printout check reads a strip and places it in its backup",
+       String(run.error ?? JSON.stringify(run.value)));
+    const left = holders(run.seen, value);
+    ok(left.length === 0, "the printout check keeps no share value", none(left));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The same failure one level up. keymaker-crypto.ts reaches keym-v2.ts through a
+// dynamic import on every v2/v3 path (decrypt, encrypt, encrypt-with-shares),
+// and addShamirSlotKeym2 reached the Shamir module through a bare import() of
+// its own rather than loadShamir(). Each rejected with the runtime's error, so
+// an unreachable chunk surfaced as a wrong password or "Encryption failed".
+// Modelled the way the block above is: a real dynamic import of a file that
+// does not exist yet, then the file is written and the call is made again.
+// ---------------------------------------------------------------------------
+{
+  const CHUNK = "keym-v2.late-chunk.mjs";
+  const missingKeym2 = {
+    name: "missing-keym2-chunk",
+    setup(build) {
+      build.onResolve({ filter: /\/keym-v2$/ }, () => ({ path: `./${CHUNK}`, external: true }));
+    },
+  };
+  const offline = await bundle(
+    "offline-keym2",
+    `export { decryptData, encryptContainer, encryptContainerWithSharesRequired, isUserFacingError, KdfId, CipherId } from "./keymaker-crypto";`,
+    [missingKeym2]
+  );
+  const typed = (e) => e !== null && offline.isUserFacingError(e) && e.code === "dependency-unavailable";
+  const why = (e) => (e ? `${e.code ?? "(untyped)"}: ${String(e.message).slice(0, 100)}` : "no error");
+  const attempt = async (fn) => {
+    try {
+      return { value: await fn(), error: null };
+    } catch (e) {
+      return { value: null, error: e };
+    }
+  };
+  const OPTS = { kdf: { kdf: offline.KdfId.PBKDF2, params: { iterations: 600_000 } }, cipher: offline.CipherId.AES_256_GCM };
+  const { entry, bytes } = fixture("v3-shamir-aes256gcm");
+  const shares = entry.shamir.shares.slice(0, entry.shamir.threshold);
+
+  const dec = await attempt(() => offline.decryptData(toAB(bytes), "", null, shares));
+  ok(typed(dec.error), "a keym-v2 chunk that fails to load is a typed error on decrypt, not a wrong password", why(dec.error));
+  const enc = await attempt(() => offline.encryptContainer(toAB(U8.from([1, 2, 3])), PASSWORD, null, OPTS));
+  ok(typed(enc.error), "a keym-v2 chunk that fails to load is a typed error on encrypt", why(enc.error));
+  const both = await attempt(() =>
+    offline.encryptContainerWithSharesRequired(toAB(U8.from([1, 2, 3])), PASSWORD, null, OPTS, 2, 3));
+  ok(typed(both.error), "a keym-v2 chunk that fails to load is a typed error on encrypt with shares", why(both.error));
+
+  await esbuild.build({
+    entryPoints: [join(LIB, "keym-v2.ts")],
+    bundle: true, format: "esm", platform: "node", outfile: join(OUT, CHUNK), logLevel: "warning",
+  });
+  const again = await attempt(() => offline.decryptData(toAB(bytes), "", null, shares));
+  ok(again.error === null && Buffer.from(again.value.data).toString() === entry.plaintext,
+     "once the keym-v2 chunk is reachable the same call opens the container (the failure was not cached)",
+     why(again.error));
+}
+{
+  const CHUNK = "keym-v2-shamir.enrol-chunk.mjs";
+  const missingShamir = {
+    name: "missing-shamir-chunk-enrol",
+    setup(build) {
+      build.onResolve({ filter: /keym-v2-shamir$/ }, () => ({ path: `./${CHUNK}`, external: true }));
+    },
+  };
+  const offline = await bundle(
+    "offline-enrol",
+    `export { addShamirSlotKeym2 } from "./keym-v2"; export { isUserFacingError } from "./keymaker-crypto";`,
+    [missingShamir]
+  );
+  const { bytes: pwBytes } = fixture("v3-pbkdf2-aes256gcm");
+  const enrol = async () => {
+    try {
+      return { value: await offline.addShamirSlotKeym2(pwBytes, { password: meta.password, keyFile: null }, 2, 3), error: null };
+    } catch (e) {
+      return { value: null, error: e };
+    }
+  };
+  const first = await enrol();
+  ok(first.error !== null && offline.isUserFacingError(first.error) && first.error.code === "dependency-unavailable",
+     "enrolling a share set with the Shamir chunk unreachable is a typed dependency-unavailable error",
+     first.error ? `${first.error.code ?? "(untyped)"}: ${String(first.error.message).slice(0, 100)}` : "no error");
+
+  await esbuild.build({
+    entryPoints: [join(LIB, "keym-v2-shamir.ts")],
+    bundle: true, format: "esm", platform: "node", outfile: join(OUT, CHUNK), logLevel: "warning",
+  });
+  const second = await enrol();
+  ok(second.error === null && second.value?.shares?.length === 3,
+     "once the Shamir chunk is reachable the same enrolment succeeds (the failure was not cached)",
+     second.error ? String(second.error.message).slice(0, 100) : "");
 }
 
 await settle();

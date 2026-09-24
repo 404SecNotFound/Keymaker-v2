@@ -539,6 +539,28 @@ export function isArgon2idAvailable(): Promise<boolean> {
   return argon2AvailabilityPromise;
 }
 
+/**
+ * The KEYM v2/v3 module, loaded on first use and typed when it cannot be.
+ *
+ * Imported lazily so this file does not depend on keym-v2.ts at evaluation
+ * time (see decryptData). On the main-thread fallback that makes it a separate
+ * chunk, and a chunk can be unreachable: offline before the precache landed, or
+ * a deploy that moved under the page. A bare `import()` rejected with the
+ * browser's own error, and a decrypt reported it as a wrong password. Same
+ * answer as `loadHashWasm`, `loadNoble` and keym-v2.ts's `loadShamir`: a typed
+ * `dependency-unavailable` error, and the rejection is not cached.
+ */
+let keym2Promise: Promise<typeof import("./keym-v2")> | null = null;
+function loadKeym2(): Promise<typeof import("./keym-v2")> {
+  if (!keym2Promise) {
+    keym2Promise = import("./keym-v2").catch((cause: unknown) => {
+      keym2Promise = null;
+      throw dependencyUnavailable("the KEYM v2 reader and writer", cause);
+    });
+  }
+  return keym2Promise;
+}
+
 export type NobleCiphers = typeof import("@noble/ciphers/chacha.js");
 let noblePromise: Promise<NobleCiphers> | null = null;
 export function loadNoble(): Promise<NobleCiphers> {
@@ -879,7 +901,7 @@ export async function encryptContainer(
   }
 
   try {
-    const { encryptKeym2 } = await import("./keym-v2");
+    const { encryptKeym2 } = await loadKeym2();
     const out = await encryptKeym2(
       new Uint8Array(dataBuffer),
       password,
@@ -927,7 +949,7 @@ export async function encryptContainerWithSharesRequired(
   }
   validateKdfParams(options.kdf, "encrypt");
   try {
-    const { encryptKeym2WithSharesRequired } = await import("./keym-v2");
+    const { encryptKeym2WithSharesRequired } = await loadKeym2();
     const { container, shares } = await encryptKeym2WithSharesRequired(
       new Uint8Array(dataBuffer),
       password,
@@ -1304,7 +1326,7 @@ export async function decryptData(
     // keeps the v1 path structurally unable to be changed by v2 work. It also
     // keeps v2 out of the initial bundle until a v2 container is actually
     // opened.
-    const { decryptKeym2, KEYM2_KDF_HKDF } = await import("./keym-v2");
+    const { decryptKeym2, KEYM2_KDF_HKDF } = await loadKeym2();
     try {
       const result = await decryptKeym2(
         fullData,

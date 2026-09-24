@@ -30,6 +30,7 @@
  */
 
 import { dearmorKeym2, shamirSlotSaltsKeym2 } from "./keym-v2";
+import { secureErase } from "./keymaker-crypto";
 import {
   decodeShareAny,
   shareSetIdV2,
@@ -103,6 +104,9 @@ export async function checkPrintoutCode(
     } catch {
       return { kind: "strip-damaged" };
     }
+    // Checking a printout needs the index, threshold and set id, never the
+    // value, which is key material the check has no reason to keep.
+    secureErase(share.value);
     const ids = await backupSetIds(backup);
     const belongs: Belongs =
       ids === null
