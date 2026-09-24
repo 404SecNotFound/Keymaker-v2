@@ -5,6 +5,7 @@ import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { appPath, BASE_PATH, encryptText, selectCrypto, useTextMode, STRONG_PASSWORD } from "./helpers";
+import { SEALED_CLAIM } from "../../src/lib/seal-verdict";
 
 /**
  * The sealed status — trust you can test, not read (10× plan, Bet 5).
@@ -78,7 +79,14 @@ test("the status opens and quotes the served page's own connect-src, read rather
   await toggle(page).click();
   await expect(toggle(page)).toHaveAttribute("aria-expanded", "true");
   await expect(panel(page)).toBeVisible();
-  await expect(panel(page)).toContainText("Forbidden to talk to any server");
+  // The claim is the narrow one the policy earns, and it says what it does not
+  // cover. It used to read "Forbidden to talk to any server ... for every
+  // request to anywhere", which no page policy can make true.
+  await expect(panel(page).getByTestId("sealed-claim-title")).toHaveText(SEALED_CLAIM.title);
+  await expect(panel(page).getByTestId("sealed-claim")).toHaveText(SEALED_CLAIM.text);
+  await expect(panel(page)).toContainText("WebRTC");
+  await expect(panel(page)).toContainText("another address");
+  await expect(panel(page)).not.toContainText(/any server|every request/i);
 
   // Character for character against the meta tag: the directives shown are the
   // ones the browser is enforcing, read rather than typed, and it is the whole

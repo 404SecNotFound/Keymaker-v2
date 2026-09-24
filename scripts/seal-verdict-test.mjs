@@ -3,8 +3,9 @@
  * The "sealed" verdict requires the whole egress-relevant directive set, not
  * connect-src alone.
  *
- * The sealed panel claims total egress prevention ("forbidden to talk to any
- * server, for every request to anywhere"). `connect-src 'none'` earns only part
+ * The sealed panel used to claim total egress prevention ("forbidden to talk to
+ * any server, for every request to anywhere"); the last section pins the
+ * narrower claim it makes now. `connect-src 'none'` earns only part
  * of that — fetch/XHR/WebSocket/EventSource/sendBeacon — while a `<form>` POST
  * is governed by `form-action`, which does not fall back to `default-src`. So a
  * build that kept `connect-src 'none'` but dropped `form-action 'none'` could
@@ -17,7 +18,7 @@
 import esbuild from "esbuild";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -25,7 +26,7 @@ const src = join(HERE, "..", "src", "lib", "seal-verdict.ts");
 const out = join(mkdtempSync(join(tmpdir(), "seal-")), "seal-verdict.mjs");
 await esbuild.build({ entryPoints: [src], bundle: true, format: "esm", platform: "node", outfile: out });
 
-const { isSealed, pickDirective } = await import(pathToFileURL(out).href);
+const { isSealed, pickDirective, SEALED_CLAIM } = await import(pathToFileURL(out).href);
 
 let failed = 0;
 const ok = (cond, msg) => {
@@ -68,6 +69,35 @@ ok(pickDirective(PROD, "frame-src") === null, "pickDirective returns null for an
 ok(pickDirective("default-src  'none' ", "default-src") === "default-src 'none'", "pickDirective collapses whitespace");
 // A longer name must not be picked up by a shorter query.
 ok(pickDirective("connect-src-elem 'self'", "connect-src") === null, "pickDirective does not match a longer directive name");
+
+// The words the panel shows for a sealed page. The three directives do not
+// govern moving the tab to another address, WebRTC, requests for the site's own
+// files, or workers, so a claim of "any server" or "every request" is false and
+// one that stops naming those limits overclaims by omission.
+{
+  ok(SEALED_CLAIM !== undefined, "seal-verdict.ts exports SEALED_CLAIM");
+  const claim = SEALED_CLAIM ? `${SEALED_CLAIM.title} ${SEALED_CLAIM.text}` : "";
+  for (const total of [/any server/i, /every request/i, /anywhere/i]) {
+    ok(!total.test(claim), `the sealed claim does not say "${total.source}"`);
+  }
+  for (const [limit, name] of [
+    [/another address/i, "moving the tab to another address"],
+    [/WebRTC/, "WebRTC"],
+    [/own files/i, "requests for the site's own files"],
+    [/workers/i, "workers"],
+  ]) {
+    ok(limit.test(claim), `the sealed claim names what it does not cover: ${name}`);
+  }
+
+  // And the panel shows these words rather than its own. A copy typed into the
+  // component would pass every check above while the panel said something else.
+  const panelSrc = readFileSync(join(HERE, "..", "src", "components", "sealed-status.tsx"), "utf8");
+  ok(/SEALED_CLAIM\.title/.test(panelSrc) && /SEALED_CLAIM\.text/.test(panelSrc),
+     "sealed-status.tsx renders SEALED_CLAIM");
+  for (const total of [/any server/i, /every request/i, /forbids every/i]) {
+    ok(!total.test(panelSrc), `sealed-status.tsx does not say "${total.source}"`);
+  }
+}
 
 console.log(failed === 0 ? "\nAll seal-verdict checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

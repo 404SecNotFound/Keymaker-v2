@@ -3,8 +3,9 @@
 /**
  * The sealed status — trust you can test, not read (10× plan, Bet 5).
  *
- * The export is forbidden by its own policy from contacting any server, and
- * the build is reproducible with a signed manifest — and both of those lived
+ * The export's own policy blocks its connections, form posts and loads from
+ * other servers (not every way out; see SEALED_CLAIM in lib/seal-verdict.ts),
+ * and the build is reproducible with a signed manifest — and both of those lived
  * in a footer link and a document. Every competitor *says* client-side; a
  * user could not tell the difference from inside the app. This is the
  * inspector's footer, expanded into three things the page can prove about
@@ -46,7 +47,7 @@ import { useEffect, useId, useState } from "react";
 import { CheckCircle2, ChevronDown, Loader2, ShieldCheck, TriangleAlert, WifiOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { isSealed, pickDirective, SEAL_REQUIRED_DIRECTIVES } from "@/lib/seal-verdict";
+import { isSealed, pickDirective, SEAL_REQUIRED_DIRECTIVES, SEALED_CLAIM } from "@/lib/seal-verdict";
 
 const BASE_PATH = (process.env.KEYMAKER_BASE_PATH || "").replace(/\/$/, "");
 
@@ -290,25 +291,21 @@ export function SealedStatus({ writes }: { writes: number }) {
               <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" aria-hidden="true" />
             )}
             <div className="min-w-0">
-              <p className={rowTitle}>
-                {sealed ? "Forbidden to talk to any server" : "Not sealed — a development build"}
+              <p className={rowTitle} data-testid="sealed-claim-title">
+                {sealed ? SEALED_CLAIM.title : "Not sealed — a development build"}
               </p>
-              <p className={rowText}>
+              <p className={rowText} data-testid="sealed-claim">
                 {sealed ? (
-                  <>
-                    Not a promise: rules the browser enforces before a request starts, for
-                    every request to anywhere — the scripted APIs, and a form POST too. The
-                    lines that say so, read from this page as it was served — not typed here:
-                  </>
+                  SEALED_CLAIM.text
                 ) : (
                   <>
-                    The production export forbids every request — the scripted APIs by{" "}
-                    <span className="font-mono">connect-src</span> and{" "}
-                    <span className="font-mono">default-src</span>, a form POST by{" "}
-                    <span className="font-mono">form-action</span> — and the build fails on
+                    The production export blocks the scripted connection APIs with{" "}
+                    <span className="font-mono">connect-src</span>, loads from other servers
+                    with <span className="font-mono">default-src</span> and a form post with{" "}
+                    <span className="font-mono">form-action</span>, and the build fails on
                     purpose if that changes. This copy does not carry the full set, so it is
                     not that export.{" "}
-                    {csp === null ? "No policy was found." : "It carries:"}
+                    {csp === null ? "No policy was found." : "What it carries is below."}
                   </>
                 )}
               </p>
