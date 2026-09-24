@@ -228,9 +228,40 @@ test.describe("auto-lock and clipboard", () => {
       join(process.cwd(), "scripts/fixtures/keymaker/v3-passkey-aes256gcm.keym")
     );
     const armor = "keym2:" + fixture.toString("base64url");
+    // The prompt is replaced wherever the engine keeps it: the prototype, the
+    // instance, and navigator.credentials itself if the engine has none. With
+    // an assignment to navigator.credentials.get alone, WebKit in CI never
+    // showed Stop, and a timeout could not say why. Each call is counted, so a
+    // stub that did not take reports itself instead.
     await page.addInitScript(() => {
+      const w = window as unknown as { __passkeyAsks: number; __toasts: string[] };
+      w.__passkeyAsks = 0;
+      // Toasts are dismissed long before a timeout, so each one is kept as it
+      // appears for the failure message below.
+      w.__toasts = [];
+      new MutationObserver((records) => {
+        for (const r of records) {
+          for (const n of r.addedNodes) {
+            if (n instanceof HTMLElement && n.matches("li") && n.closest('[aria-label^="Notifications"]')) {
+              queueMicrotask(() => w.__toasts.push((n.textContent ?? "").trim()));
+            }
+          }
+        }
+      }).observe(document, { childList: true, subtree: true });
+      const never = () => {
+        w.__passkeyAsks++;
+        return new Promise<null>(() => {});
+      };
+      const proto = (window as unknown as { CredentialsContainer?: { prototype: object } })
+        .CredentialsContainer?.prototype;
+      if (proto) Object.defineProperty(proto, "get", { value: never, configurable: true, writable: true });
       if (navigator.credentials) {
-        navigator.credentials.get = () => new Promise<null>(() => {});
+        Object.defineProperty(navigator.credentials, "get", { value: never, configurable: true, writable: true });
+      } else {
+        Object.defineProperty(Navigator.prototype, "credentials", {
+          value: { get: never },
+          configurable: true,
+        });
       }
     });
     await page.clock.install();
@@ -244,7 +275,24 @@ test.describe("auto-lock and clipboard", () => {
     await visible(usePasskey).click();
     await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
     const stop = visible(page.getByRole("button", { name: /^Stop$/i }));
-    await expect(stop, "the unlock never started").toBeVisible({ timeout: 15_000 });
+    const started = await stop.waitFor({ state: "visible", timeout: 15_000 }).then(
+      () => true,
+      () => false
+    );
+    if (!started) {
+      // Name the reason rather than time out on it: whether the authenticator
+      // was asked at all, and what the page said instead.
+      const asks = await page.evaluate(() => (window as unknown as { __passkeyAsks: number }).__passkeyAsks);
+      const said = await page.evaluate(() => (window as unknown as { __toasts: string[] }).__toasts);
+      throw new Error(
+        `the unlock never started: the authenticator was asked ${asks} time(s), and the page said ` +
+          JSON.stringify(said.filter(Boolean))
+      );
+    }
+    expect(
+      await page.evaluate(() => (window as unknown as { __passkeyAsks: number }).__passkeyAsks),
+      "the unlock is held open by the unanswered prompt, not by something else"
+    ).toBe(1);
 
     await page.clock.runFor("06:00");
 
