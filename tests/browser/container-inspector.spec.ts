@@ -100,6 +100,24 @@ test("encrypt: the itemisation is one click away, and still restates the form", 
   await expect(byteMapSlots(page)).toHaveCount(1);
 });
 
+test("encrypt: passkey quick access is itemised as a way in before sealing", async ({ page }) => {
+  const passkeySwitch = page.locator("#passkey-enabled");
+  const advanced = visible(page.getByRole("button", { name: /^Advanced/ }));
+  if ((await advanced.getAttribute("aria-expanded")) !== "true") await advanced.click();
+  test.skip((await passkeySwitch.count()) === 0, "this engine offers no passkey control");
+
+  await visible(page.getByRole("button", { name: "Show the header it will write" })).click();
+  await expect(byteMapSlots(page)).toHaveCount(1);
+
+  await visible(passkeySwitch).click();
+  await expect(visible(passkeySwitch)).toHaveAttribute("aria-checked", "true");
+
+  // The plan restates the form. With the enrol switch on, the worker writes a
+  // second slot, so the plan must say so: a row and a second byte-map segment.
+  await expect(inspector(page)).toContainText("WebAuthn PRF");
+  await expect(byteMapSlots(page), "the plan left out the passkey slot it will write").toHaveCount(2);
+});
+
 test("encrypt: real input opens the itemisation without being asked", async ({ page }) => {
   await useTextMode(page);
   const pane = inspector(page);
@@ -144,7 +162,7 @@ test("encrypt with shares: the second slot the worker enrolled is itemised", asy
 
   // The one-time shares dialog sits over the page; the pane is behind it.
   await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 30_000 });
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
   await expect(page.getByText(/Save these/)).toHaveCount(0);
 
   // The byte is the authority: slot 0 is the passphrase, slot 1 the share

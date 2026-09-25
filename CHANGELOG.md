@@ -1,5 +1,215 @@
 # Changelog
 
+## Unreleased
+
+One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),
+which a container carries only when its owner chooses it. Every container
+v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
+(three vectors are added), and both parity gates pass.
+
+### Added
+- **Recovery strips scan back in.** The paper vault has always printed a QR on
+  every recovery strip, and nothing in the app could read one into the shares
+  box. The shares box now has *Scan share QR images*, and a scan on the Decrypt
+  tab sorts what it reads: shares to the shares box, container parts to the
+  container box, so a whole printed backup can be photographed and dropped in
+  at once. A strip scanned twice is entered once.
+- **RECOVERY.md explains recovering with shares**, with the `keym2.py
+  --shares-from` command, and `recovery_test.py` runs it against a share set
+  issued by the shipping enrolment.
+- **Strips that need the password too.** A new slot type, `0x03` (FORMAT-V2-DESIGN
+  §4.8), takes the password *and* k strips together: the executor holds one,
+  the family the other, and neither opens the backup alone. The switch sits
+  under Recovery shares, off by default, and states the cost where the choice
+  is made: a forgotten password or too few strips loses the backup, and older
+  readers cannot open it. No passkey can be added beside it. The shares
+  dialog, its rehearsal, the paper vault and the receipt all say which kind
+  of strip it is; the Decrypt tab tells someone with strips and no password
+  that the password is needed too, instead of "decryption failed", and so
+  does `keym2.py`, which then asks for it. Specified first, implemented in
+  `keym2.py` from the spec, then TypeScript; byte-identical across both
+  versions, three ciphers and both KDFs; three frozen fixtures; RECOVERY.md
+  explains it and `recovery_test.py` runs it.
+- **Strips that carry the backup, for a small one.** When a backup fits one
+  printed symbol, the shares dialog offers *Put the whole backup on every
+  strip*. Each strip then prints the backup beside its share, so any k strips
+  open it with no sheet and no file. The dialog says the cost in the same
+  place: k holders who get together need nothing else. Off by default, and
+  chosen again for every share set. RECOVERY.md explains the second code, and
+  its `join` command is executed by `recovery_test.py`.
+- **Scan with the camera.** On the Decrypt tab, *Use the camera* and *Scan
+  strips with the camera* open the device camera and read strips and
+  container symbols held up one after another. It says what is in and what is
+  still needed ("1 of the 2 needed. Show the next strip."), leaves out a strip
+  from a different set, stops by itself once there is enough, and hands the
+  codes to the same boxes a scanned photo fills. The camera is released when
+  the dialog closes. Frames never leave the page.
+- **Several QR codes from one photo.** A photo of a whole sheet, strips and
+  container symbols together, is read in one go, on the Decrypt tab and in the
+  printout check. The browser's own `BarcodeDetector` is used where it exists;
+  otherwise jsqr reads a code, paints it out and looks again, then searches
+  overlapping tiles, since with several symbols in view it can pair finder
+  patterns from different ones and read none. A photo of a single code costs
+  what it did before.
+- **Check a printout.** The Recovery page takes photos of a printed strip or
+  container symbol and says, for each code, whether it read back intact and
+  whether it belongs to the backup created in this session. Nothing is joined
+  or decrypted and no password is asked for. A strip is matched on its full
+  set id against the container's share slots, which works even for a backup
+  written straight to a file; a container symbol on its fingerprint and
+  length, which needs the backup on screen. A new seal or a wipe clears the
+  results.
+- **A set code on the paper vault.** FORMAT-V2-DESIGN §4.6 names the first two
+  groups of a `KMSHARE2` strip, which every strip of a set already shares, the
+  *set code*. The owner's sheet prints it, taken from the container, so it is
+  there even on a sheet printed later without strips; each strip prints it in
+  its heading; `keym2.py inspect` prints it for a share slot; and RECOVERY.md
+  says how to use it to sort strips by backup. Both implementations compute it
+  and the parity gate compares the strings. It is a label for people and
+  opens nothing.
+- **Share-set presets.** *2 of 3* and *3 of 5* buttons sit above the share
+  fields and fill both at once. The fields stay; a preset shows as chosen only
+  while both still match it.
+- **RECOVERY.md is executed, not just tested beside.** `recovery_test.py` now
+  runs every command in the page's `bash` blocks against containers the app
+  wrote, for v1, v2 and v3, with and without a key file, and with shares. Each
+  `inspect` and `decrypt` line names the versions it is for, and that claim is
+  checked: the right script opens the file and the wrong one refuses it. A
+  command the runner does not recognise fails the suite. Step 3's two sample
+  outputs are compared line by line with what `inspect` prints.
+
+### Changed
+- **Paper vault symbols are larger-moduled.** A printed container symbol is
+  now at most a version-25 QR (FORMAT-V2-DESIGN §7.3 "Symbol size"), 0.38 mm a
+  module at the sheet's 46 mm, where a full version-40 symbol was 0.254 mm.
+  Each symbol carries 702 container bytes instead of 1,704, so a backup takes
+  more of them. Readers are unaffected: any part size reassembles.
+- **`keym2.py split` writes KMPART2 by default**, as §7.3 already required of a
+  writer, at the same size the app prints. `--v1` writes KMPART1.
+
+### Fixed
+- **The shares dialog said k holders "need nothing else from you"**; they also
+  need a copy of the backup. It says so now.
+- **The same container symbol scanned twice was refused** as "supplied twice".
+  Scanned container codes are now de-duplicated, as strips already were.
+- **`keym2.py split --v2` wrote parts no level-M QR can hold.** Its default of
+  1,734 bytes per part was the KMPART1 figure for a version-40 symbol; with
+  KMPART2's fingerprint, length and checksum each line was 2,359 characters,
+  over the 2,331 a version-40 level-M symbol holds.
+- **The paper vault printed its container symbols as a low-resolution bitmap.**
+  A full part is a version-40 symbol, and it was drawn into a 300px canvas: at
+  a devicePixelRatio of 1 that is 1.66 pixels per module, which the printer
+  could only stretch. No scale of it decodes. The sheet now draws every symbol
+  as SVG, which the printer renders at its own resolution, and a new test scans
+  every symbol of a multi-part sheet back into the container.
+- **The Recovery kit offered only `keym.py`, which reads KEYM v1 only.** It now
+  offers `keym2.py` first, plus `requirements.txt`, and labels `keym.py` as
+  v1-only. `requirements.txt` is precached with the rest of the kit.
+- **Escape or a click outside the one-time shares dialog discarded the
+  shares.** It now closes only from its X or *I have saved these shares*, and
+  it scrolls: with five or more shares its lower half was off-screen.
+- **The idle lock kept the shares but wiped the container they open** (Text
+  mode, where the container exists only on screen).
+- **Choosing recovery shares after a passkey left the passkey in charge**, so
+  an heir with enough shares was asked for a tap and told there was no passkey.
+- **Returning from Tools wiped the Encrypt or Decrypt form.**
+- **The QR scanner could not read the paper vault's own container symbol** off
+  its canvas; it now retries at several scales before reporting a miss.
+- **The encrypt-side inspector never showed the passkey slot** it was about to
+  write.
+- **Audio: a hidden payload revealed through Web Audio lost its low bits** on
+  every sample above 16384 and was reported as a wrong password. A WAV is also
+  recognised by its bytes now, not only its name.
+- **Service worker: a deploy inside the HTTP cache window could freeze the
+  previous `index.html` into the new cache**, which the sealed status then
+  reported as tampering. The shell is fetched with `cache: 'reload'`.
+- **`keym2.py` reported "decryption failed" for a text backup with a blank
+  first line or a leading space.** §7 says readers strip ASCII whitespace.
+- **`keym.py` crashed with a traceback on an 8 to 14 byte file.**
+- Documentation: README's `--outfile` (the flag is `--out`); SECURITY.md's
+  length-leak wording (it is exact) and format scope (the app writes v3); the
+  in-app dice note (100 d6 rolls clear 256 bits, not 99).
+- **A backup saved as text and chosen as a file on Decrypt** (a .txt of armor,
+  a saved self-extracting page, paper parts, a shares file) was read as a
+  legacy blob and reported as a wrong password. It is now read as what it is.
+- **The idle lock no longer fires in the middle of an operation**, and a Stop
+  pressed while a large file is still being read now stops it. With Passkey
+  quick access on, that Stop never asks the authenticator or mints a passkey,
+  and a test now covers it.
+- **A QR scan that finishes after a tab switch or a wipe is dropped** instead
+  of landing in whatever form is showing.
+- **Notices say what happened:** no "nothing was pasted" beside a paste that
+  was kept; no "type the password" after a scan that was not a complete
+  backup; the Recovery page reports whether the container was saved and
+  whether it was rehearsed. A rehearsal no longer carries over to the next
+  backup sealed in the same session.
+- **The Decrypt password is no longer graded against the encrypt policy**, and
+  names containing `..` are accepted.
+- **Accessibility:** accessible names for the output toolbar and every toast's
+  close button; the lock warning and clipboard countdown are announced at
+  milestones instead of every second; axe now scans the result states.
+- **The inheritance plan opens where its steps can be followed** (Text mode,
+  so the paper vault is available).
+- **Offline:** `/verify.html` is precached, and the service worker only reads
+  its own cache on the shared Pages origin.
+- **The two implementations agree on which characters a reader ignores**
+  (FORMAT-V2-DESIGN §7): a Notepad-saved backup with a byte order mark opened in
+  the app and failed in `keym2.py`. Both also compare a `KMSHARE2` set id in
+  full, compare a part checksum as text, and confirm a master key against the
+  payload before using it, which stops share enrolment on a v2 container with
+  a spliced-in slot from wrapping the shares around the wrong key.
+- **Secret hygiene in the crypto core:** fewer unerased copies of passwords,
+  key files, share values and plaintext; a legal worst-case container is no
+  longer refused as too large; a Shamir module that fails to load is reported
+  as such, not as a wrong password.
+- **RECOVERY.md had drifted from v3.** Step 3's v3 sample was missing the
+  `container` and `table mac` lines the tool prints; the primitives table
+  described only v2's 8-byte core header; and it, and the README, said the
+  conformance suite opens the fixtures "under whatever version is installed"
+  of the two libraries, when CI installs exact pinned versions only. The Step
+  2 and Step 4 comments now say `v3 or v2`.
+- **The self-extracting page kept what it had recovered.** A later failed
+  attempt left the plaintext in the hidden text box, a binary result left the
+  previous text there, and the save link's blob URL was never revoked. Each
+  attempt now clears all three first. The password box no longer asks the
+  browser to save the backup's password. Pages written earlier carry their own
+  copy of the decryptor and are unchanged.
+- **The self-extract refusal gave the wrong reason.** A chained backup was
+  described as ChaCha20-Poly1305, and a backup opened only by shares or a
+  passkey was told its password slot used Argon2id. It now says chained, and
+  that the backup has no password slot.
+- **Audio Hide refused 24-bit, 32-bit, float and `WAVE_FORMAT_EXTENSIBLE`
+  WAVs** as "Only 16-bit PCM WAV is supported", while FORMAT-AUDIO-STEGO.md
+  promised any WAV. They are now read directly at their own sample rate and
+  scaled to 16 bits, never through Web Audio, which resamples. A stego WAV
+  re-saved losslessly at a greater depth still reveals. ADPCM, A-law and µ-law
+  WAVs are still refused, and the document says so.
+- **The sealed panel claimed more than the policy enforces.** "Forbidden to
+  talk to any server, for every request to anywhere" is not something a page
+  CSP can do. The panel now says what is blocked and names what is not
+  covered (sending the tab to another address, WebRTC, requests for the site's
+  own files, workers), and a test fails if it goes back to the total claim.
+- **A module that failed to load could still read as a wrong password.** The
+  KEYM v2 module itself, and the Shamir code used when adding shares, were
+  imported without the typed "could not be loaded" error the other lazily
+  loaded modules use.
+- **Decoded share records were not erased.** The record a share decodes to,
+  the checksum input built from it, a record refused for its padding bits, and
+  the value dropped by two callers that needed only a share's set id or index
+  (the password-and-shares check and the printout check) are now zeroed.
+- **`keym2.py` comments said v2 is what it writes** (v3 is the default) and
+  named `--outfile` (the flag is `--out`). The comment calling the slot walk's
+  error guard "defence in depth" was wrong. §6's range admits
+  `memory_kib=1` with `parallelism=8`, and that guard is what keeps such a slot
+  from blocking a valid one. The self-test now builds that container.
+- **Build and release:** a checkout path with spaces builds; deploy and release
+  refuse to sign bytes the independent builds did not reproduce; the reference
+  self-tests run on Python 3.10, now from a hash-pinned closure resolved for
+  3.10 as well as 3.12 (it adds typing-extensions) rather than with `--no-deps`.
+  `pin-conformance-deps.py` also stopped resolving for `manylinux_2_17` alone,
+  which cannot see the argon2-cffi-bindings wheels CI installs and would have
+  downgraded them on the next regenerate.
+
 ## Keymaker v2.2.0
 
 A design release. Nothing about the container format, the ciphers or the key

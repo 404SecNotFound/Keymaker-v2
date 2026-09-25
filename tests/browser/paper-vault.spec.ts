@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { encodePaperParts, encodePaperPartsV2 } from "../../src/lib/keym-v2-paper";
 import { dearmorKeym2, keym2SlotCountOffset, KEYM2_VERSION_V3 } from "../../src/lib/keym-v2";
-import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
+import { visible, useTextMode, selectCrypto, STRONG_PASSWORD, capturePrintedSymbols } from "./helpers";
 
 /**
  * Roadmap 4.2 — the paper vault print kit.
@@ -41,6 +41,13 @@ interface PrintSnapshot {
   stripsPageSymbols: number;
   /** The rehearsal box's text. */
   rehearsal: string;
+  /** §4.6 set codes the owner's sheet prints, one per share slot. */
+  sheetSetCodes: string[];
+  /** The set code each strip's head prints, and the share code under it. */
+  stripSetCodes: string[];
+  stripShareCodes: string[];
+  /** Each container symbol's width in modules, quiet zone included (its viewBox). */
+  symbolModules: number[];
 }
 
 async function encryptSomething(page: Page) {
@@ -144,7 +151,7 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
       const strips = el ? Array.from(el.querySelectorAll(".pv-strip")) : [];
       w.__snap = {
         sheets: document.querySelectorAll(".paper-vault").length,
-        symbols: el ? el.querySelectorAll(".pv-qr canvas").length : 0,
+        symbols: el ? el.querySelectorAll(".pv-qr svg").length : 0,
         firstCaption: el?.querySelector(".pv-qr figcaption")?.textContent ?? "",
         rules: el ? el.querySelectorAll(".pv-rule").length : 0,
         text: el?.textContent ?? "",
@@ -154,8 +161,18 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
         slotSegments: el ? el.querySelectorAll('.pv-bytemap [data-kind="slot"]').length : 0,
         strips: strips.length,
         heldBy: strips.filter((s) => /Held by/.test(s.textContent ?? "")).length,
-        stripsPageSymbols: el ? el.querySelectorAll(".pv-strips .pv-qr canvas").length : 0,
+        stripsPageSymbols: el ? el.querySelectorAll(".pv-strips .pv-qr svg").length : 0,
         rehearsal: el?.querySelector(".pv-rehearsal")?.textContent ?? "",
+        sheetSetCodes: el
+          ? Array.from(el.querySelectorAll(".pv-setcode .pv-code"), (c) => c.textContent ?? "")
+          : [],
+        stripSetCodes: strips.map((s) => s.querySelector(".pv-strip-head .pv-code")?.textContent ?? ""),
+        stripShareCodes: strips.map((s) => s.querySelector(".pv-strip-body code")?.textContent ?? ""),
+        symbolModules: el
+          ? Array.from(el.querySelectorAll(".pv-qr svg"), (svg) =>
+              Number((svg.getAttribute("viewBox") ?? "").split(/\s+/)[2] ?? NaN)
+            )
+          : [],
       };
       throw new Error("print stubbed — see capturePrint()");
     };
@@ -174,6 +191,99 @@ async function capturePrint(page: Page, from: "form" | "dialog" = "form"): Promi
   return page.evaluate(() => (window as unknown as { __snap: PrintSnapshot }).__snap);
 }
 
+/**
+ * The symbols a multi-part sheet prints can be scanned back in.
+ *
+ * A container bigger than one symbol is split into several parts. When they were
+ * full version-40 symbols, 181 modules wide with their margin, the sheet drew
+ * them into a 300px canvas, so
+ * at a devicePixelRatio of 1 each module got 1.66 pixels and the printer could
+ * only stretch that aliased bitmap: no scale of it decodes. The existing
+ * scan-back tests pasted the parts' *text*, which is why nothing caught it.
+ * This one feeds every printed symbol, as pixels, to the app's own scanner.
+ */
+test("every symbol on a multi-part sheet scans back into the container", async ({ page }) => {
+  await page.goto("/");
+  await useTextMode(page);
+  await selectCrypto(page, "pbkdf2", "aes");
+  // About six symbols at §7.3's version-25 size: enough that order and a
+  // missing page both matter, and each is scanned three times below.
+  const secret = Array.from({ length: 300 }, (_, i) => `note line ${i}`).join("\n");
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await page.waitForFunction(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement | null)?.value.startsWith("keym2:"),
+    null,
+    { timeout: 90_000 }
+  );
+  const armored = await page.evaluate(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+  );
+
+  const printed = await capturePrintedSymbols(page, page.getByRole("button", { name: /Print paper vault/i }));
+  expect(printed.parts.length, "this test needs a backup that spans several full symbols").toBeGreaterThan(2);
+
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await page.locator("#qr-scan-input").setInputFiles(
+    printed.parts.map((buffer, i) => ({ name: `part-${i + 1}.png`, mimeType: "image/png", buffer }))
+  );
+  await expect(
+    visible(page.locator("#text-secret")),
+    "the printed symbols did not scan back into the container"
+  ).toHaveValue(armored, { timeout: 60_000 });
+
+  // One symbol short is not a backup yet, and the toast must not say to type
+  // the password as if it were.
+  await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await page.locator("#qr-scan-input").setInputFiles(
+    printed.parts.slice(1).map((buffer, i) => ({ name: `part-${i + 2}.png`, mimeType: "image/png", buffer }))
+  );
+  await expect(page.getByText(/not a complete backup yet/i).first()).toBeVisible({ timeout: 60_000 });
+  await expect(page.getByText(/Type the password to open it/i)).toHaveCount(0);
+  await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await page.locator("#qr-scan-input").setInputFiles(
+    printed.parts.map((buffer, i) => ({ name: `part-${i + 1}.png`, mimeType: "image/png", buffer }))
+  );
+  await expect(visible(page.locator("#text-secret"))).toHaveValue(armored, { timeout: 60_000 });
+
+  await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+  await expect(visible(page.locator("#output-text"))).toHaveValue(secret, { timeout: 90_000 });
+});
+
+/**
+ * §7.3 "Symbol size": a printed part is at most a version-25 symbol, 117
+ * modules and 121 with the sheet's two-module margin, so each module is 0.38 mm
+ * at the sheet's 46 mm rather than a full version-40 symbol's 0.254 mm.
+ */
+test("a multi-part sheet prints no symbol denser than version 25", async ({ page }) => {
+  await page.goto("/");
+  await useTextMode(page);
+  await selectCrypto(page, "pbkdf2", "aes");
+  const secret = Array.from({ length: 300 }, (_, i) => `note line ${i}`).join("\n");
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await page.waitForFunction(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement | null)?.value.startsWith("keym2:"),
+    null,
+    { timeout: 90_000 }
+  );
+  const snap = await capturePrint(page);
+  expect(snap.symbolModules.length, "this needs a backup that spans several symbols").toBeGreaterThan(2);
+  for (const width of snap.symbolModules) {
+    expect(width, "a printed symbol is denser than version 25").toBeLessThanOrEqual(121);
+  }
+  // The full parts are version 25 exactly: sized to the budget, not under it.
+  expect(snap.symbolModules[0]).toBe(121);
+});
+
 test.describe("paper vault", () => {
   test("prints a sheet of scannable parts for the container", async ({ page }) => {
     await encryptSomething(page);
@@ -181,7 +291,7 @@ test.describe("paper vault", () => {
 
     expect(snap.sheets, "no paper vault sheet was in the document when it printed").toBe(1);
 
-    // One canvas per §7.1 part. The encoding itself is gated by the Python
+    // One symbol per §7.1 part. The encoding itself is gated by the Python
     // conformance suite comparing emitted strings; this gates the wiring.
     expect(snap.symbols).toBe(1);
     expect(snap.firstCaption).toMatch(/part 1 of 1/);
@@ -338,6 +448,43 @@ test.describe("the sheet as a procedure", () => {
     expect(snap.text).toContain("keym2.py decrypt --share");
     // The rehearsal line asks which strips were used, one blank per strip needed.
     expect(snap.rehearsal).toMatch(/with strips ______ and ______/);
+  });
+
+  test("the set code on the owner's sheet is the one every strip begins with", async ({ page }) => {
+    await encryptWithShares(page, 2, 3);
+    const snap = await capturePrint(page, "dialog");
+
+    // The sheet derives its code from the container's slot salt; each strip's
+    // head derives its own from the strip's text. Two routes to one value,
+    // which is what §4.6 says they are.
+    expect(snap.sheetSetCodes, "one share slot, one set code").toHaveLength(1);
+    const code = snap.sheetSetCodes[0] as string;
+    expect(code).toMatch(/^[0-9A-HJKMNP-TV-Z]{4}-[0-9A-HJKMNP-TV-Z]{4}$/);
+    expect(snap.stripSetCodes).toEqual([code, code, code]);
+    for (const share of snap.stripShareCodes) {
+      expect(share.startsWith(`KMSHARE2:${code}-`), `${share} does not begin with ${code}`).toBe(true);
+    }
+    expect(snap.text).toMatch(/A strip that begins differently belongs to a different backup/);
+  });
+
+  test("the set code is on a sheet printed later, with no strips on it", async ({ page }) => {
+    await encryptWithShares(page, 2, 3);
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+
+    const snap = await capturePrint(page, "form");
+    expect(snap.strips, "the strips were not printed this time").toBe(0);
+    expect(snap.sheetSetCodes).toHaveLength(1);
+    expect(shares[0]?.startsWith(`KMSHARE2:${snap.sheetSetCodes[0]}-`)).toBe(true);
+  });
+
+  test("a backup without shares prints no set code", async ({ page }) => {
+    await encryptSomething(page);
+    const snap = await capturePrint(page);
+    expect(snap.sheetSetCodes).toEqual([]);
+    expect(snap.text).not.toMatch(/Set code/);
   });
 
   test("carries a rehearsal box to be filled in ink", async ({ page }) => {

@@ -2,8 +2,10 @@
  * The "sealed" verdict: does this page's own CSP forbid egress the way the
  * sealed panel claims it does?
  *
- * The panel's claim is total — "forbidden to talk to any server, for every
- * request to anywhere". `connect-src 'none'` alone does not earn that: it stops
+ * The panel's claim used to be total ("forbidden to talk to any server, for
+ * every request to anywhere"), and no page policy earns that. It is now the
+ * narrower one in SEALED_CLAIM below. `connect-src 'none'` alone does not earn
+ * even that: it stops
  * the scripted network APIs (fetch, XHR, WebSocket, EventSource, sendBeacon)
  * and nothing else. A `<form>` posting to an attacker is governed by
  * `form-action`, which does **not** fall back to `default-src`, so a build that
@@ -50,3 +52,28 @@ export function isSealed(csp: string | null | undefined): boolean {
   if (!csp) return false;
   return SEAL_REQUIRED_DIRECTIVES.every((name) => pickDirective(csp, name) === `${name} 'none'`);
 }
+
+/**
+ * What the panel says about a sealed page, and the whole of it.
+ *
+ * The three directives above stop the scripted connection APIs, a form post and
+ * any load from another server. They do not govern moving the tab to another
+ * address (`location.href = "https://elsewhere/?" + secret`), WebRTC's ICE
+ * traffic, requests for this site's own files (`img-src 'self'` with data in the
+ * query string), or the page's workers, which a `<meta>` policy does not reach.
+ * docs/HOW-IT-WORKS.md ("What the CSP does not do") measures the image and
+ * worker channels against the production export. So the
+ * claim names those limits in the same breath, and scripts/seal-verdict-test.mjs
+ * fails if it stops naming them or goes back to claiming every request.
+ */
+export const SEALED_CLAIM = {
+  title: "Blocked from opening connections",
+  text:
+    "Enforced by the browser before a request starts. This page cannot fetch, open " +
+    "a socket or send a beacon, post a form, or load anything from another server. " +
+    "That is not every way out. A page's policy does not cover sending the tab to " +
+    "another address, WebRTC, requests for this site's own files, or the page's " +
+    "workers. For those the guarantee is that no code here does it, and the " +
+    "reproducible build lets you check that. The lines the browser enforces are " +
+    "below, read from this page as it was served and not typed here.",
+} as const;

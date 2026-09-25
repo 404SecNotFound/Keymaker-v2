@@ -395,6 +395,12 @@
 .km-recovery-options { display: grid; gap: 10px; }
 .km-recovery-options > button { justify-content: flex-start; }
 .km-help { font-size: 12px; line-height: 1.7; color: var(--color-muted-foreground); }
+.km-printout-check { display: grid; gap: 10px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--color-border); }
+.km-printout-check > button { justify-self: start; }
+.km-printout-results { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; font-size: 13px; line-height: 1.55; color: var(--color-foreground); }
+.km-printout-results li { display: flex; gap: 8px; align-items: flex-start; }
+.km-printout-results li svg { flex-shrink: 0; margin-top: 2px; }
+.km-printout-file { font-family: var(--font-mono); font-size: 12px; color: var(--color-muted-foreground); overflow-wrap: anywhere; }
 .km-action-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .km-recovery-reference { grid-column: 1 / -1; display: flex; align-items: center; justify-content: space-between; gap: 24px; }
 .km-recovery-reference h2 { font-size: 14px; font-weight: 500; }
@@ -519,7 +525,7 @@
     break-inside: avoid;
   }
 
-  .pv-qr canvas {
+  .pv-qr svg {
     width: 46mm !important;
     height: 46mm !important;
   }
@@ -673,16 +679,33 @@
     font-weight: 400;
   }
 
+  /* §4.6 set code: monospace, so 0/O and 1/I/L read as the characters the
+     strip's own code uses. */
+  .pv-code {
+    font-family: var(--font-mono);
+    letter-spacing: 0.04em;
+  }
+
   .pv-strip-body {
     display: flex;
     gap: 8pt;
     align-items: flex-start;
   }
 
-  .pv-strip-body canvas {
+  .pv-strip-body svg {
     width: 30mm !important;
     height: 30mm !important;
     flex: none;
+  }
+
+  .pv-strip-backup {
+    margin: 0;
+    flex: none;
+    text-align: center;
+  }
+
+  .pv-strip-backup figcaption {
+    font-size: 7.5pt;
   }
 
   .pv-strip-note {

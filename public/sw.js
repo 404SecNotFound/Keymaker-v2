@@ -54,6 +54,14 @@ const APP_SHELL = [
   `${BASE}/recovery/RECOVERY.md`,
   `${BASE}/recovery/keym.py`,
   `${BASE}/recovery/keym2.py`,
+  // The pinned dependency list the kit dialog offers beside the scripts, and
+  // the file RECOVERY.md's install step reads.
+  `${BASE}/recovery/requirements.txt`,
+  // The verify page. Reachable from the footer and the command bar, and it
+  // was not precached, so offline the navigation fallback served the home
+  // page under /verify.html: a page that says what build you are running
+  // answering with a different page.
+  `${BASE}/verify.html`,
   `${BASE}/logo.svg`,
   // The hero background plate. Named here rather than left to runtime caching
   // for the same reason as everything else in this list: isCacheableAsset()
@@ -106,7 +114,17 @@ self.addEventListener('install', (event) => {
       // chunks, which include the lazily imported crypto dependencies
       // (hash-wasm for Argon2id, @noble/ciphers for ChaCha, the EFF wordlist)
       // that a user may not touch until after the network is gone.
-      return cache.addAll(APP_SHELL).then(() => cache.addAll(PRECACHE_ASSETS));
+      //
+      // The shell is fetched with `cache: 'reload'`. Its URLs are not
+      // content-hashed, so the browser's HTTP cache may still hold the
+      // previous deploy's copy (GitHub Pages serves them with max-age=600),
+      // and addAll's default fetch would take that copy and freeze it into
+      // this version's cache: old HTML beside a new SHA256SUMS, which the
+      // sealed status reports as tampering, and which offline asks for chunks
+      // the activate step has already deleted. The chunks are hashed and
+      // immutable, so an HTTP-cached copy of one is the right copy.
+      const shell = APP_SHELL.map((url) => new Request(url, { cache: 'reload' }));
+      return cache.addAll(shell).then(() => cache.addAll(PRECACHE_ASSETS));
     })
   );
 
@@ -245,7 +263,7 @@ self.addEventListener('fetch', (event) => {
     // stay exactly what the manifest describes: the bytes install() wrote.
     event.respondWith(
       fetch(event.request).catch(() =>
-        caches.match(event.request).then((cached) => cached || caches.match(`${BASE}/`))
+        ownMatch(event.request).then((cached) => cached || ownMatch(`${BASE}/`))
       )
     );
     return;
@@ -263,7 +281,7 @@ self.addEventListener('fetch', (event) => {
   // Anything not matched here falls through to the network untouched.
   if (isCacheableAsset(url.pathname)) {
     event.respondWith(
-      caches.match(event.request).then((cached) => {
+      ownMatch(event.request).then((cached) => {
         if (cached) return cached;
         return fetch(event.request).then((response) =>
           cacheResponse(event.request, response)
@@ -281,6 +299,18 @@ self.addEventListener('fetch', (event) => {
  * installed PWA needs to launch offline. Deliberately excluded: anything
  * dynamic, anything user-supplied, and anything not enumerated here.
  */
+/**
+ * Look a request up in this worker's own cache only.
+ *
+ * `caches.match()` searches every cache on the origin, and GitHub Pages puts
+ * every project site on one origin (the same reason CACHE_PREFIX exists): a
+ * neighbouring app's cache could answer for a URL this one serves, including
+ * the navigation fallback that stands in for the whole app offline.
+ */
+function ownMatch(request) {
+  return caches.open(CACHE_VERSION).then((cache) => cache.match(request));
+}
+
 function isCacheableAsset(pathname) {
   if (pathname.startsWith(`${BASE}/_next/static/`)) return true;
   return APP_SHELL.includes(pathname);

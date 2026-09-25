@@ -34,6 +34,8 @@
 
 import {
   encryptContainer,
+  encryptContainerWithSharesRequired,
+  KeymakerError,
   secureErase,
   decryptData,
   isUserFacingError,
@@ -66,7 +68,7 @@ export type CryptoRequest =
        * alive in the page past the encrypt that should have cleared it, or
        * asking the user to type it a second time.
        */
-      shamir?: { threshold: number; count: number } | undefined;
+      shamir?: { threshold: number; count: number; withPassword?: boolean } | undefined;
       /**
        * §4.7. Obtained on the main thread, because `navigator.credentials` does
        * not exist here — a Worker cannot tap a security key. The 32 bytes and
@@ -215,51 +217,75 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       // and the enrolment fails with "Decryption failed." in the middle of an
       // encryption.
       const keyFileForSlots =
-        req.keyFile && (req.shamir || req.passkey)
+        req.keyFile && (req.shamir || req.passkey) && !req.shamir?.withPassword
           ? new Uint8Array(req.keyFile.slice(0))
           : null;
-      let out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
+      let out: ArrayBuffer;
       let shares: string[] | undefined;
+      try {
+        if (req.shamir?.withPassword) {
+          // §4.8. One slot that takes the password and the shares together, and
+          // nothing else: a passphrase or passkey slot beside it would open the
+          // backup with one half, which is what this choice rules out.
+          if (req.passkey) {
+            throw new KeymakerError(
+              "invalid-input",
+              "A passkey would open this backup on its own, and it was set to need the password and the strips together."
+            );
+          }
+          const written = await encryptContainerWithSharesRequired(
+            req.data, req.password, req.keyFile, req.options, req.shamir.threshold, req.shamir.count
+          );
+          out = written.data;
+          shares = written.shares;
+        } else {
+          out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
+        }
 
-      if (req.shamir) {
-        // §4.6. Enrolled here rather than in the page so the share secret and
-        // the coefficients are generated, used and dropped inside the worker's
-        // heap — the same reason the derivation lives here.
-        const { addShamirSlotKeym2 } = await import("./keym-v2");
-        const enrolled = await addShamirSlotKeym2(
-          new Uint8Array(out),
-          { password: req.password, keyFile: keyFileForSlots },
-          req.shamir.threshold,
-          req.shamir.count
-        );
-        out = enrolled.container.buffer.slice(
-          enrolled.container.byteOffset,
-          enrolled.container.byteOffset + enrolled.container.byteLength
-        ) as ArrayBuffer;
-        shares = enrolled.shares;
+        if (req.shamir && !req.shamir.withPassword) {
+          // §4.6. Enrolled here rather than in the page so the share secret and
+          // the coefficients are generated, used and dropped inside the worker's
+          // heap — the same reason the derivation lives here.
+          const { addShamirSlotKeym2 } = await import("./keym-v2");
+          const enrolled = await addShamirSlotKeym2(
+            new Uint8Array(out),
+            { password: req.password, keyFile: keyFileForSlots },
+            req.shamir.threshold,
+            req.shamir.count
+          );
+          out = enrolled.container.buffer.slice(
+            enrolled.container.byteOffset,
+            enrolled.container.byteOffset + enrolled.container.byteLength
+          ) as ArrayBuffer;
+          shares = enrolled.shares;
+        }
+
+        if (req.passkey) {
+          // §4.7. Added after encryption for the same reason a share set is: the
+          // container has to exist before a slot can be added to it. The rule
+          // that a passkey never travels alone is satisfied structurally here —
+          // `out` already carries the passphrase slot encryptContainer wrote.
+          const { addPasskeySlotKeym2 } = await import("./keym-v2");
+          const enrolled = await addPasskeySlotKeym2(
+            new Uint8Array(out),
+            { password: req.password, keyFile: keyFileForSlots },
+            req.passkey.prfOutput,
+            req.passkey.salt
+          );
+          out = enrolled.buffer.slice(
+            enrolled.byteOffset,
+            enrolled.byteOffset + enrolled.byteLength
+          ) as ArrayBuffer;
+        }
+      } finally {
+        // The copy taken above so the enrolments could still read it. Same
+        // standard encryptContainer applies to the original. In a `finally`,
+        // as crypto-client.ts's fallback already does: the copy outlives three
+        // awaits that can each throw, and the `catch` below turns a throw into
+        // an ordinary response, so an enrolment that failed part-way left half
+        // the key material in this heap with nothing left to erase it.
+        secureErase(keyFileForSlots);
       }
-
-      if (req.passkey) {
-        // §4.7. Added after encryption for the same reason a share set is: the
-        // container has to exist before a slot can be added to it. The rule
-        // that a passkey never travels alone is satisfied structurally here —
-        // `out` already carries the passphrase slot encryptContainer wrote.
-        const { addPasskeySlotKeym2 } = await import("./keym-v2");
-        const enrolled = await addPasskeySlotKeym2(
-          new Uint8Array(out),
-          { password: req.password, keyFile: keyFileForSlots },
-          req.passkey.prfOutput,
-          req.passkey.salt
-        );
-        out = enrolled.buffer.slice(
-          enrolled.byteOffset,
-          enrolled.byteOffset + enrolled.byteLength
-        ) as ArrayBuffer;
-      }
-
-      // The copy taken above so the enrolments could still read it. Same
-      // standard encryptContainer applies to the original.
-      if (keyFileForSlots) secureErase(keyFileForSlots);
 
       const response: CryptoResponse = { id: req.id, ok: true, op: "encrypt", data: out, shares };
       ctx.postMessage(response, [out]);

@@ -40,6 +40,7 @@ from __future__ import annotations
 import base64
 import re
 import os
+import shlex
 import stat
 import subprocess
 import sys
@@ -130,8 +131,9 @@ def main() -> int:
         print("Step 2 — each script identifies its own format and refuses the other's:")
         v1_file = js_encrypt(1, SECRET, "pbkdf2", "aes", None, tmp)
         v2_file = js_encrypt(2, SECRET, "pbkdf2", "aes", None, tmp)
+        v3_file = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp)
 
-        for version, container, other in ((1, v1_file, 2), (2, v2_file, 1)):
+        for version, container, other in ((1, v1_file, 2), (2, v2_file, 1), (3, v3_file, 1)):
             r = cli(version, ["inspect", "--in", str(container)])
             check(r.returncode == 0, f"keym{'' if version == 1 else '2'}.py inspects a v{version} container",
                   r.stderr.strip()[:160])
@@ -183,7 +185,10 @@ def main() -> int:
         # Step 4: decrypt with the password supplied interactively.
         # ------------------------------------------------------------------
         print("\nStep 4 — decrypt with the password on the prompt:")
-        for version in (1, 2):
+        # v3 is what the app writes today, so it is the backup an heir is most
+        # likely to be holding. This loop covered v1 and v2 only for as long as
+        # v3 has been the default.
+        for version in (1, 2, 3):
             for kdf, cipher, kf in (
                 ("pbkdf2", "aes", None),
                 ("pbkdf2", "chacha", None),
@@ -209,6 +214,45 @@ def main() -> int:
                 (tmp / "out.bin").unlink(missing_ok=True)
 
         # ------------------------------------------------------------------
+        # Step 4, with recovery shares instead of the password.
+        # ------------------------------------------------------------------
+        # The share set is issued by the shipping enrolment (addShamirSlotKeym2,
+        # through the bridge) on a container the shipping encryptor wrote, and
+        # opened with the page's own command: two of three strips in a file
+        # with a comment line, one of them lower-cased with its hyphens typed
+        # as spaces, the way a person copying it by hand might, and nothing on
+        # stdin.
+        print("\nStep 4 — decrypt with recovery shares, no password:")
+        base = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp, tag="-shares")
+        shared, issued = tmp / "shared.keym", tmp / "issued.txt"
+        r = subprocess.run(
+            ["node", str(BRIDGE), "addshares", "--password", PASSWORD,
+             "--in", str(base), "--out", str(shared), "--shares-out", str(issued),
+             "--threshold", "2", "--shares", "3",
+             "--salt", os.urandom(32).hex(), "--share-secret", os.urandom(32).hex(),
+             "--share-coefficients", os.urandom(32).hex()],
+            capture_output=True, text=True, cwd=ROOT)
+        strips = [ln for ln in issued.read_text().split("\n") if ln.strip()] if r.returncode == 0 else []
+        check(len(strips) == 3, "the shipping enrolment issued three strips", r.stderr.strip()[:160])
+        if len(strips) == 3:
+            prefix, _, code = strips[2].partition(":")
+            (tmp / "shares.txt").write_text(
+                "# strips 1 and 3 of 3\n" + strips[0] + "\n"
+                + prefix + ":" + code.lower().replace("-", " ") + "\n")
+            r = cli(2, ["decrypt", "--in", str(shared), "--shares-from",
+                        str(tmp / "shares.txt"), "--out", str(tmp / "out.bin")], stdin="")
+            recovered = (tmp / "out.bin").read_bytes() if r.returncode == 0 else b""
+            check(r.returncode == 0 and recovered == SECRET,
+                  "two of three strips open the backup with no password",
+                  r.stderr.strip()[:160])
+            (tmp / "out.bin").unlink(missing_ok=True)
+            (tmp / "one.txt").write_text(strips[1] + "\n")
+            r = cli(2, ["decrypt", "--in", str(shared), "--shares-from",
+                        str(tmp / "one.txt"), "--out", str(tmp / "out.bin")], stdin="")
+            check(r.returncode != 0 and not (tmp / "out.bin").exists(),
+                  "one strip of a 2-of-3 set does not", r.stderr.strip()[:160])
+
+        # ------------------------------------------------------------------
         # Both wire forms, for both versions.
         # ------------------------------------------------------------------
         print("\nBoth backup forms the document mentions:")
@@ -232,6 +276,18 @@ def main() -> int:
         check(r.returncode == 0 and SECRET.decode() in r.stdout, "keym2: text form",
               r.stderr.strip()[:160])
         check("=" not in v2_body, "v2 armor is unpadded, as the page shows it")
+
+        # A text backup that picked up a blank first line or a leading space on
+        # the way into a notes app or an email. §7 says readers strip ASCII
+        # whitespace, and the app always has; keym2.py sniffed the prefix on
+        # the raw bytes, missed it, and fell through to "decryption failed",
+        # which sends the reader to retype a password that was never wrong.
+        padded = tmp / "v2-padded.txt"
+        padded.write_text("\n  \n\tkeym2:" + v2_body + "\n")
+        r = cli(2, ["decrypt", "--in", str(padded)], stdin=PASSWORD + "\n")
+        check(r.returncode == 0 and SECRET.decode() in r.stdout,
+              "keym2: text form after a blank line and leading spaces",
+              r.stderr.strip()[:160])
 
         # A pasted backup often arrives wrapped by whatever stored it. The page
         # says line breaks are fine; that has to be true of both.
@@ -316,6 +372,8 @@ def main() -> int:
         error_paths(tmp)
 
     recovery_version_claims()
+    recovery_examples()
+    recovery_commands()
     walkthrough()
 
     print(f"\n{passed} passed, {failed} failed")
@@ -520,6 +578,337 @@ def recovery_version_claims() -> None:
     check("two container versions" not in doc,
           "RECOVERY.md no longer claims there are two container versions",
           "there are three (v1, v2, v3) and two scripts; keym2.py reads v2 and v3")
+
+
+
+# ----------------------------------------------------------------------------
+# docs/RECOVERY.md — the sample output must be output the tools produce
+# ----------------------------------------------------------------------------
+
+# Lines whose value is random per container. Their *label* still has to match,
+# because a line the page leaves out is a line an heir sees and cannot place.
+RANDOM_VALUED = ("container", "table mac", "salt")
+
+
+def fenced_after(doc: str, marker: str) -> str | None:
+    """The first ``` block after `marker`, or None."""
+    at = doc.find(marker)
+    if at < 0:
+        return None
+    m = re.search(r"^```[^\n]*\n(.*?)^```", doc[at:], re.MULTILINE | re.DOTALL)
+    return m.group(1) if m else None
+
+
+def inspect_lines(text: str) -> list[tuple[str, str]]:
+    """(label, whole line) for each line of `inspect` output."""
+    out = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # A continuation line (v1's "time cost …") starts deep in the value
+        # column and has no label of its own.
+        indent = len(line) - len(line.lstrip())
+        label = "" if indent >= 8 else re.split(r"\s{2,}", stripped, maxsplit=1)[0]
+        out.append((label, stripped))
+    return out
+
+
+def recovery_examples() -> None:
+    """
+    Step 3's two sample outputs, compared against what `inspect` prints.
+
+    The v3 sample was typed in by hand when v3 landed and was missing two of
+    the lines the tool prints — `container` and `table mac` — so an heir
+    comparing their screen with the page saw output the page did not describe.
+    Nothing read the sample, so nothing noticed.
+
+    Each sample is compared with a container built to match it: the same KDF
+    costs, the same cipher, and a plaintext of the length the sample states.
+    Lines that are random per container are compared by label only.
+    """
+    print("\ndocs/RECOVERY.md — Step 3's sample output is real output:")
+    doc = RECOVERY.read_text(encoding="utf-8")
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        for version, marker, kdf, cipher, script in (
+            (3, "For a **v3** container", "argon2id", "aes", 3),
+            (1, "For a **v1** container", "argon2id", "chained", 1),
+        ):
+            sample = fenced_after(doc, marker)
+            check(sample is not None, f"RECOVERY.md has a v{version} inspect sample")
+            if sample is None:
+                continue
+
+            # The plaintext length the sample claims, so the chunk and
+            # ciphertext lines can be compared exactly rather than by label.
+            m = re.search(r"\((\d+) plaintext bytes\)", sample) if version != 1 \
+                else re.search(r"ciphertext\s+(\d+) bytes", sample)
+            length = int(m.group(1)) if m else 1
+            if version == 1 and cipher == "chained":
+                length -= 32  # two 16-byte tags
+            container = tmp / f"sample-v{version}.keym"
+            src = tmp / "sample-pt.bin"
+            src.write_bytes(b"x" * max(length, 1))
+            args = ["encrypt" if version == 1 else "encryptapp", "--password", PASSWORD,
+                    "--kdf", kdf, "--cipher", cipher, "--in", str(src), "--out", str(container),
+                    "--time", "3", "--mem", "65536", "--par", "4"]
+            if version != 1:
+                args += ["--version", str(version)]
+            r = subprocess.run(["node", str(BRIDGE), *args], capture_output=True, text=True, cwd=ROOT)
+            if r.returncode != 0:
+                check(False, f"built a container matching the v{version} sample", r.stderr.strip()[:160])
+                continue
+
+            r = cli(script, ["inspect", "--in", str(container)])
+            actual = inspect_lines(r.stdout)
+            shown = inspect_lines(sample)
+            check([a for a, _ in actual] == [s for s, _ in shown],
+                  f"the v{version} sample has the lines inspect prints, in order",
+                  f"page: {[s for s, _ in shown]}; tool: {[a for a, _ in actual]}")
+            tool = dict(actual)
+            for label, want in shown:
+                if label in RANDOM_VALUED or label not in tool:
+                    continue
+                check(tool[label] == want, f"  v{version} sample line {label or '(continued)'!r} matches",
+                      f"page: {want!r}; tool: {tool[label]!r}")
+
+
+# ----------------------------------------------------------------------------
+# docs/RECOVERY.md — every command on the page, executed
+# ----------------------------------------------------------------------------
+
+# The names the page uses. The runner supplies each one, the way the reader
+# already has them: their backup, their key file, the codes off their strips.
+PLACEHOLDERS = ("backup.keym", "mykey.bin", "shares.txt", "recovered.txt")
+
+
+def claimed_versions(command: str) -> set[int]:
+    """The versions a line's trailing comment says it is for: `# v3 or v2`."""
+    _, _, comment = command.partition("#")
+    return {int(v) for v in re.findall(r"\bv(\d+)\b", comment)}
+
+
+def run_doc_command(command: str, cwd: Path, stdin: str,
+                    extra: list[str] | None = None) -> subprocess.CompletedProcess:
+    argv = shlex.split(command, comments=True) + (extra or [])
+    if argv[:1] == ["python3"]:
+        argv[0] = sys.executable
+    return subprocess.run(argv, input=stdin, capture_output=True, text=True, cwd=cwd)
+
+
+def recovery_commands() -> None:
+    """
+    Run every command in RECOVERY.md's `bash` blocks, from the page.
+
+    Everything above drives the scripts with argument lists written *here*,
+    which is the copy nobody follows. This extracts the page's own lines, so a
+    renamed flag or a wrong script in the document fails the build rather than
+    an heir.
+
+    Every command must be recognised. A block added to the page that this
+    runner does not know how to check fails, rather than being skipped, because
+    an unexecuted command in a recovery document is exactly the drift this
+    exists to stop.
+
+    Each `inspect` and `decrypt` line carries a comment naming the versions it
+    is for (`# v3 or v2`). That comment is a claim, and it is checked: each
+    version must be claimed by exactly one line, that line must work on it, and
+    the others must refuse it, which is Step 2's "the wrong one refuses".
+    """
+    print("\ndocs/RECOVERY.md — every command on the page, executed:")
+    doc = RECOVERY.read_text(encoding="utf-8")
+    commands = [
+        line.strip()
+        for block in bash_blocks(doc)
+        for line in block.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    identify, decrypt, shares, joins, unknown = [], [], [], [], []
+    for c in commands:
+        argv = shlex.split(c, comments=True)
+        if argv[:1] == ["pip"]:
+            print(f"  skip {c}  (needs a package index; the libraries are a prerequisite, not a step)")
+        elif argv[:1] == ["python3"] and "decrypt" in argv and "--shares-from" in argv:
+            shares.append(c)
+        elif argv[:1] == ["python3"] and "join" in argv:
+            joins.append(c)
+        # A line without a `# vN` comment cannot be checked against the version
+        # it is for, so it counts as unrecognised rather than as "for none".
+        elif argv[:1] == ["python3"] and "inspect" in argv and claimed_versions(c):
+            identify.append(c)
+        elif argv[:1] == ["python3"] and "decrypt" in argv and claimed_versions(c):
+            decrypt.append(c)
+        else:
+            unknown.append(c)
+
+    for c in unknown:
+        check(False, f"RECOVERY.md command is executed by this runner: `{c}`",
+              "add a case for it here rather than leaving it unchecked")
+    for group, name in ((identify, "inspect"), (decrypt, "decrypt")):
+        for version in (1, 2, 3):
+            owners = [c for c in group if version in claimed_versions(c)]
+            check(len(owners) == 1,
+                  f"exactly one {name} line on the page is for v{version}",
+                  f"{len(owners)} lines claim it: {owners}")
+    check(len(shares) >= 1, "the page carries a shares command")
+    check(len(joins) >= 1, "the page carries a join command for strips that carry the backup")
+
+    # "Add `--key-file mykey.bin` if step 3 reported one was required."
+    m = re.search(r"Add `(--key-file [^`]+)`", doc)
+    check(m is not None, "the page says how to add a key file")
+    keyfile_args = shlex.split(m.group(1)) if m else []
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        # The page's commands run `python3 keym2.py`, a copy beside the backup,
+        # not a path into a clone.
+        for name in ("keym.py", "keym2.py"):
+            (tmp / name).write_bytes((ROOT / "reference" / name).read_bytes())
+        backup, mykey = tmp / PLACEHOLDERS[0], tmp / PLACEHOLDERS[1]
+        shares_file, recovered = tmp / PLACEHOLDERS[2], tmp / PLACEHOLDERS[3]
+        mykey.write_bytes(KEYFILE)
+
+        # Step 2: the right script describes the file, the wrong one refuses.
+        for version in (1, 2, 3):
+            backup.write_bytes(js_encrypt(version, SECRET, "pbkdf2", "aes", None, tmp).read_bytes())
+            for c in identify:
+                r = run_doc_command(c, tmp, stdin="")
+                if version in claimed_versions(c):
+                    check(r.returncode == 0 and f"KEYM v{version}" in r.stdout,
+                          f"v{version}: `{c}` describes it", (r.stderr or r.stdout).strip()[:160])
+                else:
+                    check(r.returncode != 0, f"v{version}: `{c}` refuses it", r.stdout.strip()[:160])
+
+        # Step 4: the line for this version, with the password on the prompt,
+        # and again with the key file the page tells you to add.
+        for version in (1, 2, 3):
+            for kf in (None, KEYFILE):
+                backup.write_bytes(js_encrypt(version, SECRET, "argon2id", "chained", kf, tmp,
+                                              tag="-doc").read_bytes())
+                for c in decrypt:
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin=PASSWORD + "\n",
+                                        extra=keyfile_args if kf else None)
+                    tag = f"v{version}{' +key file' if kf else ''}: `{c}`"
+                    if version in claimed_versions(c):
+                        got = recovered.read_bytes() if recovered.exists() else b""
+                        check(r.returncode == 0 and got == SECRET, f"{tag} recovers the bytes",
+                              r.stderr.strip()[:160])
+                    else:
+                        # Troubleshooting item 1: the wrong script fails, and
+                        # writes nothing a reader could mistake for a result.
+                        check(r.returncode != 0 and not recovered.exists(),
+                              f"{tag} refuses it", r.stderr.strip()[:160])
+
+        # Step 4 with shares: two of three strips, one of them copied by hand.
+        base = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp, tag="-docshares")
+        issued = tmp / "issued.txt"
+        r = subprocess.run(
+            ["node", str(BRIDGE), "addshares", "--password", PASSWORD,
+             "--in", str(base), "--out", str(backup), "--shares-out", str(issued),
+             "--threshold", "2", "--shares", "3",
+             "--salt", os.urandom(32).hex(), "--share-secret", os.urandom(32).hex(),
+             "--share-coefficients", os.urandom(32).hex()],
+            capture_output=True, text=True, cwd=ROOT)
+        strips = [ln for ln in issued.read_text().split("\n") if ln.strip()] if r.returncode == 0 else []
+        check(len(strips) == 3, "issued a share set for the shares command", r.stderr.strip()[:160])
+        if len(strips) == 3:
+            prefix, _, code = strips[2].partition(":")
+            shares_file.write_text("# strips 1 and 3\n" + strips[0] + "\n"
+                                   + prefix + ":" + code.lower().replace("-", " ") + "\n")
+            for c in shares:
+                recovered.unlink(missing_ok=True)
+                r = run_doc_command(c, tmp, stdin="")
+                got = recovered.read_bytes() if recovered.exists() else b""
+                check(r.returncode == 0 and got == SECRET, f"`{c}` recovers the bytes",
+                      r.stderr.strip()[:160])
+
+            # Strips that carry the backup: the second code on a strip is the
+            # backup's one paper part, exactly as the app prints it. Saved as
+            # parts.txt, the page's join turns it back into backup.keym, and
+            # the page's shares command then opens that with the strips.
+            shared_container = backup.read_bytes()
+            r = subprocess.run(["node", str(BRIDGE), "split", "--in", str(backup),
+                                "--out", str(tmp / "printed-parts.txt"), "--print"],
+                               capture_output=True, text=True, cwd=ROOT)
+            printed = [ln for ln in (tmp / "printed-parts.txt").read_text().splitlines() if ln.strip()] \
+                if r.returncode == 0 else []
+            check(len(printed) == 1 and printed[0].startswith("KMPART2:1/1:"),
+                  "a small backup prints as one KMPART2:1/1 part, as the page says",
+                  f"{len(printed)} parts: {r.stderr.strip()[:120]}")
+            if printed:
+                backup.unlink()
+                (tmp / "parts.txt").write_text(printed[0] + "\n")
+                for c in joins:
+                    r = run_doc_command(c, tmp, stdin="")
+                    check(r.returncode == 0 and backup.exists() and backup.read_bytes() == shared_container,
+                          f"`{c}` rebuilds the backup from a strip's second code", r.stderr.strip()[:160])
+                for c in shares:
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin="")
+                    got = recovered.read_bytes() if recovered.exists() else b""
+                    check(r.returncode == 0 and got == SECRET,
+                          f"and then `{c}` opens it with the strips alone", r.stderr.strip()[:160])
+
+            # "If the strips need the password as well": a §4.8 container the
+            # shipping writer made, opened with the page's own shares command,
+            # which reads the strips and then asks for the password on stdin.
+            both_src = tmp / "both-pt.bin"
+            both_src.write_bytes(SECRET)
+            both_issued = tmp / "both-issued.txt"
+            r = subprocess.run(
+                ["node", str(BRIDGE), "encryptboth", "--password", PASSWORD,
+                 "--in", str(both_src), "--out", str(backup), "--shares-out", str(both_issued),
+                 "--threshold", "2", "--shares", "3", "--kdf", "pbkdf2", "--iterations", "600000",
+                 "--salt", os.urandom(32).hex(), "--master-key", os.urandom(32).hex(),
+                 "--container-id", os.urandom(16).hex(),
+                 "--share-secret", os.urandom(32).hex(), "--share-coefficients", os.urandom(32).hex()],
+                capture_output=True, text=True, cwd=ROOT)
+            both_strips = [ln for ln in both_issued.read_text().split("\n") if ln.strip()] \
+                if r.returncode == 0 else []
+            check(len(both_strips) == 3, "wrote a backup whose strips need the password",
+                  r.stderr.strip()[:160])
+            if both_strips:
+                v3_line = [c for c in identify if 3 in claimed_versions(c)]
+                if v3_line:
+                    r = run_doc_command(v3_line[0], tmp, stdin="")
+                    check("password and share set, both needed" in r.stdout,
+                          "inspect says the strips and the password are both needed",
+                          r.stdout.strip()[-200:])
+                shares_file.write_text(both_strips[1] + "\n" + both_strips[2] + "\n")
+                for c in shares:
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin="")
+                    check(r.returncode != 0 and not recovered.exists(),
+                          f"`{c}` with no password typed does not open it", r.stderr.strip()[-160:])
+                    check("together with its password" in r.stderr,
+                          "and says the strips need the password", r.stderr.strip()[-160:])
+                    recovered.unlink(missing_ok=True)
+                    r = run_doc_command(c, tmp, stdin=PASSWORD + "\n")
+                    got = recovered.read_bytes() if recovered.exists() else b""
+                    check(r.returncode == 0 and got == SECRET,
+                          f"`{c}` asks for the password and opens it", r.stderr.strip()[-160:])
+            check("password and share set, both needed" in doc,
+                  "the page quotes inspect's words for such a backup")
+            # Back to the share-set backup the checks below are about.
+            backup.write_bytes(shared_container)
+            shares_file.write_text("# strips 1 and 3\n" + strips[0] + "\n" + strips[2] + "\n")
+
+            # "inspect prints it on the line `set code`", and it is what every
+            # strip begins with. Run with the page's own inspect line for v3.
+            v3_inspect = [c for c in identify if 3 in claimed_versions(c)]
+            if v3_inspect:
+                r = run_doc_command(v3_inspect[0], tmp, stdin="")
+                m = re.search(r"^\s*set code\s+(\S+)$", r.stdout, re.MULTILINE)
+                check(m is not None and all(t.startswith("KMSHARE2:" + m.group(1) + "-") for t in strips),
+                      "inspect's `set code` is what every strip of the set begins with",
+                      r.stdout.strip()[-200:])
+            check(re.search(r"KMSHARE2:[0-9A-Z]{4}-[0-9A-Z]{4}-`", doc) is not None
+                  and "`set code`" in doc,
+                  "the page shows a set code and names inspect's `set code` line")
 
 
 # ----------------------------------------------------------------------------

@@ -1,7 +1,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { visible, useTextMode, encryptText, STRONG_PASSWORD } from "./helpers";
+import { visible, useTextMode, encryptText, selectCrypto, STRONG_PASSWORD } from "./helpers";
 import { PROBE_TIMEOUT_MS, WORST_CASE_PROBE_MS } from "../../src/lib/worker-probe-policy";
 
 /**
@@ -548,4 +548,58 @@ test("Stop during the readiness probe ends the operation instead of freezing the
     releaseScript();
     await context.close();
   }
+});
+
+/**
+ * Stop pressed while a file is still being read.
+ *
+ * processData awaits the file read before it reaches the worker. A Stop in that
+ * window moved the op counter and terminated the (not yet started) derivation,
+ * and then the read finished and the disowned operation went on: a fresh worker,
+ * a full derivation, and a result thrown away. The read is slowed here so the
+ * window is wide enough to press Stop in.
+ */
+test("Stop during a slow file read starts no derivation afterwards", async ({ page }) => {
+  await page.addInitScript(() => {
+    const original = Blob.prototype.arrayBuffer;
+    Blob.prototype.arrayBuffer = function (this: Blob) {
+      if (this instanceof File && this.name === "slow-read.txt") {
+        return new Promise<ArrayBuffer>((resolve) =>
+          setTimeout(() => void original.call(this).then(resolve), 3_000)
+        );
+      }
+      return original.call(this);
+    };
+  });
+  const workersAfterStop: string[] = [];
+  let stopped = false;
+  page.on("worker", (w) => {
+    if (stopped) workersAfterStop.push(w.url());
+  });
+
+  await page.goto("/");
+  await selectCrypto(page, "pbkdf2", "aes");
+  await visible(page.getByRole("button", { name: "File", exact: true })).first().click();
+  await page.setInputFiles('input[type="file"]', {
+    name: "slow-read.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from("read slowly"),
+  });
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  let downloaded = false;
+  page.on("download", () => {
+    downloaded = true;
+  });
+  await visible(page.getByRole("button", { name: /^Encrypt File$/i })).click();
+
+  const stop = visible(page.getByRole("button", { name: /^Stop$/i }));
+  await expect(stop).toBeVisible({ timeout: 10_000 });
+  stopped = true;
+  await stop.click();
+
+  // Past the slowed read and well past a PBKDF2 derivation of this size.
+  await page.waitForTimeout(6_000);
+  expect(workersAfterStop, "a worker was started for an operation already stopped").toEqual([]);
+  expect(downloaded, "the stopped operation went on to produce a container").toBe(false);
+  await expect(page.getByText(/could not start the background worker/i)).toHaveCount(0);
 });

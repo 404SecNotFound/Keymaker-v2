@@ -121,3 +121,60 @@ test("a worker that dies mid-operation is named, and the password is not blamed"
     await context.close();
   }
 });
+
+/**
+ * A backup saved as text, chosen as a file on Decrypt.
+ *
+ * File mode handed every file to the reader as raw bytes. A .txt holding
+ * `keym2:` armor does not start with the binary magic, so it fell through to
+ * the headerless legacy path, ran a million PBKDF2 iterations and reported
+ * "the password may be incorrect". The heir with a saved text backup, a
+ * printed-and-retyped paper set or a shares file was told their password was
+ * wrong.
+ */
+test.describe("a text-form backup chosen as a file", () => {
+  const SECRET = "saved as a text file by someone who meant well";
+
+  async function chooseOnDecrypt(page: Page, name: string, body: string) {
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await page.locator("#decrypt-file").setInputFiles({
+      name,
+      mimeType: "text/plain",
+      buffer: Buffer.from(body, "utf8"),
+    });
+  }
+
+  test("a .txt of keym2: armor opens with its password", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    const armored = await encryptText(page, SECRET, STRONG_PASSWORD);
+
+    // A leading blank line and a BOM, the way a notes app saves it.
+    await chooseOnDecrypt(page, "backup.txt", `﻿\n${armored}\n`);
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
+    // Verify-only would hide the plaintext; decrypt proper so the bytes can
+    // be compared. A decrypted file is downloaded, so its body is read there.
+    const download = page.waitForEvent("download", { timeout: 60_000 });
+    await visible(page.getByRole("button", { name: /^Decrypt File$/i })).click();
+    const file = await download;
+    const path = await file.path();
+    expect(readFileSync(path!, "utf8")).toBe(SECRET);
+    await expect(page.getByText(/password may be incorrect/i)).toHaveCount(0);
+  });
+
+  test("a shares file is named as shares, not as a wrong password", async ({ page }) => {
+    await page.goto("/");
+    await chooseOnDecrypt(
+      page,
+      "shares.txt",
+      "# strips 1 and 2\nKMSHARE2:05DZ-4EG3-07VX-TDNP\nKMSHARE2:05DZ-4EG3-095E-01FR\n"
+    );
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Decrypt File$/i })).click();
+    await expect(page.getByText(/holds recovery shares, not an encrypted backup/i).first()).toBeVisible({
+      timeout: 30_000,
+    });
+    await expect(page.getByText(/password may be incorrect/i)).toHaveCount(0);
+  });
+});

@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { visible, useTextMode, selectCrypto } from "./helpers";
+import { visible, useTextMode, selectCrypto, capturePrintedSymbols, composePhoto } from "./helpers";
 
 /**
  * Phase 4.1d — recovery shares, driven the way a user reaches them.
@@ -81,12 +81,12 @@ async function encryptWithShares(
     timeout: 90_000,
   });
   const shares = await page.locator("p.font-mono").allTextContents();
-  // Escape rather than hunting for a close control. Radix's dismiss button is
-  // an icon whose accessible name and attributes are an implementation detail
-  // of the component library, and a locator built on those is a portability
-  // hazard between engines — which is precisely how the U28 clipboard test put
-  // main red on two of three.
-  await page.keyboard.press("Escape");
+  // The dialog's own labelled button, not Radix's icon X: the X's accessible
+  // name is an implementation detail of the component library, and a locator
+  // built on it is a portability hazard between engines (how the U28
+  // clipboard test put main red on two of three). Escape no longer closes this
+  // dialog at all; see "the one-time shares survive a stray Escape".
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
   await expect(page.getByText(/Save these/)).toHaveCount(0);
 
   const armored = await page.evaluate(
@@ -103,6 +103,42 @@ test.describe("enrolling a share set", () => {
     for (const s of shares) expect(s).toMatch(/^KMSHARE2:[0-9A-HJKMNP-TV-Z-]+$/);
     expect(new Set(shares).size, "two shares came out identical").toBe(3);
     expect(armored.startsWith("keym2:"), "the container is not v2 armor").toBe(true);
+  });
+
+  test("a preset fills both fields, and the set it issues is that set", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 4);
+
+    const presets = page.getByRole("group", { name: "Common share sets" });
+    const twoOfThree = visible(presets.getByRole("button", { name: "2 of 3" }));
+    const threeOfFive = visible(presets.getByRole("button", { name: "3 of 5" }));
+    // 2 of 4 is neither preset, so neither may claim to be chosen.
+    await expect(twoOfThree).toHaveAttribute("aria-pressed", "false");
+    await expect(threeOfFive).toHaveAttribute("aria-pressed", "false");
+
+    await threeOfFive.click();
+    await expect(page.getByLabel("Needed to open")).toHaveValue("3");
+    await expect(page.getByLabel("Shares to print")).toHaveValue("5");
+    await expect(threeOfFive).toHaveAttribute("aria-pressed", "true");
+    await expect(twoOfThree).toHaveAttribute("aria-pressed", "false");
+
+    // A preset only fills the fields. Editing one afterwards is a custom set,
+    // and the button must stop saying otherwise.
+    await visible(page.getByLabel("Needed to open")).fill("4");
+    await expect(threeOfFive).toHaveAttribute("aria-pressed", "false");
+
+    await threeOfFive.click();
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 5 shares now/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/Any 3 of them open this container/)).toBeVisible();
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+    expect(shares, "the preset did not issue five shares").toHaveLength(5);
   });
 
   test("the honest framing is on screen, not only in the docs", async ({ page }) => {
@@ -136,6 +172,30 @@ test.describe("enrolling a share set", () => {
   });
 });
 
+test.describe("the one-time shares dialog", () => {
+  test("survives a stray Escape and a backdrop click, and closes when asked", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    const title = page.getByText(/Save these 3 shares now/);
+    await expect(title).toBeVisible({ timeout: 90_000 });
+
+    // The dialog says the shares are shown once and cannot be reissued. Each
+    // of these used to close it, and closing it destroys them.
+    await page.keyboard.press("Escape");
+    await expect(title, "Escape discarded the one-time shares").toBeVisible();
+    await page.mouse.click(5, 5);
+    await expect(title, "a click on the backdrop discarded the one-time shares").toBeVisible();
+
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+    await expect(title).toHaveCount(0);
+  });
+});
+
 test.describe("a share pasted into the wrong box", () => {
   test("is named as a share rather than failing as a container", async ({ page }) => {
     const { shares } = await encryptWithShares(page, 2, 3);
@@ -147,6 +207,12 @@ test.describe("a share pasted into the wrong box", () => {
     // §7's wrong-box paste. Without this it reaches the parser and comes back
     // as a generic decryption failure.
     await expect(page.getByText(/recovery share, not an encrypted container/i)).toBeVisible();
+    // The paste is kept, so the notice must not say nothing was pasted.
+    await expect(
+      page.locator("#text-secret-size-error"),
+      "the notice said nothing was pasted, beside the paste it had kept"
+    ).not.toContainText(/Nothing was pasted/);
+    await expect(visible(page.getByPlaceholder("Enter text to decrypt"))).toHaveValue(shares[0] as string);
   });
 });
 
@@ -202,5 +268,342 @@ test.describe("the inheritance path", () => {
     // §4.4's skip rule from the owner's side: enrolling shares must not cost
     // them the way in they already had.
     await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+});
+
+/**
+ * The printed strips carry a QR each, and until this the app could not read
+ * them into the shares box: a strip scanned on the Decrypt tab was only told it
+ * was in the wrong box, and a whole printed backup scanned in one batch (parts
+ * and strips together) failed as one bad paste. The images here are the strip
+ * and part symbols of the real print sheet, snapshotted from inside
+ * `window.print()`, so the round trip is through the artefact a person would
+ * photograph rather than a fixture that could drift from it.
+ */
+interface PrintedBackup {
+  armored: string;
+  shares: string[];
+  stripPngs: Buffer[];
+  partPngs: Buffer[];
+}
+
+async function encryptAndPrintWithShares(
+  page: import("@playwright/test").Page,
+  k: number,
+  n: number
+): Promise<PrintedBackup> {
+  await page.goto("/");
+  await useTextMode(page);
+  await selectCrypto(page, "pbkdf2", "aes");
+  await enableShares(page, k, n);
+
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await expect(page.getByText(new RegExp(`Save these ${n} shares now`))).toBeVisible({
+    timeout: 90_000,
+  });
+  const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+    s.startsWith("KMSHARE2:")
+  );
+
+  // The strip and part symbols of the real print sheet, as a scan would see
+  // them; see capturePrintedSymbols.
+  const printed = await capturePrintedSymbols(
+    page,
+    page.getByRole("dialog").getByRole("button", { name: /Print paper vault/i })
+  );
+
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
+  await expect(page.getByText(/Save these/)).toHaveCount(0);
+  const armored = await page.evaluate(
+    () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+  );
+  return { armored, shares, stripPngs: printed.strips, partPngs: printed.parts };
+}
+
+const png = (name: string, buffer: Buffer) => ({ name, mimeType: "image/png", buffer });
+
+
+async function shareBoxLines(page: import("@playwright/test").Page): Promise<string[]> {
+  const value = await visible(page.locator("#share-input")).inputValue();
+  return value
+    .split("\n")
+    .map((l) => l.trim())
+    .filter((l) => l && !l.startsWith("#"));
+}
+
+test.describe("scanning the printed strips", () => {
+  test("strip QRs scan into the shares box and open the backup with no password", async ({ page }) => {
+    const backup = await encryptAndPrintWithShares(page, 2, 3);
+    expect(backup.stripPngs, "the sheet printed no strip symbols").toHaveLength(3);
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(backup.armored);
+    await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
+
+    // Strips 2 and 3, for the same reason as the typed test above.
+    await page.locator("#share-qr-scan-input").setInputFiles([
+      png("strip-2.png", backup.stripPngs[1] as Buffer),
+      png("strip-3.png", backup.stripPngs[2] as Buffer),
+    ]);
+    await expect.poll(() => shareBoxLines(page), { timeout: 20_000 }).toEqual([
+      backup.shares[1],
+      backup.shares[2],
+    ]);
+
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("a whole printed backup scanned in one batch sorts parts from strips", async ({ page }) => {
+    const backup = await encryptAndPrintWithShares(page, 2, 3);
+    expect(backup.partPngs.length, "the sheet printed no container symbols").toBeGreaterThan(0);
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+
+    // Everything photographed off the sheet, strips interleaved with parts,
+    // through the container box's own scan button. Nothing else is touched:
+    // not the shares toggle, not the password.
+    await page.locator("#qr-scan-input").setInputFiles([
+      png("strip-1.png", backup.stripPngs[0] as Buffer),
+      ...backup.partPngs.map((b, i) => png(`part-${i + 1}.png`, b)),
+      png("strip-3.png", backup.stripPngs[2] as Buffer),
+    ]);
+
+    await expect(visible(page.locator("#text-secret"))).toHaveValue(backup.armored, {
+      timeout: 20_000,
+    });
+    await expect(
+      visible(page.getByRole("button", { name: /^Use a password instead$/ })),
+      "the scanned strips did not turn on the shares path"
+    ).toBeVisible();
+    expect(await shareBoxLines(page)).toEqual([backup.shares[0], backup.shares[2]]);
+
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("one photo of a whole page reads every code on it", async ({ page }) => {
+    const backup = await encryptAndPrintWithShares(page, 2, 3);
+    // Two strips and every container symbol laid out on one sheet and
+    // photographed once, which is how a person holding the paper would do it.
+    const photo = await composePhoto(page, [
+      backup.stripPngs[0] as Buffer,
+      ...backup.partPngs,
+      backup.stripPngs[2] as Buffer,
+    ]);
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await page.locator("#qr-scan-input").setInputFiles([png("the-whole-page.png", photo)]);
+
+    await expect(visible(page.locator("#text-secret"))).toHaveValue(backup.armored, {
+      timeout: 30_000,
+    });
+    await expect(
+      page.locator("#share-input"),
+      "no strip was read from the photo, so the shares box never opened"
+    ).toBeVisible({ timeout: 20_000 });
+    // jsqr finds codes in no particular order, and neither box cares.
+    expect((await shareBoxLines(page)).sort()).toEqual([backup.shares[0], backup.shares[2]].sort());
+
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("strips that carry the backup open it with nothing else", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+
+    // Off until chosen, and the cost is on screen beside it.
+    const carry = visible(page.getByRole("switch", { name: "Put the whole backup on every strip" }));
+    await expect(carry).toHaveAttribute("aria-checked", "false");
+    await expect(page.getByTestId("strips-carry-backup")).toContainText(
+      "2 holders who get together need nothing else"
+    );
+    await carry.click();
+    await expect(carry).toHaveAttribute("aria-checked", "true");
+
+    const printed = await capturePrintedSymbols(
+      page,
+      page.getByRole("dialog").getByRole("button", { name: /Print paper vault/i })
+    );
+    // Two codes a strip now: its share, and the backup.
+    expect(printed.strips, "each strip should carry two symbols").toHaveLength(6);
+
+    // A fresh page: no container, nothing typed, nothing from the owner.
+    // Strips 1 and 3, both codes of each, are all there is.
+    await page.reload();
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await page.locator("#qr-scan-input").setInputFiles([
+      png("strip-1-share.png", printed.strips[0] as Buffer),
+      png("strip-1-backup.png", printed.strips[1] as Buffer),
+      png("strip-3-share.png", printed.strips[4] as Buffer),
+      png("strip-3-backup.png", printed.strips[5] as Buffer),
+    ]);
+    await expect(visible(page.locator("#text-secret"))).not.toHaveValue("", { timeout: 30_000 });
+    await expect(page.locator("#share-input")).toBeVisible({ timeout: 20_000 });
+    expect((await shareBoxLines(page)).sort()).toEqual([shares[0], shares[2]].sort());
+
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("a backup too big for one symbol is not offered on the strips", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill("x".repeat(4000));
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    // Given a moment to decide, since the size check is asynchronous.
+    await page.waitForTimeout(1_000);
+    await expect(page.getByTestId("strips-carry-backup")).toHaveCount(0);
+  });
+
+  test("a strip scanned twice is entered once", async ({ page }) => {
+    const backup = await encryptAndPrintWithShares(page, 2, 3);
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(backup.armored);
+    await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
+
+    // §4.6 refuses a repeated index, so a duplicate left in the box would fail
+    // an otherwise sufficient set with nothing to say which photo repeated.
+    await page.locator("#share-qr-scan-input").setInputFiles([
+      png("strip-1.png", backup.stripPngs[0] as Buffer),
+      png("strip-1-again.png", backup.stripPngs[0] as Buffer),
+      png("strip-2.png", backup.stripPngs[1] as Buffer),
+    ]);
+    await expect.poll(() => shareBoxLines(page), { timeout: 20_000 }).toEqual([
+      backup.shares[0],
+      backup.shares[1],
+    ]);
+
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+});
+
+test.describe("one unlock path at a time", () => {
+  test("choosing shares after a passkey does not leave the passkey in charge", async ({ page }) => {
+    const { armored, shares } = await encryptWithShares(page, 2, 3);
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+
+    const passkey = page.getByRole("button", { name: /^Use a passkey$/ });
+    test.skip((await passkey.count()) === 0, "this engine offers no passkey control");
+    await visible(passkey).click();
+    await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
+    await visible(page.locator("#share-input")).fill(`${shares[0]}\n${shares[1]}\n`);
+
+    // The passkey control is hidden while shares are on, so a passkey choice
+    // left set behind it would ask for a tap and then report that this
+    // container has no passkey, to someone holding a sufficient share set.
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+});
+
+/**
+ * §4.8, "the strips need the password too": one slot that takes both, and
+ * nothing beside it. What a person sees at each step has to match what the
+ * format now does: the choice states its cost, the passkey goes away, the
+ * strips alone are told they need the password rather than "decryption
+ * failed", the password alone fails, and the two together open it.
+ */
+test.describe("strips that need the password too", () => {
+  test("neither half opens it alone, and together they do", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+
+    const both = visible(page.getByRole("switch", { name: "The strips need the password too" }));
+    await expect(both).toHaveAttribute("aria-checked", "false");
+    await both.click();
+    await expect(both).toHaveAttribute("aria-checked", "true");
+    await expect(page.getByTestId("shares-need-password-cost")).toContainText(
+      "loses the backup for good"
+    );
+    const passkeySwitch = page.getByRole("switch", { name: "Passkey quick access" });
+    if ((await passkeySwitch.count()) > 0) await expect(passkeySwitch).toBeDisabled();
+
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    await expect(page.getByText(/open this container together with the\s+password, and only with it/)).toBeVisible();
+    const shares = (await page.locator("p.font-mono").allTextContents()).filter((s) =>
+      s.startsWith("KMSHARE2:")
+    );
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+    const armored = await page.evaluate(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+    );
+    await expect(page.getByTestId("receipt-ways")).toContainText("both needed");
+
+    // The strips alone: named for what they are, before any work.
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
+    await visible(page.locator("#share-input")).fill(`${shares[0]}\n${shares[2]}`);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(
+      page.getByText(/These strips open this backup together with its password/).first()
+    ).toBeVisible({ timeout: 30_000 });
+    // A refused unlock renders no output at all.
+    await expect(page.locator("#output-text")).toHaveCount(0);
+
+    // Both together.
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
+  test("the password alone does not open it", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    await selectCrypto(page, "pbkdf2", "aes");
+    await enableShares(page, 2, 3);
+    await visible(page.getByRole("switch", { name: "The strips need the password too" })).click();
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(SECRET);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+    await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 90_000 });
+    await page.getByRole("button", { name: "I have saved these shares" }).click();
+    const armored = await page.evaluate(
+      () => (document.querySelector("#output-text") as HTMLTextAreaElement).value
+    );
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await visible(page.getByPlaceholder("Enter decryption password")).fill(PASSWORD);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(page.getByText(/decryption failed|could not be decrypted|password may be incorrect/i).first()).toBeVisible({
+      timeout: 90_000,
+    });
+    // A refused unlock renders no output at all.
+    await expect(page.locator("#output-text")).toHaveCount(0);
   });
 });

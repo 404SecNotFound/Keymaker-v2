@@ -131,9 +131,12 @@ export function DiceEntropyTool() {
     }
 
     const totalBits = rolls * bitsPerRoll;
-    const rollsFor128 = Math.ceil(FLOOR_BITS / bitsPerRoll);
-    const rollsFor256 = Math.ceil(TARGET_BITS / bitsPerRoll);
-    const rollsNeeded = Math.ceil(targetBits / bitsPerRoll);
+    // Null, not Infinity, when the die is not a die: the counts divide by
+    // bits per roll, which is 0 for an invalid size, and the page printed
+    // "Infinity /128" and "Keep rolling, Infinity more 0-sided rolls".
+    const rollsFor128 = sidesValid ? Math.ceil(FLOOR_BITS / bitsPerRoll) : null;
+    const rollsFor256 = sidesValid ? Math.ceil(TARGET_BITS / bitsPerRoll) : null;
+    const rollsNeeded = sidesValid ? Math.ceil(targetBits / bitsPerRoll) : null;
     const progress = Math.min(1, totalBits / targetBits);
 
     const verdict: Verdict =
@@ -160,7 +163,7 @@ export function DiceEntropyTool() {
    * U21. "1 more rolls" — the last roll before a target is the one most likely
    * to be read, and it was the one sentence that read as unfinished.
    */
-  const remaining = calc.rollsNeeded - calc.rolls;
+  const remaining = calc.rollsNeeded === null ? null : calc.rollsNeeded - calc.rolls;
   const rollWord = remaining === 1 ? "roll" : "rolls";
 
   const verdictUI = {
@@ -168,7 +171,10 @@ export function DiceEntropyTool() {
       icon: ShieldAlert,
       classes: "border-destructive/40 bg-destructive/10 text-destructive",
       title: "Below the 128-bit floor",
-      body: `Keep rolling — ${remaining} more ${calc.validSides}-sided ${rollWord} to reach your ${targetBits}-bit target.`,
+      body:
+        remaining === null
+          ? "Enter how many sides your die has to see how many rolls you need."
+          : `Keep rolling — ${remaining} more ${calc.validSides}-sided ${rollWord} to reach your ${targetBits}-bit target.`,
     },
     floor: {
       icon: CheckCircle2,
@@ -385,9 +391,9 @@ export function DiceEntropyTool() {
           <div className="min-w-0">
             <p className="text-[12px] uppercase tracking-wide text-muted-foreground">Rolls needed</p>
             <p className="truncate font-medium tabular-nums">
-              {calc.rollsFor128} <span className="text-muted-foreground">/128</span>
+              {calc.rollsFor128 ?? "n/a"} <span className="text-muted-foreground">/128</span>
               {" · "}
-              {calc.rollsFor256} <span className="text-muted-foreground">/256</span>
+              {calc.rollsFor256 ?? "n/a"} <span className="text-muted-foreground">/256</span>
             </p>
           </div>
         </div>
@@ -431,7 +437,7 @@ export function DiceEntropyTool() {
             />
           </div>
           <div className="mt-1 flex justify-between text-[12px] text-muted-foreground">
-            <span className={cn(calc.totalBits >= FLOOR_BITS && "text-warning")}>128-bit floor @ {calc.rollsFor128} rolls</span>
+            <span className={cn(calc.totalBits >= FLOOR_BITS && "text-warning")}>128-bit floor @ {calc.rollsFor128 ?? "n/a"} rolls</span>
             <span>{calc.progress >= 1 ? "100%" : `${Math.floor(calc.progress * 100)}%`}</span>
           </div>
         </div>

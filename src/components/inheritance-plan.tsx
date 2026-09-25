@@ -78,8 +78,10 @@ export function InheritancePlan({
           and cannot be reissued.
         </li>
         <li data-testid="inheritance-step">
-          Print the paper vault for the container, and put each share on its own
-          sheet.
+          Print the paper vault: the container as QR symbols, and each share on
+          its own strip to cut apart. The vault prints what was sealed as text;
+          if you sealed a file instead, keep the downloaded <code>.keym</code>{" "}
+          with the shares.
         </li>
         <li data-testid="inheritance-step">
           Keep the recovery kit, <code>keym2.py</code> and{" "}

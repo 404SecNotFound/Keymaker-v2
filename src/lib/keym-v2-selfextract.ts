@@ -21,6 +21,9 @@
 import {
   KEYM2_ARMOR_PREFIX,
   KEYM2_CORE_HEADER_LEN,
+  KEYM2_SLOT_TYPE_BOTH,
+  KEYM2_SLOT_TYPE_PASSKEY,
+  KEYM2_SLOT_TYPE_SHAMIR,
   armorKeym2,
   dearmorKeym2,
   keym2SlotLen,
@@ -74,7 +77,16 @@ export function webcryptoProfileViolations(container: Uint8Array): string[] {
     return ["this is not a KEYM v2 container"];
   }
 
-  if (core.cipher !== CipherId.AES_256_GCM) {
+  // Named for what the container actually uses. This once said ChaCha20-Poly1305
+  // for every cipher that was not AES, chained mode included, which sent the
+  // reader looking for a setting they had not chosen.
+  if (core.cipher === CipherId.CHAINED) {
+    reasons.push(
+      "the payload is encrypted in chained mode, AES-256-GCM and then " +
+        "ChaCha20-Poly1305. WebCrypto has never had ChaCha20-Poly1305 and no " +
+        "proposal adds it, so a self-extracting page can only carry AES-256-GCM alone."
+    );
+  } else if (core.cipher !== CipherId.AES_256_GCM) {
     reasons.push(
       "the payload is encrypted with ChaCha20-Poly1305, which WebCrypto has " +
         "never had and no proposal adds. A self-extracting page can only carry AES-256-GCM."
@@ -86,6 +98,12 @@ export function webcryptoProfileViolations(container: Uint8Array): string[] {
   const width = keym2SlotLen(core.cipher);
   let usable = false;
   let keyFileOnly = false;
+  let argon2Password = false;
+  // The ways in that are not a password alone, in the order they are found.
+  const otherWays: string[] = [];
+  const note = (way: string) => {
+    if (!otherWays.includes(way)) otherWays.push(way);
+  };
 
   for (let j = 0; j < slotCount; j++) {
     const start = table + j * width;
@@ -95,8 +113,23 @@ export function webcryptoProfileViolations(container: Uint8Array): string[] {
     // the container. The question is only whether *some* slot is in the subset.
     const slot = parseKeym2Slot(record);
     if (!slot) continue;
+    if (slot.slotType === KEYM2_SLOT_TYPE_PASSKEY) {
+      note("a passkey");
+      continue;
+    }
+    if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) {
+      note("a set of shares");
+      continue;
+    }
+    if (slot.slotType === KEYM2_SLOT_TYPE_BOTH) {
+      note("a password together with shares");
+      continue;
+    }
     if (slot.slotType !== 0x00) continue;
-    if (slot.kdf.kdf !== KdfId.PBKDF2) continue;
+    if (slot.kdf.kdf !== KdfId.PBKDF2) {
+      argon2Password = true;
+      continue;
+    }
     if (slot.keyFileUsed) {
       keyFileOnly = true;
       continue;
@@ -111,10 +144,19 @@ export function webcryptoProfileViolations(container: Uint8Array): string[] {
           "one file, which is exactly what a key file exists to prevent; leaving " +
           "it out would write a weaker backup than you think you have."
       );
-    } else {
+    } else if (argon2Password) {
       reasons.push(
         "the password slot uses Argon2id, which needs WebAssembly. A page that " +
           "still works in twenty years cannot depend on it."
+      );
+    } else {
+      // A share-only or passkey-only backup has no password slot at all, and
+      // telling its owner their password uses Argon2id describes a setting
+      // that does not exist.
+      const ways = otherWays.length ? otherWays.join(" or ") : "no method this page understands";
+      reasons.push(
+        `this backup has no password slot. It opens with ${ways}, and the page ` +
+          "can only ask for a password, so it needs a PBKDF2 password slot."
       );
     }
   }
@@ -214,7 +256,7 @@ export function looksLikeSelfExtract(text: string): boolean {
  * reason the app does: hashing a stylesheet buys nothing when no untrusted
  * style can reach the document.
  */
-const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-inEHJqi1e61OpR8s6dLFBcrboDqwxu81fUCR/fn76v4=";
+const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-w5DyUTkawgwIa/55Xv/mJyxzZXVehfLAkhGPDPFhJVw=";
 
 const SELF_EXTRACT_CSP = [
   "default-src 'none'",
@@ -429,6 +471,23 @@ function say(text, bad) {
   statusEl.className = bad ? 'bad' : 'busy';
 }
 
+// The blob URL behind the save link. It keeps the recovered bytes reachable
+// for as long as it exists, so it is revoked rather than left to page unload.
+var savedUrl = null;
+
+// Nothing an earlier attempt recovered outlives the next one. Hiding the result
+// is not enough: a hidden textarea still holds its value, a binary result would
+// otherwise leave the previous text in it, and an unrevoked blob URL still
+// serves the plaintext to anything that has it.
+function forget() {
+  resultEl.hidden = true;
+  tableEl.hidden = true;
+  outEl.value = '';
+  if (savedUrl !== null) URL.revokeObjectURL(savedUrl);
+  savedUrl = null;
+  saveEl.setAttribute('href', '#');
+}
+
 formEl.addEventListener('submit', async function (e) {
   e.preventDefault();
   if (!crypto || !crypto.subtle) {
@@ -436,8 +495,7 @@ formEl.addEventListener('submit', async function (e) {
         'or use keym2.py -- the backup text is in this file either way.', true);
     return;
   }
-  resultEl.hidden = true;
-  tableEl.hidden = true;
+  forget();
   goEl.disabled = true;
   say('Working. This takes a few seconds by design.');
   // Yield once so the browser paints the line above before PBKDF2 blocks it.
@@ -463,7 +521,8 @@ formEl.addEventListener('submit', async function (e) {
     // MAC covers the table whole and cannot say.
     tableEl.hidden = (opened.slotTableAuthentic !== false);
     var blob = new Blob([plain], { type: 'application/octet-stream' });
-    saveEl.href = URL.createObjectURL(blob);
+    savedUrl = URL.createObjectURL(blob);
+    saveEl.href = savedUrl;
     saveEl.download = 'recovered.bin';
     pwEl.value = '';
   } catch (err) {
@@ -500,6 +559,10 @@ export interface SelfExtractOptions {
  * A page whose job is to still work in 2040 does not get a framework, a font
  * download or a build step — every one of those is a thing that can stop
  * resolving while the file sits in a drawer.
+ *
+ * The password field says `autocomplete="off"`. The page is opened on whatever
+ * machine the heir has to hand, and `current-password` asks that machine's
+ * password manager to keep the backup's password afterwards.
  */
 export function buildSelfExtractingPage(options: SelfExtractOptions): string {
   const { container, createdOn, appVersion } = options;
@@ -551,7 +614,7 @@ disconnect from the network first if you like, and it will behave identically.</
 
 <form id="f">
   <label for="pw" hidden>Password</label>
-  <input id="pw" type="password" placeholder="Password" autocomplete="current-password" autofocus>
+  <input id="pw" type="password" placeholder="Password" autocomplete="off" autofocus>
   <button id="go" type="submit">Decrypt</button>
 </form>
 <p id="status" aria-live="polite"></p>

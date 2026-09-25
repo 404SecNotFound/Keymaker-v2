@@ -515,7 +515,7 @@ export function DocsGuide({ onNavigate, assetBase = "" }: { onNavigate?: ((targe
           <p>
             Under <GoTo target="tools" onNavigate={onNavigate}>Tools</GoTo>. It answers one question: how many physical
             dice rolls do you need for 128 or 256 bits of entropy? Bits per roll is log2 of the number of sides, so
-            a six-sided die gives about 2.58 bits and 99 rolls clear 256. It computes bits. It does not generate a
+            a six-sided die gives about 2.58 bits, so 100 rolls clear 256 (99 give 255.9). It computes bits. It does not generate a
             seed. Roll real dice and turn the rolls into a seed on an air-gapped device with dedicated software.
           </p>
           <Callout kind="note" title="Why dice at all">

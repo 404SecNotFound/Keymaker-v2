@@ -434,4 +434,62 @@ test.describe("§4.7 passkey slots", () => {
       await cdp.detach();
     }
   });
+
+  test("Stop during a slow file read never asks the authenticator", async ({ page }) => {
+    // processData awaits the file read, then asks the authenticator for its PRF
+    // output, then hands over to the worker. The isStale() check between the
+    // read and enrolPasskey is what keeps a Stop pressed during the read from
+    // putting a passkey prompt in front of someone who has just said stop, and
+    // minting a credential for a backup that is never written. worker.spec.ts
+    // covers the same window without a passkey, where the later check before
+    // the worker catches it too; with a passkey, only this one does.
+    await page.addInitScript(() => {
+      const original = Blob.prototype.arrayBuffer;
+      Blob.prototype.arrayBuffer = function (this: Blob) {
+        if (this instanceof File && this.name === "slow-read.txt") {
+          return new Promise<ArrayBuffer>((resolve) =>
+            setTimeout(() => void original.call(this).then(resolve), 3_000)
+          );
+        }
+        return original.call(this);
+      };
+      const w = window as unknown as { __creates: number };
+      w.__creates = 0;
+      const create = navigator.credentials.create.bind(navigator.credentials);
+      navigator.credentials.create = (options?: CredentialCreationOptions) => {
+        w.__creates++;
+        return create(options);
+      };
+    });
+    const { cdp, id } = await addVirtualAuthenticator(page);
+    try {
+      await prepareEncrypt(page, true);
+      await visible(page.getByRole("button", { name: "File", exact: true })).first().click();
+      await page.setInputFiles('input[type="file"]', {
+        name: "slow-read.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from("read slowly"),
+      });
+      await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+      let downloaded = false;
+      page.on("download", () => {
+        downloaded = true;
+      });
+      await visible(page.getByRole("button", { name: /^Encrypt File$/i })).click();
+
+      const stop = visible(page.getByRole("button", { name: /^Stop$/i }));
+      await expect(stop).toBeVisible({ timeout: 10_000 });
+      await stop.click();
+
+      // Past the slowed read, and past the enrolment that would follow it.
+      await page.waitForTimeout(6_000);
+      const creates = await page.evaluate(() => (window as unknown as { __creates: number }).__creates);
+      expect(creates, "the authenticator was asked to enrol for an operation already stopped").toBe(0);
+      const { credentials } = await cdp.send("WebAuthn.getCredentials", { authenticatorId: id });
+      expect(credentials, "a passkey was minted for a backup that was never written").toEqual([]);
+      expect(downloaded, "the stopped operation went on to produce a container").toBe(false);
+    } finally {
+      await cdp.detach();
+    }
+  });
 });

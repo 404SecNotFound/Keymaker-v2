@@ -94,5 +94,14 @@ ok(fit.every((p) => p.length <= budget), `every v2 part fits the ${budget}-char 
 const over = await m.encodePaperPartsV2(big, m.paperCapacity(budget));
 ok(over.some((p) => p.length > budget), "control: the v1 (KMPART1) capacity overflows a v2 symbol");
 
+// §7.3 "Symbol size": the paper vault's own parts fill a version-25 level-M
+// symbol and no more. This is the size the sheet prints, through the one
+// function the app calls.
+ok(m.PAPER_QR_VERSION === 25 && m.PAPER_QR_MAX_BYTES === 997, "the paper budget is version 25 at level M, 997 bytes");
+ok(m.paperCapacityV2(m.PAPER_QR_MAX_BYTES) === 702, "a printed KMPART2 part carries 702 container bytes");
+const printed = await m.encodePaperPartsForPrint(big);
+ok(printed.every((p) => p.length <= 997) && printed.length === Math.ceil(big.length / 702),
+  "the printed parts are sized to the version-25 budget and never over it");
+
 console.log(failed === 0 ? "\nAll recovery-envelope checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

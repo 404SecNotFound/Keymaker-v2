@@ -361,6 +361,52 @@ test.describe("U2b — the dice log survives a tab switch", () => {
     ).toHaveValue("64");
   });
 
+  test("the decrypt password is not graded against the encrypt policy", async ({ page }) => {
+    // The right password is whatever the container was sealed with, so on
+    // Decrypt a short, old password was painted red as if it were wrong.
+    await page.goto("/");
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    const field = visible(page.getByPlaceholder("Enter decryption password"));
+    await field.fill("hunter2");
+    await expect(field, "the decrypt password was painted as failing the encrypt policy")
+      .not.toHaveClass(/border-destructive/);
+    // Encrypt still grades it.
+    await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+    const enc = visible(page.getByPlaceholder("Enter a strong password"));
+    await enc.fill("hunter2");
+    await expect(enc).toHaveClass(/border-destructive/);
+  });
+
+  test("the encrypt form survives a peek at Tools", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    const secret = "a secret typed before checking the dice calculator";
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill(secret);
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+
+    // U2's first half, both ways. Going *to* Tools already skipped the reset;
+    // coming back was an ordinary mode change and wiped the form anyway.
+    await visible(page.getByRole("tab", { name: "Tools" })).click();
+    await expect(visible(page.getByLabel("Rolls completed"))).toBeVisible();
+    await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+
+    await expect(
+      visible(page.getByPlaceholder("Enter text to encrypt")),
+      "returning from Tools wiped the secret being typed"
+    ).toHaveValue(secret);
+    await expect(
+      visible(page.getByPlaceholder("Enter a strong password")),
+      "returning from Tools wiped the password"
+    ).toHaveValue(STRONG_PASSWORD);
+
+    // Going somewhere else is still a real mode change, and still resets.
+    await visible(page.getByRole("tab", { name: "Tools" })).click();
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+    await useTextMode(page);
+    await expect(visible(page.getByPlaceholder("Enter text to encrypt"))).toHaveValue("");
+  });
+
   /**
    * The price of forceMount, and the two tests that make sure it is not being
    * paid.

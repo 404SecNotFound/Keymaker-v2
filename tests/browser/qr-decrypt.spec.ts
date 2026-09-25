@@ -137,3 +137,35 @@ test.describe("decrypt by scanning a QR image", () => {
     expect(boxValue).toBe("");
   });
 });
+
+test("a scan that finishes after the user has moved on is dropped", async ({ page }) => {
+  // Decoding a large photo takes a moment. A scan started on Decrypt used to
+  // write its result wherever the form was when it finished: here, into the
+  // Encrypt secret field after a tab switch.
+  await page.addInitScript(() => {
+    const original = window.createImageBitmap.bind(window);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (window as any).createImageBitmap = (...args: Parameters<typeof createImageBitmap>) =>
+      new Promise((resolve) => setTimeout(() => resolve(original(...args)), 2_000));
+  });
+  await page.goto(appPath("/"));
+  const qrPng = await encryptAndCaptureQr(page);
+
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  await useTextMode(page);
+  await page.locator("#qr-scan-input").setInputFiles({
+    name: "encrypted-qr.png",
+    mimeType: "image/png",
+    buffer: qrPng,
+  });
+  // Move on before the slowed decode finishes.
+  await visible(page.getByRole("tab", { name: "Encrypt" })).click();
+  await page.waitForTimeout(3_500);
+
+  await useTextMode(page);
+  await expect(
+    visible(page.getByPlaceholder("Enter text to encrypt")),
+    "a stale scan wrote the container into the Encrypt field"
+  ).toHaveValue("");
+  await expect(page.getByText(/QR image scanned/i)).toHaveCount(0);
+});

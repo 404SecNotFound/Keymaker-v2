@@ -36,9 +36,9 @@ Keymaker is a **client-side** browser encryption PWA. In scope:
 
 - The cryptographic core (`src/lib/crypto.ts` — frozen legacy format;
   `src/lib/keymaker-crypto.ts` — KEYM v1; `src/lib/keym-v2.ts` and
-  `src/lib/keym-v2-shamir.ts` — KEYM v2, the format the app writes today) and
-  its wire formats (IBTZ v0/v1, KEYM v1, KEYM v2). See `docs/FORMAT.md` and
-  `docs/FORMAT-V2-DESIGN.md`.
+  `src/lib/keym-v2-shamir.ts` — KEYM v2 and v3; the app writes v3) and
+  its wire formats (IBTZ v0/v1, KEYM v1, KEYM v2, KEYM v3). See `docs/FORMAT.md`,
+  `docs/FORMAT-V2-DESIGN.md` and `docs/FORMAT-V3-DESIGN.md`.
 - Key derivation, nonce/salt generation, memory handling (`secureErase`),
   and authentication of ciphertext and header metadata (AAD).
 - The static export's content security policy and supply-chain (dependency)
@@ -61,8 +61,9 @@ Out of scope / known limitations:
   buffers, but the JS engine/GC may retain copies of secrets. WebCrypto keys
   are non-extractable where the API allows.
 - **Deniability / traffic analysis.** Containers are not padded, so their
-  length reveals the plaintext's length — to within a 1 MiB chunk for KEYM v2,
-  plus a small constant for v1. If the *size* of what is being protected is
+  length reveals the plaintext's length exactly: the overhead is fixed for a
+  given format and settings, so container length determines plaintext length
+  byte for byte (FORMAT-V2-DESIGN §8). If the *size* of what is being protected is
   itself sensitive, the cipher does not help. `docs/FORMAT-V2-DESIGN.md` §8
   records why a padding scheme was deliberately left out of v2 rather than
   bundled into it.

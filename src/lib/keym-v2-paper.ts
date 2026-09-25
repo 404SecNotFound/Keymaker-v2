@@ -15,6 +15,9 @@
  * error-correction is arithmetic rather than eyesight.
  */
 
+// §7, "Characters a reader ignores": the same set as keym2.py, not `\s`.
+import { dropIgnorable, stripIgnorable } from "./keym-text";
+
 /** §7.1. `KMS` is a share, `KMP` is a paper part; the family splits at byte 2. */
 export const KEYM2_PART_PREFIX = "KMPART1:";
 
@@ -22,15 +25,30 @@ export const KEYM2_PART_PREFIX = "KMPART1:";
 const PART_RE = /^KMPART1:(\d{1,4})\/(\d{1,4}):([A-Za-z0-9_-]+)$/;
 
 /**
- * Byte-mode capacity of a version-40 QR at error-correction level **M**.
+ * Byte-mode capacity of the QR symbol each printed part is sized for:
+ * **version 25** at error-correction level **M** (§7.3 "Symbol size").
  *
- * Deliberately not level L, which the on-screen QR uses. L recovers 7% of a
+ * Level M rather than L, which the on-screen QR uses. L recovers 7% of a
  * damaged symbol and is the right trade when the "paper" is a phone screen two
  * feet away. This code is going in a drawer for a decade, where it will be
  * folded, stained, photocopied and sun-bleached, and 15% recovery for a third
  * fewer bytes is the trade that actually matches the medium.
+ *
+ * Version 25 rather than 40. A full version-40 symbol printed 46 mm wide is
+ * 0.254 mm a module, which a phone has to hold focus close to the page to
+ * resolve; version 25 at the same width is 0.38 mm. The price is more symbols
+ * per backup: 702 container bytes a part instead of 1,704.
  */
-export const PAPER_QR_MAX_BYTES = 2_331;
+export const PAPER_QR_VERSION = 25;
+export const PAPER_QR_MAX_BYTES = 997;
+
+/**
+ * §7.3, the paper vault's own parts: KMPART2, sized by §7.3 "Symbol size". One
+ * function so the app and the conformance bridge cannot size them differently.
+ */
+export async function encodePaperPartsForPrint(container: Uint8Array): Promise<string[]> {
+  return encodePaperPartsV2(container, paperCapacityV2(PAPER_QR_MAX_BYTES));
+}
 
 function b64urlEncode(bytes: Uint8Array): string {
   let binary = "";
@@ -71,9 +89,11 @@ export function paperCapacity(qrByteCapacity: number, totalHint = 9999): number 
  * overhead a run can emit (four-digit counts, a ten-digit length, the fixed
  * fingerprint and checksum), so every part it sizes fits inside one symbol.
  *
- * At the paper budget this yields 1,704 raw bytes per part; a full part is then
- * 2,331 chars exactly, the ceiling and not over it. `scripts/recovery-envelopes-test.mjs`
- * asserts that bound rather than trusting this comment.
+ * At the version-40 budget (2,331 bytes) this yields 1,704 raw bytes per part,
+ * and at the paper vault's version-25 budget (`PAPER_QR_MAX_BYTES`, 997) 702; a
+ * full part is then the budget exactly, the ceiling and not over it.
+ * `scripts/recovery-envelopes-test.mjs` asserts that bound rather than trusting
+ * this comment.
  */
 export function paperCapacityV2(qrByteCapacity: number, totalHint = 9999): number {
   const overhead =
@@ -144,7 +164,7 @@ export function decodePaperParts(parts: readonly string[]): Uint8Array {
   const totals = new Set<number>();
 
   for (const raw of parts) {
-    const text = raw.replace(/\s+/g, "");
+    const text = dropIgnorable(raw);
     if (!text) continue;
     const m = PART_RE.exec(text);
     if (!m) {
@@ -212,7 +232,7 @@ export function decodePaperParts(parts: readonly string[]): Uint8Array {
 export function splitPaperParts(text: string): string[] {
   return text
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map((line) => stripIgnorable(line))
     .filter((line) => line !== "" && !line.startsWith("#"));
 }
 
@@ -240,7 +260,7 @@ export function looksLikePaperPart(text: string): boolean {
  * validate it. Reads either version's prefix.
  */
 export function describePaperPart(text: string): { index: number; total: number } | null {
-  const stripped = text.replace(/\s+/g, "");
+  const stripped = dropIgnorable(text);
   const m = PART_RE.exec(stripped) ?? PART2_RE.exec(stripped);
   if (!m) return null;
   return { index: Number(m[1]), total: Number(m[2]) };
@@ -279,7 +299,7 @@ async function sha256(...parts: Uint8Array[]): Promise<Uint8Array> {
 }
 
 /** §7.3. The 128-bit fingerprint that is both the id and the whole digest. */
-async function containerFingerprint(container: Uint8Array): Promise<string> {
+export async function containerFingerprint(container: Uint8Array): Promise<string> {
   return b64urlEncode((await sha256(container)).slice(0, 16));
 }
 
@@ -342,7 +362,7 @@ export async function decodePaperPartsV2(parts: readonly string[]): Promise<Uint
   const corrupt: number[] = [];
 
   for (const raw of parts) {
-    const text = raw.replace(/\s+/g, "");
+    const text = dropIgnorable(raw);
     if (!text) continue;
     const m = PART2_RE.exec(text);
     if (!m) {
@@ -407,9 +427,41 @@ export async function decodePaperPartsV2(parts: readonly string[]): Promise<Uint
   return container;
 }
 
+/**
+ * §7.3, for one part on its own: what reassembly would check of it before it
+ * had the rest. The fields it names, and whether its `part_checksum` holds,
+ * compared as text as §7.3 requires. Null for anything that is not a
+ * well-formed `KMPART2` line.
+ *
+ * For the printout check, which confirms a printed symbol reads back and says
+ * which backup it belongs to without joining or opening anything.
+ */
+export async function inspectPaperPartV2(
+  raw: string
+): Promise<{ index: number; total: number; cid: string; length: number; checksumOk: boolean } | null> {
+  const m = PART2_RE.exec(dropIgnorable(raw));
+  if (!m) return null;
+  const index = Number(m[1]);
+  const total = Number(m[2]);
+  if (total < 1 || index < 1 || index > total) return null;
+  let chunk: Uint8Array;
+  try {
+    chunk = b64urlDecode(m[5] as string);
+  } catch {
+    return null;
+  }
+  return {
+    index,
+    total,
+    cid: m[3] as string,
+    length: Number(m[4]),
+    checksumOk: timingSafeEqualStr(m[6] as string, await partChecksum(chunk)),
+  };
+}
+
 /** Dispatch on the version digit: §7.1 `KMPART1` or its v2 §7.3 `KMPART2`. */
 export async function decodePaperPartsAny(parts: readonly string[]): Promise<Uint8Array> {
-  const items = parts.map((p) => p.replace(/\s+/g, "")).filter((p) => p !== "");
+  const items = parts.map((p) => dropIgnorable(p)).filter((p) => p !== "");
   if (items.some((p) => p.startsWith(KEYM2_PART2_PREFIX))) {
     return decodePaperPartsV2(items);
   }

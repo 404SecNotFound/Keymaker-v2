@@ -341,7 +341,17 @@ async function main() {
       const version = fx.version ?? 1;
       const expected = version === 3 ? "keym-v3" : version === 2 ? "keym-v2" : "keym-v1";
       try {
-        const res = await decryptData(ab, meta.password, keyFile);
+        // §4.8. A `both` vector opens with the password *and* its shares and
+        // with nothing less, so it goes through the v2 module with both; the
+        // password alone is asserted to fail below.
+        const res = fx.both
+          ? {
+              ...(await (await import("../src/lib/keym-v2.ts")).decryptKeym2(
+                new Uint8Array(blob), meta.password, null, fx.both.shares.slice(-fx.both.threshold)
+              )),
+              format: expected,
+            }
+          : await decryptData(ab, meta.password, keyFile);
         check(
           res.format === expected && dec.decode(res.data) === fx.plaintext,
           `v${version} ${fx.name} (${fx.kdf} / ${fx.cipher}${fx.keyFile ? " / +keyfile" : ""})`
@@ -381,6 +391,26 @@ async function main() {
           refused = true;
         }
         check(refused, `v${version} ${fx.name} — ${k - 1} shares still do not`);
+      }
+
+      // §4.8. Neither half alone, and not k-1 strips with the password.
+      if (fx.both) {
+        const { decryptKeym2 } = await import("../src/lib/keym-v2.ts");
+        const all: string[] = fx.both.shares;
+        const k: number = fx.both.threshold;
+        for (const [label, attempt] of [
+          ["the password alone", () => decryptKeym2(new Uint8Array(blob), meta.password, null)],
+          ["the shares alone", () => decryptKeym2(new Uint8Array(blob), "", null, all.slice(0, k))],
+          [`the password and ${k - 1} shares`, () => decryptKeym2(new Uint8Array(blob), meta.password, null, all.slice(0, k - 1))],
+        ] as const) {
+          let refused = false;
+          try {
+            await attempt();
+          } catch {
+            refused = true;
+          }
+          check(refused, `v${version} ${fx.name} — ${label} still does not open it`);
+        }
       }
 
       // §4.7. Same promise in the other shape: the recorded PRF output is the
@@ -440,13 +470,15 @@ async function main() {
     const passkeyCount = meta.fixtures.filter((f: any) => f.passkey).length;
     const pageCount = meta.fixtures.filter((f: any) => f.selfextract).length;
     const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
+    const bothCount = meta.fixtures.filter((f: any) => f.both).length;
     check(
-      fixtureCount === 32 && v1Count === 6 && v2Count === 13 && v3Count === 13 &&
-        shamirCount === 6 && passkeyCount === 6 && pageCount === 1 && strippedCount === 1,
+      fixtureCount === 35 && v1Count === 6 && v2Count === 13 && v3Count === 16 &&
+        shamirCount === 6 && passkeyCount === 6 && pageCount === 1 && strippedCount === 1 &&
+        bothCount === 3,
       `corpus covers all three versions and all three ciphers per slot type ` +
         `(${v1Count} v1 + ${v2Count} v2 + ${v3Count} v3, of which ${shamirCount} share ` +
-        `sets, ${passkeyCount} passkey slots, ${pageCount} self-extracting page and ` +
-        `${strippedCount} stripped slot table = ${fixtureCount}/32)`
+        `sets, ${passkeyCount} passkey slots, ${bothCount} password-and-shares slots, ` +
+        `${pageCount} self-extracting page and ${strippedCount} stripped slot table = ${fixtureCount}/35)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);
@@ -1067,6 +1099,86 @@ async function main() {
       byShares.weakKdf === null,
       `unlocking with shares reported "${byShares.weakKdf}" — that is slot 0's ` +
         `weakness, described to someone holding a slot that has no cost parameters at all`
+    );
+  }
+
+  // ---- 9. §7.2's refusal names what the container actually uses ----
+  //
+  // webcryptoProfileViolations is shown to the owner as the reason their backup
+  // cannot become a page. It used to call every non-AES cipher ChaCha20-Poly1305,
+  // chained mode included, and to tell a backup with no password slot at all
+  // that its "password slot uses Argon2id". Both sent the owner looking for a
+  // setting they had not chosen.
+  {
+    console.log("\n9. The self-extract refusal describes this container");
+    const { webcryptoProfileViolations } = await import("../src/lib/keym-v2-selfextract.ts");
+    const {
+      encryptKeym2,
+      addPasskeySlotKeym2,
+      addShamirSlotKeym2,
+      keym2SlotLen,
+      KEYM2_VERSION_V2,
+    } = await import("../src/lib/keym-v2.ts");
+    const pt = enc.encode("self-extract reasons");
+    const secrets = { password: PASSWORD, keyFile: null };
+
+    // v2 carries no slot_table_mac, so dropping slot 0 leaves a container whose
+    // only way in is the slot that was added after it. That is the shape a
+    // share-only or passkey-only backup has; this function reads structure only.
+    const withoutSlot0 = (c: Uint8Array, cipher: CipherId): Uint8Array => {
+      const TABLE = 9;
+      const w = keym2SlotLen(cipher);
+      const out = new Uint8Array(c.length - w);
+      out.set(c.subarray(0, TABLE));
+      out.set(c.subarray(TABLE + w), TABLE);
+      out[8] = (c[8] as number) - 1;
+      return out;
+    };
+    const aes = { kdf: PBKDF2_FAST, cipher: CipherId.AES_256_GCM };
+    const pbkdf2Aes = await encryptKeym2(pt, PASSWORD, null, aes, KEYM2_VERSION_V2);
+
+    const accepted = webcryptoProfileViolations(pbkdf2Aes);
+    check(accepted.length === 0, `a PBKDF2/AES backup is inside the subset (got ${JSON.stringify(accepted)})`);
+
+    const chained = webcryptoProfileViolations(
+      await encryptKeym2(pt, PASSWORD, null, { kdf: PBKDF2_FAST, cipher: CipherId.CHAINED }, KEYM2_VERSION_V2)
+    );
+    check(
+      chained.length === 1 && /chained/i.test(chained[0]!),
+      `a chained backup is called chained (got ${JSON.stringify(chained)})`
+    );
+
+    const chacha = webcryptoProfileViolations(
+      await encryptKeym2(pt, PASSWORD, null, { kdf: PBKDF2_FAST, cipher: CipherId.CHACHA20_POLY1305 }, KEYM2_VERSION_V2)
+    );
+    check(
+      chacha.length === 1 && /ChaCha20-Poly1305/.test(chacha[0]!) && !/chained/i.test(chacha[0]!),
+      `a ChaCha20-Poly1305 backup is called that, not chained (got ${JSON.stringify(chacha)})`
+    );
+
+    const argon = webcryptoProfileViolations(
+      await encryptKeym2(pt, PASSWORD, null, { kdf: ARGON_FAST, cipher: CipherId.AES_256_GCM }, KEYM2_VERSION_V2)
+    );
+    check(
+      argon.length === 1 && /Argon2id/.test(argon[0]!),
+      `an Argon2id password still names Argon2id (got ${JSON.stringify(argon)})`
+    );
+
+    const prf = new Uint8Array(32).fill(7);
+    const prfSalt = new Uint8Array(32).fill(9);
+    const passkeyOnly = webcryptoProfileViolations(
+      withoutSlot0(await addPasskeySlotKeym2(pbkdf2Aes, secrets, prf, prfSalt), CipherId.AES_256_GCM)
+    );
+    check(
+      passkeyOnly.length === 1 && !/Argon2id/.test(passkeyOnly[0]!) && /passkey/.test(passkeyOnly[0]!),
+      `a passkey-only backup is not told its password uses Argon2id (got ${JSON.stringify(passkeyOnly)})`
+    );
+
+    const { container: withShares } = await addShamirSlotKeym2(pbkdf2Aes, secrets, 2, 3);
+    const sharesOnly = webcryptoProfileViolations(withoutSlot0(withShares, CipherId.AES_256_GCM));
+    check(
+      sharesOnly.length === 1 && !/Argon2id/.test(sharesOnly[0]!) && /shares/.test(sharesOnly[0]!),
+      `a share-only backup is not told its password uses Argon2id (got ${JSON.stringify(sharesOnly)})`
     );
   }
 

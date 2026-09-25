@@ -1,18 +1,22 @@
 #!/usr/bin/env node
 /**
- * §7: the armor dearmor strips ASCII whitespace only, matching keym2.py.
+ * §7, "Characters a reader ignores": dearmor ignores exactly the IGNORABLE set
+ * (Unicode White_Space plus U+FEFF), at the ends and inside the body, and
+ * rejects everything else, the same set keym2.py uses.
  *
- * keym2.py trims the ends with `str.strip()` (Unicode-aware) and then removes
- * whitespace *inside* the body with `bytes.split()`, which is ASCII-only — so a
- * non-ASCII space (U+00A0, a stray BOM) in the middle of the base64 body is
- * kept and the strict base64 decode rejects it. The app's `dearmorKeym2` used
- * `\s`, which is Unicode-aware, so it silently stripped that character and
- * opened a container the durable Python decryptor refuses — stranding the heir
- * on the one recovery path that has no browser.
+ * The history is why this is a named set. The app first stripped with `\s`,
+ * which is Unicode-aware, while keym2.py stripped the body with bytes.split(),
+ * which is ASCII-only, so the app opened backups the Python decryptor refused.
+ * The first fix made the app ASCII-only inside the body to match, which only
+ * moved the disagreement: the ends still used JavaScript's trim() against
+ * Python's strip(), which differ on U+FEFF (a Windows editor's byte order mark),
+ * U+0085 and U+001C..U+001F. Both implementations now name the set, and
+ * crosstest2.py holds them to the same verdicts.
  *
  * This drives `dearmorKeym2` directly (esbuild bundles the TS the way the rest
- * of the project reaches its `.ts`). The control bites: with the internal strip
- * back on `\s`, the two rejection cases below open instead of throwing.
+ * of the project reaches its `.ts`). Controls: going back to `trim()` fails the
+ * U+0085 ends case; going back to an ASCII-only body strip fails the U+00A0 and
+ * BOM body cases.
  */
 import esbuild from "esbuild";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -35,31 +39,40 @@ const rejects = (fn, msg) => {
   catch { ok(true, msg); }
 };
 const eq = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+// Guarded, so a regression is reported as the check it breaks rather than as a
+// crash that hides which one (CLAUDE.md, "an unguarded call").
+const decodes = (text) => {
+  try { return m.dearmorKeym2(text); } catch { return new Uint8Array(0); }
+};
 
 const m = await import(pathToFileURL(out).href);
 const secret = Uint8Array.from({ length: 200 }, (_, i) => (i * 37 + 5) & 0xff);
 const clean = m.armorKeym2(secret); // "keym2:" + base64url wrapped at 64 cols with \n
 
 // 1. The clean armor round-trips, including the ASCII line breaks armorKeym2 adds.
-ok(eq(m.dearmorKeym2(clean), secret), "clean line-wrapped armor decodes to the original bytes");
+ok(eq(decodes(clean), secret), "clean line-wrapped armor decodes to the original bytes");
 
 // A splice point inside the base64 body (after the "keym2:" prefix and a few chars).
 const at = "keym2:".length + 10;
 const inject = (ch) => clean.slice(0, at) + ch + clean.slice(at);
 
-// 2. A non-ASCII space inside the body is kept and rejected — matching keym2.py,
-//    which is exactly the divergence this fixes.
-rejects(() => m.dearmorKeym2(inject(" ")), "a U+00A0 inside the body is rejected (not silently stripped)");
-rejects(() => m.dearmorKeym2(inject("﻿")), "a BOM inside the body is rejected");
-
+// 2. IGNORABLE characters inside the body are ignored: a no-break space or a
+//    byte order mark that a notes app put there is not base64 and cannot
+//    change what the body decodes to.
+ok(eq(decodes(inject("\u00a0")), secret), "a U+00A0 inside the body is ignored");
+ok(eq(decodes(inject("\ufeff")), secret), "a BOM inside the body is ignored");
 // 3. ASCII whitespace inside the body is still stripped (so real line-wrapping,
 //    tabs and CRLF keep working).
-ok(eq(m.dearmorKeym2(inject(" \t\r\n")), secret), "ASCII whitespace inside the body is still stripped");
-
-// 4. Leading/trailing whitespace — including non-ASCII — is trimmed at the ends,
-//    matching keym2.py's str.strip(), so a stray wrapper does not break a paste.
-ok(eq(m.dearmorKeym2(" \n  " + clean + "   \n"), secret),
-   "leading/trailing whitespace (ASCII and non-ASCII) is trimmed at the ends");
+ok(eq(decodes(inject(" \t\r\n")), secret), "ASCII whitespace inside the body is still stripped");
+// 4. Leading and trailing IGNORABLE characters are removed, including the byte
+//    order mark a Windows editor writes at the start of a UTF-8 file.
+ok(eq(decodes("\ufeff \n\u0085  " + clean + "  \u00a0\n"), secret),
+   "a leading BOM and U+0085/U+00A0 at the ends are removed");
+// 5. Characters outside the set are rejected, wherever they are: a zero-width
+//    space is not White_Space, and U+001C..U+001F are control characters.
+rejects(() => m.dearmorKeym2(inject("\u200b")), "a zero-width space inside the body is rejected");
+rejects(() => m.dearmorKeym2(clean + "\u001f"), "a trailing U+001F is rejected");
+rejects(() => m.dearmorKeym2("\u001c" + clean), "a leading U+001C is rejected");
 
 console.log(failed === 0 ? "\nAll dearmor-whitespace checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

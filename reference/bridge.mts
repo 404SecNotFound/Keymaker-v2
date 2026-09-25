@@ -56,6 +56,7 @@ import {
 import {
   encryptKeym2,
   encryptKeym2WithExplicitSecrets,
+  encryptKeym2WithSharesRequired,
   decryptKeym2,
   KEYM2_VERSION_V2,
   KEYM2_VERSION_V3,
@@ -63,9 +64,24 @@ import {
   addShamirSlotKeym2,
   addPasskeySlotKeym2,
   derivePrfSalt,
+  dearmorKeym2,
 } from "../src/lib/keym-v2.ts";
-import { encodePaperParts, encodePaperPartsV2, decodePaperParts, decodePaperPartsAny, splitPaperParts } from "../src/lib/keym-v2-paper.ts";
-import { encodeShareV2, shareSetIdV2 } from "../src/lib/keym-v2-shamir.ts";
+import {
+  encodePaperParts,
+  encodePaperPartsV2,
+  encodePaperPartsForPrint,
+  decodePaperParts,
+  decodePaperPartsAny,
+  splitPaperParts,
+} from "../src/lib/keym-v2-paper.ts";
+import {
+  encodeShareV2,
+  shareSetIdV2,
+  decodeShareAny,
+  isKeym2Share,
+  shareSetCode,
+  shareTextSetCode,
+} from "../src/lib/keym-v2-shamir.ts";
 import {
   buildSelfExtractingPage,
   embedSelfExtract,
@@ -168,6 +184,46 @@ try {
     );
     writeFileSync(outFile, Buffer.from(out));
 
+  } else if (cmd === "encryptboth") {
+    // §4.8. A container whose only slot takes the password and k of n shares,
+    // every random input pinned (salt, master key, share secret, coefficients,
+    // container id), so crosstest2.py can compare the bytes and the share
+    // strings each implementation writes.
+    const kdf: KdfParams =
+      flag("kdf") === "argon2id"
+        ? {
+            kdf: KdfId.ARGON2ID,
+            params: {
+              timeCost: Number(flag("time") ?? 2),
+              memoryKiB: Number(flag("mem") ?? 16384),
+              parallelism: Number(flag("par") ?? 2),
+            },
+          }
+        : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
+    const hex = (name: string) => {
+      const v = flag(name);
+      return v === undefined ? undefined : Uint8Array.from(Buffer.from(v, "hex"));
+    };
+    const containerId = hex("container-id");
+    const { container, shares } = await encryptKeym2WithSharesRequired(
+      new Uint8Array(inputBuf),
+      password,
+      keyFile ? new Uint8Array(keyFile) : null,
+      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
+      Number(flag("threshold")),
+      Number(flag("shares")),
+      containerId === undefined ? KEYM2_VERSION_V2 : KEYM2_VERSION_V3,
+      {
+        salt: hex("salt"),
+        masterKey: hex("master-key"),
+        containerId,
+        shareSecret: hex("share-secret"),
+        coefficients: hex("share-coefficients"),
+      }
+    );
+    writeFileSync(outFile, Buffer.from(container));
+    writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
+
   } else if (cmd === "encryptapp") {
     const kdf: KdfParams =
       flag("kdf") === "argon2id"
@@ -246,10 +302,16 @@ try {
     // §7.1 / §7.3. Emitted so crosstest2.py can compare the *strings*, not only
     // the reassembled container: transposing a slice boundary leaves reassembly
     // correct and the two implementations' printed pages mutually unusable.
+    //
+    // `--print` is the paper vault's own sizing, through the function the app
+    // calls, so the cross-test compares what the sheet prints with what
+    // `keym2.py split` writes by default (§7.3 "Symbol size").
     const cap = Number(flag("capacity") ?? 1734);
-    const parts = process.argv.includes("--v2")
-      ? await encodePaperPartsV2(new Uint8Array(inputBuf), cap)
-      : encodePaperParts(new Uint8Array(inputBuf), cap);
+    const parts = process.argv.includes("--print")
+      ? await encodePaperPartsForPrint(new Uint8Array(inputBuf))
+      : process.argv.includes("--v2")
+        ? await encodePaperPartsV2(new Uint8Array(inputBuf), cap)
+        : encodePaperParts(new Uint8Array(inputBuf), cap);
     writeFileSync(outFile, parts.join("\n") + "\n");
   } else if (cmd === "sharev2") {
     // §4.6 v2. One KMSHARE2 string from pinned inputs, so crosstest2.py can
@@ -324,6 +386,50 @@ try {
       }`
     );
 
+  } else if (cmd === "textverdicts") {
+    // §7, "Characters a reader ignores". Every case the cross-test hands over,
+    // judged by the shipping readers: accept or reject, and on accept the
+    // bytes read, so the two implementations are compared on what they
+    // decoded and not only on whether they decoded something.
+    const cases = JSON.parse(readFileSync(inFile, "utf8")) as { kind: string; text: string }[];
+    const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
+    const verdicts: { ok: boolean; hex?: string }[] = [];
+    for (const c of cases) {
+      try {
+        if (c.kind === "armor") {
+          verdicts.push({ ok: true, hex: hex(dearmorKeym2(c.text)) });
+        } else if (c.kind === "share") {
+          const sh = await decodeShareAny(c.text);
+          verdicts.push({
+            ok: true,
+            hex: hex(sh.setId) + ":" + sh.threshold + ":" + sh.index + ":" + hex(sh.value),
+          });
+        } else if (c.kind === "parts") {
+          verdicts.push({ ok: true, hex: hex(await decodePaperPartsAny(splitPaperParts(c.text))) });
+        } else if (c.kind === "isshare") {
+          verdicts.push({ ok: isKeym2Share(c.text) });
+        } else {
+          throw new Error(`unknown case kind ${c.kind}`);
+        }
+      } catch {
+        verdicts.push({ ok: false });
+      }
+    }
+    writeFileSync(outFile, JSON.stringify(verdicts));
+  } else if (cmd === "setcodes") {
+    // §4.6 "The set code". From a slot salt (what inspect and the owner's sheet
+    // print) and from a strip's own text (what a person reads off the paper),
+    // so the cross-test compares the string each emits, not a decode of it.
+    const cases = JSON.parse(readFileSync(inFile, "utf8")) as { salt?: string; text?: string }[];
+    const codes: (string | null)[] = [];
+    for (const c of cases) {
+      codes.push(
+        c.salt !== undefined
+          ? await shareSetCode(Uint8Array.from(Buffer.from(c.salt, "hex")))
+          : shareTextSetCode(c.text ?? "")
+      );
+    }
+    writeFileSync(outFile, JSON.stringify(codes));
   } else {
     throw new Error(`unknown command: ${cmd}`);
   }

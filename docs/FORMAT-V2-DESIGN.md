@@ -502,7 +502,8 @@ a slot is 96 or 112 bytes.
 | 0x00 | Passphrase, optionally with a key file (§4.1) | Implemented |
 | 0x01 | Passkey / WebAuthn PRF (§4.7) | Implemented |
 | 0x02 | Shamir share set (§4.6) | Implemented |
-| 0x03–0xFF | Unassigned | Reserved |
+| 0x03 | Passphrase **and** a Shamir share set (§4.8) | Implemented |
+| 0x04–0xFF | Unassigned | Reserved |
 
 The wire layout for 0x01 is deliberately **not** written here. This project's
 rule is that a specification is tested by an implementation written from it, and
@@ -566,6 +567,28 @@ the user without breaking that rule.
 The last two sentences are finding F6, and the middle one is F7. Both came from
 implementing this section, and both are cases where the first wording of the
 amendment said something that fell apart on contact with a second slot.
+
+**A master key is recovered only when it opens the payload.**
+
+> A slot that unwraps yields *a* 32-byte key, not necessarily *the* container's
+> key. A reader **MUST** confirm a candidate by opening chunk 0 of the payload
+> (§5) with it, and on failure **MUST** discard it and continue the walk, exactly
+> as for any other per-slot rejection.
+>
+> A writer that adds, replaces or re-wraps a slot **MUST** use a master key
+> confirmed this way.
+
+The case is a v2 container with a slot spliced in ahead of the owner's from a
+second container whose password the owner also uses. The spliced slot unwraps
+first, to the other container's key. A reader that committed to the first
+unwrap rejected a container whose own slot 1 was valid; a writer that did so
+wrapped a new share set around the wrong key, so the owner went on opening the
+backup normally while every share printed for it opened nothing, which nobody
+finds out until the owner is gone. v3 binds `container_id` into each slot's AAD
+(FORMAT-V3-DESIGN §4), so a foreign slot no longer unwraps there, but v2 stays
+readable and writable forever. The cost is one chunk-0 AEAD per candidate, which
+is not a KDF. The TypeScript reader did this from the start; its enrolment path
+and the Python reference did not, and this paragraph is the finding.
 
 **Why failure is slot-scoped and not container-scoped.** §3.3's "reject" was
 written for a format with one unlock path, where rejecting the slot and
@@ -804,8 +827,10 @@ character carries non-zero padding bits, so that one share has exactly one
 encoding.
 
 Alphabet `0123456789ABCDEFGHJKMNPQRSTVWXYZ` — Crockford's, which omits I, L, O
-and U. A reader is case-insensitive, maps `I`/`L` to `1` and `O` to `0`, and
-ignores hyphens and ASCII whitespace; every other character is rejected.
+and U. A reader is case-insensitive over ASCII letters, maps `I`/`L` to `1` and
+`O` to `0`, and ignores hyphens and the IGNORABLE characters of §7; every other
+character is rejected. (This said "ASCII whitespace" until §7 pinned the set
+down; see "Characters a reader ignores" there.)
 
 **Why base32 and not the base64url used everywhere else in this document.** The
 whole string — uppercase letters, digits, `-` and `:` — lies inside QR code
@@ -892,7 +917,17 @@ checksum     = SHA-256("keymaker.v2.share-checksum" || body)[0:16]
 These are the §4.6 derivations with a wider truncation and no other change. A
 `KMSHARE2` set id is therefore the `KMSHARE1` set id extended: the first four
 bytes are byte-identical, because both are a prefix of the same hash of the same
-`slot_salt`. The value, the field arithmetic, `threshold`, `index` and the
+`slot_salt`.
+
+**A reader compares the whole set id a share carries.** §6's rule is that a
+share's `share_set_id` must match the one derived from the slot's `slot_salt`,
+and for a `KMSHARE2` share that is all sixteen bytes. Both implementations first
+compared only the four-byte `KMSHARE1` prefix against the container, which kept
+one comparison for both versions and threw away the twelve bytes this record
+exists to add. (Harmless to confidentiality, since a share from the wrong set
+reconstructs a key the unwrap then refuses, but it turns the named "share from a
+different set" rejection back into a generic failure one time in 2^32, and it is
+not what §6 says.) The value, the field arithmetic, `threshold`, `index` and the
 `2..16` bounds are §4.6's, untouched. `KMSHARE2` is an envelope change, not a
 cryptographic one: it does not reach `shamirSplit`, `shamirCombine`, or the slot
 the shares unwrap.
@@ -915,6 +950,60 @@ must still open. A writer emits `KMSHARE2`; a reader accepts either, dispatching
 on the prefix's version digit. A set is single-version by construction, since one
 enrolment writes one version, and a set that mixes versions is refused: the two
 record lengths give set ids of different lengths that cannot compare equal.
+
+#### The set code
+
+A share set also has a short name for people to compare by eye:
+
+```
+set_code = Crockford-base32(share_set_id_v2(slot_salt))[0:8]
+           written as two groups of four: XXXX-XXXX
+```
+
+`share_set_id_v2` is the sixteen-byte set id above, derived from the slot's
+`slot_salt`, so a reader computes the set code from the container alone,
+holding no share. The alphabet and the bit order are §4.6's.
+
+**Every `KMSHARE2` strip already begins with it.** The share text is base32 of
+a record whose first sixteen bytes are the set id, and base32 spends five bits
+per character from the most significant bit, so the first eight characters
+after the prefix encode the first forty bits of the set id and nothing else.
+The text of every strip in a set therefore starts `KMSHARE2:XXXX-XXXX-`, and
+those two groups are the set code. Nothing new is printed that the strip did
+not already say; the set code gives those eight characters a name, so a sheet
+or `inspect` can print them beside the container they belong to.
+
+Read off a strip, the set code is text, not a decoded record: §4.6's folding
+applies (case, `I` and `L` as `1`, `O` as `0`, hyphens and §7's ignorable
+characters dropped), and no checksum is needed, because a person comparing
+codes by eye does not have one either. Whether the strip is intact is a
+separate question, answered by decoding it.
+
+That is the point of it. Someone holding a drawer of strips from several
+backups can tell which strips go with which backup without a tool, by
+comparing the first two groups of a strip with the set code on the owner's
+sheet or in `inspect`'s output.
+
+**It is a label, not a check.** Forty bits make an accidental match between two
+particular sets a 2⁻⁴⁰ event. By the birthday bound, a collision anywhere in a
+collection reaches even odds only at about 1.2 million sets, far beyond one
+person's or one estate's archive. It is not secret, because `slot_salt` is in the clear. A
+reader **MUST NOT** use the set code in place of §6's full sixteen-byte
+comparison; the set code is for people, the set id is for readers.
+
+A `KMSHARE1` strip matches in its first **six** base32 characters only: the
+first group, and the first two characters of the second. Its set id is four
+bytes, so its text carries thirty bits of set id before the threshold byte
+starts in the seventh character. Those six characters are the first six of
+the set code, because both ids are prefixes of the same hash.
+
+Vector:
+
+| | |
+|---|---|
+| `slot_salt` | `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f` |
+| `share_set_id_v2` | `21f2097e1d1107bdf7c15732669d7476` |
+| set code | `47S0-JZGX` |
 
 ### 4.7 Slot secret for a passkey slot (`slot_type = 0x01`)
 
@@ -1108,6 +1197,101 @@ logged, no password to phish, and a credential the authenticator binds to this
 origin. Convenience and phishing resistance. Saying "hardware-grade security"
 over a file that a 12-character password also opens would be the KM-02
 overstatement in a new place.
+
+### 4.8 Slot secret for a passphrase-and-shares slot (`slot_type = 0x03`)
+
+Every other slot is one secret, and any one slot opens the container. This slot
+is two: it opens only for someone holding **both** the passphrase **and** enough
+shares. It exists for the case the other slots cannot express, an estate where
+the executor knows the password and the family holds the strips, and neither
+should be able to open the backup alone.
+
+```
+passphrase_key = KDF(kdf_input, slot_salt, slot_params)       32 bytes
+                 -- §4.1's kdf_input, this slot's slot_kdf_id and parameters
+
+share_secret   = §4.6's, reconstructed from k shares whose set id is
+                 share_set_id_v2(slot_salt)                     32 bytes
+
+both_input     = LP("keymaker.v2.passphrase-and-shares")
+               || LP(passphrase_key)
+               || LP(share_secret)
+
+slot_key       = HKDF-SHA-256(both_input, slot_salt, "keymaker.v2.slot-key", 32)
+```
+
+`LP` is §4.1's, and the domain string differs from §4.1's, §4.6's and §4.7's, so
+this slot's key can never equal a key another slot type would derive from the
+same bytes.
+
+**The shape of the record does not change**, as it did not for 0x01 and 0x02.
+Same 48-byte prefix, same `wrapped_key`, bytes 3..7 reserved and zero. The
+parameter block and `slot_kdf_id` are the passphrase's, bounded by §6 exactly as
+for 0x00, and `slot_flags` bit 0 means what it means for 0x00: a key file is part
+of `kdf_input`. `slot_kdf_id` is 0x00 or 0x01, **never** 0x02 (§6's pairing
+table): the guessable half of this secret is a password, and a password under
+HKDF alone is a password with no stretching.
+
+**The shares are §4.6's, unchanged.** A writer splits `share_secret` exactly as
+§4.6 does and writes `KMSHARE2` records whose set id is
+`share_set_id_v2(slot_salt)`, so a strip for this slot looks like any other strip
+and carries a set code (§4.6) like any other.
+
+**Why two stages, and why in this order.** The memory-hard cost belongs on the
+guessable input, so the passphrase goes through the slot's own KDF first, as it
+would in a 0x00 slot. The share secret is 32 CSPRNG bytes and needs no
+stretching, so the two are combined by HKDF, which is §4.6's construction for an
+unguessable input. Feeding the share secret into Argon2id instead would pay a
+memory-hard cost to defend a value that cannot be guessed; XOR-ing the two would
+need its own argument for domain separation, where length-prefixed concatenation
+under a domain string is the argument every other slot already uses.
+
+**Reading.** A reader attempts a 0x03 slot only when it holds a passphrase *and*
+shares, and only after the shares' set id matches this slot's
+`share_set_id_v2(slot_salt)`, compared in full (§6), **before** the KDF runs. A
+set for a different slot is then declined without paying for an Argon2id
+derivation on its behalf. Every other outcome is §4.4's: a wrong passphrase, too
+few shares or a mistyped strip disqualifies this slot and the walk continues.
+
+A reader holding shares whose set id matches a 0x03 slot, but no passphrase,
+**MAY** say that these shares open this backup together with the password. That
+is not an oracle: the set id is derived from `slot_salt`, which is in the clear,
+so the statement tells the holder nothing anyone holding the container could not
+compute. It is the difference between "decryption failed", which sends an heir
+to retype strips that were never wrong, and the one sentence they need.
+
+**Writing.** A container **MAY** have a 0x03 slot as its only slot. That is the
+point of the type: a plain 0x00 slot beside it would open the container with the
+passphrase alone and make the shares decoration. The cost has to be stated where
+the choice is made, not discovered later:
+
+- **Both halves are needed, forever.** A forgotten passphrase or fewer than `k`
+  strips loses the backup, and no other secret can stand in for either.
+- **A reader that predates this section cannot open it.** §4.4 has it skip the
+  unknown type, which is correct and means a container whose only slot is 0x03
+  opens only in readers that implement this section.
+
+A writer **SHOULD** say both before writing such a container. §4.7's "never
+travels alone" rule does not apply: that rule exists because a passkey is
+hardware that cannot be backed up, and both halves of this slot are archival,
+one in a head or a password manager and the other on paper.
+
+v3's `slot_table_mac` covers this slot as it covers any other (FORMAT-V3-DESIGN
+§5), so removing a 0x03 slot from a v3 container is reported like any other
+change to the table.
+
+Vector. PBKDF2 with one iteration, which §6's reader bounds admit and its
+writer policy does not, so that a third implementation can check the
+construction without waiting for a real derivation:
+
+| | |
+|---|---|
+| password | `correct horse` (no key file) |
+| `slot_salt` | `000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f` |
+| `slot_kdf_id`, parameters | 0x00 (PBKDF2), 1 iteration |
+| `share_secret` | `404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f` |
+| `passphrase_key` | `894e1ee6ba584197c33cfae7f050fe3691e8d79a9899caa8c71b206d604ddc21` |
+| `slot_key` | `558d5bd0d8e944df524cfefacad4bf4f76602ba84ebe315d29044af809be9f8c` |
 
 ## 5. Payload: chunked AEAD
 
@@ -1343,6 +1527,7 @@ is the whole of its validation.
 |---|---|
 | 0x00 passphrase | 0x00, 0x01 — **never 0x02** |
 | 0x02 Shamir | 0x02 — **only** |
+| 0x03 passphrase and shares | 0x00, 0x01 — **never 0x02** (§4.8) |
 
 A reader MUST disqualify a slot that violates either direction, before invoking
 any KDF. The forbidden combinations are the two that would be silently wrong
@@ -1498,6 +1683,34 @@ A hyphen also lies inside QR alphanumeric mode, where a newline does not.
 The prefix is **case-sensitive** and matched byte-for-byte. A reader that
 accepted `KEYM2:` would reintroduce the exact collision this section removes,
 while believing it was being lenient.
+
+#### Characters a reader ignores
+
+Every text form in this document (armor here, §4.6 share text, and §7.1/§7.3
+paper parts) is copied, saved and retyped by people using whatever editor is to
+hand, so a reader has to agree with every other reader about which characters
+are not part of the text. The set is:
+
+```
+IGNORABLE = U+0009..U+000D  U+0020  U+0085  U+00A0  U+1680  U+2000..U+200A
+            U+2028  U+2029  U+202F  U+205F  U+3000  U+FEFF
+```
+
+That is Unicode `White_Space` plus U+FEFF, the byte order mark a Windows editor
+puts at the start of a UTF-8 file. A reader removes IGNORABLE characters from
+both ends of the text before looking for a prefix, and ignores them inside
+armor, share and part bodies. Any other character outside an encoding's
+alphabet is rejected. Case-folding, where an encoding allows it (§4.6), applies
+to ASCII letters only: a non-ASCII character is never folded into the alphabet,
+so `ı` (U+0131) is not `I` and `ſ` (U+017F) is not `S`.
+
+This was written down after the two implementations were found to disagree on
+it, each by inheriting its language's idea of whitespace: JavaScript's `trim`
+removes U+FEFF and Python's `strip` does not, while Python's removes U+0085 and
+U+001C..U+001F and JavaScript's does not, and each language's `upper()` folds a
+few non-ASCII letters into ASCII ones. A saved backup that opened in the app and
+failed in `keym2.py` was the concrete case. U+001C..U+001F are control
+characters, not spacing, and are rejected.
 
 Base64url without padding, so the armored form survives being pasted into a
 URL, a filename, or a QR code without escaping — and so `=` never has to be
@@ -1698,7 +1911,12 @@ KMPART2:<index>/<total>:<cid>:<length>:<base64url-unpadded slice>:<part_checksum
   `base64url(SHA-256("keymaker.v2.part-checksum" || slice)[0:4])`, 6 characters.
   It localises damage: a part whose checksum fails is named, so the reader points
   at "part 3" rather than at the set. Four bytes is a diagnosis, not a guarantee.
-  The fingerprint and the AEAD are the guarantees.
+  The fingerprint and the AEAD are the guarantees. A reader compares it **as
+  text**: it recomputes the checksum, encodes it, and requires the six characters
+  to be equal. Six base64 characters carry 36 bits for 32, so the last one has
+  four spare bits, and a reader that compared decoded bytes accepted sixteen
+  spellings of each checksum where the other accepted one. One part, one
+  encoding, the rule §4.6 already set for shares.
 
 Reassembly, in order: parse each part; require all parts to agree on `total`,
 `cid` and `length`; require exactly one of each index in `1..total`; verify each
@@ -1717,6 +1935,38 @@ reader stays frozen, because pages printed before this section must still
 reassemble. A writer emits `KMPART2`; a reader dispatches on the version digit
 and accepts either, and a set is single-version by construction because one split
 writes one version.
+
+#### Symbol size (writer guidance)
+
+A reader accepts parts of any size: reassembly never asks how many bytes a part
+holds. How much a writer puts in each symbol is therefore not a wire rule, but it
+decides whether the printed page can be read at all, so it is written down here.
+
+**A writer SHOULD size each part to fit a version-25 symbol at level M, 997
+bytes, and not fill a version-40 symbol.** The paper vault prints each symbol 46
+mm wide. A full version-40 symbol is 177 modules, 181 with its quiet zone, so
+each module is 0.254 mm, a quarter of a millimetre. A phone camera has to hold
+focus close to the page to resolve that, and a fold, a toner streak or a
+photocopy can erase a whole module. Version 25 is 117 modules, 121 with the
+quiet zone, which is 0.38 mm per module at the same printed width: half as wide
+again, and more than twice the area.
+
+The cost is more symbols. At 997 bytes, with §7.3's widest overhead reserved
+(four-digit counts, a ten-digit length, the fingerprint and the checksum), a
+`KMPART2` part carries 702 container bytes where a version-40 part carried
+1,704. A typical backup of a few kilobytes goes from two or three symbols to five
+to eight, which is a page, and each one is far easier to read.
+
+| | version 40, M | version 25, M |
+|---|---|---|
+| symbol capacity | 2,331 bytes | 997 bytes |
+| `KMPART2` payload per part | 1,704 bytes | 702 bytes |
+| modules, with quiet zone | 181 | 121 |
+| module width at 46 mm | 0.254 mm | 0.38 mm |
+
+`keym2.py split` uses the same size by default, and writes `KMPART2`, as this
+section already requires of a writer; `--v1` writes §7.1's `KMPART1` for an
+older reader, and `--capacity` still overrides the size.
 
 ## 8. What this does not fix
 
@@ -1781,6 +2031,15 @@ is the one that closed the document.
    by a test edit makes the printed procedure false.
 5. New fixtures are **added** to `scripts/fixtures/keymaker/`, never
    substituted, and the v1 fixtures stay exactly as they are.
+
+**What "frozen" still admits: a new slot type.** Frozen means no byte a reader
+already interprets changes meaning. A new `slot_type` changes none: §4.4 has
+every existing reader skip a type it does not implement, so a container carrying
+one still opens through its other slots in every reader ever shipped, and one
+whose only slot is the new type is refused by an old reader with the same
+generic failure as any other unopenable file. §4.8 was added on exactly those
+terms, and any future type must be too: a fixed-width record, the same prefix,
+and nothing outside the slot that an old reader would read differently.
 
 ## 10. Review checklist
 

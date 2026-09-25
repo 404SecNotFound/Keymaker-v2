@@ -47,6 +47,7 @@
 
 import {
   CipherId,
+  dependencyUnavailable,
   describeWeakKdf,
   isUserFacingError,
   KdfId,
@@ -57,6 +58,7 @@ import {
   validateKdfParams,
   type KdfParams,
 } from "./keymaker-crypto";
+import { dropIgnorable, stripIgnorable } from "./keym-text";
 
 // ---------------------------------------------------------------------------
 // Constants (§3, §4.4, §5.1, §7)
@@ -207,6 +209,8 @@ const SLOT_TYPE_PASSPHRASE = 0x00;
 export const KEYM2_SLOT_TYPE_PASSKEY = 0x01;
 /** §4.6. Same 48-byte prefix; only the slot secret's origin differs. */
 export const KEYM2_SLOT_TYPE_SHAMIR = 0x02;
+/** §4.8. A passphrase *and* a share set, both needed. Same 48-byte prefix. */
+export const KEYM2_SLOT_TYPE_BOTH = 0x03;
 
 /**
  * §3.2, HKDF-SHA-256 — added by §4.6, with no cost parameters on purpose.
@@ -230,6 +234,8 @@ function kdfIsLegalForSlotType(slotType: number, kdfId: number): boolean {
   if (slotType === SLOT_TYPE_PASSPHRASE) return kdfId === KdfId.PBKDF2 || kdfId === KdfId.ARGON2ID;
   if (slotType === KEYM2_SLOT_TYPE_SHAMIR) return kdfId === KEYM2_KDF_HKDF;
   if (slotType === KEYM2_SLOT_TYPE_PASSKEY) return kdfId === KEYM2_KDF_HKDF;
+  // §4.8: the guessable half is a password, so exactly 0x00's KDFs.
+  if (slotType === KEYM2_SLOT_TYPE_BOTH) return kdfId === KdfId.PBKDF2 || kdfId === KdfId.ARGON2ID;
   return false;
 }
 
@@ -257,6 +263,8 @@ const INFO_SLOT_KEY = textEncoder.encode("keymaker.v2.slot-key");
 // §4.7, the same argument a third time: a passphrase, a share secret and a PRF
 // output are all 32 bytes and must not reach the same slot key.
 const CTX_PASSKEY_INPUT = textEncoder.encode("keymaker.v2.passkey-input");
+// §4.8, a fourth domain string, for the slot that takes both.
+const CTX_BOTH_INPUT = textEncoder.encode("keymaker.v2.passphrase-and-shares");
 // §4.7. The PRF salt is derived from slot_salt rather than stored. This differs
 // from INFO_SLOT_KEY as hygiene rather than as a load-bearing separation: the
 // two HKDF calls already take different IKMs, 32 bytes against 65.
@@ -532,7 +540,8 @@ export function parseKeym2Slot(record: Uint8Array): Keym2Slot | null {
   if (
     slotType !== SLOT_TYPE_PASSPHRASE &&
     slotType !== KEYM2_SLOT_TYPE_SHAMIR &&
-    slotType !== KEYM2_SLOT_TYPE_PASSKEY
+    slotType !== KEYM2_SLOT_TYPE_PASSKEY &&
+    slotType !== KEYM2_SLOT_TYPE_BOTH
   ) {
     return null;
   }
@@ -725,11 +734,24 @@ async function requireAuthenticSlotTable(parsed: Keym2Container, master: Uint8Ar
 // Key derivation (§4)
 // ---------------------------------------------------------------------------
 
-/** §4.1 `LP(x) = uint32_be(len(x)) || x`. */
-function lp(x: Uint8Array): Uint8Array {
-  const out = new Uint8Array(4 + x.length);
-  new DataView(out.buffer).setUint32(0, x.length, false);
-  out.set(x, 4);
+/**
+ * §4.1 `LP(x0) || LP(x1) || ...`, where `LP(x) = uint32_be(len(x)) || x`.
+ *
+ * Written straight into one buffer rather than as `concat(fields.map(lp))`.
+ * The fields are secrets (a password, a share secret, a PRF output), and the
+ * two-step form allocated a length-prefixed copy of each one that nobody held a
+ * reference to and so nobody erased. One buffer means the caller's
+ * `secureErase` on the result reaches every copy this function made.
+ */
+function lpConcat(fields: Uint8Array[]): Uint8Array {
+  const out = new Uint8Array(fields.reduce((n, f) => n + 4 + f.length, 0));
+  const view = new DataView(out.buffer);
+  let at = 0;
+  for (const field of fields) {
+    view.setUint32(at, field.length, false);
+    out.set(field, at + 4);
+    at += 4 + field.length;
+  }
   return out;
 }
 
@@ -738,10 +760,19 @@ function lp(x: Uint8Array): Uint8Array {
  *
  * This is the half of KM-05 that length prefixes alone do not solve, and it is
  * what makes a large key file free: the KDF sees 32 bytes, not 100 MB.
+ *
+ * Web Crypto has no streaming digest, so the domain string and the key file
+ * have to be joined first, and that join is a complete copy of the key file.
+ * Erased in a `finally`: it is half the key material, it is made once per slot
+ * the walk attempts, and nothing else holds a reference to it.
  */
 async function keyfileDigest(keyFile: Uint8Array): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_KEYFILE, keyFile]) as BufferSource);
-  return new Uint8Array(digest);
+  const input = concat([CTX_KEYFILE, keyFile]);
+  try {
+    return new Uint8Array(await crypto.subtle.digest("SHA-256", input as BufferSource));
+  } finally {
+    secureErase(input);
+  }
 }
 
 /**
@@ -751,18 +782,30 @@ async function keyfileDigest(keyFile: Uint8Array): Promise<Uint8Array> {
  * Worth being precise about what closes KM-05, because the obvious answer is
  * wrong: for this particular pair it is §4.2's *hashing*, not the length
  * prefixes. A fixed-width 32-byte field cannot slide, so `("ab","c")` and
- * `("a","bc")` differ either way. What `lp()` buys is injectivity of the
+ * `("a","bc")` differ either way. What `LP` buys is injectivity of the
  * concatenation as a whole, which is what keeps the encoding sound as fields
  * are added. (Established by a negative control on the Python reference:
  * stubbing `LP` to the identity left every injectivity test green.)
+ *
+ * The returned buffer is the caller's to erase, and it is the only copy of the
+ * password bytes that survives this function. `normalized` and the key-file
+ * digest are erased here, in a `finally` so a failed digest cannot skip it; the
+ * same pattern as v1's `buildBaseMaterial`. This runs once per passphrase slot
+ * the walk attempts, on every unlock and every enrolment.
  */
 async function buildKdfInput(password: string, keyFile: Uint8Array | null): Promise<Uint8Array> {
   const normalized = textEncoder.encode(password.normalize("NFC"));
-  // "No key file" is LP("") rather than an omitted field — one shape, one code
-  // path, and the absent case explicitly encoded. It cannot collide with a
-  // present-but-empty key file, which hashes to 32 bytes.
-  const digest = keyFile ? await keyfileDigest(keyFile) : new Uint8Array(0);
-  return concat([lp(CTX_KDF_INPUT), lp(normalized), lp(digest)]);
+  let digest: Uint8Array | null = null;
+  try {
+    // "No key file" is LP("") rather than an omitted field — one shape, one code
+    // path, and the absent case explicitly encoded. It cannot collide with a
+    // present-but-empty key file, which hashes to 32 bytes.
+    digest = keyFile ? await keyfileDigest(keyFile) : new Uint8Array(0);
+    return lpConcat([CTX_KDF_INPUT, normalized, digest]);
+  } finally {
+    secureErase(normalized);
+    secureErase(digest);
+  }
 }
 
 /**
@@ -774,7 +817,7 @@ async function buildKdfInput(password: string, keyFile: Uint8Array | null): Prom
  */
 function buildShamirInput(shareSecret: Uint8Array): Uint8Array {
   if (shareSecret.length !== MASTER_KEY_LEN) reject();
-  return concat([lp(CTX_SHAMIR_INPUT), lp(shareSecret)]);
+  return lpConcat([CTX_SHAMIR_INPUT, shareSecret]);
 }
 
 /** §4.7. WebAuthn's PRF extension returns 32 bytes. */
@@ -811,7 +854,56 @@ export async function derivePrfSalt(slotSalt: Uint8Array): Promise<Uint8Array> {
  */
 function buildPasskeyInput(prfOutput: Uint8Array): Uint8Array {
   if (prfOutput.length !== KEYM2_PRF_OUTPUT_LEN) reject();
-  return concat([lp(CTX_PASSKEY_INPUT), lp(prfOutput)]);
+  return lpConcat([CTX_PASSKEY_INPUT, prfOutput]);
+}
+
+/**
+ * What a slot is opened with. One buffer for every slot type but §4.8's, which
+ * takes two: §4.1's kdf input, which the slot's KDF stretches, and the
+ * reconstructed share secret, which it does not.
+ */
+type SlotSecret = Uint8Array | { kdfInput: Uint8Array; shareSecret: Uint8Array };
+
+function eraseSlotSecret(secret: SlotSecret): void {
+  if (secret instanceof Uint8Array) {
+    secureErase(secret);
+  } else {
+    secureErase(secret.kdfInput);
+    secureErase(secret.shareSecret);
+  }
+}
+
+/**
+ * §4.8. The stretched passphrase and the share secret combined by HKDF, under
+ * their own domain string. The memory-hard cost is paid once, on the
+ * passphrase; the share secret is 32 CSPRNG bytes and needs none.
+ */
+async function deriveBothSlotKey(
+  kdfInput: Uint8Array,
+  shareSecret: Uint8Array,
+  salt: Uint8Array,
+  kdf: Keym2KdfParams
+): Promise<Uint8Array> {
+  if (kdf.kdf === KEYM2_KDF_HKDF) reject();
+  if (shareSecret.length !== MASTER_KEY_LEN) reject();
+  const passphraseKey = await deriveSlotKey(kdfInput, salt, kdf);
+  const bothInput = lpConcat([CTX_BOTH_INPUT, passphraseKey, shareSecret]);
+  try {
+    return await deriveSlotKey(bothInput, salt, { kdf: KEYM2_KDF_HKDF });
+  } finally {
+    secureErase(passphraseKey);
+    secureErase(bothInput);
+  }
+}
+
+/** §4.3 / §4.8. The slot key for a slot, from whichever secret it takes. */
+async function deriveSlotKeyFor(slot: Keym2Slot, secret: SlotSecret): Promise<Uint8Array> {
+  if (slot.slotType === KEYM2_SLOT_TYPE_BOTH) {
+    if (secret instanceof Uint8Array) reject();
+    return deriveBothSlotKey(secret.kdfInput, secret.shareSecret, slot.salt, slot.kdf);
+  }
+  if (!(secret instanceof Uint8Array)) reject();
+  return deriveSlotKey(secret, slot.salt, slot.kdf);
 }
 
 /** §4.3. The slot key, from that slot's own KDF, salt and parameters. */
@@ -1102,6 +1194,29 @@ export interface Keym2Secrets {
 }
 
 /**
+ * The Shamir module, loaded on first use and typed when it cannot be.
+ *
+ * On the worker path this is bundled inline and cannot fail. On the main-thread
+ * fallback it is a separate chunk, and a chunk can be unreachable: offline
+ * before the precache has landed, or a deploy that moved under the page. The
+ * bare `import()` rejected with the browser's own error, `decryptData` passed it
+ * through untyped, and the UI reported "the password or key file may be
+ * incorrect" for a share set that was never read. Same failure, same answer as
+ * `loadHashWasm` and `loadNoble`: a typed `dependency-unavailable` error, and the
+ * rejection is not cached, so a later attempt imports again.
+ */
+let shamirModulePromise: Promise<typeof import("./keym-v2-shamir")> | null = null;
+function loadShamir(): Promise<typeof import("./keym-v2-shamir")> {
+  if (!shamirModulePromise) {
+    shamirModulePromise = import("./keym-v2-shamir").catch((cause: unknown) => {
+      shamirModulePromise = null;
+      throw dependencyUnavailable("the recovery-share decoder", cause);
+    });
+  }
+  return shamirModulePromise;
+}
+
+/**
  * §4.1 / §4.6. The slot secret this caller can offer *this* slot, or null if it
  * holds nothing of the kind the slot wants.
  *
@@ -1109,7 +1224,7 @@ export interface Keym2Secrets {
  * unchanged; only the question "what secret does this slot take" grew a second
  * answer.
  */
-async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Uint8Array | null> {
+async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<SlotSecret | null> {
   if (slot.slotType === SLOT_TYPE_PASSPHRASE) {
     if (secrets.password === undefined) return null;
     return buildKdfInput(secrets.password, secrets.keyFile ?? null);
@@ -1117,17 +1232,43 @@ async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Ui
 
   if (slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) {
     if (!secrets.shares || secrets.shares.length === 0) return null;
-    const { combineShares, shareSetId } = await import("./keym-v2-shamir");
+    // Outside the `try` below, deliberately: that `catch` means "these shares
+    // do not fit this slot", and a module that failed to load says nothing
+    // about the shares. `loadShamir` types the failure so it reaches the user
+    // as a missing component rather than as a wrong password.
+    const { combineShares, shareSetIdV2 } = await loadShamir();
     try {
       // Checked against *this* slot's salt, so a share set belonging to a
       // different Shamir slot declines rather than reconstructing a clean
       // secret that is simply the wrong one.
-      const shareSecret = await combineShares(secrets.shares, await shareSetId(slot.salt));
-      const input = buildShamirInput(shareSecret);
-      secureErase(shareSecret);
-      return input;
+      const shareSecret = await combineShares(secrets.shares, await shareSetIdV2(slot.salt));
+      try {
+        return buildShamirInput(shareSecret);
+      } finally {
+        secureErase(shareSecret);
+      }
     } catch {
       return null;
+    }
+  }
+
+  if (slot.slotType === KEYM2_SLOT_TYPE_BOTH) {
+    // §4.8: both, or this slot is not attempted, and the set id is compared in
+    // full before anything is stretched, so shares for some other slot decline
+    // here rather than after an Argon2id derivation on their behalf.
+    if (secrets.password === undefined || !secrets.shares || secrets.shares.length === 0) return null;
+    const { combineShares, shareSetIdV2 } = await loadShamir();
+    let shareSecret: Uint8Array;
+    try {
+      shareSecret = await combineShares(secrets.shares, await shareSetIdV2(slot.salt));
+    } catch {
+      return null;
+    }
+    try {
+      return { kdfInput: await buildKdfInput(secrets.password, secrets.keyFile ?? null), shareSecret };
+    } catch (error) {
+      secureErase(shareSecret);
+      throw error;
     }
   }
 
@@ -1215,9 +1356,9 @@ async function* unwrapCandidates(
     // 8 * parallelism." reached decryptData's callers.
     let slotKey: Uint8Array;
     try {
-      slotKey = await deriveSlotKey(slotSecret, slot.salt, slot.kdf);
+      slotKey = await deriveSlotKeyFor(slot, slotSecret);
     } catch (error) {
-      secureErase(slotSecret);
+      eraseSlotSecret(slotSecret);
       // One exception to the skip rule: the Argon2id library failing to
       // *load* is not a property of the slot, and skipping every Argon2id
       // slot on its account exhausts the walk and reports a wrong password
@@ -1237,7 +1378,7 @@ async function* unwrapCandidates(
     //
     // Safe for every branch: each iteration builds its own, so there is no
     // shared buffer a later slot could need.
-    secureErase(slotSecret);
+    eraseSlotSecret(slotSecret);
     const keys = await wrapKeys(slotKey, container.core.cipher);
     let master: Uint8Array | null;
     try {
@@ -1261,21 +1402,54 @@ async function* unwrapCandidates(
 }
 
 /**
- * The first slot the caller's secrets open.
+ * The first slot the caller's secrets open whose key opens this payload.
  *
- * What the enrolment paths want: they need *a* master key, and any slot that
- * yields one is proof the caller may edit this container. Only `decryptKeym2`
- * has a second opinion about which one is right, because only it has a payload
- * to check the answer against.
+ * What the enrolment paths want: the container's own master key, confirmed
+ * against chunk 0 the way `decryptKeym2` confirms its candidates.
  */
 async function unwrapMasterKey(
   container: Keym2Container,
   secrets: Keym2Secrets
 ): Promise<{ master: Uint8Array; slot: Keym2Slot }> {
+  // §4.4, "A master key is recovered only when it opens the payload". This
+  // took the first candidate, on the reasoning above that any unwrap proves
+  // the caller may edit the container. It proves the caller knows *a*
+  // password, not that the key belongs here: behind a slot spliced in from
+  // another v2 container, enrolment wrapped a new share set around that other
+  // container's key, and every share printed for this one opened nothing.
   for await (const candidate of unwrapCandidates(container, secrets)) {
-    return candidate;
+    if (await opensFirstChunk(container, candidate.master)) return candidate;
+    secureErase(candidate.master);
   }
   reject();
+}
+
+/** §4.4: does this candidate master key open chunk 0 of this container? */
+async function opensFirstChunk(container: Keym2Container, master: Uint8Array): Promise<boolean> {
+  let sizes: number[];
+  try {
+    sizes = chunkLayout(container.payload.length, container.core.tagOverhead);
+  } catch {
+    return false;
+  }
+  const firstLen = (sizes[0] as number) + container.core.tagOverhead;
+  const firstBlob = container.payload.subarray(0, firstLen);
+  if (firstBlob.length !== firstLen) return false;
+  const keys = await payloadKeys(master, container.core.cipher);
+  try {
+    const first = await open(
+      container.core.cipher,
+      keys,
+      nonceFor(0, sizes.length === 1),
+      firstBlob,
+      container.coreBytes
+    );
+    if (first === null) return false;
+    secureErase(first);
+    return true;
+  } finally {
+    secureErase(keys.chachaKey);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1382,8 +1556,44 @@ export async function encryptKeym2WithExplicitSecrets(
   if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) {
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
   }
-  const coreBytes = packCoreHeader(options.cipher, 0, version, containerId);
   const prefix = packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt);
+  return writeKeym2(plaintext, options.cipher, masterKey, version, containerId, prefix, async () => {
+    // `finally`, not a trailing call: `kdfInput` holds the NFC password bytes and
+    // the key-file digest, and `deriveSlotKey` throws on reachable input — an
+    // Argon2id slot at §6's memory ceiling on a device that cannot allocate it,
+    // which the *decrypt* walk was specifically hardened against. On that path
+    // the buffer survived the throw. The unlock walk has always used `catch`
+    // here; the write paths were the inconsistency.
+    const kdfInput = await buildKdfInput(password, keyFile);
+    try {
+      return await deriveSlotKey(kdfInput, salt, options.kdf);
+    } finally {
+      secureErase(kdfInput);
+    }
+  });
+}
+
+/**
+ * A single-slot container: the core header, one slot built from `prefix` and
+ * the key `slotKey()` derives, and the payload under `masterKey`.
+ *
+ * Shared by the passphrase writer and §4.8's, which differ only in the slot's
+ * type byte and how its key is derived. Both prefixes go through the reader's
+ * own validators first.
+ */
+async function writeKeym2(
+  plaintext: Uint8Array,
+  cipher: CipherId,
+  masterKey: Uint8Array,
+  version: number,
+  containerId: Uint8Array,
+  prefix: Uint8Array,
+  slotKey: () => Promise<Uint8Array>
+): Promise<Uint8Array> {
+  if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) {
+    throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
+  }
+  const coreBytes = packCoreHeader(cipher, 0, version, containerId);
 
   // Round-trip both through the reader's own validators. A writer that can emit
   // a container its own parser rejects is a bug worth catching here rather than
@@ -1395,35 +1605,19 @@ export async function encryptKeym2WithExplicitSecrets(
   // reason that has nothing to do with the header being wrong.
   parseKeym2CoreHeader(concat([coreBytes, new Uint8Array(keym2SlotTableOffset(version) - coreBytes.length)]));
 
-  if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + tagOverheadFor(options.cipher))])) === null) {
+  if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + tagOverheadFor(cipher))])) === null) {
     throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
   }
 
-  // `finally`, not a trailing call: `kdfInput` holds the NFC password bytes and
-  // the key-file digest, and `deriveSlotKey` throws on reachable input — an
-  // Argon2id slot at §6's memory ceiling on a device that cannot allocate it,
-  // which the *decrypt* walk was specifically hardened against. On that path
-  // the buffer survived the throw. The unlock walk has always used `catch`
-  // here; the write paths were the inconsistency.
-  const kdfInput = await buildKdfInput(password, keyFile);
-  let slotKey: Uint8Array;
-  try {
-    slotKey = await deriveSlotKey(kdfInput, salt, options.kdf);
-  } finally {
-    secureErase(kdfInput);
-  }
-
+  const key = await slotKey();
   let record: Uint8Array;
   try {
-    record = concat([
-      prefix,
-      await wrapMasterKey(options.cipher, slotKey, masterKey, concat([coreBytes, prefix])),
-    ]);
+    record = concat([prefix, await wrapMasterKey(cipher, key, masterKey, concat([coreBytes, prefix]))]);
   } finally {
-    secureErase(slotKey);
+    secureErase(key);
   }
 
-  const keys = await payloadKeys(masterKey, options.cipher);
+  const keys = await payloadKeys(masterKey, cipher);
   try {
     const count = chunkCount(plaintext.length);
     // v3 §3 puts the MAC between slot_count and the table. It is computed over
@@ -1435,7 +1629,7 @@ export async function encryptKeym2WithExplicitSecrets(
     const parts: Uint8Array[] = [...head, record];
     for (let i = 0; i < count; i++) {
       const chunk = plaintext.subarray(i * KEYM2_CHUNK_SIZE, (i + 1) * KEYM2_CHUNK_SIZE);
-      parts.push(await seal(options.cipher, keys, nonceFor(i, i === count - 1), chunk, coreBytes));
+      parts.push(await seal(cipher, keys, nonceFor(i, i === count - 1), chunk, coreBytes));
     }
     return concat(parts);
   } finally {
@@ -1443,6 +1637,113 @@ export async function encryptKeym2WithExplicitSecrets(
   }
 }
 
+/**
+ * §4.8. A container whose only slot takes the passphrase **and** `k` of the
+ * `n` shares returned.
+ *
+ * §4.8 lets this slot stand alone, and this writes that case because it is the
+ * case the type exists for: with a plain passphrase slot beside it the shares
+ * would be decoration. What it costs is the caller's to show before calling: a
+ * forgotten passphrase, or fewer than `k` strips, loses the backup.
+ *
+ * `explicit` pins the random inputs, for the conformance bridge only (§4.5).
+ */
+export async function encryptKeym2WithSharesRequired(
+  plaintext: Uint8Array,
+  password: string,
+  keyFile: Uint8Array | null,
+  options: Keym2Options,
+  threshold: number,
+  count: number,
+  version: number = KEYM2_VERSION,
+  explicit?: {
+    salt?: Uint8Array;
+    masterKey?: Uint8Array;
+    containerId?: Uint8Array;
+    shareSecret?: Uint8Array;
+    coefficients?: Uint8Array;
+  }
+): Promise<Keym2ShareSet> {
+  if (!password) {
+    throw new KeymakerError("credential-required", "A password is required for encryption.");
+  }
+  validateKdfParams(options.kdf, "encrypt");
+  const { shamirSplit, shareSetIdV2, encodeShareV2, SHARE_VALUE_LEN } = await loadShamir();
+
+  const salt = explicit?.salt ?? crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const masterKey = explicit?.masterKey ?? crypto.getRandomValues(new Uint8Array(MASTER_KEY_LEN));
+  const containerId =
+    explicit?.containerId ??
+    (version === KEYM2_VERSION_V3 ? crypto.getRandomValues(new Uint8Array(CONTAINER_ID_LEN)) : EMPTY);
+  const shareSecret = explicit?.shareSecret ?? crypto.getRandomValues(new Uint8Array(SHARE_VALUE_LEN));
+  if (salt.length !== SALT_LEN || masterKey.length !== MASTER_KEY_LEN || shareSecret.length !== SHARE_VALUE_LEN) {
+    throw new KeymakerError("invalid-input", "KEYM v2 requires 32-byte salts and secrets.");
+  }
+
+  try {
+    // Split first: it validates k and n, and a refused split should cost
+    // nothing, not an Argon2id derivation.
+    const parts = shamirSplit(shareSecret, threshold, count, explicit?.coefficients);
+    const prefix = packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt, KEYM2_SLOT_TYPE_BOTH);
+    const container = await writeKeym2(plaintext, options.cipher, masterKey, version, containerId, prefix, async () => {
+      const kdfInput = await buildKdfInput(password, keyFile);
+      try {
+        return await deriveBothSlotKey(kdfInput, shareSecret, salt, options.kdf);
+      } finally {
+        secureErase(kdfInput);
+      }
+    });
+    const setId = await shareSetIdV2(salt);
+    const shares: string[] = [];
+    for (const part of parts) {
+      shares.push(await encodeShareV2({ setId, threshold, index: part.index, value: part.value }));
+      secureErase(part.value);
+    }
+    return { container, shares };
+  } finally {
+    if (!explicit?.shareSecret) secureErase(shareSecret);
+    if (!explicit?.masterKey) secureErase(masterKey);
+  }
+}
+
+/** Byte equality over public values (set ids), so no timing care is needed. */
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+
+/**
+ * §4.8's MAY: do these shares belong to a slot that also takes the password?
+ * From the slot salts, which are in the clear, so saying so tells the holder
+ * nothing anyone holding the container could not compute.
+ */
+export async function sharesNeedPasswordKeym2(data: Uint8Array, shares: string[]): Promise<boolean> {
+  try {
+    const { decodeShareAny, shareSetIdV2 } = await loadShamir();
+    const core = parseKeym2CoreHeader(data);
+    const slotCount = data[keym2SlotCountOffset(core.version)] as number;
+    const width = keym2SlotLen(core.cipher);
+    const table = keym2SlotTableOffset(core.version);
+    const ids: Uint8Array[] = [];
+    for (const text of shares) {
+      // Only the set id is wanted. The value is key material, so it is erased
+      // rather than dropped.
+      const share = await decodeShareAny(text);
+      ids.push(share.setId);
+      secureErase(share.value);
+    }
+    for (let i = 0; i < slotCount; i++) {
+      const slot = parseKeym2Slot(data.subarray(table + i * width, table + (i + 1) * width));
+      if (slot === null || slot.slotType !== KEYM2_SLOT_TYPE_BOTH) continue;
+      const wide = await shareSetIdV2(slot.salt);
+      if (ids.some((id) => sameBytes(wide.subarray(0, id.length), id))) return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
+}
 
 export interface Keym2ShareSet {
   container: Uint8Array;
@@ -1473,7 +1774,7 @@ export async function addShamirSlotKeym2(
   count: number,
   explicit?: { salt?: Uint8Array; shareSecret?: Uint8Array; coefficients?: Uint8Array }
 ): Promise<Keym2ShareSet> {
-  const { shamirSplit, shareSetIdV2, encodeShareV2, SHARE_VALUE_LEN } = await import("./keym-v2-shamir");
+  const { shamirSplit, shareSetIdV2, encodeShareV2, SHARE_VALUE_LEN } = await loadShamir();
 
   const parsed = parseKeym2Container(container);
   if (parsed.records.length >= KEYM2_MAX_SLOTS) {
@@ -1523,8 +1824,8 @@ export async function addShamirSlotKeym2(
 
   // New share sets are written v2 (KMSHARE2): a 128-bit set id and checksum,
   // and diagnostics a v1 share cannot carry. The container slot is unchanged, so
-  // the set id's first four bytes still equal `shareSetId(salt)` and the unwrap
-  // guard (which compares that prefix) opens either version.
+  // the set id's first four bytes still equal `shareSetId(salt)`, and the unwrap
+  // guard compares each share over its own full length against the 16-byte id.
   const setId = await shareSetIdV2(salt);
 
   const shares: string[] = [];
@@ -1570,6 +1871,31 @@ export function passkeySlotSaltsKeym2(container: Uint8Array): Uint8Array[] {
   for (const record of parsed.records) {
     const slot = parseKeym2Slot(record);
     if (slot !== null && slot.slotType === KEYM2_SLOT_TYPE_PASSKEY) salts.push(slot.salt);
+  }
+  return salts;
+}
+
+/**
+ * §4.6. The salt of each Shamir slot, in table order, for §4.6's set code and
+ * set id: the paper vault prints the code beside the container, and the
+ * printout check compares a scanned strip's set id against these.
+ *
+ * Reads the header and slot table only, never the payload, so the header copy
+ * the workbench keeps of a container written straight to a file
+ * (`KEYM2_HEADER_PEEK_BYTES`) is enough. Structural errors in what it does read
+ * propagate, as above.
+ */
+export function shamirSlotSaltsKeym2(data: Uint8Array): Uint8Array[] {
+  const core = parseKeym2CoreHeader(data);
+  const slotCount = data[keym2SlotCountOffset(core.version)] as number;
+  if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) reject();
+  const width = keym2SlotLen(core.cipher);
+  const table = keym2SlotTableOffset(core.version);
+  if (data.length < table + slotCount * width) reject();
+  const salts: Uint8Array[] = [];
+  for (let i = 0; i < slotCount; i++) {
+    const slot = parseKeym2Slot(data.subarray(table + i * width, table + (i + 1) * width));
+    if (slot !== null && slot.slotType === KEYM2_SLOT_TYPE_SHAMIR) salts.push(slot.salt);
   }
   return salts;
 }
@@ -1881,16 +2207,15 @@ export function armorKeym2Compact(container: Uint8Array): string {
  * bug v1's `KEYM1:` armor had.
  */
 export function dearmorKeym2(text: string): Uint8Array {
-  const trimmed = text.trim();
+  const trimmed = stripIgnorable(text);
   if (!trimmed.startsWith(KEYM2_ARMOR_PREFIX)) reject();
   try {
-    // §7: ASCII whitespace only inside the body, matching keym2.py's
-    // `bytes.split()` (the ends are trimmed above, as its `str.strip()` does). A
-    // non-ASCII space — U+00A0, a stray BOM — is *kept*, so `fromBase64Url`
-    // rejects it exactly as the reference does. Stripping it here with `\s`
-    // instead opened a container the durable Python decryptor refuses, which
-    // strands the heir on the one path that has no browser.
-    return fromBase64Url(trimmed.slice(KEYM2_ARMOR_PREFIX.length).replace(/[ \t\n\r\v\f]/g, ""));
+    // §7, "Characters a reader ignores": the same IGNORABLE set at the ends
+    // and inside the body, in both implementations. This used ASCII-only
+    // inside and `trim()` at the ends, which differs from Python's `strip()`
+    // in both directions (U+FEFF, U+0085, U+001C..U+001F); matching the other
+    // implementation's accident is not a rule, so the rule is now written down.
+    return fromBase64Url(dropIgnorable(trimmed.slice(KEYM2_ARMOR_PREFIX.length)));
   } catch {
     reject();
   }
@@ -2104,6 +2429,12 @@ export function inspectKeym2(
           ? "passkey / WebAuthn PRF (HKDF-SHA-256)"
           : slot.slotType === KEYM2_SLOT_TYPE_SHAMIR
           ? "Shamir share set (HKDF-SHA-256)"
+          : slot.slotType === KEYM2_SLOT_TYPE_BOTH && slot.kdf.kdf !== KEYM2_KDF_HKDF
+          ? `password and share set, both needed (${
+              slot.kdf.kdf === KdfId.PBKDF2
+                ? `PBKDF2 ${slot.kdf.params.iterations.toLocaleString("en-US")} iters`
+                : `Argon2id ${Math.round(slot.kdf.params.memoryKiB / 1024)} MiB`
+            })`
           : // Unreachable for the three types above, since §6 forbids a
             // passphrase slot from declaring HKDF and the parser enforces it.
             // Kept as the default for a *future* HKDF slot type, which should

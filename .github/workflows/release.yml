@@ -123,11 +123,17 @@ jobs:
       contents: read
     uses: ./.github/workflows/crypto-regression.yml
 
+  # The tag goes to ci.yml so its reproducible-elsewhere legs build the release
+  # channel, the same expression `build` below sets KEYMAKER_RELEASE_TAG from.
+  # Without it they would build the development label, and `sign` would be
+  # comparing the release against a different artifact.
   verify-ci:
     needs: preflight
     permissions:
       contents: read
     uses: ./.github/workflows/ci.yml
+    with:
+      release-tag: ${{ github.ref_name }}
 
   verify-conformance:
     needs: preflight
@@ -182,8 +188,12 @@ jobs:
   # Signing and packaging happen here, in the job that holds `id-token: write`
   # but has run no install scripts. Packaging is here rather than in publish so
   # that the job holding `contents: write` installs nothing at all.
+  #
+  # `verify-ci` is named here as well as through `build` because this job reads
+  # its artifacts: the SHA256SUMS each reproducible-elsewhere leg uploaded.
+  # Same run, so no permission beyond the ones below. See deploy.yml.
   sign:
-    needs: build
+    needs: [build, verify-ci]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -206,6 +216,18 @@ jobs:
         with:
           name: site
           path: out
+
+      # Outside out/, so none of it is signed, packaged or attached.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: sums-*
+          path: reproduced
+
+      # The release manifest must be the one the verified builds produced, not
+      # only one this job's `build` produced. verify-ci's legs built this tag,
+      # labelled as this release, each on its own runner.
+      - name: The manifest being signed is the one independent builds reproduced
+        run: node scripts/check-reproduced-manifest.mjs out/SHA256SUMS reproduced
 
       - name: Sign the build manifest
         run: node scripts/sign-manifest.mjs

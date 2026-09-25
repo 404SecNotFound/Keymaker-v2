@@ -70,7 +70,7 @@ test("its buttons download the container, print the paper vault, and rehearse fr
   // The one-time shares dialog sits over the receipt; an owner who has copied
   // the strips closes it.
   await expect(page.getByText(/Save these 3 shares now/)).toBeVisible({ timeout: 30_000 });
-  await page.keyboard.press("Escape");
+  await page.getByRole("button", { name: "I have saved these shares" }).click();
   await expect(page.getByText(/Save these/)).toHaveCount(0);
 
   await expect(receipt(page)).toBeVisible();

@@ -1,7 +1,9 @@
 name: Format conformance
 
-# Cross-tests the TypeScript implementation against an independent Python
-# reference written only from docs/FORMAT.md.
+# Cross-tests the TypeScript implementation against independent Python
+# references written only from the format documents: reference/keym.py from
+# docs/FORMAT.md (v1), and reference/keym2.py from docs/FORMAT-V2-DESIGN.md and
+# the v3 delta in docs/FORMAT-V3-DESIGN.md.
 #
 # The frozen fixtures prove Keymaker stays compatible with itself. They cannot
 # prove it matches its own specification, because the implementation that
@@ -57,15 +59,15 @@ jobs:
       - name: Reference self-test (KEYM v1)
         run: python3 reference/keym.py selftest
 
-      # KEYM v2 has no TypeScript yet, so there is nothing to cross-test
-      # against — which is the point. The reference is written from
-      # docs/FORMAT-V2-DESIGN.md *first*, so the specification is what gets
-      # debugged, before an implementation exists to enshrine its gaps. It has
-      # already found four (see §11 of that document, and §A of keym2.py).
-      #
-      # Running it in CI from now keeps those findings from rotting as the
-      # proposal is edited.
-      - name: Reference self-test (KEYM v2, spec-first)
+      # The reference on its own, before it is compared with anything. Each
+      # format change is written into docs/FORMAT-V2-DESIGN.md first and
+      # implemented in keym2.py from that section alone, before the TypeScript,
+      # so the specification is what gets debugged rather than an
+      # implementation's reading of it. The findings that produced are in §11
+      # of that document and §A of keym2.py; this keeps them from rotting as
+      # the spec is edited. The byte-for-byte cross-test against the
+      # TypeScript follows.
+      - name: Reference self-test (KEYM v2 and v3, spec-first)
         run: npm run test:keym2
 
       # Byte equality, not just round-trips. For v1 a bidirectional round-trip
@@ -75,7 +77,6 @@ jobs:
       # decode correctly — so two writers could disagree, round-trip perfectly
       # in both directions, and still produce incompatible files.
       - name: Bidirectional conformance (KEYM v2 and v3, byte-for-byte)
-
         run: npm run test:conformance2
 
       - name: Bidirectional conformance
@@ -86,6 +87,56 @@ jobs:
       # be executable, or it decays silently into a page of stale instructions.
       - name: Recovery procedure works as documented
         run: npm run test:recovery
+
+  # ---------------------------------------------------------------- oldest supported Python
+  #
+  # docs/RECOVERY.md tells whoever is recovering a backup that the scripts need
+  # "Python 3.10 or newer", and every other job here runs 3.12, so nothing
+  # tested the floor of that promise. A 3.11-only construct in keym.py or
+  # keym2.py (`except*`, `tomllib`, `typing.Self`) would pass the job above and
+  # fail on exactly the old machine the page is written for. The pinned wheels
+  # sit on the same floor: cffi 2.1.1 and argon2-cffi-bindings 26.1.0 both
+  # declare Requires-Python >=3.10, so a routine bump could drop 3.10 with
+  # nothing else noticing.
+  #
+  # The self-tests only: they are the scripts' own known-answer vectors, which
+  # is the part an heir's interpreter has to run. The cross-tests drive the
+  # TypeScript and add nothing about the Python version.
+  reference-python-floor:
+    name: Reference self-tests on Python 3.10 (the RECOVERY.md floor)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.10"
+
+      # A job that quietly ran the runner's default interpreter would pass while
+      # testing 3.12 a second time.
+      - name: The interpreter is the documented floor
+        run: |
+          python3 --version
+          python3 -c 'import sys; sys.exit(0 if sys.version_info[:2] == (3, 10) else "expected Python 3.10, got " + sys.version)'
+
+      # Hash-checked, with dependencies resolved as on any other install. On
+      # 3.10 cryptography also needs typing-extensions (it declares it for
+      # python_full_version < '3.11'); scripts/pin-conformance-deps.py now
+      # resolves the closure for 3.10 as well as 3.12, so it is pinned. This
+      # job used --no-deps until it was, which installed the pinned bytes but
+      # could not tell a missing dependency from a present one.
+      - name: Install the pinned reference dependencies
+        run: pip install --require-hashes -r reference/conformance-requirements.txt
+
+      - name: Reference self-test (KEYM v1) on Python 3.10
+        run: python3 reference/keym.py selftest
+
+      - name: Reference self-test (KEYM v2 and v3) on Python 3.10
+        run: python3 reference/keym2.py selftest
 
   # ---------------------------------------------------------------- dependency audit
   #

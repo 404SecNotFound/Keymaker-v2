@@ -159,6 +159,60 @@ for (const [verifyJob, file] of Object.entries(SUITES)) {
   else bad("a release verify job does not need preflight; the fast-fail checks no longer run first");
 }
 
+// ---------------------------------------------------------------- reproduced
+//
+// The needs edges above prove the suites passed on this commit. They do not
+// prove the bytes being signed are the bytes the suites built: each publisher
+// signs what its own `build` job made, and no suite ever sees that. The sign
+// job closes the gap by comparing that manifest with the ones ci.yml's
+// reproducible-elsewhere legs uploaded (scripts/check-reproduced-manifest.mjs).
+// This asserts the wiring: the legs upload under the prefix the sign jobs
+// download, each sign job compares before it signs, and each publisher has the
+// legs build the channel it publishes.
+//
+// To watch the control bite: delete the "The manifest being signed..." step
+// from deploy.yml's sign job, or the `release-tag:` line from release.yml's
+// verify-ci, and re-run.
+{
+  const ci = readFileSync(join(WF, "ci.yml"), "utf8");
+  const legs = jobBlock(ci, "reproducible-elsewhere") ?? "";
+  if (/^\s*name:\s*sums-\$\{\{ matrix\.id \}\}\s*$/m.test(legs))
+    ok("ci.yml reproducible-elsewhere uploads each leg's manifest as sums-<leg>");
+  else bad("ci.yml reproducible-elsewhere no longer uploads sums-<leg>; the sign jobs would find nothing to compare");
+  if (/^\s*KEYMAKER_RELEASE_TAG:\s*\$\{\{ inputs\.release-tag \}\}\s*$/m.test(legs))
+    ok("ci.yml reproducible-elsewhere builds the channel its caller names");
+  else bad("ci.yml reproducible-elsewhere ignores inputs.release-tag; a release would be compared against a development build");
+  if (/^\s{4}inputs:\s*\n(?:\s{6,}.*\n)*?\s{6}release-tag:\s*$/m.test(ci))
+    ok("ci.yml declares the release-tag workflow_call input");
+  else bad("ci.yml does not declare the release-tag workflow_call input");
+
+  for (const [file, releaseTag] of [
+    ["deploy.yml", null],
+    ["release.yml", "${{ github.ref_name }}"],
+  ]) {
+    const src = readFileSync(join(WF, file), "utf8");
+    const sign = jobBlock(src, "sign") ?? "";
+    const download = sign.search(/^\s*pattern:\s*sums-\*\s*\n\s*path:\s*reproduced\s*$/m);
+    const compare = sign.indexOf("node scripts/check-reproduced-manifest.mjs out/SHA256SUMS reproduced");
+    const signing = sign.indexOf("node scripts/sign-manifest.mjs");
+    if (download !== -1 && compare > download && signing > compare)
+      ok(`${file} sign compares the reproduced manifests before it signs`);
+    else bad(`${file} sign does not download sums-* and run check-reproduced-manifest.mjs before signing`);
+
+    if (ancestors(src, "sign").has("verify-ci")) ok(`${file} sign runs after verify-ci, whose manifests it reads`);
+    else bad(`${file} sign does not wait for verify-ci, so the manifests it compares may not exist yet`);
+
+    const passed = (jobBlock(src, "verify-ci") ?? "").match(/^\s*release-tag:\s*(.*?)\s*$/m)?.[1] ?? null;
+    if (passed === releaseTag)
+      ok(`${file} has ci.yml build the ${releaseTag ? "release" : "development"} channel it publishes`);
+    else
+      bad(
+        `${file} verify-ci passes release-tag ${JSON.stringify(passed)}, expected ${JSON.stringify(releaseTag)}; ` +
+          "the legs would build a different channel from the one being signed"
+      );
+  }
+}
+
 if (failures > 0) {
   console.log(`\n${failures} check(s) failed: a publish path is not gated on its tests.`);
   process.exit(1);

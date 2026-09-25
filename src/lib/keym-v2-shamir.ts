@@ -25,6 +25,7 @@
  */
 
 import { KeymakerError, secureErase } from "./keymaker-crypto";
+import { asciiUpper, isIgnorable, stripIgnorable } from "./keym-text";
 
 /** §4.6, the share record: set id, threshold, index, value, checksum. */
 export const SHARE_SET_ID_LEN = 4;
@@ -55,12 +56,6 @@ const SHARE_GROUP = 4;
 /** Crockford's alphabet, which omits I, L, O and U. */
 const B32_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-/**
- * Explicitly ASCII rather than a Unicode-aware `\s`. Two implementations that
- * disagree about whether U+00A0 is whitespace disagree about whether a printed
- * share decodes.
- */
-const ASCII_WHITESPACE = " \t\n\r\v\f";
 
 /** GF(2^8) modulo x^8 + x^4 + x^3 + x + 1 — the AES field. */
 const GF_REDUCTION = 0x1b;
@@ -260,8 +255,14 @@ export async function shareSetId(slotSalt: Uint8Array): Promise<Uint8Array> {
 }
 
 async function shareChecksum(body: Uint8Array): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_SHARE_CHECKSUM, body]) as BufferSource);
-  return new Uint8Array(digest).slice(0, SHARE_CHECKSUM_LEN);
+  // The body carries the share value, so its copy here is erased like the value.
+  const input = concat([CTX_SHARE_CHECKSUM, body]);
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", input as BufferSource);
+    return new Uint8Array(digest).slice(0, SHARE_CHECKSUM_LEN);
+  } finally {
+    secureErase(input);
+  }
 }
 
 export interface Share {
@@ -338,8 +339,8 @@ export function b32Encode(data: Uint8Array): string {
 }
 
 /**
- * §4.6. Case-insensitive, I/L map to 1, O maps to 0, hyphens and ASCII
- * whitespace ignored, everything else rejected.
+ * §4.6. Case-insensitive over ASCII, I/L map to 1, O maps to 0, hyphens and
+ * §7's IGNORABLE characters ignored, everything else rejected.
  *
  * Non-zero padding bits in the final character are rejected so one share has
  * exactly one encoding. Without that check the last character has 16 spellings
@@ -348,8 +349,11 @@ export function b32Encode(data: Uint8Array): string {
 export function b32Decode(text: string, nbytes: number): Uint8Array {
   const values: number[] = [];
   for (const ch of text) {
-    if (ch === "-" || ASCII_WHITESPACE.includes(ch)) continue;
-    let u = ch.toUpperCase();
+    if (ch === "-" || isIgnorable(ch)) continue;
+    // §7: folding is ASCII-only. toUpperCase() maps U+0131 to "I" (so to "1")
+    // and U+017F to "S", which the alphabet then accepted.
+    if (ch.charCodeAt(0) > 0x7f) reject();
+    let u = asciiUpper(ch);
     if (u === "I" || u === "L") u = "1";
     else if (u === "O") u = "0";
     const pos = B32_ALPHABET.indexOf(u);
@@ -372,9 +376,13 @@ export function b32Decode(text: string, nbytes: number): Uint8Array {
       bits -= 8;
     }
   }
-  // Whatever is left is padding, and §4.6 requires it to be zero.
-  if (bits > 0 && (acc & ((1 << bits) - 1)) !== 0) reject();
-  if (at !== nbytes) reject();
+  // Whatever is left is padding, and §4.6 requires it to be zero. A record
+  // refused here has already been decoded in full, share value included, and
+  // nobody else holds it to erase.
+  if ((bits > 0 && (acc & ((1 << bits) - 1)) !== 0) || at !== nbytes) {
+    secureErase(out);
+    reject();
+  }
   return out;
 }
 
@@ -388,9 +396,17 @@ export async function encodeShare(share: Share): Promise<string> {
 }
 
 export async function decodeShare(text: string): Promise<Share> {
-  const stripped = text.trim();
-  if (!stripped.toUpperCase().startsWith(SHARE_PREFIX)) reject();
-  return parseShare(b32Decode(stripped.slice(SHARE_PREFIX.length), SHARE_LEN));
+  const stripped = stripIgnorable(text);
+  if (!asciiUpper(stripped).startsWith(SHARE_PREFIX)) reject();
+  // The decoded record carries the share value, and parseShare copies what it
+  // keeps. So the record is erased here, whether it parsed or not; the value in
+  // the returned Share is the caller's to erase (combineShares does).
+  const record = b32Decode(stripped.slice(SHARE_PREFIX.length), SHARE_LEN);
+  try {
+    return await parseShare(record);
+  } finally {
+    secureErase(record);
+  }
 }
 
 /**
@@ -408,7 +424,7 @@ export async function decodeShare(text: string): Promise<Share> {
  */
 export async function combineShares(texts: string[], expectedSetId?: Uint8Array): Promise<Uint8Array> {
   if (texts.length === 0) reject();
-  const shares = await Promise.all(texts.map((t) => decodeShareAny(t)));
+  const shares: Share[] = [];
 
   // Everything from here is inside the `finally`, because a decoded share value
   // is key material of the same class as the secret it reconstructs — k of them
@@ -418,17 +434,33 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
   // holds a reference to them. `shamirCombine` allocates its own output, so
   // erasing the parts afterwards cannot reach it.
   try {
+    // Decoding is inside the `try` too. It used to be a `Promise.all` above it,
+    // and one malformed share rejected that before the `try` was entered: the
+    // shares that had decoded were never erased, and the ones still decoding
+    // resolved afterwards into nothing that could erase them. `allSettled`
+    // waits for every decode, so each value that exists is in `shares` by the
+    // time any failure is raised.
+    const settled = await Promise.allSettled(texts.map((t) => decodeShareAny(t)));
+    for (const result of settled) {
+      if (result.status === "fulfilled") shares.push(result.value);
+    }
+    const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
+    if (failed) throw failed.reason;
+
     const thresholds = new Set(shares.map((s) => s.threshold));
     if (thresholds.size !== 1) reject();
     const k = shares[0]?.threshold as number;
 
     const first = shares[0] as Share;
     if (shares.some((s) => !bytesEqual(s.setId, first.setId))) reject();
-    // Prefix comparison, not whole: the container's slot_salt yields the 4-byte
-    // v1 id, and a v2 share's 16-byte id extends that same prefix. The shares
-    // still agree on their full id above; this only cross-checks the container.
+    // §6: the share's whole set id must match the one derived from the slot.
+    // The caller passes the widest id (shareSetIdV2), of which the v1 id is the
+    // first four bytes, and each share is compared over its own full length:
+    // four bytes for KMSHARE1, all sixteen for KMSHARE2. This compared only
+    // the first four bytes of either, discarding the twelve the v2 record adds.
     if (expectedSetId !== undefined
-        && !bytesEqual(first.setId.slice(0, expectedSetId.length), expectedSetId)) reject();
+        && (expectedSetId.length < first.setId.length
+            || !bytesEqual(expectedSetId.slice(0, first.setId.length), first.setId))) reject();
 
     const indices = shares.map((s) => s.index);
     if (new Set(indices).size !== indices.length) reject();
@@ -443,7 +475,7 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
 
 /** §7 as amended by §4.6 — a share is not a container, and must not be read as one. */
 export function isKeym2Share(text: string): boolean {
-  const upper = text.trimStart().toUpperCase();
+  const upper = asciiUpper(stripIgnorable(text));
   return upper.startsWith(SHARE_PREFIX) || upper.startsWith(SHARE2_PREFIX);
 }
 
@@ -472,9 +504,57 @@ export async function shareSetIdV2(slotSalt: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(digest).slice(0, SHARE2_SET_ID_LEN);
 }
 
+/** §4.6 "The set code": eight base32 characters, as two groups of four. */
+export const SET_CODE_CHARS = 8;
+
+/**
+ * §4.6 "The set code". The first eight base32 characters of the v2 set id,
+ * written `XXXX-XXXX`. Every `KMSHARE2` strip of the set begins with exactly
+ * these two groups, since its text is base32 of a record that starts with the
+ * set id. For people to compare by eye: a reader still compares all sixteen
+ * bytes of the set id (§6).
+ */
+export async function shareSetCode(slotSalt: Uint8Array): Promise<string> {
+  const code = b32Encode(await shareSetIdV2(slotSalt)).slice(0, SET_CODE_CHARS);
+  return `${code.slice(0, SHARE_GROUP)}-${code.slice(SHARE_GROUP)}`;
+}
+
+/**
+ * The set code a `KMSHARE2` strip's own text carries: its first two groups,
+ * read with §4.6's folding (case, `I`/`L` to `1`, `O` to `0`, hyphens and §7's
+ * ignorable characters dropped). Null for anything that is not `KMSHARE2` text,
+ * including a `KMSHARE1` strip, which carries only six characters of it.
+ *
+ * Reads the text and nothing else: no checksum, so a strip with a typo later in
+ * its code still reports its set code. That is what a person comparing codes
+ * by eye would see too. Whether the strip is intact is `decodeShareV2`'s job.
+ */
+export function shareTextSetCode(text: string): string | null {
+  const stripped = stripIgnorable(text);
+  if (!asciiUpper(stripped).startsWith(SHARE2_PREFIX)) return null;
+  let code = "";
+  for (const ch of stripped.slice(SHARE2_PREFIX.length)) {
+    if (ch === "-" || isIgnorable(ch)) continue;
+    let u = asciiUpper(ch);
+    if (u === "I" || u === "L") u = "1";
+    else if (u === "O") u = "0";
+    if (!B32_ALPHABET.includes(u)) return null;
+    code += u;
+    if (code.length === SET_CODE_CHARS) {
+      return `${code.slice(0, SHARE_GROUP)}-${code.slice(SHARE_GROUP)}`;
+    }
+  }
+  return null;
+}
+
 async function shareChecksumV2(body: Uint8Array): Promise<Uint8Array> {
-  const digest = await crypto.subtle.digest("SHA-256", concat([CTX_SHARE_CHECKSUM, body]) as BufferSource);
-  return new Uint8Array(digest).slice(0, SHARE2_CHECKSUM_LEN);
+  const input = concat([CTX_SHARE_CHECKSUM, body]);
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", input as BufferSource);
+    return new Uint8Array(digest).slice(0, SHARE2_CHECKSUM_LEN);
+  } finally {
+    secureErase(input);
+  }
 }
 
 export async function packShareV2(share: Share): Promise<Uint8Array> {
@@ -518,13 +598,19 @@ export async function encodeShareV2(share: Share): Promise<string> {
 }
 
 export async function decodeShareV2(text: string): Promise<Share> {
-  const stripped = text.trim();
-  if (!stripped.toUpperCase().startsWith(SHARE2_PREFIX)) reject();
-  return parseShareV2(b32Decode(stripped.slice(SHARE2_PREFIX.length), SHARE2_LEN));
+  const stripped = stripIgnorable(text);
+  if (!asciiUpper(stripped).startsWith(SHARE2_PREFIX)) reject();
+  // As decodeShare: the record is erased, the returned value is the caller's.
+  const record = b32Decode(stripped.slice(SHARE2_PREFIX.length), SHARE2_LEN);
+  try {
+    return await parseShareV2(record);
+  } finally {
+    secureErase(record);
+  }
 }
 
 /** Dispatch on the version digit: §4.6 `KMSHARE1` or its v2 `KMSHARE2`. */
 export async function decodeShareAny(text: string): Promise<Share> {
-  if (text.trim().toUpperCase().startsWith(SHARE2_PREFIX)) return decodeShareV2(text);
+  if (asciiUpper(stripIgnorable(text)).startsWith(SHARE2_PREFIX)) return decodeShareV2(text);
   return decodeShare(text);
 }

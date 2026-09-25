@@ -1,6 +1,8 @@
 name: CI
 
-# Build + typecheck + the KEYM v1 regression suite.
+# Typecheck, the Node-side suites (KEYM regression, fuzzing, the workflow and
+# document gates), the production build with its palette and icon audits, and
+# the checks that the build is reproducible.
 #
 # This is deliberately separate from crypto-regression.yml. That workflow
 # gates the frozen IBTZ core and runs with no `npm ci` at all, so no
@@ -16,6 +18,16 @@ name: CI
 on:
   pull_request:
   workflow_call:
+    inputs:
+      # release.yml passes the tag it is about to build, so the
+      # reproducible-elsewhere legs below build the same channel it publishes
+      # and its sign job compares like with like. Empty (every PR, and
+      # deploy.yml) builds the development channel, which is what deploy.yml
+      # publishes.
+      release-tag:
+        type: string
+        required: false
+        default: ""
   workflow_dispatch:
 
 permissions: {}
@@ -84,6 +96,16 @@ jobs:
       - name: Owned secret buffers are zeroed on every path
         run: npm run test:secret-erase
 
+      # The copies the crypto core makes for itself: the length-prefixed KDF
+      # input, the joined key file behind its digest, a second plaintext left
+      # by decryptData, share values decoded before a malformed share rejected
+      # the set, and the worker's key-file copy when an enrolment throws. None
+      # is visible to a caller, so this takes a census of every Uint8Array the
+      # core allocates during a call and searches what survives. Also pins a
+      # Shamir chunk that fails to load as a typed dependency error.
+      - name: Internal secret copies are zeroed by the crypto core
+        run: npm run test:secret-erase-core
+
       # The plaintext input buffer is transferred (and so detached/erased) on the
       # worker path, but the no-worker fallback hands it to encryptContainer
       # in-thread and never transfers it — and neither encryptContainer nor
@@ -112,14 +134,47 @@ jobs:
         run: npm run test:audio-wav-bounds
 
       # Every other malformed carrier is a typed AudioStegoError too, on both the
-      # WAV parse (not RIFF, no data chunk, non-PCM, non-16-bit, zero channels)
+      # WAV parse (not RIFF, no data chunk, an unread encoding, zero channels)
       # and the KAUD extract path (no marker, unreadable version/depth, empty or
       # over-long declared payload). A carrier fault must never reach the AEAD as
       # "decryption failed". Controls bite: removing the payload-length bound
-      # returns garbage instead of throwing; removing the format/bit-depth check
-      # misreads a 24-bit file instead of refusing it.
+      # returns garbage instead of throwing; removing the encoding check misreads
+      # an ADPCM file instead of refusing it.
       - name: Malformed audio carriers are all typed carrier errors
         run: npm run test:audio-malformed
+
+      # A WAV carrier at 8, 24 or 32-bit PCM or 32/64-bit float, plain or
+      # WAVE_FORMAT_EXTENSIBLE, is read at its own rate and scaled to 16 bits by
+      # a power of two, so a stego WAV re-saved losslessly at a greater depth
+      # still reveals. It used to be refused as "Only 16-bit PCM WAV" while the
+      # format doc promised any WAV. Control bites: restoring the refusal fails
+      # every conversion case; dropping the SubFormat GUID check reads a foreign
+      # EXTENSIBLE header as PCM.
+      - name: WAV carriers of any common depth are read without resampling
+        run: npm run test:audio-wav-depths
+
+      # A carrier decoded through Web Audio must come back sample-exact. Web
+      # Audio returns a 16-bit sample s as s / 32768; scaling positives back by
+      # 32767 flipped the low bit of every sample above 16384, which is where
+      # the payload lives. A WAV is also recognised by its RIFF/WAVE bytes, not
+      # only its name, so a renamed stego file keeps the exact parser. Controls
+      # bite: the 32767 scale fails 16,383 values; a sniff that never matches
+      # fails the byte check.
+      - name: Audio decode is sample-exact, and WAVs are sniffed by content
+        run: npm run test:audio-decode-scale
+
+      # The service worker's shell URLs are not content-hashed, so install must
+      # fetch them past the HTTP cache (cache: 'reload'). Otherwise a deploy
+      # inside Pages' max-age window froze the previous index.html into the new
+      # version's cache: a false tamper report beside the new SHA256SUMS, and a
+      # blank page offline. Runs public/sw.js itself in a stub worker scope,
+      # and also checks offline lookups use the worker's own cache (Pages puts
+      # every project site on one origin) and that /verify.html opens offline.
+      # Controls bite: plain-string addAll fails the reload check; dropping
+      # requirements.txt from the shell fails the recovery-kit check; going
+      # back to caches.match fails the three offline lookups.
+      - name: Service worker precaches a fresh shell and the whole recovery kit
+        run: npm run test:sw-precache
 
       # The "sealed" verdict must rest on the whole egress-relevant CSP set, not
       # connect-src alone: connect-src 'none' stops fetch/XHR/WebSocket but a
@@ -130,6 +185,20 @@ jobs:
       # policy sealed. The served page's set is checked in sealed-status.spec.ts.
       - name: Sealed verdict requires the full egress directive set
         run: npm run test:seal-verdict
+
+      # "Check this printout": a printed strip or symbol reads back, and is from
+      # this backup or is said not to be, without joining or decrypting
+      # anything. Controls bite: a four-byte KMSHARE2 set-id compare, a skipped
+      # part checksum, and a header treated as a whole container each fail it.
+      - name: Printout check matches codes to their backup
+        run: npm run test:printout-check
+
+      # The live camera scanner's stopping rule: when enough strips and symbols
+      # are in. Controls bite: a repeated strip counted twice, a strip from
+      # another set counted, and strips alone taken as complete when container
+      # symbols have been started each fail it.
+      - name: Camera scanner stops when enough is read, and not before
+        run: npm run test:camera-progress
 
       # The build's counterpart of the sealed verdict: apply-csp-hashes.mjs fails
       # the build unless default-src, connect-src AND form-action are all 'none'
@@ -173,6 +242,15 @@ jobs:
       # guards its own wiring.
       - name: Publication is gated on the test suites
         run: npm run test:release-gate
+
+      # The step in deploy.yml and release.yml that refuses to sign a manifest
+      # the reproducible-elsewhere legs below did not reproduce byte for byte.
+      # It only ever runs inside a publish, which is too late to learn it
+      # accepts a mismatch, so its refusals are exercised here on every PR. The
+      # control bites: a comparison that always agrees passes a differing,
+      # extra or missing file, and a minimum of zero signs on no evidence.
+      - name: Signing refuses a manifest no independent build reproduced
+        run: npm run test:reproduced-manifest
 
       - name: KEYM v1 regression suite
         run: npm run test:keymaker
@@ -334,7 +412,12 @@ jobs:
   #
   #  - **the checkout path**, because an absolute path that leaks into a bundle
   #    or a source map is the classic way a build stops being portable, and it
-  #    is invisible to anyone who only ever builds in one directory;
+  #    is invisible to anyone who only ever builds in one directory. The
+  #    second leg's path also has a space and non-ASCII letters in it, because
+  #    a verifier's home directory might, and the build broke there once:
+  #    `new URL('../out', import.meta.url).pathname` is percent-encoded, so
+  #    the post-build scripts looked for `…/a%20checkout…/out`, which does not
+  #    exist. That leg failing is the regression test for it;
   #  - **the Node major**, because README.md tells people 22.22.2 *or newer* is
   #    supported, and a verifier on a newer major who gets different bytes has
   #    been told to expect a match.
@@ -353,9 +436,9 @@ jobs:
           - id: node22
             node: 22
             dir: keymaker
-          - id: node22-longer-checkout-path
+          - id: node22-spaced-non-ascii-checkout-path
             node: 22
-            dir: a-checkout-directory-named-nothing-like-the-other-one
+            dir: "a checkout directory named nothing like the other one ünï"
           - id: node24
             node: 24
             dir: keymaker
@@ -382,13 +465,23 @@ jobs:
       # reason verify-reproducible.mjs pins it: a PR checkout is a merge commit
       # that does not exist upstream, and letting each leg resolve it from git
       # would be comparing git rather than the build.
+      #
+      # The channel is the caller's: empty on a PR and under deploy.yml, the
+      # tag under release.yml. It arrives through `env`, never interpolated into
+      # a script, because a tag name is text its author controls.
       - name: Build
         run: npm run build
         working-directory: ${{ matrix.dir }}
         env:
           KEYMAKER_BASE_PATH: /Keymaker-v2
           KEYMAKER_BUILD_ID: ${{ github.sha }}
+          KEYMAKER_RELEASE_TAG: ${{ inputs.release-tag }}
 
+      # Consumed twice: by the comparison job below, and, when deploy.yml or
+      # release.yml called this workflow, by their sign job, which refuses to
+      # sign a manifest these legs did not reproduce
+      # (scripts/check-reproduced-manifest.mjs). Keep the `sums-` prefix; both
+      # download by it.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sums-${{ matrix.id }}
