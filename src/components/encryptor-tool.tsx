@@ -7,7 +7,7 @@ import { PaperVault } from "@/components/paper-vault";
 import { ContainerInspector, type InspectorPlan } from "@/components/container-inspector";
 import { SelfExtractExport } from "@/components/self-extract-export";
 import { InheritancePlan } from "@/components/inheritance-plan";
-import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION } from "@/lib/keym-v2";
+import { armorKeym2, KEYM2_HEADER_PEEK_BYTES, KEYM2_VERSION, loadShamir } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeAllQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
@@ -77,6 +77,7 @@ import {
   DEFAULT_ARGON2ID,
   type KdfParams,
   type DetectedFormat,
+  loadKeym2,
 } from "@/lib/keymaker-crypto";
 import {
   encryptViaWorker,
@@ -859,7 +860,7 @@ async function containerFromTextFile(bytes: Uint8Array): Promise<Uint8Array | nu
         "Nothing was tried against your password. Recover from another copy."
     );
   if (text.startsWith(KEYM_V2_TEXT_PREFIX)) {
-    const { dearmorKeym2 } = await import("@/lib/keym-v2");
+    const { dearmorKeym2 } = await loadKeym2();
     try {
       return dearmorKeym2(text);
     } catch {
@@ -1135,8 +1136,8 @@ async function preparePaperParts(
  */
 async function containerSetCodes(container: Uint8Array): Promise<string[]> {
   try {
-    const { shamirSlotSaltsKeym2 } = await import("@/lib/keym-v2");
-    const { shareSetCode } = await import("@/lib/keym-v2-shamir");
+    const { shamirSlotSaltsKeym2 } = await loadKeym2();
+    const { shareSetCode } = await loadShamir();
     return await Promise.all(shamirSlotSaltsKeym2(container).map((salt) => shareSetCode(salt)));
   } catch {
     return [];
@@ -1569,7 +1570,7 @@ export function EncryptorTool() {
     let live = true;
     (async () => {
       try {
-        const { dearmorKeym2 } = await import("@/lib/keym-v2");
+        const { dearmorKeym2 } = await loadKeym2();
         const { encodePaperPartsForPrint } = await import("@/lib/keym-v2-paper");
         const parts = await encodePaperPartsForPrint(dearmorKeym2(outputText));
         if (live) setBackupFitsOnStrip(parts.length === 1);
@@ -3015,7 +3016,7 @@ export function EncryptorTool() {
         let passkey: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
         // §4.8 rules a passkey out: it would open the backup on its own.
         if (passkeyEnabled && !(shamirEnabled && sharesNeedPassword)) {
-          const { derivePrfSalt } = await import("@/lib/keym-v2");
+          const { derivePrfSalt } = await loadKeym2();
           const { enrolPasskey } = await import("@/lib/webauthn-prf");
           const slotSalt = crypto.getRandomValues(new Uint8Array(32));
           const prfOutput = await enrolPasskey(await derivePrfSalt(slotSalt));
@@ -3122,7 +3123,7 @@ export function EncryptorTool() {
             // and so nobody has to strip `=` by hand from a backup they are
             // trying to recover. Dynamically imported for the same reason the
             // crypto core imports it that way.
-            const { armorKeym2 } = await import("@/lib/keym-v2");
+            const { armorKeym2 } = await loadKeym2();
             setOutputText(armorKeym2(new Uint8Array(resultBuffer)));
             setReceipt(receiptOf("text", "keym2: container, on screen", true));
             setTextSecret('');
@@ -3160,7 +3161,7 @@ export function EncryptorTool() {
               // Case-sensitive and byte-exact — see the note on the constants.
               // Also base64url rather than base64, so this cannot go through
               // base64ToUint8Array.
-              const { dearmorKeym2 } = await import("@/lib/keym-v2");
+              const { dearmorKeym2 } = await loadKeym2();
               bytes = dearmorKeym2(blobText);
             } else {
               if (blobText.toUpperCase().startsWith(KEYM_V1_TEXT_PREFIX)) {
@@ -3199,7 +3200,7 @@ export function EncryptorTool() {
         // reading a variable the worker has not produced yet — the whole point
         // is that this runs first.
         {
-          const { keym2UnlockCost, describeUnlockCost } = await import("@/lib/keym-v2");
+          const { keym2UnlockCost, describeUnlockCost } = await loadKeym2();
           const cost = keym2UnlockCost(headerPeek);
           const notice = describeUnlockCost(cost);
           // Same freeze, arriving from the other direction: here the KDF is the
@@ -3247,7 +3248,7 @@ export function EncryptorTool() {
         if (isStale()) return;
         let prfOutput: Uint8Array | undefined;
         if (usePasskey) {
-          const { passkeySlotSaltsKeym2, derivePrfSalt } = await import("@/lib/keym-v2");
+          const { passkeySlotSaltsKeym2, derivePrfSalt } = await loadKeym2();
           const { assertPasskeyPrf } = await import("@/lib/webauthn-prf");
           const salts = passkeySlotSaltsKeym2(new Uint8Array(inputBuffer));
           if (salts.length === 0) {
@@ -3265,7 +3266,7 @@ export function EncryptorTool() {
         // "decryption failed" about strips that were never wrong. From the slot
         // salts, which are in the clear, so it tells nobody anything new.
         if (suppliedShares.length > 0 && !mutablePassword) {
-          const { sharesNeedPasswordKeym2 } = await import("@/lib/keym-v2");
+          const { sharesNeedPasswordKeym2 } = await loadKeym2();
           if (await sharesNeedPasswordKeym2(new Uint8Array(inputBuffer), suppliedShares)) {
             throw new KeymakerError(
               "credential-required",
@@ -3341,7 +3342,7 @@ export function EncryptorTool() {
         ) {
           // One inspector for both: every field it reads sits at a
           // version-dependent offset it already resolves from the header.
-          const { inspectKeym2 } = await import("@/lib/keym-v2");
+          const { inspectKeym2 } = await loadKeym2();
           const inspected = inspectKeym2(headerPeek);
           if (inspected) {
             info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
@@ -5257,7 +5258,7 @@ export function EncryptorTool() {
             trimmed.startsWith(KEYM_V2_TEXT_PREFIX) &&
             trimmed.length <= MAX_BASE64_INPUT_CHARS
           ) {
-            const { dearmorKeym2 } = await import("@/lib/keym-v2");
+            const { dearmorKeym2 } = await loadKeym2();
             // 1392 armor characters cover the peek even if every 64-column
             // line break survived the paste; a slice that cuts mid-quantum
             // throws, is caught, and reads as "nothing loaded yet".
@@ -5325,7 +5326,7 @@ export function EncryptorTool() {
    */
   const printPaperVault = useCallback(async () => {
     if (!outputText.startsWith("keym2:")) return;
-    const { dearmorKeym2 } = await import("@/lib/keym-v2");
+    const { dearmorKeym2 } = await loadKeym2();
     const container = dearmorKeym2(outputText);
     const { parts, tooLarge, setCodes } = await preparePaperParts(container);
     setPaperVault({
@@ -5340,7 +5341,7 @@ export function EncryptorTool() {
 
   const downloadContainer = useCallback(async () => {
     if (!outputText.startsWith("keym2:")) return;
-    const { dearmorKeym2 } = await import("@/lib/keym-v2");
+    const { dearmorKeym2 } = await loadKeym2();
     triggerDownload(
       new Blob([dearmorKeym2(outputText).slice()]),
       `keymaker-${randomFilenameSuffix()}.keym`
@@ -5393,7 +5394,7 @@ export function EncryptorTool() {
     setRehearsal({ kind: "running" });
     const started = performance.now();
     try {
-      const { dearmorKeym2 } = await import("@/lib/keym-v2");
+      const { dearmorKeym2 } = await loadKeym2();
       // A copy: the worker takes ownership of the buffer it is handed.
       const container = dearmorKeym2(outputText).slice();
       // §4.8. Strips that need the password are rehearsed with it, the way an
@@ -5619,7 +5620,7 @@ export function EncryptorTool() {
       let container: Uint8Array | null = null;
       if (mode === "encrypt" && receipt?.onScreen && outputText.startsWith("keym2:")) {
         try {
-          const { dearmorKeym2 } = await import("@/lib/keym-v2");
+          const { dearmorKeym2 } = await loadKeym2();
           container = dearmorKeym2(outputText);
         } catch {
           container = null;
@@ -6155,7 +6156,7 @@ export function EncryptorTool() {
               onClick={async () => {
                 if (!issuedShares || !outputText.startsWith("keym2:")) return;
                 try {
-                  const { dearmorKeym2 } = await import("@/lib/keym-v2");
+                  const { dearmorKeym2 } = await loadKeym2();
                   const container = dearmorKeym2(outputText);
                   const { parts, tooLarge, setCodes } = await preparePaperParts(container);
                   setPaperVault({
