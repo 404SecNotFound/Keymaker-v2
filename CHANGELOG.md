@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## Keymaker v2.3.0
 
 One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),
 which a container carries only when its owner chooses it. Every container

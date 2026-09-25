@@ -10,14 +10,17 @@ rule it amends.
 The organising fact: Keymaker *displays* QR codes everywhere and cannot *read*
 one. The paper vault prints symbols the app cannot scan back. The heir — the
 person the product exists for — types. The bets follow from taking that person
-seriously, even though the bet that fixes it directly (Heir Mode) is on hold.
+seriously. The bet that fixes it directly (Heir Mode) was on hold when this
+was written and has since shipped; see the end of this file.
 
 ## Decisions already made
 
-- **Bet 1 — Heir Mode (in-app camera scanning) is ON HOLD.** It adds a camera
-  permission surface and, because `BarcodeDetector` is not available in every
-  engine, almost certainly a QR-decoding dependency. That is a supply-chain
-  decision the owner has not taken. Do not start it; do not add a decoder.
+- **Bet 1 — Heir Mode (in-app camera scanning) was ON HOLD, and has since
+  shipped** (`22c7cdf`, every QR code in one photo; `161e919`, live camera
+  scanning). The hold was the decoder: `BarcodeDetector` is not in every
+  engine, so a QR-decoding dependency was a supply-chain decision the owner
+  had not taken. It was taken as `BarcodeDetector` where the engine has it and
+  `jsqr`, pinned, where it does not.
 - **Bet 6's motion amendment is approved** by the instruction to execute every
   bet except Bet 1. The house order still applies: amend
   `DESIGN-SYSTEM.md § Motion` *first*, in the same PR, then write the code.
@@ -143,8 +146,8 @@ walks the owner through the *heir's* path.
 
 **Scope.**
 - "Rehearse now" on the issued-shares dialog: choose any K of the N shares
-  just issued, enter them as an heir would (paste; scanning is Bet 1 and on
-  hold), run the identical decryption via the verify-only path, and report
+  just issued, enter them as an heir would (paste; Bet 1 was on hold when
+  this was written), run the identical decryption via the verify-only path, and report
   "opened in N s — contents kept hidden". A wrong share fails loudly.
 - On success, the next print carries the rehearsal stamp filled in
   (date, which strips). The app stores nothing: the stamp is ink on paper and
@@ -252,12 +255,29 @@ the whole plan; say so in the PR body.
   stored anywhere; nothing new touches the clipboard.
 - `connect-src 'none'`. The build fails on purpose if it changes.
 
-## Bet 1, for when it is un-held
+## Bet 1, shipped
 
-Heir Mode: in-app scanning of paper parts and shares inside Decrypt, a
-viewfinder that requests the camera only on tap, "2 of 3 shares scanned"
-progress, arrival detection when someone lands from the printed URL, and
-zero-jargon copy. The decision it needs is the decoder dependency
-(`BarcodeDetector` where present; a small, licence-vetted fallback where not).
-Everything else in this plan is designed so that Heir Mode drops into flows
-that already speak the heir's language.
+As sketched when it was on hold: in-app scanning of paper parts and shares
+inside Decrypt, a viewfinder that requests the camera only on tap, "2 of 3
+shares scanned" progress, arrival detection when someone lands from the
+printed URL, and zero-jargon copy. The decision it needed was the decoder
+dependency (`BarcodeDetector` where present; a small, licence-vetted fallback
+where not).
+
+What shipped, in `22c7cdf` and `161e919`. The decoder decision was taken as
+`BarcodeDetector` where the engine has it and `jsqr` where it does not. On the
+Decrypt tab, *Use the camera* and *Scan strips with the camera* open the
+device camera from a button and read strips and container symbols held up one
+after another; the dialog says what is in and what is still needed ("1 of the
+2 needed. Show the next strip."), leaves out a strip from a different set,
+stops by itself once there is enough, hands the codes to the same boxes a
+scanned photo fills, and releases the camera when it closes. Frames never
+leave the page. A photo of a whole sheet is read in one go, on the Decrypt
+tab and in the printout check. Code in `src/components/camera-scan.tsx`,
+covered by `tests/browser/camera-scan.spec.ts`; the progress logic is gated
+by `scripts/camera-progress-test.mjs`.
+
+Not shipped from the sketch: arrival detection when someone lands from the
+printed URL, and a separate zero-jargon Heir Mode. The scanner drops into the
+existing Decrypt flow instead, which is what the rest of this plan prepared
+for.
