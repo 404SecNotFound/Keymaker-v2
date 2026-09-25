@@ -43,6 +43,7 @@ import {
   encryptKeym2WithSharesRequired,
   keym2SlotLen,
   KEYM2_VERSION_V3,
+  KEYM2_VERSION_V4,
 } from "../src/lib/keym-v2.ts";
 import { buildSelfExtractingPage } from "../src/lib/keym-v2-selfextract.ts";
 
@@ -78,7 +79,7 @@ const ARGON_PARAMS: KdfParams = {
 
 interface Combo {
   name: string;
-  version: 1 | 2 | 3;
+  version: 1 | 2 | 3 | 4;
   kdf: KdfParams;
   cipher: CipherId;
   kdfName: string;
@@ -98,7 +99,7 @@ const combos: Combo[] = [];
 // added a MAC; it did not move the cost floor, and holding the derivation
 // settings still is what makes a v2 and a v3 vector comparable on the one axis
 // that did change.
-for (const version of [1, 2, 3] as const) {
+for (const version of [1, 2, 3, 4] as const) {
   const kdfs: Array<{ params: KdfParams; name: string }> = [
     { params: version === 1 ? PBKDF2_V1_PARAMS : PBKDF2_V2_PARAMS, name: "pbkdf2" },
     { params: ARGON_PARAMS, name: "argon2id" },
@@ -147,14 +148,17 @@ async function main() {
     // takes: it writes whatever `KEYM2_VERSION` currently names, and that is
     // still v2 (keym-v2.ts's note on why). A vector for a version the app does
     // not yet default to has to say which version it wants.
+    // v4 the same way: the version is the only thing that differs, and the
+    // plaintext sits well inside v4 §4.3's floor, so each of these six vectors
+    // is a 256-byte stream in one chunk. The vector past the floor is below.
     const ct =
-      c.version === 3
+      c.version === 3 || c.version === 4
         ? await encryptKeym2(
             new TextEncoder().encode(plaintext),
             PASSWORD,
             keyFile ? new Uint8Array(keyFile.slice(0)) : null,
             { kdf: c.kdf, cipher: c.cipher },
-            KEYM2_VERSION_V3
+            c.version === 3 ? KEYM2_VERSION_V3 : KEYM2_VERSION_V4
           )
         : await (c.version === 1 ? encryptData : encryptContainer)(
             new TextEncoder().encode(plaintext).buffer as ArrayBuffer,
@@ -175,10 +179,47 @@ async function main() {
       // so that the one vector below whose table was tampered with states its
       // expectation in the same field as the ones whose table is intact —
       // a reader that inferred "v3 ⇒ authentic" could not express it.
-      ...(c.version === 3 ? { slotTableAuthentic: true } : {}),
+      ...(c.version === 3 || c.version === 4 ? { slotTableAuthentic: true } : {}),
     });
     wrote++;
     console.log(`wrote ${file} (${ct.byteLength} bytes)`);
+  }
+
+  // v4 §4.2. One vector whose stream is above the floor, so the corpus holds
+  // Padmé's arithmetic and not only the floor: 300 plaintext bytes is n = 308,
+  // E = 8, S = 4, a 16-byte unit, a 320-byte stream. A reader that padded to
+  // the wrong bucket, or the right bucket by the wrong rule, refuses this file
+  // (v4 §4.4 step 4) while still opening the six at the floor.
+  {
+    const file = "v4-padme-aes256gcm.keym";
+    const prior = byName.get("v4-padme-aes256gcm");
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      console.log(`kept  ${file}`);
+    } else {
+      const plaintext = "Keymaker fixture - v4 past the floor / pbkdf2 / aes-256-gcm. ".repeat(6).slice(0, 300);
+      if (new TextEncoder().encode(plaintext).length !== 300) throw new Error("the Padmé vector must be 300 bytes");
+      const ct = await encryptKeym2(
+        new TextEncoder().encode(plaintext),
+        PASSWORD,
+        null,
+        { kdf: PBKDF2_V2_PARAMS, cipher: CipherId.AES_256_GCM },
+        KEYM2_VERSION_V4
+      );
+      writeFileSync(join(DIR, file), Buffer.from(ct));
+      fixtures.push({
+        name: "v4-padme-aes256gcm",
+        file,
+        version: 4,
+        kdf: "pbkdf2",
+        cipher: "aes-256-gcm",
+        keyFile: false,
+        plaintext,
+        slotTableAuthentic: true,
+      });
+      wrote++;
+      console.log(`wrote ${file} (${ct.byteLength} bytes)`);
+    }
   }
 
   // §4.6. One share-set fixture per cipher, because the wrap uses the

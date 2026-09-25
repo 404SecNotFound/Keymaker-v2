@@ -85,7 +85,7 @@ export const DEFAULT_ARGON2ID: Argon2idParams = {
   parallelism: 4,
 };
 
-export type DetectedFormat = "keym-v1" | "keym-v2" | "keym-v3" | "ibtz-v1" | "ibtz-v0";
+export type DetectedFormat = "keym-v1" | "keym-v2" | "keym-v3" | "keym-v4" | "ibtz-v1" | "ibtz-v0";
 
 const SALT_LEN_PBKDF2 = 16;
 const SALT_LEN_ARGON2ID = 32;
@@ -1091,6 +1091,9 @@ export function detectFormat(data: Uint8Array): DetectedFormat {
     // had not. Naming it here is what connects the two.
     if (data[4] === 2) return "keym-v2";
     if (data[4] === 3) return "keym-v3";
+    // v4 §6: the same lesson, learned once. The parser and this dispatcher
+    // learn a version together or the container is refused as "newer".
+    if (data[4] === 4) return "keym-v4";
     return "keym-v1";
   }
   if (data.length >= 5 && magicPrefixLen(data, IBTZ_MAGIC) === IBTZ_MAGIC.length) {
@@ -1324,7 +1327,7 @@ export async function decryptData(
   const fullData = new Uint8Array(encryptedBuffer);
   const format = detectFormat(fullData);
 
-  if (format === "keym-v2" || format === "keym-v3") {
+  if (format === "keym-v2" || format === "keym-v3" || format === "keym-v4") {
     // Dynamically imported so keymaker-crypto.ts does not depend on keym-v2.ts
     // at module-evaluation time — the dependency runs one way, which is what
     // keeps the v1 path structurally unable to be changed by v2 work. It also

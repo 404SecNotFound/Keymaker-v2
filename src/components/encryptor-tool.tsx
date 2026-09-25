@@ -3311,6 +3311,7 @@ export function EncryptorTool() {
           "keym-v1": "KEYM v1",
           "keym-v2": "KEYM v2",
           "keym-v3": "KEYM v3",
+          "keym-v4": "KEYM v4",
           "ibtz-v1": "IttyBitz v1 (legacy)",
           "ibtz-v0": "IttyBitz v0 (legacy)",
         };
@@ -3338,7 +3339,8 @@ export function EncryptorTool() {
           if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
         } else if (
           decryptResult.format === "keym-v2" ||
-          decryptResult.format === "keym-v3"
+          decryptResult.format === "keym-v3" ||
+          decryptResult.format === "keym-v4"
         ) {
           // One inspector for both: every field it reads sits at a
           // version-dependent offset it already resolves from the header.

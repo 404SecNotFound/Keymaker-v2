@@ -60,7 +60,7 @@ import {
   decryptKeym2,
   KEYM2_VERSION_V2,
   KEYM2_VERSION_V3,
-
+  KEYM2_VERSION_V4,
   addShamirSlotKeym2,
   addPasskeySlotKeym2,
   derivePrfSalt,
@@ -179,7 +179,9 @@ try {
       { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
       Uint8Array.from(Buffer.from(flag("salt")!, "hex")),
       Uint8Array.from(Buffer.from(flag("master-key")!, "hex")),
-      containerId === undefined ? KEYM2_VERSION_V2 : KEYM2_VERSION_V3,
+      // `--version 4` writes v4 (padded); with a container id and no version
+      // flag it is v3, and without either it is v2, as it always was.
+      containerId === undefined ? KEYM2_VERSION_V2 : flag("version") === "4" ? KEYM2_VERSION_V4 : KEYM2_VERSION_V3,
       containerId === undefined ? new Uint8Array(0) : Uint8Array.from(Buffer.from(containerId, "hex"))
     );
     writeFileSync(outFile, Buffer.from(out));
@@ -212,7 +214,9 @@ try {
       { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
       Number(flag("threshold")),
       Number(flag("shares")),
-      containerId === undefined ? KEYM2_VERSION_V2 : KEYM2_VERSION_V3,
+      // `--version 4` writes v4 (padded); with a container id and no version
+      // flag it is v3, and without either it is v2, as it always was.
+      containerId === undefined ? KEYM2_VERSION_V2 : flag("version") === "4" ? KEYM2_VERSION_V4 : KEYM2_VERSION_V3,
       {
         salt: hex("salt"),
         masterKey: hex("master-key"),

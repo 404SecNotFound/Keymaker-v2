@@ -1052,6 +1052,7 @@ Review    End-to-end review fixes      ─ done ─  strips scan back in · SVG 
 Paper     Paper vault, second pass     ─ done ─  set code · presets · version-25 symbols · self-contained strips · printout check
 Scanning  Photo and live camera        ─ done ─  every code in one photo · live camera · TEN-X Bet 1 un-held
 Docs      RECOVERY.md executed         ─ done ─  recovery_test.py runs every bash block · v1, v2, v3 · with shares
+v4        Padded payload               ─ done ─  spec · reference · parity · fixtures · opt-in, the app's switch is next
 Phase 8   Outreach                     ──────    owner-only · drafts in docs/OUTREACH.md · after the next tag
 ```
 

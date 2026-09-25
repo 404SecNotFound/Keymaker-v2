@@ -285,6 +285,9 @@ fix a gap v2 never claimed to close.
   it with an authentication fix would make both harder to review; that is the
   same reasoning v2 used to defer it in the first place. It stays open, and
   bumping the version here does not close it.
+  *Closed by [FORMAT-V4-DESIGN.md](FORMAT-V4-DESIGN.md), a delta on this
+  document that changes the payload and nothing else. A v3 container's length
+  still says exactly what this bullet says.*
 
 ---
 

@@ -168,6 +168,76 @@
       "slotTableAuthentic": true
     },
     {
+      "name": "v4-pbkdf2-aes256gcm",
+      "file": "v4-pbkdf2-aes256gcm.keym",
+      "version": 4,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v4 pbkdf2 / aes-256-gcm",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v4-pbkdf2-chacha20poly1305",
+      "file": "v4-pbkdf2-chacha20poly1305.keym",
+      "version": 4,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": true,
+      "plaintext": "Keymaker fixture — v4 pbkdf2 / chacha20-poly1305",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v4-pbkdf2-chained",
+      "file": "v4-pbkdf2-chained.keym",
+      "version": 4,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v4 pbkdf2 / chained",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v4-argon2id-aes256gcm",
+      "file": "v4-argon2id-aes256gcm.keym",
+      "version": 4,
+      "kdf": "argon2id",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v4 argon2id / aes-256-gcm",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v4-argon2id-chacha20poly1305",
+      "file": "v4-argon2id-chacha20poly1305.keym",
+      "version": 4,
+      "kdf": "argon2id",
+      "cipher": "chacha20-poly1305",
+      "keyFile": true,
+      "plaintext": "Keymaker fixture — v4 argon2id / chacha20-poly1305",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v4-argon2id-chained",
+      "file": "v4-argon2id-chained.keym",
+      "version": 4,
+      "kdf": "argon2id",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v4 argon2id / chained",
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v4-padme-aes256gcm",
+      "file": "v4-padme-aes256gcm.keym",
+      "version": 4,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture - v4 past the floor / pbkdf2 / aes-256-gcm. Keymaker fixture - v4 past the floor / pbkdf2 / aes-256-gcm. Keymaker fixture - v4 past the floor / pbkdf2 / aes-256-gcm. Keymaker fixture - v4 past the floor / pbkdf2 / aes-256-gcm. Keymaker fixture - v4 past the floor / pbkdf2 / aes-256-",
+      "slotTableAuthentic": true
+    },
+    {
       "name": "v2-shamir-aes256gcm",
       "file": "v2-shamir-aes256gcm.keym",
       "version": 2,
