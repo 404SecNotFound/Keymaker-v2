@@ -151,6 +151,30 @@ check(dec.decode(openedV4.data) === "v4 payload", "decryptData opens v4 through 
 check(openedV4.format === "keym-v4", "decryptData reports v4");
 check(openedV4.slotTableAuthentic === true, "a v4 container carries v3's slot-table verdict");
 
+// The app's writer takes the choice as an option, so the worker and its
+// no-worker fallback, which both call encryptContainer, write the same thing.
+// Off means exactly what it wrote before: a v3 container.
+const { encryptContainer } = await import("../src/lib/keymaker-crypto.ts");
+const appPadded = new Uint8Array(
+  await encryptContainer(toArrayBuffer(enc.encode("app padded")), PASSWORD, null, {
+    kdf: FAST,
+    cipher: CipherId.AES_256_GCM,
+    padded: true,
+  })
+);
+const appPlain = new Uint8Array(
+  await encryptContainer(toArrayBuffer(enc.encode("app padded")), PASSWORD, null, {
+    kdf: FAST,
+    cipher: CipherId.AES_256_GCM,
+  })
+);
+check(appPadded[4] === 4 && detectFormat(appPadded) === "keym-v4", "encryptContainer with padded: true writes v4");
+check(appPlain[4] === 3, "encryptContainer without it still writes v3");
+check(
+  dec.decode((await decryptData(toArrayBuffer(appPadded), PASSWORD, null)).data) === "app padded",
+  "the app's own padded container opens through the dispatch"
+);
+
 // v3 §5.2 travels with the plaintext or it is not a report. Two containers that
 // have never been touched, and the verdict distinguishes "sealed and intact"
 // from "carries no seal at all" rather than collapsing both to a passing
