@@ -279,25 +279,98 @@ test.describe("an operation that loses the UI falls silent", () => {
     await inFlight;
   });
 
+  /**
+   * The race in this test specifically, and why raising `SLOW_KDF` further is
+   * not the fix.
+   *
+   * `confirmRaceOpened` above exists because the window this test needs — "the
+   * derivation is still running when the tab switch lands" — was bought by
+   * racing a *measured* uninterrupted run against the click that switches
+   * tabs. Both sides of that race move with whatever else the CI box is
+   * doing: raising the KDF cost widens the window on typical hardware, but it
+   * cannot rule out this run's derivation (worker spawn included) finishing
+   * before the click lands, or the click itself being the slow side. Either
+   * way the test would exercise nothing. `confirmRaceOpened` turned a closed
+   * window into a named failure instead of a silent false pass — real
+   * progress — but the window was still sized from a timing, and a timing
+   * measured once can still be wrong the next time.
+   *
+   * The fix removes the timing dependence at its source, the way
+   * verify-recovery-lock.spec.ts's passkey stand-in does for its own
+   * "operation in progress" race: swap in an operation that cannot finish on
+   * its own, so there is no clock left to race. `Worker.prototype.postMessage`
+   * is stubbed to swallow the one request that would actually start Argon2id
+   * (`op: "encrypt"`) instead of forwarding it to the real worker. The
+   * readiness ping crypto-client.ts sends first is left alone, so the app
+   * still finds a worker, shows a genuine "in progress" state, and takes the
+   * exact code path a real derivation would — it is just never told to run
+   * one. The request sits in crypto-client.ts's own pending map exactly as a
+   * slow real one would, until `cancelAllCryptoWork()` rejects it — which is
+   * the tab switch under test. Argon2id's cost no longer needs raising, and no
+   * run has to be timed first to know how long to keep watching afterwards:
+   * nothing here can complete except by being cancelled, so any watch length
+   * proves the same thing.
+   */
   test("switching tabs mid-derivation leaves the new tab silent", async ({
     page,
     browserName,
   }) => {
-    test.skip(browserName !== "chromium", "window timings measured on Chromium only");
+    test.skip(browserName !== "chromium", "worker-termination behaviour exercised on Chromium only");
 
-    const operationMs = await measureOperation(page);
-    // A fresh page above all else here: the measured run's own announcement is
-    // indistinguishable from the leak this test looks for.
+    // Swallow every `encrypt` request `Worker.prototype.postMessage` is asked
+    // to send, at the prototype and before the page's own scripts run, so it
+    // catches the worker crypto-client.ts spawns regardless of when. `ping`
+    // (the readiness probe) is passed through for real: swallowing that too
+    // would make the app decide no worker is available and fall back to an
+    // uncancellable main-thread derivation, which is the opposite of what
+    // this test needs. Each swallowed attempt is counted rather than just
+    // dropped, so a stub that silently failed to install is caught by the
+    // count check below instead of leaving a real multi-second derivation
+    // racing the tab switch exactly as before.
+    await page.addInitScript(() => {
+      const w = window as unknown as { __encryptAsks: number };
+      w.__encryptAsks = 0;
+      const proto = Worker.prototype as unknown as {
+        postMessage: (...args: unknown[]) => void;
+      };
+      const real = proto.postMessage;
+      proto.postMessage = function (this: Worker, ...args: unknown[]) {
+        const message = args[0] as { op?: string } | null | undefined;
+        if (message && typeof message === "object" && message.op === "encrypt") {
+          w.__encryptAsks++;
+          return;
+        }
+        return real.apply(this, args);
+      };
+    });
+
     await prepareEncrypt(page);
 
-    const started = Date.now();
     const inFlight = startOperation(page, /^Encrypt Text$/i);
     await confirmInFlight(page);
 
-    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
-    await confirmRaceOpened(page, Date.now() - started, operationMs);
+    // The precondition `confirmRaceOpened` used to check by comparing timings
+    // is now a fact instead: the stub means the request cannot have completed,
+    // ever. What can still go wrong is the stub itself not taking — this is
+    // what proves it did, rather than the app having quietly taken a
+    // different path.
+    const asks = await page.evaluate(
+      () => (window as unknown as { __encryptAsks: number }).__encryptAsks
+    );
+    expect(
+      asks,
+      "the encrypt request never reached the worker boundary — either the stub did not take, " +
+        "or the app took a path that does not use the worker, and a real derivation is racing " +
+        "the tab switch below exactly as it used to"
+    ).toBe(1);
 
-    const watchUntil = Date.now() + operationMs * WATCH_MULTIPLE + WATCH_FLOOR_MS;
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+
+    // No measured window to outlast: the operation cannot finish by itself,
+    // so any watch length proves the same thing. This one is short and
+    // fixed — long enough to catch a leak on a delayed timer, not sized
+    // against a real derivation that no longer exists to race.
+    const watchUntil = Date.now() + 2_000;
     while (Date.now() < watchUntil) {
       expect(
         await announcements(page),

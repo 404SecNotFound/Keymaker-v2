@@ -35,41 +35,54 @@ import { visible, useTextMode } from "./helpers";
 
 const KIB = 1024;
 
-/** Paste without shipping megabytes over CDP, driving React the way a real
- *  paste does: the native value setter plus an input event. */
-async function paste(page: Page, chars: number): Promise<void> {
-  await page.evaluate((n) => {
+/**
+ * The race in "a 1 MiB single-line paste is refused instead of freezing the
+ * tab", and why it flaked on WebKit rather than here.
+ *
+ * The block this test guards against is layout, not application code: the
+ * `onChange` handler returns in single-digit milliseconds regardless of size
+ * (confirmed below), and the multi-second cost is the browser laying out one
+ * very long unbroken line — which happens whenever something next reads a
+ * layout-dependent property, not necessarily inside the event that caused it.
+ *
+ * The previous version measured that indirectly, sampling the worst gap
+ * between `requestAnimationFrame` callbacks for four seconds after the paste.
+ * That gap is "this tab did not paint for N ms", which a synchronous layout
+ * produces, but so does a CI runner declining to schedule this tab's renderer
+ * for a moment — and the two are indistinguishable from outside. The comment
+ * this replaced records exactly that: a 2000ms cutoff flaked once on WebKit at
+ * 2239ms with nothing actually wrong, and the fix at the time was to raise the
+ * cutoff to 5000ms — which only widens the window CI noise has to land in to
+ * cause the next false failure, rather than removing the dependency on when a
+ * paint happens to be scheduled.
+ *
+ * `paste()` below removes that dependency at its source: it forces the layout
+ * a future, unobserved paint would otherwise do — reading `el.offsetHeight`
+ * immediately after the input event — inside the same `page.evaluate()` call
+ * that is already timing it. The cost then lands inside a bracket this
+ * function holds itself, on the browser's own clock, rather than in a four
+ * second window sampled after the fact. Measured against the code with the
+ * size gate disabled (KM's own negative control for this file): this reads
+ * ~11.7s, matching the ~12.4s the table above recorded for the same input by
+ * the old method — so this is timing the same work, not a smaller, easier
+ * version of it, and there is no scheduler left in the measurement for a busy
+ * CI box to disturb.
+ */
+async function paste(page: Page, chars: number): Promise<number> {
+  return page.evaluate((n) => {
     const el = document.querySelector("#text-secret") as HTMLTextAreaElement;
     const setter = Object.getOwnPropertyDescriptor(
       window.HTMLTextAreaElement.prototype,
       "value"
     )!.set!;
+    const started = performance.now();
     setter.call(el, "A".repeat(n));
     el.dispatchEvent(new Event("input", { bubbles: true }));
+    // Force now the layout a real paint would otherwise defer to a moment
+    // this function is not watching — see the comment above.
+    void el.offsetHeight;
+    return performance.now() - started;
   }, chars);
-}
-
-/** Worst frame gap while `body` runs — what a user actually feels. */
-async function worstBlockDuring(page: Page, body: () => Promise<void>, settleMs = 4000): Promise<number> {
-  await page.evaluate(() => {
-    (window as unknown as { __gaps: number[] }).__gaps = [];
-    let last = performance.now();
-    const w = window as unknown as { __stop?: boolean; __gaps: number[] };
-    w.__stop = false;
-    (function sample() {
-      const now = performance.now();
-      w.__gaps.push(now - last);
-      last = now;
-      if (!w.__stop) requestAnimationFrame(sample);
-    })();
-  });
-  await body();
-  await page.waitForTimeout(settleMs);
-  return page.evaluate(() => {
-    const w = window as unknown as { __stop?: boolean; __gaps: number[] };
-    w.__stop = true;
-    return Math.round(Math.max(...w.__gaps));
-  });
 }
 
 test.describe("oversized paste", () => {
@@ -79,22 +92,18 @@ test.describe("oversized paste", () => {
 
     const field = visible(page.getByPlaceholder("Enter text to encrypt"));
 
-    const worst = await worstBlockDuring(page, () => paste(page, 1024 * KIB));
+    const blockedMs = await paste(page, 1024 * KIB);
 
-    // Before the gate this measured ~12 400 ms; with it, ~400 ms. The threshold
-    // sits between the two, nearer the broken end, so a regression that
-    // reinstates the block fails by 2.5x rather than by a hair.
-    //
-    // It was 2000 ms and flaked once on webkit at 2239 ms. That was not the
-    // gate slipping — what `worstBlockDuring` samples is the worst gap between
-    // `requestAnimationFrame` callbacks, which measures "this tab did not paint
-    // for N ms" and cannot tell our code blocking the thread apart from a CI
-    // box running three browser engines declining to schedule us. A 2 s
-    // scheduling stall there is ordinary. 5000 ms is above that noise and still
-    // 60% below the un-gated measurement, so the test keeps the power it was
-    // written for and stops reporting the runner's load as a product
-    // regression.
-    expect(worst, "the main thread was blocked by the paste").toBeLessThan(5000);
+    // Before the gate this measured ~12 400 ms; with it, low tens of ms (see
+    // `paste()`'s docstring — both are the same bracket, so the two numbers
+    // are directly comparable, unlike the old rAF sample). 3000 ms keeps a
+    // wide margin over ordinary CI slowness while still failing a regression
+    // that reinstates the block by 4x rather than by a hair.
+    expect(
+      Math.round(blockedMs),
+      `the main thread was blocked for ${Math.round(blockedMs)} ms laying out the paste — ` +
+        "the size gate did not stop the value from reaching the field before layout ran"
+    ).toBeLessThan(3000);
 
     // Refused, not truncated. Silently keeping a prefix of someone's secret and
     // encrypting that is worse than refusing: it succeeds and loses data.
@@ -143,8 +152,12 @@ test.describe("oversized paste", () => {
     await visible(page.getByRole("tab", { name: "Decrypt" })).click();
     await useTextMode(page);
 
-    const worst = await worstBlockDuring(page, () => paste(page, 1024 * KIB));
-    expect(worst, "the main thread was blocked by the paste").toBeLessThan(2000);
+    // Same bracketed measurement and reasoning as the encrypt-side test above.
+    const blockedMs = await paste(page, 1024 * KIB);
+    expect(
+      Math.round(blockedMs),
+      `the main thread was blocked for ${Math.round(blockedMs)} ms laying out the paste`
+    ).toBeLessThan(3000);
 
     await expect(visible(page.getByPlaceholder("Enter text to decrypt"))).toHaveValue("");
     await expect(page.getByText(/Encrypted text is accepted up to/i)).toBeVisible();
