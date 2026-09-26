@@ -475,8 +475,9 @@ a way of not saying anything:
   cipher. This is stated in [§8 of the format design](docs/FORMAT-V2-DESIGN.md).
   [KEYM v4](docs/FORMAT-V4-DESIGN.md) pads the payload so the length says only
   which bucket the plaintext is in, and everything up to 248 bytes is the same
-  size; `keym2.py encrypt --pad` writes it, and it is opt-in because it costs
-  bytes, and on paper bytes are symbols. Padding is not deniability: the file
+  size; `keym2.py encrypt --pad` and the app's *Hide the size of what is inside*
+  switch write it, and it is opt-in because it costs bytes, and on paper bytes
+  are symbols. Padding is not deniability: the file
   is still plainly a backup.
 - **A weak password.** Argon2id makes guessing expensive; it cannot make a
   guessable password unguessable.
