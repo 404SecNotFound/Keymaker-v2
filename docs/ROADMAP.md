@@ -997,7 +997,7 @@ Not "later". Cut, with reasons.
 |---|---|
 | **Plausible-deniability container** and **duress/decoy password** | The blueprint concedes it: "deniability fails if the UI announces it." This is open-source software with a public spec — an adversary who knows Keymaker exists knows the decoy mode exists, and the presence of the feature is itself evidence. Shipping it invites users to bet their physical safety on a property the design cannot deliver. Worse than absent. |
 | **PAKE / croc-style transfer** | Needs a rendezvous server. The zero-server property is the product. |
-| **Steganography (KEYM-in-PNG)** | The blueprint frames it honestly as "obscurity, not security" — which is the argument for not shipping it. |
+| **Steganography (KEYM-in-PNG)** | The blueprint frames it honestly as "obscurity, not security" — which is the argument for not shipping it. The audio carrier that ships under *Audio* (`KAUD1`, `docs/FORMAT-AUDIO-STEGO.md`) is kept for the opposite reason: it is documented as a carrier, not steganography. The magic sits in the first sample LSBs, nothing is hidden from steganalysis, and all confidentiality is the container's, so it makes no claim this row would cut. It is a transport for a container, like paper, and stays only as long as it claims nothing more. |
 | **TOTP vault** | Scope creep into password-manager territory, against incumbents with sync. Dilutes focus for no differentiation. |
 | **OPFS vault / File System Access workspace** | Chromium-only, large surface, and it puts plaintext-adjacent state into durable storage — directly against "nothing is stored", which is the claim people choose this tool for. |
 | **Importers (Hat.sh, age, OpenPGP)** | Low value, ongoing maintenance, and OpenPGP is a key-model mismatch with a huge dependency tree. |
@@ -1047,7 +1047,12 @@ Phase 4.2 Paper vault print kit        ─ done ─  §7.1 parts · the sheet ·
 Phase 4.3 Self-extracting page         ─ done ─  §7.2 subset · the page · three readers, one file
 Phase 4.4 Passkey / WebAuthn PRF slot  ─ done ─  §4.7 · reference · parity · UI
 Phase 4.5 Inheritance wizard           ─ done ─  a plan over shares · paper vault · self-extract · recovery kit
-Phase 8  Outreach                      ──────    gated on 6, and on a tag existing
+Review    End-to-end review fixes      ─ done ─  strips scan back in · SVG symbols · secret hygiene · CI signs only reproduced bytes
+§4.8      Password-and-shares slot     ─ done ─  spec · reference · parity · UI · three fixtures
+Paper     Paper vault, second pass     ─ done ─  set code · presets · version-25 symbols · self-contained strips · printout check
+Scanning  Photo and live camera        ─ done ─  every code in one photo · live camera · TEN-X Bet 1 un-held
+Docs      RECOVERY.md executed         ─ done ─  recovery_test.py runs every bash block · v1, v2, v3 · with shares
+Phase 8   Outreach                     ──────    owner-only · drafts in docs/OUTREACH.md · after the next tag
 ```
 
 **Phase 6 goes before the rest of Phase 4, and that reverses the usual order.**
