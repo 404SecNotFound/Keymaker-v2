@@ -59,7 +59,7 @@ jobs:
     # to sign unless this job's SHA256SUMS matches every reproducible-elsewhere
     # leg's.
     needs: [verify-crypto, verify-ci, verify-conformance, verify-browser]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -107,7 +107,7 @@ jobs:
   # with no permission beyond the ones below.
   sign:
     needs: [build, verify-ci]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
@@ -158,7 +158,7 @@ jobs:
 
   deploy:
     needs: sign
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       pages: write
       id-token: write
