@@ -24,6 +24,7 @@ import {
   KEYM2_SLOT_TYPE_BOTH,
   KEYM2_SLOT_TYPE_PASSKEY,
   KEYM2_SLOT_TYPE_SHAMIR,
+  KEYM2_VERSION_V4,
   armorKeym2,
   dearmorKeym2,
   keym2SlotLen,
@@ -90,6 +91,17 @@ export function webcryptoProfileViolations(container: Uint8Array): string[] {
     reasons.push(
       "the payload is encrypted with ChaCha20-Poly1305, which WebCrypto has " +
         "never had and no proposal adds. A self-extracting page can only carry AES-256-GCM."
+    );
+  }
+
+  // v4 §6: the subset stops at v3. The page carries its own container,
+  // separate from the backup, so the backup can be v4 while the page's
+  // container is written as v3 and nothing is lost.
+  if (core.version === KEYM2_VERSION_V4) {
+    reasons.push(
+      "the payload is padded (KEYM v4, FORMAT-V4-DESIGN.md §4), and a " +
+        "self-extracting page's reader stops at v3. The page carries its own " +
+        "container, separate from the backup, so that one is written as v3."
     );
   }
 

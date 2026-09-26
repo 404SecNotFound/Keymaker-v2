@@ -466,14 +466,19 @@ a way of not saying anything:
 - **Someone looking at your screen.** Secret fields blur by default and reveal
   toggles exist for that reason, but a shoulder, a webcam and a screen-recorder
   all defeat it.
-- **How long your plaintext is.** The container is not padded, and the final
-  chunk is not padded either, so its length reveals the plaintext's length
-  *exactly* — overhead is a constant, and one more byte in gives one more byte
-  out. Not "to within a chunk": byte for byte. If the mere *size* of
-  what you are protecting is sensitive — which document, which of two possible
-  answers — that leaks regardless of the cipher. This is stated in
-  [§8 of the format design](docs/FORMAT-V2-DESIGN.md) and a padding scheme is
-  deliberately not in v2: it is its own design with its own trade-offs.
+- **How long your plaintext is.** A v3 container (what the app writes today)
+  is not padded, and the final chunk is not padded either, so its length
+  reveals the plaintext's length *exactly* — overhead is a constant, and one
+  more byte in gives one more byte out. Not "to within a chunk": byte for
+  byte. If the mere *size* of what you are protecting is sensitive — which
+  document, which of two possible answers — that leaks regardless of the
+  cipher. This is stated in [§8 of the format design](docs/FORMAT-V2-DESIGN.md).
+  [KEYM v4](docs/FORMAT-V4-DESIGN.md) pads the payload so the length says only
+  which bucket the plaintext is in, and everything up to 248 bytes is the same
+  size; `keym2.py encrypt --pad` and the app's *Hide the size of what is inside*
+  switch write it, and it is opt-in because it costs bytes, and on paper bytes
+  are symbols. Padding is not deniability: the file
+  is still plainly a backup.
 - **A weak password.** Argon2id makes guessing expensive; it cannot make a
   guessable password unguessable.
 - **Forgetting the password.** There is no reset, no recovery email and nobody
@@ -657,8 +662,8 @@ process list to every other account on the machine while the KDF ran. Prefer
 the interactive prompt, or `--shares-from` with a file only you can read.
 
 **Two scripts, because there are two container generations.** The app writes
-**KEYM v3**, and `keym2.py` reads v3 and v2 alike — one command, whichever year
-your backup is from. Backups older than that are **v1** and need `keym.py`;
+**KEYM v3**, and `keym2.py` reads v4, v3 and v2 alike — one command, whichever
+year your backup is from. Backups older than that are **v1** and need `keym.py`;
 neither script reads the other's format, and the one that refuses is telling you
 which you have.
 [docs/RECOVERY.md](docs/RECOVERY.md) is the printable procedure, and
@@ -732,6 +737,7 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/FORMAT.md`](docs/FORMAT.md) | Normative KEYM v1 byte-level specification |
 | [`docs/FORMAT-V2-DESIGN.md`](docs/FORMAT-V2-DESIGN.md) | Normative KEYM v2 specification — still read, no longer written |
 | [`docs/FORMAT-V3-DESIGN.md`](docs/FORMAT-V3-DESIGN.md) | Normative KEYM v3 specification, a delta on v2 — the format the app writes today |
+| [`docs/FORMAT-V4-DESIGN.md`](docs/FORMAT-V4-DESIGN.md) | Normative KEYM v4 specification, a delta on v3 — a padded payload, written on request |
 | [`docs/FORMAT-AUDIO-STEGO.md`](docs/FORMAT-AUDIO-STEGO.md) | The KAUD1 encrypted audio carrier layout: packing a container into audio, with a diagram |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | Phased plan: what ships next, and what was cut |
 | [`docs/VERIFYING.md`](docs/VERIFYING.md) | Checking that the site you loaded is the code you read |

@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+One format revision, opt-in: **KEYM v4** (`docs/FORMAT-V4-DESIGN.md`), a delta
+on v3 whose only change is a padded payload. Nothing the app writes today
+changes, and every v2 and v3 container reads exactly as before.
+
+### Added
+- **KEYM v4: the container's length no longer states the plaintext's.** v2 §8
+  and v3 §7 both deferred this. The payload now seals a stream of an 8-byte
+  length prefix, the plaintext and zeros, padded to a bucket: 256 bytes for
+  anything up to 248, and Padmé above that, so a 12-word seed, a 24-word seed
+  and a password give the same file. Header, slots, MAC and chunking are
+  v3's; the version byte sits inside every AAD, so a relabelled container
+  opens in neither direction. Specified first, implemented in `keym2.py` from
+  the spec (`encrypt --pad`, and `inspect` says "padded bytes" rather than
+  claiming a plaintext length), then TypeScript; byte-identical across both,
+  three ciphers, both KDFs and every stream boundary; a published vector held
+  in both; seven frozen fixtures; RECOVERY.md's commands claim v4 and
+  `recovery_test.py` executes them against v4 containers the app wrote. v4
+  is written on request only, so the paper vault does not grow by default;
+  the self-extracting page keeps its v3 container and its writer refuses v4.
+- **"Hide the size of what is inside"**, under Advanced on the Encrypt tab, is
+  how the app writes v4. Off by default, with the cost stated beside it: up
+  to 248 bytes plus under 7%, more symbols on paper, and older readers
+  cannot open it. A browser test shows a one-byte and a 200-byte secret
+  sealing to the same length.
+- **Re-seal an old backup.** With a v2, v1 or IttyBitz backup open, the
+  Decrypt tab says its list of ways in is not authenticated and offers to
+  re-seal it. The button carries the recovered text to the Encrypt tab (a
+  recovered file, already downloaded, is asked for), and the ordinary seal
+  writes today's format with a password the owner types. Shares and
+  passkeys are not carried over, and the notice says so. Not a one-click
+  re-encrypt on purpose: the password is cleared on success and the
+  plaintext erased, and a silent re-seal would have to keep both.
+- **Releases carry a GitHub build attestation** on the tarball and on
+  `SHA256SUMS`, beside the Sigstore signature and not in place of it, so
+  `gh attestation verify` checks the same bytes with nothing but GitHub's CLI.
+  VERIFYING.md says what it asserts and why `--signer-workflow` is not
+  optional.
+
+## Keymaker v2.3.0
+
 One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),
 which a container carries only when its owner chooses it. Every container
 v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged

@@ -76,6 +76,14 @@ export type KdfParams =
 export interface KeymakerOptions {
   kdf: KdfParams;
   cipher: CipherId;
+  /**
+   * Write a KEYM v4 container (FORMAT-V4-DESIGN.md): the payload is padded so
+   * the file's length states only which bucket the plaintext is in. Off by
+   * default, and v4 §6 says why: the cost lands on the writer's medium, and
+   * on paper more bytes are more symbols. Ignored by the v1 writer, which
+   * nothing in the product reaches.
+   */
+  padded?: boolean;
 }
 
 export const DEFAULT_PBKDF2: Pbkdf2Params = { iterations: 1_000_000 };
@@ -85,7 +93,7 @@ export const DEFAULT_ARGON2ID: Argon2idParams = {
   parallelism: 4,
 };
 
-export type DetectedFormat = "keym-v1" | "keym-v2" | "keym-v3" | "ibtz-v1" | "ibtz-v0";
+export type DetectedFormat = "keym-v1" | "keym-v2" | "keym-v3" | "keym-v4" | "ibtz-v1" | "ibtz-v0";
 
 const SALT_LEN_PBKDF2 = 16;
 const SALT_LEN_ARGON2ID = 32;
@@ -905,12 +913,13 @@ export async function encryptContainer(
   }
 
   try {
-    const { encryptKeym2 } = await loadKeym2();
+    const { encryptKeym2, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
     const out = await encryptKeym2(
       new Uint8Array(dataBuffer),
       password,
       keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
-      { kdf: options.kdf, cipher }
+      { kdf: options.kdf, cipher },
+      options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
     );
     return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
   } catch (error) {
@@ -953,14 +962,15 @@ export async function encryptContainerWithSharesRequired(
   }
   validateKdfParams(options.kdf, "encrypt");
   try {
-    const { encryptKeym2WithSharesRequired } = await loadKeym2();
+    const { encryptKeym2WithSharesRequired, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
     const { container, shares } = await encryptKeym2WithSharesRequired(
       new Uint8Array(dataBuffer),
       password,
       keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
       { kdf: options.kdf, cipher: options.cipher },
       threshold,
-      count
+      count,
+      options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
     );
     return {
       data: container.buffer.slice(container.byteOffset, container.byteOffset + container.byteLength) as ArrayBuffer,
@@ -1091,6 +1101,9 @@ export function detectFormat(data: Uint8Array): DetectedFormat {
     // had not. Naming it here is what connects the two.
     if (data[4] === 2) return "keym-v2";
     if (data[4] === 3) return "keym-v3";
+    // v4 §6: the same lesson, learned once. The parser and this dispatcher
+    // learn a version together or the container is refused as "newer".
+    if (data[4] === 4) return "keym-v4";
     return "keym-v1";
   }
   if (data.length >= 5 && magicPrefixLen(data, IBTZ_MAGIC) === IBTZ_MAGIC.length) {
@@ -1324,7 +1337,7 @@ export async function decryptData(
   const fullData = new Uint8Array(encryptedBuffer);
   const format = detectFormat(fullData);
 
-  if (format === "keym-v2" || format === "keym-v3") {
+  if (format === "keym-v2" || format === "keym-v3" || format === "keym-v4") {
     // Dynamically imported so keymaker-crypto.ts does not depend on keym-v2.ts
     // at module-evaluation time — the dependency runs one way, which is what
     // keeps the v1 path structurally unable to be changed by v2 work. It also

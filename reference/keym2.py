@@ -206,7 +206,8 @@ MAGIC = b"KEYM"
 
 VERSION_V2 = 2
 VERSION_V3 = 3
-SUPPORTED_VERSIONS = (VERSION_V2, VERSION_V3)
+VERSION_V4 = 4
+SUPPORTED_VERSIONS = (VERSION_V2, VERSION_V3, VERSION_V4)
 
 # The version this implementation *writes* by default.
 #
@@ -225,6 +226,12 @@ SUPPORTED_VERSIONS = (VERSION_V2, VERSION_V3)
 # nothing rewrites an existing file. `encrypt(..., version=VERSION_V2)` still
 # writes v2 for anyone who needs to produce one — a vector for the frozen
 # corpus, say, or a container for a reader that predates v3.
+#
+# v4 (docs/FORMAT-V4-DESIGN.md) pads the payload so the container's length
+# stops stating the plaintext's, and is written on request only:
+# `encrypt(..., version=VERSION_V4)`, `--pad` on the CLI. v4 §6 says MAY,
+# not SHOULD, and does not move this default, because the cost lands on
+# the writer's medium: on paper, more bytes are more symbols.
 VERSION = VERSION_V3
 
 # §3. The header is in two parts and the split is load-bearing (§5.3): the core
@@ -504,7 +511,7 @@ def core_header_len(version: int) -> int:
     """Length of the payload AAD, and of the first half of every slot's AAD."""
     if version == VERSION_V2:
         return CORE_HEADER_LEN
-    if version == VERSION_V3:
+    if version in (VERSION_V3, VERSION_V4):
         return CORE_HEADER_LEN_V3
     raise UsageError(f"unknown version {version}")
 
@@ -515,10 +522,10 @@ def slot_count_offset(version: int) -> int:
 
 def slot_table_offset(version: int) -> int:
     """Where the slot table starts: straight after slot_count in v2, after
-    slot_count and the 32-byte MAC in v3."""
+    slot_count and the 32-byte MAC in v3 and v4 (v4 §3 keeps v3's header)."""
     if version == VERSION_V2:
         return SLOT_TABLE_OFFSET
-    if version == VERSION_V3:
+    if version in (VERSION_V3, VERSION_V4):
         return SLOT_TABLE_OFFSET_V3
     raise UsageError(f"unknown version {version}")
 
@@ -529,7 +536,7 @@ def slot_table_offset(version: int) -> int:
 
 @dataclass(frozen=True)
 class CoreHeader:
-    """§3, bytes [0, 8) in v2 and [0, 24) in v3. The payload AAD, and the only
+    """§3, bytes [0, 8) in v2 and [0, 24) in v3 and v4. The payload AAD, and the only
     part every AEAD invocation in the container agrees on.
 
     v3 §3 widens it by ``container_id`` and nothing else, which is what makes
@@ -549,14 +556,22 @@ class CoreHeader:
         return tag_overhead(self.cipher_id)
 
     @property
-    def is_v3(self) -> bool:
-        return self.version == VERSION_V3
+    def authenticated_table(self) -> bool:
+        """v3 §3: a container_id in the core header and a MAC over the slot
+        table. v4 keeps both unchanged (v4 §2); only v2 lacks them."""
+        return self.version in (VERSION_V3, VERSION_V4)
+
+    @property
+    def padded(self) -> bool:
+        """v4 §4: the payload seals a length-prefixed, zero-padded stream
+        rather than the plaintext."""
+        return self.version == VERSION_V4
 
     def __post_init__(self) -> None:
         if self.version == VERSION_V2:
             if self.container_id:
                 raise UsageError("v2 containers have no container_id")
-        elif self.version == VERSION_V3:
+        elif self.version in (VERSION_V3, VERSION_V4):
             if len(self.container_id) != CONTAINER_ID_LEN:
                 raise UsageError(f"container_id must be {CONTAINER_ID_LEN} bytes")
         else:
@@ -630,9 +645,10 @@ def parse_core_header(data: bytes) -> CoreHeader:
         raise _reject()
 
     version = data[4]
-    # v3 §6: a v3 reader MUST open v1, v2 and v3. v1 has its own file; here the
-    # bound is v2 or v3, and anything else is an unknown version. A v2-only
-    # reader rejects 0x03 through this same check, which is what §6 relies on.
+    # v3 §6: a v3 reader MUST open v1, v2 and v3, and v4 §6 adds v4. v1 has
+    # its own file; here the bound is v2, v3 or v4, and anything else is an
+    # unknown version. A v2-only reader rejects 0x03 through this same check,
+    # and a v3-only reader rejects 0x04, which is what both §6s rely on.
     if version not in SUPPORTED_VERSIONS:
         raise _reject()
     if len(data) < slot_table_offset(version):
@@ -650,7 +666,7 @@ def parse_core_header(data: bytes) -> CoreHeader:
     if data[7] != 0:  # §3 reserved
         raise _reject()
 
-    container_id = (data[8:8 + CONTAINER_ID_LEN] if version == VERSION_V3
+    container_id = (data[8:8 + CONTAINER_ID_LEN] if version != VERSION_V2
                     else b"")
     return CoreHeader(cipher_id=cipher_id, flags=flags, version=version,
                       container_id=container_id)
@@ -701,7 +717,7 @@ def read_slot_table_mac(data: bytes) -> Optional[bytes]:
     the container is long enough to hold it.
     """
     core = parse_core_header(data)
-    if not core.is_v3:
+    if not core.authenticated_table:
         return None
     return data[SLOT_TABLE_MAC_OFFSET_V3:SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN]
 
@@ -867,6 +883,13 @@ def webcrypto_profile_violations(container: bytes) -> list[str]:
         reasons.append(
             f"cipher_id 0x{core.cipher_id:02x} needs ChaCha20-Poly1305, which "
             "WebCrypto has never had; the subset is AES-256-GCM only"
+        )
+
+    if core.padded:
+        reasons.append(
+            "version 0x04 pads the payload (docs/FORMAT-V4-DESIGN.md §4), and "
+            "v4 §6 keeps the page's reader at v3. The page carries its own "
+            "container, separate from the backup, so write that one as v3"
         )
 
     # §4.4's skip rule applies here too: a slot this implementation cannot parse
@@ -1226,7 +1249,7 @@ def compute_slot_table_mac(core: CoreHeader, records: list[bytes],
     edge cases, and it pins slot order as a side effect, which is why the
     reordering attack of §1.1 stops being possible even though it was inert.
     """
-    if not core.is_v3:
+    if not core.authenticated_table:
         raise UsageError("slot_table_mac is a v3 field")
     if not (SLOT_COUNT_MIN <= len(records) <= SLOT_COUNT_MAX):
         raise UsageError(f"slot_count must be {SLOT_COUNT_MIN}..{SLOT_COUNT_MAX}")
@@ -1249,7 +1272,7 @@ def verify_slot_table(container: bytes, core: CoreHeader, records: list[bytes],
     but because a MAC comparison written the other way is the kind of thing that
     gets copied into a place where it does matter.
     """
-    if not core.is_v3:
+    if not core.authenticated_table:
         return None
     stored = read_slot_table_mac(container)
     assert stored is not None
@@ -1877,6 +1900,73 @@ def _split_plaintext(plaintext: bytes) -> list[bytes]:
     return [plaintext[i * CHUNK_SIZE:(i + 1) * CHUNK_SIZE] for i in range(count)]
 
 
+# v4 §4. The payload of a v4 container seals a *stream*, not the plaintext:
+#
+#     stream = uint64_be(L) || plaintext || zero bytes, to padded_len(8 + L)
+#
+# so that the container's length no longer states L. The chunking below is
+# untouched; it simply sees the stream.
+PAD_PREFIX_LEN = 8       # v4 §4.1, uint64_be(L)
+PAD_FLOOR = 256          # v4 §4.3, the smallest stream
+
+
+def padded_len(n: int) -> int:
+    """
+    v4 §4.2. The stream length for a prefixed plaintext of ``n = 8 + L`` bytes.
+
+    At or below the floor, the floor. Above it, Padmé: ``n`` rounded up to a
+    multiple of ``2^(E - S)`` with ``E = floor(log2 n)`` and
+    ``S = floor(log2 E) + 1``, so each doubling admits only ``2^S`` distinct
+    lengths. A function of the format, like the chunk size: a reader verifies
+    it (§4.4) rather than trusting the writer's arithmetic.
+    """
+    if n < PAD_PREFIX_LEN:
+        raise UsageError("a padded stream carries at least its 8-byte prefix")
+    if n <= PAD_FLOOR:
+        return PAD_FLOOR
+    e = n.bit_length() - 1          # floor(log2 n)
+    s = e.bit_length()              # floor(log2 e) + 1
+    unit = 1 << (e - s)
+    return (n + unit - 1) // unit * unit
+
+
+def pad_stream(plaintext: bytes) -> bytes:
+    """v4 §4.1. Prefix, plaintext, zeros."""
+    n = PAD_PREFIX_LEN + len(plaintext)
+    return len(plaintext).to_bytes(PAD_PREFIX_LEN, "big") + plaintext \
+        + bytes(padded_len(n) - n)
+
+
+def unpad_stream(stream: bytes) -> bytes:
+    """
+    v4 §4.4, its six steps in its order. Every failure is §6's generic
+    rejection: a v4 reader says no more about a bad prefix than about a bad
+    tag.
+
+    Step 3 runs before step 4 so ``8 + L`` is only formed once it is known to
+    fit; Python's integers cannot overflow, but the order is the document's
+    and an implementation that copies this one should not be taught the wrong
+    one.
+
+    The zero check has no cryptographic job — the AEAD already covers every
+    byte — and exists so that the two implementations agree on every input.
+    A writer that emitted anything but zeros is not a conforming writer, and a
+    reader that opened its output while the other refused it would be the
+    disagreement §4.5 was written to rule out.
+    """
+    if len(stream) < PAD_PREFIX_LEN:
+        raise _reject()
+    length = int.from_bytes(stream[:PAD_PREFIX_LEN], "big")
+    if length > len(stream) - PAD_PREFIX_LEN:
+        raise _reject()
+    if len(stream) != padded_len(PAD_PREFIX_LEN + length):
+        raise _reject()
+    end = PAD_PREFIX_LEN + length
+    if stream[end:].count(0) != len(stream) - end:
+        raise _reject()
+    return stream[PAD_PREFIX_LEN:end]
+
+
 def _seal(cipher_id: int, aes_key: bytes, chacha_key: bytes,
           nonce: bytes, plaintext: bytes, aad: bytes) -> bytes:
     """§5.4. Chained is AES inner, ChaCha outer — both under the same nonce,
@@ -2046,7 +2136,7 @@ def assemble(core: CoreHeader, slots: list[bytes], payload: bytes,
             raise UsageError("slot record has the wrong width for this cipher")
 
     head = core.pack() + bytes([len(slots)])
-    if core.is_v3:
+    if core.authenticated_table:
         if master_key is None:
             raise UsageError(
                 "writing a v3 slot table needs the master key to recompute "
@@ -2058,10 +2148,19 @@ def assemble(core: CoreHeader, slots: list[bytes], payload: bytes,
 
 
 def encrypt_payload(core: CoreHeader, master_key: bytes, plaintext: bytes) -> bytes:
-    """§5. The chunk sequence, sealed under the master key."""
+    """§5. The chunk sequence, sealed under the master key. For v4 the thing
+    chunked is §4.1's padded stream; the sealing is the same."""
+    return _seal_stream(core, master_key,
+                        pad_stream(plaintext) if core.padded else plaintext)
+
+
+def _seal_stream(core: CoreHeader, master_key: bytes, stream: bytes) -> bytes:
+    """§5 on exactly these bytes. Split out from encrypt_payload so the
+    selftest can seal a stream a conforming v4 writer would never produce and
+    watch the reader refuse it."""
     aes_key, chacha_key = payload_keys(core.cipher_id, master_key)
     aad = core.pack()
-    chunks = _split_plaintext(plaintext)
+    chunks = _split_plaintext(stream)
     out = []
     for i, chunk in enumerate(chunks):
         out.append(_seal(core.cipher_id, aes_key, chacha_key,
@@ -2087,7 +2186,7 @@ def encrypt(
     container_id: Optional[bytes] = None,
 ) -> bytes:
     """
-    Write a single-slot container, v3 by default and v2 on request.
+    Write a single-slot container, v3 by default, v2 or v4 on request.
 
     The default is ``VERSION`` above, which moved to v3 once the TypeScript core
     was held to the same bytes. ``version=VERSION_V2`` still writes v2, for the
@@ -2107,11 +2206,11 @@ def encrypt(
     if version not in SUPPORTED_VERSIONS:
         raise UsageError(f"unknown version {version}")
 
-    if version == VERSION_V3:
+    if version in (VERSION_V3, VERSION_V4):
         if container_id is None:
             container_id = os.urandom(CONTAINER_ID_LEN)
     elif container_id is not None:
-        raise UsageError("container_id is a v3 field")
+        raise UsageError("container_id is a v3 and v4 field")
     core = CoreHeader(cipher_id=cipher_id, version=version,
                       container_id=container_id or b"")
 
@@ -2127,7 +2226,7 @@ def encrypt(
         salt=salt, enforce_write_policy=enforce_write_policy,
     )
     return assemble(core, [record], encrypt_payload(core, master_key, plaintext),
-                    master_key if core.is_v3 else None)
+                    master_key if core.authenticated_table else None)
 
 
 def encrypt_both(
@@ -2168,11 +2267,11 @@ def encrypt_both(
         raise UsageError(f"unknown cipher_id {cipher_id}")
     if version not in SUPPORTED_VERSIONS:
         raise UsageError(f"unknown version {version}")
-    if version == VERSION_V3:
+    if version in (VERSION_V3, VERSION_V4):
         if container_id is None:
             container_id = os.urandom(CONTAINER_ID_LEN)
     elif container_id is not None:
-        raise UsageError("container_id is a v3 field")
+        raise UsageError("container_id is a v3 and v4 field")
     core = CoreHeader(cipher_id=cipher_id, version=version,
                       container_id=container_id or b"")
     if master_key is None:
@@ -2188,7 +2287,7 @@ def encrypt_both(
         enforce_write_policy=enforce_write_policy,
     )
     container = assemble(core, [record], encrypt_payload(core, master_key, plaintext),
-                         master_key if core.is_v3 else None)
+                         master_key if core.authenticated_table else None)
     return container, texts
 
 
@@ -2455,7 +2554,12 @@ def decrypt_report(
 
     if offset != len(payload):
         raise _reject()
-    return DecryptResult(plaintext=b"".join(out), slot_table_authentic=authentic)
+    stream = b"".join(out)
+    # v4 §4.4: only once every chunk has verified and the final flag has been
+    # seen. The prefix and the padding are inside the AEAD, so nothing here is
+    # attacker-controlled; the checks are for a writer that got §4 wrong.
+    plaintext = unpad_stream(stream) if core.padded else stream
+    return DecryptResult(plaintext=plaintext, slot_table_authentic=authentic)
 
 
 def decrypt(
@@ -2540,7 +2644,7 @@ def add_slot(
         salt=salt, enforce_write_policy=enforce_write_policy,
     )
     return assemble(core, records + [record], payload,
-                    master if core.is_v3 else None)
+                    master if core.authenticated_table else None)
 
 
 def add_shamir_slot(
@@ -2579,7 +2683,7 @@ def add_shamir_slot(
         core, master, k, n,
         salt=salt, share_secret=share_secret, coefficients=coefficients)
     return (assemble(core, records + [record], payload,
-                     master if core.is_v3 else None), texts)
+                     master if core.authenticated_table else None), texts)
 
 
 def add_both_slot(
@@ -2622,7 +2726,7 @@ def add_both_slot(
         time_cost=time_cost, memory_kib=memory_kib, parallelism=parallelism,
         salt=salt, share_secret=share_secret, coefficients=coefficients)
     return (assemble(core, records + [record], payload,
-                     master if core.is_v3 else None), texts)
+                     master if core.authenticated_table else None), texts)
 
 
 def _passkey_only(records: list[bytes]) -> bool:
@@ -2676,7 +2780,7 @@ def add_passkey_slot(
             "a passkey is hardware, and a container only a lost key opens is "
             "lost data (§4.7)"
         )
-    return assemble(core, out, payload, master if core.is_v3 else None)
+    return assemble(core, out, payload, master if core.authenticated_table else None)
 
 
 def remove_slot(
@@ -2709,7 +2813,7 @@ def remove_slot(
     """
     core = parse_core_header(container)
     master: Optional[bytes] = None
-    if core.is_v3:
+    if core.authenticated_table:
         if (unlock_password is None and not unlock_shares
                 and unlock_prf_output is None):
             raise UsageError(
@@ -2797,7 +2901,7 @@ def rewrap_slot(
         salt=salt, enforce_write_policy=enforce_write_policy,
     )
     return assemble(core, records[:index] + [record] + records[index + 1:], payload,
-                    master if core.is_v3 else None)
+                    master if core.authenticated_table else None)
 
 
 # =============================================================================
@@ -3348,7 +3452,7 @@ def _inspect(container: bytes) -> str:
         f"KEYM v{core.version}",
         f"  cipher      {cipher}",
     ]
-    if core.is_v3:
+    if core.authenticated_table:
         lines.append(f"  container   {core.container_id.hex()}")
         # Deliberately not "mac ok" / "mac bad": whether the MAC is *correct* is
         # not knowable here. inspect holds no secret, so it cannot derive
@@ -3362,7 +3466,13 @@ def _inspect(container: bytes) -> str:
 
     for i, record in enumerate(records):
         lines.extend(_describe_slot(i, record))
-    lines.append(f"  chunks      {len(sizes)} ({sum(sizes)} plaintext bytes)")
+    if core.padded:
+        # v4 §5: without the secret, the stream length is all that is knowable
+        # about the plaintext's, and inspect holds no secret.
+        lines.append(f"  chunks      {len(sizes)} ({sum(sizes)} padded bytes; "
+                     f"v4 hides the length of what is inside)")
+    else:
+        lines.append(f"  chunks      {len(sizes)} ({sum(sizes)} plaintext bytes)")
     return "\n".join(lines)
 
 
@@ -5235,9 +5345,9 @@ def _selftest() -> int:
         check("a container written with no version says v3 on the wire",
               encrypt(v3msg, pw, **fast)[4] == VERSION_V3)
 
-        check("an unknown version is still rejected",
+        check("an unknown version (5) is still rejected",
               _raises_keym(lambda: decrypt(bytes([v3one[0], v3one[1], v3one[2],
-                                                  v3one[3], 4]) + v3one[5:], pw)))
+                                                  v3one[3], 5]) + v3one[5:], pw)))
         check("v1 and v2 magic dispatch is unchanged by v3",
               detect(v3one) == "keym-binary-v3" and detect(a2) == "keym-binary-v2")
 
@@ -5248,6 +5358,219 @@ def _selftest() -> int:
         v3_crash = f"{type(exc).__name__}: {exc}"
     check(f"the v3 section ran to completion{'' if v3_crash is None else f' ({v3_crash})'}",
           v3_crash is None)
+
+    def _v4_section() -> None:
+        # =====================================================================
+        # KEYM v4 (docs/FORMAT-V4-DESIGN.md)
+        # =====================================================================
+        #
+        # Only the delta: the padded stream. Header, MAC, slots and chunking are
+        # v3's and are tested above; what is checked here is that the length
+        # stops saying what v2 §8 said it says, that §4.4's reader refuses every
+        # stream a conforming writer cannot produce, and that nothing else moved.
+
+        # §4.2's worked values, pinned so the table in the document cannot drift
+        # from the arithmetic.
+        for n, want in ((8, 256), (256, 256), (257, 272), (300, 304),
+                        (1000, 1024), (1025, 1088), (65544, 67584),
+                        (1048584, 1081344), (100000008, 100663296)):
+            check(f"v4 §4.2: padded_len({n}) == {want}", padded_len(n) == want)
+        check("v4 §4.2: a stream shorter than its prefix is not a length",
+              _raises_usage(lambda: padded_len(7)))
+        check("v4 §4.2: padded_len never shrinks and never steps down",
+              all(padded_len(n) >= n and padded_len(n + 1) >= padded_len(n)
+                  for n in range(PAD_PREFIX_LEN, 70000)))
+        check("v4 §5: the overhead above the floor stays under 7% up to 256 KiB",
+              all((padded_len(n) - n) * 100 < 7 * n for n in range(257, 1 << 18)))
+        check("v4 §4.3: the two branches meet without a step",
+              padded_len(256) == 256 and padded_len(257) == 272)
+
+        v4msg = b"what is inside must not show through the length"
+        v4one = encrypt(v4msg, pw, version=VERSION_V4, **fast)
+        check("v4 §3: a v4 container declares version 4", v4one[4] == VERSION_V4)
+        check("v4 §3: the header geometry is v3's",
+              core_header_len(VERSION_V4) == CORE_HEADER_LEN_V3 == 24
+              and slot_table_offset(VERSION_V4) == SLOT_TABLE_OFFSET_V3 == 57)
+        check("v4 §2: container_id and the table MAC are present",
+              len(parse_container(v4one)[0].container_id) == CONTAINER_ID_LEN
+              and read_slot_table_mac(v4one) is not None)
+        opens("v4: round trip", lambda: decrypt(v4one, pw), v4msg)
+        reports("v4 §2: a fresh v4 table is reported authentic",
+                lambda: decrypt_report(v4one, pw).slot_table_authentic, True)
+        check("v4 §6: this implementation still writes v3 by default",
+              VERSION == VERSION_V3 and encrypt(v4msg, pw, **fast)[4] == VERSION_V3)
+        check("v4: detect names the version", detect(v4one) == "keym-binary-v4")
+
+        # §1.1 and §4.3: the leak, closed. Every plaintext up to 248 bytes gives
+        # the same container; v2 §8's "byte for byte" is no longer true of v4.
+        floor_len = SLOT_TABLE_OFFSET_V3 + slot_len(CIPHER_AES) + PAD_FLOOR + TAG_LEN
+        lens = {L: len(encrypt(bytes(L), pw, version=VERSION_V4, **fast))
+                for L in (0, 1, 75, 150, 170, 247, 248)}
+        check(f"v4 §4.3: every plaintext up to 248 bytes is a {floor_len}-byte container",
+              set(lens.values()) == {floor_len})
+        check("v4 §4.3: 249 bytes is the first plaintext past the floor",
+              len(encrypt(bytes(249), pw, version=VERSION_V4, **fast)) == floor_len + 16)
+        v3_lens = {L: len(encrypt(bytes(L), pw, version=VERSION_V3, **fast))
+                   for L in (75, 150)}
+        check("v2 §8 still holds for v3: its lengths differ by the plaintext's",
+              v3_lens[150] - v3_lens[75] == 75)
+
+        # Round trips across every boundary the stream can sit on: the floor,
+        # one full chunk, and the first byte that needs a second chunk.
+        for L in (0, 1, 248, 249, 256, 257, CHUNK_SIZE - 8, CHUNK_SIZE - 7, CHUNK_SIZE):
+            msg = os.urandom(L)
+            c = encrypt(msg, pw, version=VERSION_V4, **fast)
+            opens(f"v4: a {L}-byte plaintext round-trips", lambda c=c: decrypt(c, pw), msg)
+            _, _, payload = parse_container(c)
+            want_chunks = max(1, math.ceil(padded_len(PAD_PREFIX_LEN + L) / CHUNK_SIZE))
+            check(f"v4 §4.1: a {L}-byte plaintext is sealed as {want_chunks} chunk(s)",
+                  len(_chunk_layout(len(payload), TAG_LEN)) == want_chunks)
+
+        # §4.4, each step, against streams a conforming writer never produces.
+        # Built with the writer's own sealer on a pinned master key, so the
+        # only thing wrong with each container is the stream inside it.
+        mk = bytes(range(32))
+        base = encrypt(v4msg, pw, version=VERSION_V4, master_key=mk, **fast)
+        core4, _recs4, pay4 = parse_container(base)
+        head4 = base[:len(base) - len(pay4)]
+
+        def with_stream(stream: bytes) -> bytes:
+            return head4 + _seal_stream(core4, mk, stream)
+
+        good = pad_stream(v4msg)
+        opens("v4 §4.4: the writer's own stream opens (the control for the rest)",
+              lambda: decrypt(with_stream(good), pw), v4msg)
+        rejects("v4 §4.4 step 1: a stream shorter than the prefix",
+                lambda: decrypt(with_stream(b"\x00" * 4), pw))
+        rejects("v4 §4.4 step 3: a prefix claiming more bytes than the stream holds",
+                lambda: decrypt(with_stream((1 << 40).to_bytes(8, "big") + good[8:]), pw))
+        rejects("v4 §4.4 step 4: a stream padded by another rule, even with zeros",
+                lambda: decrypt(with_stream(good + b"\x00"), pw))
+        rejects("v4 §4.4 step 4: a stream one byte short of its bucket",
+                lambda: decrypt(with_stream(good[:-1]), pw))
+        rejects("v4 §4.4 step 5: a non-zero padding byte at the end",
+                lambda: decrypt(with_stream(good[:-1] + b"\x01"), pw))
+        rejects("v4 §4.4 step 5: a non-zero padding byte right after the plaintext",
+                lambda: decrypt(with_stream(good[:8 + len(v4msg)] + b"\x80"
+                                            + good[9 + len(v4msg):]), pw))
+        rejects("v4 §4.4 step 5: the prefix undercounting, so plaintext reads as padding",
+                lambda: decrypt(with_stream((len(v4msg) - 1).to_bytes(8, "big") + good[8:]), pw))
+        # The version byte is in the AAD (§2), so neither relabelling opens.
+        rejects("v4 §2: a v4 container relabelled v3 fails on every chunk",
+                lambda: decrypt(base[:4] + bytes([VERSION_V3]) + base[5:], pw))
+        v3one4 = encrypt(v4msg, pw, version=VERSION_V3, **fast)
+        rejects("v4 §2: a v3 container relabelled v4 fails on every chunk",
+                lambda: decrypt(v3one4[:4] + bytes([VERSION_V4]) + v3one4[5:], pw))
+
+        # §2, §6: slot editing is v3's and leaves the container v4.
+        pw2, pw3 = "second holder", "new password"
+        two = add_slot(v4one, pw, pw2, **fast)
+        check("v4 §2: enrolling a slot keeps the version", two[4] == VERSION_V4)
+        opens("v4 §2: the enrolled slot opens the padded payload",
+              lambda: decrypt(two, pw2), v4msg)
+        check("v4 §2: enrolment did not touch the payload",
+              parse_container(two)[2] == parse_container(v4one)[2])
+        one_again = remove_slot(two, 1, unlock_password=pw)
+        check("v4 §2: revocation keeps the version and the payload",
+              one_again[4] == VERSION_V4
+              and parse_container(one_again)[2] == parse_container(v4one)[2])
+        rewrapped = rewrap_slot(v4one, 0, pw, pw3, **fast)
+        opens("v4 §2: a re-wrapped slot opens the padded payload",
+              lambda: decrypt(rewrapped, pw3), v4msg)
+        check("v4 §2: re-wrapping keeps the version", rewrapped[4] == VERSION_V4)
+        # v3 §1.1's strip attack is still announced on v4.
+        _c, recs2, pay2 = parse_container(two)
+        stripped = (bytearray(two[:SLOT_TABLE_OFFSET_V3]))
+        stripped[SLOT_COUNT_OFFSET_V3] = 1
+        reports("v4 §2: a stripped v4 table is still reported",
+                lambda: decrypt_report(bytes(stripped) + recs2[0] + pay2,
+                                       pw).slot_table_authentic, False)
+
+        # §8's published vector. v3 §8's inputs with the version and one word
+        # of the plaintext changed, real Argon2id cost and all, so the hex in
+        # the document cannot drift from what this file writes.
+        vec_pw = "correct horse battery staple \u2014 test only"
+        vec_pt = b"Keymaker fixture - KEYM v4 / argon2id / aes-256-gcm"
+        vec_mk = bytes.fromhex("404142434445464748494a4b4c4d4e4f"
+                               "505152535455565758595a5b5c5d5e5f")
+        vec = encrypt(vec_pt, vec_pw, kdf_id=KDF_ARGON2ID, cipher_id=CIPHER_AES,
+                      time_cost=3, memory_kib=65536, parallelism=4,
+                      salt=bytes.fromhex("00112233445566778899aabbccddeeff"
+                                         "00112233445566778899aabbccddeeff"),
+                      master_key=vec_mk,
+                      container_id=bytes.fromhex("0123456789abcdef0123456789abcdef"),
+                      version=VERSION_V4)
+        check("v4 §8: the published vector is 425 bytes", len(vec) == 425)
+        check("v4 §8: the published core header reproduces",
+              vec[:24].hex() == "4b45594d040000000123456789abcdef0123456789abcdef")
+        check("v4 §8: K_table is v3 §8's, since only the master key feeds it",
+              slot_table_key(vec_mk).hex()
+              == "351351be1b09b978ae98feede32b49f98af1acd365aeda6943178985395e7cf6")
+        check("v4 §8: the published slot_table_mac reproduces",
+              vec[25:57].hex()
+              == "2b57f2b782ba97fe97cf4f18455c21e27d9286d749ce5aa5ff9c76a1fed44c11")
+        check("v4 §8: the published container reproduces byte for byte",
+              vec.hex() ==
+              "4b45594d040000000123456789abcdef0123456789abcdef012b57f2b782ba97"
+              "fe97cf4f18455c21e27d9286d749ce5aa5ff9c76a1fed44c1100010000000000"
+              "0000112233445566778899aabbccddeeff00112233445566778899aabbccddee"
+              "ff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea5"
+              "8ebba4ecc919f86d5c31a2e4a961d80c1b34957112c55e92ddb3ae733192a6e4"
+              "725beff0a4ed88081ff33e43e1706716c145d27e0a55965b2bb169dd9f809630"
+              "121604f971fec25aa62f06aac5737bd0c139e7a07d41a6a48edcf2868f64b1f9"
+              "e31146e75116808c42530044fa45aa06db4459dda1d22ef646d4790d3769ba81"
+              "26b022115b28841829f1f40096ebc4acf10b9dad99fada24566f1b6ba0604336"
+              "5d5a508c80572e3c1486888e3f4cafcbe3a225b1bafe3fd211dcecfd635f2b32"
+              "c5de3ffe575d3c696e8cb27777cb148bdf285d75e8464065939853297de066e2"
+              "dbe384123dda057182fb2656f5c735cbc975e8fd07b1d019807174fc25b084fd"
+              "3ad0326314c796dde9346618e2ec7e29768b432206d2a99d212e17be19e8fb44"
+              "420bacf2a03e69291d")
+        opens("v4 §8: the published vector opens to its plaintext",
+              lambda: decrypt(vec, vec_pw), vec_pt)
+
+        # §5: inspect says what is knowable and not what is not.
+        text = _inspect(v4one)
+        check("v4: inspect names the version and the padded stream, not the plaintext length",
+              text.startswith("KEYM v4") and "padded bytes" in text
+              and f"{len(v4msg)} plaintext bytes" not in text)
+
+        # §6: the §7.2 subset excludes v4, and the writer says so.
+        v4page = encrypt(v4msg, pw, version=VERSION_V4, kdf_id=KDF_PBKDF2, **fast)
+        check("v4 §6: the WebCrypto profile names v4 as outside the subset",
+              any("0x04" in r for r in webcrypto_profile_violations(v4page)))
+        check("v4 §6: the self-extract writer refuses a v4 container",
+              _raises_usage(lambda: check_selfextract_policy(v4page)))
+        check("...and a v3 container with the same slot is inside it",
+              webcrypto_profile_violations(
+                  encrypt(v4msg, pw, version=VERSION_V3, kdf_id=KDF_PBKDF2, **fast)) == [])
+
+        # The CLI: --pad writes v4, decrypt opens it, and --v2 with --pad is
+        # one choice too many.
+        with _tempfile.TemporaryDirectory() as d:
+            src, dst, back = (os.path.join(d, n) for n in ("in.bin", "out.keym", "back.bin"))
+            open(src, "wb").write(v4msg)
+            code, _o, err = _cli(["encrypt", "--kdf", "pbkdf2", "--iterations", "600000",
+                                  "--pad", "--password", pw, "--in", src, "--out", dst])
+            check("v4 CLI: encrypt --pad writes a v4 container",
+                  code == 0 and open(dst, "rb").read()[4] == VERSION_V4)
+            code, out, _e = _cli(["inspect", "--in", dst])
+            check("v4 CLI: inspect reads it as v4", code == 0 and out.startswith("KEYM v4"))
+            code, _o, _e = _cli(["decrypt", "--password", pw, "--in", dst, "--out", back])
+            check("v4 CLI: decrypt recovers the bytes",
+                  code == 0 and open(back, "rb").read() == v4msg)
+            code, _o, err = _cli(["encrypt", "--kdf", "pbkdf2", "--iterations", "600000",
+                                  "--pad", "--v2", "--password", pw, "--in", src,
+                                  "--out", dst + ".2"])
+            check("v4 CLI: --pad with --v2 is refused in a sentence",
+                  code == 1 and "choose one" in err and not os.path.exists(dst + ".2"))
+
+    v4_crash = None
+    try:
+        _v4_section()
+    except (KeymError, UsageError, AssertionError, ValueError) as exc:
+        v4_crash = f"{type(exc).__name__}: {exc}"
+    check(f"the v4 section ran to completion{'' if v4_crash is None else f' ({v4_crash})'}",
+          v4_crash is None)
 
     # --- the multi-secret matrix -------------------------------------------
     #
@@ -5601,8 +5924,16 @@ def main(argv: Optional[list[str]] = None) -> int:
                            help="write a KEYM v2 container instead of v3 "
                                 "(older readers only; the slot table is then "
                                 "unauthenticated — see docs/FORMAT-V3-DESIGN.md §1.1)")
+            # v4 §6: MAY, not SHOULD, so the direction that costs bytes is the
+            # explicit one here too.
+            p.add_argument("--pad", action="store_true",
+                           help="write a KEYM v4 container: the payload is padded so "
+                                "the file's length does not state the length of what "
+                                "is inside (docs/FORMAT-V4-DESIGN.md). Costs up to 248 "
+                                "bytes plus under 7%%, and a reader older than v4 "
+                                "cannot open it")
             p.add_argument("--container-id",
-                           help="16-byte hex container id, v3 only "
+                           help="16-byte hex container id, v3 and v4 only "
                                 "(conformance testing only)")
 
 
@@ -5941,6 +6272,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         # A password and a share set are not alternatives to choose between.
         # §4.4's walk tries every slot against every secret it holds, so
         # supplying both is exactly how you find out which one still works.
+        if args.cmd == "encrypt" and args.v2 and args.pad:
+            raise UsageError("--v2 writes v2 and --pad writes v4; choose one")
         password = (args.password if (shares or prf_output)
                     else resolve_password(args.password,
                                           confirm=(args.cmd == "encrypt")))
@@ -5970,7 +6303,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 parallelism=args.parallelism,
                 salt=bytes.fromhex(args.salt) if args.salt else None,
                 master_key=bytes.fromhex(args.master_key) if args.master_key else None,
-                version=VERSION_V2 if args.v2 else VERSION,
+                version=(VERSION_V2 if args.v2
+                         else VERSION_V4 if args.pad else VERSION),
                 container_id=(bytes.fromhex(args.container_id)
                               if args.container_id else None),
             )

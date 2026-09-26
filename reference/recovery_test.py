@@ -48,13 +48,14 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# Keyed by container version, not by script: v2 and v3 are both keym2.py, which
+# Keyed by container version, not by script: v2, v3 and v4 are all keym2.py, which
 # is the point of §6's dispatch — an heir runs one command whatever year the
 # backup is from, and the script works out the rest.
 SCRIPTS = {
     1: ROOT / "reference" / "keym.py",
     2: ROOT / "reference" / "keym2.py",
     3: ROOT / "reference" / "keym2.py",
+    4: ROOT / "reference" / "keym2.py",
 }
 BRIDGE = ROOT / "reference" / "bridge.mjs"
 
@@ -188,7 +189,7 @@ def main() -> int:
         # v3 is what the app writes today, so it is the backup an heir is most
         # likely to be holding. This loop covered v1 and v2 only for as long as
         # v3 has been the default.
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             for kdf, cipher, kf in (
                 ("pbkdf2", "aes", None),
                 ("pbkdf2", "chacha", None),
@@ -748,7 +749,7 @@ def recovery_commands() -> None:
         check(False, f"RECOVERY.md command is executed by this runner: `{c}`",
               "add a case for it here rather than leaving it unchecked")
     for group, name in ((identify, "inspect"), (decrypt, "decrypt")):
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             owners = [c for c in group if version in claimed_versions(c)]
             check(len(owners) == 1,
                   f"exactly one {name} line on the page is for v{version}",
@@ -772,7 +773,7 @@ def recovery_commands() -> None:
         mykey.write_bytes(KEYFILE)
 
         # Step 2: the right script describes the file, the wrong one refuses.
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             backup.write_bytes(js_encrypt(version, SECRET, "pbkdf2", "aes", None, tmp).read_bytes())
             for c in identify:
                 r = run_doc_command(c, tmp, stdin="")
@@ -784,7 +785,7 @@ def recovery_commands() -> None:
 
         # Step 4: the line for this version, with the password on the prompt,
         # and again with the key file the page tells you to add.
-        for version in (1, 2, 3):
+        for version in (1, 2, 3, 4):
             for kf in (None, KEYFILE):
                 backup.write_bytes(js_encrypt(version, SECRET, "argon2id", "chained", kf, tmp,
                                               tag="-doc").read_bytes())
