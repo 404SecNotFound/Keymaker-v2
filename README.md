@@ -435,6 +435,24 @@ None of the three protects a compromised device. That is the next section.
 
 ## Security model
 
+**What has been audited, and what has not.** Everything in this table is a claim
+this project makes about its own code, so the scope of outside review is part of
+reading it. [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) is real and found real
+defects. Its scope line is *the KEYM v1 container, `src/lib/keymaker-crypto.ts`,
+the encryptor UI, the dice entropy tool, the CSP build pipeline, and CI.*
+
+**The container format this app writes today is not in that scope.** KEYM v2,
+v3 and v4, the authenticated slot table, v4's padded payload, Shamir share sets,
+passkey slots, paper parts, the audio carrier and the self-extracting page all
+came later. Parts of it have been through external review passes, and those
+findings are fixed, tested and traceable in the commit history, though nothing
+here records one for v4. None of it appears in that document, and no audit has
+been scoped to it.
+
+If you are deciding whether to trust a seed phrase to this, weigh that before the
+test counts. A large suite written by the same people who wrote the code is
+evidence about care, not about independence.
+
 | Property | Strength of guarantee |
 |---|---|
 | Data never leaves the device | **Auditable, not structural.** There is no telemetry and no code that transmits anything; the build is reproducible and the manifest signed, so you can confirm that rather than trust it. The CSP raises the cost — `connect-src 'none'` blocks `fetch`, XHR, WebSocket, EventSource and `sendBeacon` — but it does not make transmission impossible: `img-src 'self'` alone lets a URL carry data off the page, and a `<meta>` policy does not reach Web Workers at all. [What the policy does and does not do](docs/HOW-IT-WORKS.md#what-the-csp-does-not-do). |
@@ -577,21 +595,61 @@ npm run typecheck
 
 npm run test:crypto       # frozen IBTZ core — the legacy decryption contract
 npm run test:keymaker     # container suite — round-trips, tamper rejection, fixtures
+npm run test:keym2-dispatch  # version routing: v1 unchanged, v2 onward routed, failures generic
+npm run test:calibration  # the Argon2id cost the device measures, against synthetic devices
 npm run test:fuzz         # malformed containers against the v1 parser
 npm run test:fuzz2        # the v2 surfaces: slot table, armor, shares, self-extract
 npm run test:fuzz3        # the v3 slot table — every covered byte must be reported
+npm run test:shamir       # the Shamir core under a hostile caller, not a typo
 npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference
 npm run test:conformance2 # ...and the same for v2/v3, byte for byte
 npm run test:keym2        # the Python reference against itself
 npm run test:recovery     # the documented recovery procedure, end to end
-npm run test:palette      # every painted colour is one the design system names (needs build + a browser)
+
+# Focused suites, each holding one defect class fixed
+npm run test:wordlist             # the bundled EFF list against EFF's own checksum
+npm run test:password-policy      # the advisory password floor accepts and refuses the right secrets
+npm run test:recovery-envelopes   # KMPART2 names a corrupt part, a truncated tail, a mixed set
+npm run test:passkey-binding      # passkey enrolment's second tap is bound to the credential it made
+npm run test:secret-erase         # the page's key-file buffer is erased after a worker encrypt
+npm run test:secret-erase-core    # the crypto core erases its own copies of a secret
+npm run test:encrypt-input-erase  # the plaintext buffer is erased on the no-worker fallback
+npm run test:dearmor-whitespace   # armor ignores exactly the characters keym2.py ignores
+npm run test:audio-wav-bounds     # a truncated WAV is a typed error, never a RangeError
+npm run test:audio-malformed      # every malformed audio carrier is refused as a typed error
+npm run test:audio-decode-scale   # a carrier decoded through Web Audio comes back sample-exact
+npm run test:audio-wav-depths     # a WAV carrier at any common depth, at its own sample rate
+npm run test:sw-precache          # the service worker precaches a fresh shell and the whole kit
+npm run test:camera-progress      # the camera scanner's rule for when enough has been read
+npm run test:printout-check       # "Check this printout" says whether each code is from this backup
+npm run test:seal-verdict         # "sealed" needs the whole egress directive set, not connect-src
+npm run test:csp-egress           # the build refuses a page whose CSP leaves an egress path open
+
+# Release and documentation gates
+npm run test:release-notes        # release notes stay generated from docs/VERIFYING.md
+npm run test:release-recipe       # VERIFYING.md's release rebuild recipe sets what release.yml sets
+npm run test:release-gate         # deploy and release wait for every suite before signing
+npm run test:reproduced-manifest  # the sign job refuses a manifest no other runner reproduced
+npm run test:screenshots          # every README and walkthrough screenshot is one width
+npm run test:readme               # this list covers package.json, and the audit scope below is current
+
+# Against the built export (npm run build first)
+npm run test:verify-recipe  # VERIFYING.md's mirroring recipe, executed against out/
+npm run test:palette        # every painted colour is one the design system names (needs a browser)
+npm run test:icons          # every icon is a size the design system names (needs a browser)
 
 # Regenerating brand artifacts (after a palette, logo or hero-plate change)
 node scripts/make-icons.mjs    # the PWA icons, from public/logo.svg
 node scripts/make-og-card.mjs  # the social card, from scripts/og-card-template.html
 
 ```
+
+That list is not maintained by hand. `npm run test:readme` fails if
+`package.json` gains a `test:` script this section does not mention. It is the
+same drift that let RECOVERY.md claim the app wrote v2 for as long as v3 had
+been the default, and a list of commands nobody re-checks is a list that
+quietly stops being true.
 
 The browser suite runs against whichever layout it was built for. CI builds and
 serves it the way `deploy.yml` does, under `/Keymaker-v2/`; locally it defaults
@@ -745,7 +803,7 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
-| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Current Keymaker v2 audit, findings and disposition |
+| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | External review of the v1 core and the app shell. Read its scope line, it predates the v2, v3 and v4 format |
 | [`SECURITY-AUDIT-ITTYBITZ-2026-04.md`](SECURITY-AUDIT-ITTYBITZ-2026-04.md) | Historical IttyBitz audit — legacy core only |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 
