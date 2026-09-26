@@ -83,6 +83,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     deviceFit, calibrating, calibrationNote, runCalibration,
     cipherChoice, setCipherChoice, obscureFilename, setObscureFilename,
     decryptInfo, slotTableWarning, showDecryptedText, setShowDecryptedText,
+    hideSize, setHideSize, resealOffer, startReseal, resealNotice,
     useKeyFile, keyFile, setKeyFile, isLoading, unlockCostNotice,
     isCryptoAvailable, isQrModalOpen, setIsQrModalOpen, verifyOnly, setVerifyOnly,
     verifyResult, inheritanceOpen, setInheritanceOpen,
@@ -306,6 +307,22 @@ export function SecretForm({ mode }: { mode: Mode }) {
                 </span>
               )}
             </div>
+            {/* A re-seal in progress: what was carried here, and what was not. */}
+            {mode === 'encrypt' && resealNotice && (
+              <p
+                role="status"
+                data-testid="reseal-notice"
+                className="mb-2 rounded-lg bg-inset px-3 py-2 text-[12px] leading-snug text-muted-foreground"
+              >
+                <Info className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
+                Re-sealing.{" "}
+                {resealNotice === "text"
+                  ? "The recovered text is in the field below."
+                  : "Choose the file you just saved as the file to encrypt."}{" "}
+                Enter a password and seal to write a backup in today&apos;s format. Recovery
+                shares and passkeys are not carried over: enrol them again here if you want them.
+              </p>
+            )}
             <div className="relative">
               <Textarea
                 id="text-secret"
@@ -1076,6 +1093,40 @@ export function SecretForm({ mode }: { mode: Mode }) {
                     )}
 
                     {/*
+                      v4 §6: padding is the owner's choice, and the cost is
+                      stated where the choice is made. Off, the backup is the
+                      usual v3; on, a v4 whose length says only the bucket.
+                    */}
+                    {mode === "encrypt" && (
+                      <div className="space-y-2 rounded-lg border border-border p-3">
+                        <div className="flex items-center gap-3">
+                          <Switch
+                            id="hide-size"
+                            checked={hideSize}
+                            onCheckedChange={setHideSize}
+                          />
+                          <div className="flex items-center gap-1.5">
+                            <Label htmlFor="hide-size" className="cursor-pointer text-sm text-foreground">
+                              Hide the size of what is inside
+                            </Label>
+                            <InfoTip label="What does hiding the size do?">
+                              <p>
+                                Pads the backup so its length no longer says how long the
+                                secret is: a password, a 12-word seed and a 24-word seed
+                                become the same size (KEYM v4).
+                              </p>
+                            </InfoTip>
+                          </div>
+                        </div>
+                        <p className="text-[12px] leading-relaxed text-muted-foreground">
+                          Adds up to 248 bytes plus under 7%, so a paper vault may need more
+                          symbols, and older readers cannot open it. Off, the backup is the
+                          usual v3.
+                        </p>
+                      </div>
+                    )}
+
+                    {/*
                       §4.6 recovery shares. Encrypt only — a share set is
                       enrolled while writing, and the decrypt side has its own
                       entry path.
@@ -1294,6 +1345,29 @@ export function SecretForm({ mode }: { mode: Mode }) {
           have turned detectable tampering into a lost backup, which is the
           worse outcome; saying nothing would have wasted the detection. So:
           both. */}
+      {/* v3 §6: "moving a v2 backup to v3 means decrypting and re-encrypting
+          it, which is a user's decision and needs their secret." Put in front
+          of the user here, with the backup open, rather than left in a
+          document. The button carries the result to the Encrypt tab; the
+          ordinary seal does the rest, with a password the owner types. */}
+      {resealOffer && mode === 'decrypt' && (
+        <div
+          className="mt-2 animate-in fade-in-50 rounded-xl border border-border bg-inset p-3 text-[12px] leading-snug text-muted-foreground"
+          data-testid="reseal-offer"
+        >
+          <p>
+            {resealOffer === "keym-v2"
+              ? "This backup is KEYM v2. It opens, but its list of ways in is not authenticated, so a way in could be removed without anyone noticing; v3 closed that."
+              : "This backup is in an older format. It opens, but today's format authenticates its list of ways in and this one cannot."}{" "}
+            Re-sealing writes a new backup in today&apos;s format from what was just recovered.
+            Recovery shares and passkeys are not carried over.
+          </p>
+          <Button type="button" variant="outline" size="sm" className="mt-2" onClick={startReseal}>
+            Re-seal this backup
+          </Button>
+        </div>
+      )}
+
       {slotTableWarning && mode === 'decrypt' && (
         <div
           role="alert"
