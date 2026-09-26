@@ -22,6 +22,11 @@ changes, and every v2 and v3 container reads exactly as before.
   is written on request only, so the paper vault does not grow by default;
   the self-extracting page keeps its v3 container and its writer refuses v4.
   The app can already open a v4 backup; a switch to write one is separate.
+- **Releases carry a GitHub build attestation** on the tarball and on
+  `SHA256SUMS`, beside the Sigstore signature and not in place of it, so
+  `gh attestation verify` checks the same bytes with nothing but GitHub's CLI.
+  VERIFYING.md says what it asserts and why `--signer-workflow` is not
+  optional.
 
 ## Keymaker v2.3.0
 
