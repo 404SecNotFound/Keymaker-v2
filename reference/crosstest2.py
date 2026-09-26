@@ -201,13 +201,14 @@ def main() -> int:
         # corpus to v1 because the v1 reference cannot read a v2 container. The
         # v2 vectors would otherwise be written by the generator and checked by
         # nothing but the TypeScript that produced them.
-        print("\nFrozen v2 and v3 fixtures decrypted by the Python reference:")
+        print("\nFrozen v2, v3 and v4 fixtures decrypted by the Python reference:")
         corpus = ROOT / "scripts" / "fixtures" / "keymaker"
         meta = json.loads((corpus / "fixtures.json").read_text())
         fx_pw, fx_kf = meta["password"], bytes.fromhex(meta["keyFileHex"])
         v2_fixtures = [f for f in meta["fixtures"] if f.get("version") == 2]
         v3_fixtures = [f for f in meta["fixtures"] if f.get("version") == 3]
-        for f in v2_fixtures + v3_fixtures:
+        v4_fixtures = [f for f in meta["fixtures"] if f.get("version") == 4]
+        for f in v2_fixtures + v3_fixtures + v4_fixtures:
             blob = (corpus / f["file"]).read_bytes()
             # §7.2. A page is a container wearing an HTML document; unwrap it and
             # it takes exactly the same checks as every other frozen vector.
@@ -304,7 +305,7 @@ def main() -> int:
                 except keym2.KeymError:
                     check(f"{f['name']}: k-1 js-written shares still refused", True)
 
-        modern = v2_fixtures + v3_fixtures
+        modern = v2_fixtures + v3_fixtures + v4_fixtures
         shamir_fixtures = [f for f in modern if "shamir" in f]
         passkey_fixtures = [f for f in modern if "passkey" in f]
         stripped_fixtures = [f for f in modern if "strippedPasskey" in f]
@@ -312,14 +313,15 @@ def main() -> int:
         # Counted rather than assumed, because the corpus is append-only and a
         # fixture that silently stopped being listed would otherwise just stop
         # being tested. Update deliberately when the corpus grows.
-        check("v2+v3 corpus has all twenty-nine vectors: six share sets, six "
-              "passkeys, three password-and-shares, one page, one stripped table",
-              len(v2_fixtures) == 13 and len(v3_fixtures) == 16
+        check("v2+v3+v4 corpus has all thirty-six vectors: six share sets, six "
+              "passkeys, three password-and-shares, one page, one stripped table, "
+              "seven padded",
+              len(v2_fixtures) == 13 and len(v3_fixtures) == 16 and len(v4_fixtures) == 7
               and len(shamir_fixtures) == 6 and len(passkey_fixtures) == 6
               and len(both_fixtures) == 3
               and len([f for f in v2_fixtures if f.get("selfextract")]) == 1
               and len(stripped_fixtures) == 1,
-              f"found {len(v2_fixtures)} v2, {len(v3_fixtures)} v3, "
+              f"found {len(v2_fixtures)} v2, {len(v3_fixtures)} v3, {len(v4_fixtures)} v4, "
               f"{len(shamir_fixtures)} shamir, {len(passkey_fixtures)} passkey, "
               f"{len(both_fixtures)} both, {len(stripped_fixtures)} stripped")
 
@@ -1481,6 +1483,196 @@ def main() -> int:
         check("the reference reproduces the §8 vector", py_vec.hex() == VEC_HEX)
 
         # ---------------------------------------------------------------
+        # KEYM v4 (docs/FORMAT-V4-DESIGN.md)
+        # ---------------------------------------------------------------
+        #
+        # Byte equality is the whole test here. Two implementations that pad
+        # to different buckets, or put the prefix in a different place, or
+        # fill with something other than zeros, decode their own output
+        # perfectly and disagree only about the bytes — the same shape as
+        # §5.1's chunk-boundary defect, which is why the bytes are compared
+        # first and the round-trips second.
+        print("\nKEYM v4 byte equality (pinned salt, master key and container_id):")
+        for kdf in ("pbkdf2", "argon2id"):
+            for cipher in ("aes", "chacha", "chained"):
+                label = f"v4: {kdf} + {cipher}"
+                plaintext = b"v4 conformance payload \xf0\x9f\x97\x9d " * 40
+                src = tmp / "pt4.bin"
+                src.write_bytes(plaintext)
+                js_out = tmp / "js4.keym2"
+                try:
+                    bridge("encrypt2", "--password", PASSWORD, "--in", str(src),
+                           "--out", str(js_out), "--cipher", cipher, "--salt", SALT.hex(),
+                           "--master-key", MASTER_KEY.hex(), "--version", "4",
+                           "--container-id", CONTAINER_ID.hex(), *kdf_flags(kdf))
+                except BridgeError as e:
+                    check(label, False, f"js refused to write: {e}")
+                    continue
+                py_bytes = keym2.encrypt(
+                    plaintext, PASSWORD,
+                    kdf_id=keym2.KDF_ARGON2ID if kdf == "argon2id" else keym2.KDF_PBKDF2,
+                    cipher_id=CIPHER_IDS[cipher], iterations=PBKDF2_ITERS,
+                    salt=SALT, master_key=MASTER_KEY, container_id=CONTAINER_ID,
+                    version=keym2.VERSION_V4, enforce_write_policy=False, **ARGON2)
+                js_bytes = js_out.read_bytes()
+                if py_bytes == js_bytes:
+                    check(label, True)
+                else:
+                    n = min(len(py_bytes), len(js_bytes))
+                    at = next((i for i in range(n) if py_bytes[i] != js_bytes[i]), n)
+                    off = keym2.SLOT_TABLE_OFFSET_V3 + keym2.slot_len(CIPHER_IDS[cipher])
+                    where = ("header or slot" if at < off else f"payload+{at - off}")
+                    check(label, False,
+                          f"first difference at byte {at} ({where}); "
+                          f"py {len(py_bytes)}B, js {len(js_bytes)}B")
+
+        # §4.2 and §4.3 at every boundary the stream can sit on. The bucket
+        # arithmetic is where two writers would differ, and a plaintext just
+        # past the floor, just under one chunk and just over it are the inputs
+        # that tell padded_len's branches apart.
+        print("\nKEYM v4 stream boundaries (both write the same bucket):")
+        C = keym2.CHUNK_SIZE
+        for n, why in ((0, "empty"), (1, "one byte"), (248, "the last plaintext at the floor"),
+                       (249, "the first past the floor"), (300, "inside Padmé's first unit"),
+                       (C - 8, "a stream of exactly one chunk"),
+                       (C - 7, "the first stream needing two chunks"),
+                       (C, "one chunk of plaintext")):
+            plaintext = bytes((i * 31 + 7) & 0xFF for i in range(n))
+            src = tmp / "pt4.bin"
+            src.write_bytes(plaintext)
+            js_out = tmp / "js4.keym2"
+            bridge("encrypt2", "--password", PASSWORD, "--in", str(src),
+                   "--out", str(js_out), "--cipher", "aes", "--salt", SALT.hex(),
+                   "--master-key", MASTER_KEY.hex(), "--version", "4",
+                   "--container-id", CONTAINER_ID.hex(), *kdf_flags("pbkdf2"))
+            py_bytes = keym2.encrypt(
+                plaintext, PASSWORD, kdf_id=keym2.KDF_PBKDF2, cipher_id=keym2.CIPHER_AES,
+                iterations=PBKDF2_ITERS, salt=SALT, master_key=MASTER_KEY,
+                container_id=CONTAINER_ID, version=keym2.VERSION_V4,
+                enforce_write_policy=False)
+            js_bytes = js_out.read_bytes()
+            want = keym2.SLOT_TABLE_OFFSET_V3 + keym2.slot_len(keym2.CIPHER_AES)
+            P = keym2.padded_len(keym2.PAD_PREFIX_LEN + n)
+            want += P + keym2.TAG_LEN * max(1, -(-P // C))
+            check(f"{why} ({n} B): identical, {want} bytes", py_bytes == js_bytes
+                  and len(py_bytes) == want,
+                  f"py={len(py_bytes)} js={len(js_bytes)} want={want}")
+
+        # The §8 vector, pinned in both directions, as v3's is.
+        print("\nKEYM v4 published test vector (docs/FORMAT-V4-DESIGN.md §8):")
+        VEC4_PT = b"Keymaker fixture - KEYM v4 / argon2id / aes-256-gcm"
+        VEC4_HEX = (
+            "4b45594d040000000123456789abcdef0123456789abcdef012b57f2b782ba97"
+            "fe97cf4f18455c21e27d9286d749ce5aa5ff9c76a1fed44c1100010000000000"
+            "0000112233445566778899aabbccddeeff00112233445566778899aabbccddee"
+            "ff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea5"
+            "8ebba4ecc919f86d5c31a2e4a961d80c1b34957112c55e92ddb3ae733192a6e4"
+            "725beff0a4ed88081ff33e43e1706716c145d27e0a55965b2bb169dd9f809630"
+            "121604f971fec25aa62f06aac5737bd0c139e7a07d41a6a48edcf2868f64b1f9"
+            "e31146e75116808c42530044fa45aa06db4459dda1d22ef646d4790d3769ba81"
+            "26b022115b28841829f1f40096ebc4acf10b9dad99fada24566f1b6ba0604336"
+            "5d5a508c80572e3c1486888e3f4cafcbe3a225b1bafe3fd211dcecfd635f2b32"
+            "c5de3ffe575d3c696e8cb27777cb148bdf285d75e8464065939853297de066e2"
+            "dbe384123dda057182fb2656f5c735cbc975e8fd07b1d019807174fc25b084fd"
+            "3ad0326314c796dde9346618e2ec7e29768b432206d2a99d212e17be19e8fb44"
+            "420bacf2a03e69291d")
+        vec4_src = tmp / "vec4.bin"
+        vec4_src.write_bytes(VEC4_PT)
+        vec4_js = tmp / "vec4.keym2"
+        try:
+            bridge("encrypt2", "--password", VEC_PW, "--in", str(vec4_src),
+                   "--out", str(vec4_js), "--cipher", "aes", "--salt", VEC_SALT.hex(),
+                   "--master-key", VEC_MK.hex(), "--container-id", VEC_CID.hex(),
+                   "--version", "4",
+                   "--kdf", "argon2id", "--time", "3", "--mem", "65536", "--par", "4")
+            check("the TypeScript reproduces the v4 §8 vector",
+                  vec4_js.read_bytes().hex() == VEC4_HEX)
+        except BridgeError as e:
+            check("the TypeScript reproduces the v4 §8 vector", False, f"js refused: {e}")
+        py_vec4 = keym2.encrypt(VEC4_PT, VEC_PW, salt=VEC_SALT, master_key=VEC_MK,
+                                container_id=VEC_CID, version=keym2.VERSION_V4)
+        check("the reference reproduces the v4 §8 vector", py_vec4.hex() == VEC4_HEX)
+
+        # Round trips across the boundary, both ways, every cipher. The
+        # plaintext is random so a reader that returned a padding byte, or
+        # one byte short, cannot pass by coincidence.
+        print("\nKEYM v4 round-trips (py -> js and js -> py):")
+        for cipher in ("aes", "chacha", "chained"):
+            for n in (0, 200, 249, C - 7):
+                msg = os.urandom(n)
+                label = f"v4 {cipher}, {n} B"
+                py_c = keym2.encrypt(msg, PASSWORD, kdf_id=keym2.KDF_PBKDF2,
+                                     cipher_id=CIPHER_IDS[cipher], iterations=PBKDF2_ITERS,
+                                     version=keym2.VERSION_V4, enforce_write_policy=False)
+                py_path = tmp / "py4.keym2"
+                py_path.write_bytes(py_c)
+                js_pt = tmp / "js4.pt"
+                try:
+                    bridge("decrypt2", "--password", PASSWORD, "--in", str(py_path),
+                           "--out", str(js_pt))
+                    check(f"py -> js: {label}", js_pt.read_bytes() == msg,
+                          f"js returned {js_pt.stat().st_size} B for {n}")
+                except BridgeError as e:
+                    check(f"py -> js: {label}", False, str(e))
+                src = tmp / "pt4.bin"
+                src.write_bytes(msg)
+                js_c = tmp / "js4w.keym2"
+                bridge("encryptapp", "--password", PASSWORD, "--in", str(src),
+                       "--out", str(js_c), "--cipher", cipher, "--version", "4",
+                       *kdf_flags("pbkdf2"))
+                try:
+                    check(f"js -> py: {label}", keym2.decrypt(js_c.read_bytes(), PASSWORD) == msg)
+                except keym2.KeymError as e:
+                    check(f"js -> py: {label}", False, str(e))
+
+        # §4.4 across the boundary: streams the reference's own sealer builds
+        # and no conforming writer emits. The reference's selftest shows it
+        # refuses each of these; here the TypeScript must refuse the same
+        # files, or the two readers disagree about which containers exist.
+        print("\nKEYM v4 §4.4: the TypeScript refuses what the reference refuses:")
+        mk4 = bytes(range(32))
+        base4 = keym2.encrypt(b"a small secret", PASSWORD, kdf_id=keym2.KDF_PBKDF2,
+                              iterations=PBKDF2_ITERS, master_key=mk4,
+                              version=keym2.VERSION_V4, enforce_write_policy=False)
+        core4, _r4, pay4 = keym2.parse_container(base4)
+        head4 = base4[:len(base4) - len(pay4)]
+        good4 = keym2.pad_stream(b"a small secret")
+
+        def js_opens(container: bytes) -> bool:
+            path = tmp / "bad4.keym2"
+            path.write_bytes(container)
+            try:
+                bridge("decrypt2", "--password", PASSWORD, "--in", str(path),
+                       "--out", str(tmp / "bad4.pt"))
+                return True
+            except BridgeError:
+                return False
+
+        def py_opens(container: bytes) -> bool:
+            try:
+                keym2.decrypt(container, PASSWORD)
+                return True
+            except keym2.KeymError:
+                return False
+
+        for why, stream in (
+                ("the writer's own stream (the control)", good4),
+                ("step 1: shorter than the prefix", b"\x00" * 4),
+                ("step 3: a prefix past the stream", (1 << 40).to_bytes(8, "big") + good4[8:]),
+                ("step 4: another rule's bucket, zeros and all", good4 + b"\x00"),
+                ("step 4: one byte short of its bucket", good4[:-1]),
+                ("step 5: a non-zero padding byte", good4[:-1] + b"\x01")):
+            container = head4 + keym2._seal_stream(core4, mk4, stream)
+            expected = why.startswith("the writer")
+            py_ok, js_ok = py_opens(container), js_opens(container)
+            check(f"{why}: both {'open' if expected else 'refuse'}",
+                  py_ok == js_ok == expected,
+                  f"python {'opened' if py_ok else 'refused'}, js {'opened' if js_ok else 'refused'}")
+        check("a v4 container relabelled v3 is refused by both",
+              not py_opens(base4[:4] + b"\x03" + base4[5:])
+              and not js_opens(base4[:4] + b"\x03" + base4[5:]))
+
+        # ---------------------------------------------------------------
         # v3 §5.2 — the report each implementation makes about the table
         # ---------------------------------------------------------------
         #
@@ -1843,7 +2035,7 @@ def main() -> int:
     if failed:
         print("KEYM v2/v3 conformance FAILED — the implementations disagree.")
         return 1
-    print("Conformance passed: independent implementations agree on KEYM v2 and v3, "
+    print("Conformance passed: independent implementations agree on KEYM v2, v3 and v4, "
           "byte for byte.")
 
     return 0

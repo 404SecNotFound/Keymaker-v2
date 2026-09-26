@@ -60,13 +60,17 @@ Out of scope / known limitations:
 - **JavaScript memory hygiene is best-effort.** `secureErase` zero-fills
   buffers, but the JS engine/GC may retain copies of secrets. WebCrypto keys
   are non-extractable where the API allows.
-- **Deniability / traffic analysis.** Containers are not padded, so their
-  length reveals the plaintext's length exactly: the overhead is fixed for a
-  given format and settings, so container length determines plaintext length
-  byte for byte (FORMAT-V2-DESIGN §8). If the *size* of what is being protected is
-  itself sensitive, the cipher does not help. `docs/FORMAT-V2-DESIGN.md` §8
-  records why a padding scheme was deliberately left out of v2 rather than
-  bundled into it.
+- **Deniability / traffic analysis.** v1, v2 and v3 containers are not padded,
+  so their length reveals the plaintext's length exactly: the overhead is fixed
+  for a given format and settings, so container length determines plaintext
+  length byte for byte (FORMAT-V2-DESIGN §8). A **v4** container pads its
+  payload (`docs/FORMAT-V4-DESIGN.md`): its length reveals only which bucket
+  the plaintext falls in, and every plaintext up to 248 bytes gives the same
+  length. v4 is written on request, not by default, and padding is not
+  deniability: the container is still plainly a Keymaker container, its cipher
+  and slots are still readable, and a plaintext just over a bucket boundary is
+  still on the far side of it. If the *size* of what is being protected is
+  itself sensitive and the backup is not v4, the cipher does not help.
 - **Password strength.** Weak passwords undermine any KDF. Argon2id
   (memory-hard) is the default recommendation, but cannot fix a weak
   password.

@@ -38,6 +38,7 @@ import {
   KEYM2_HEADER_PEEK_BYTES,
   KEYM2_MAX_SLOTS,
   KEYM2_VERSION_V3,
+  KEYM2_VERSION_V4,
   keym2SlotCountOffset,
   keym2SlotTableOffset,
   isKeym2Binary,
@@ -112,6 +113,17 @@ check(detectFormat(v2) === "keym-v2", "a v2 container is detected as v2");
 // understood perfectly to the v1 path, which rejected it as "a newer KEYM
 // version" — a reader refusing a format it had already implemented.
 check(detectFormat(v3) === "keym-v3", "a v3 container is detected as v3");
+// v4 §6, the same lesson again: the parser and the dispatcher learn a version
+// together, or a container the module opens is refused as "newer".
+const v4 = await encryptKeym2(
+  enc.encode("v4 payload"),
+  PASSWORD,
+  null,
+  { kdf: FAST, cipher: CipherId.AES_256_GCM },
+  KEYM2_VERSION_V4
+);
+check(detectFormat(v4) === "keym-v4", "a v4 container is detected as v4");
+check(isKeym2Binary(v4), "isKeym2Binary accepts v4");
 check(!isKeym2Binary(v1), "isKeym2Binary rejects v1");
 check(isKeym2Binary(v2), "isKeym2Binary accepts v2");
 
@@ -133,6 +145,11 @@ check(openedV2.format === "keym-v2", "decryptData reports v2");
 const openedV3 = await decryptData(toArrayBuffer(v3), PASSWORD, null);
 check(dec.decode(openedV3.data) === "v3 payload", "decryptData opens v3 through the dispatch");
 check(openedV3.format === "keym-v3", "decryptData reports v3");
+
+const openedV4 = await decryptData(toArrayBuffer(v4), PASSWORD, null);
+check(dec.decode(openedV4.data) === "v4 payload", "decryptData opens v4 through the dispatch, padding removed");
+check(openedV4.format === "keym-v4", "decryptData reports v4");
+check(openedV4.slotTableAuthentic === true, "a v4 container carries v3's slot-table verdict");
 
 // v3 §5.2 travels with the plaintext or it is not a report. Two containers that
 // have never been touched, and the verdict distinguishes "sealed and intact"

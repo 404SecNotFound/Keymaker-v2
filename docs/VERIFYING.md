@@ -124,6 +124,29 @@ more variable than rebuilding the deployment; [section 2](#2-rebuild-it-yourself
 gives both commands, and `scripts/release-recipe-test.mjs` fails the build if
 the release one stops matching what `release.yml` actually sets.
 
+### A second statement about the same bytes, from GitHub
+
+Releases cut after this section was written also carry a GitHub **build
+attestation** on the tarball and on `SHA256SUMS`: SLSA provenance, signed
+through GitHub's own Sigstore instance by the same `release.yml` run that
+signed the manifest. It sits beside the signature above, not in place of it,
+and it needs nothing but GitHub's CLI:
+
+```bash
+gh attestation verify keymaker-v2.3.0.tar.gz \
+  --repo 404SecNotFound/Keymaker-v2 \
+  --signer-workflow 404SecNotFound/Keymaker-v2/.github/workflows/release.yml
+```
+
+What it asserts is that this exact file was produced by that workflow in this
+repository, which is the same claim the cosign command makes about the
+manifest. Two signers, two tools, one set of bytes. Pass `--signer-workflow`:
+without it the check accepts any workflow in the repository, which is the same
+loosening as `cosign verify-blob` without `--certificate-identity`. This is the
+convenience path; the manifest signature above is the one every release's
+notes print, and the one this document teaches first, because it does not
+depend on GitHub's CLI existing in the year you need it.
+
 ### What the signature actually asserts
 
 Keyless signing means there is no long-lived private key to store, rotate, or

@@ -1,5 +1,33 @@
 # Changelog
 
+## Unreleased
+
+One format revision, opt-in: **KEYM v4** (`docs/FORMAT-V4-DESIGN.md`), a delta
+on v3 whose only change is a padded payload. Nothing the app writes today
+changes, and every v2 and v3 container reads exactly as before.
+
+### Added
+- **KEYM v4: the container's length no longer states the plaintext's.** v2 §8
+  and v3 §7 both deferred this. The payload now seals a stream of an 8-byte
+  length prefix, the plaintext and zeros, padded to a bucket: 256 bytes for
+  anything up to 248, and Padmé above that, so a 12-word seed, a 24-word seed
+  and a password give the same file. Header, slots, MAC and chunking are
+  v3's; the version byte sits inside every AAD, so a relabelled container
+  opens in neither direction. Specified first, implemented in `keym2.py` from
+  the spec (`encrypt --pad`, and `inspect` says "padded bytes" rather than
+  claiming a plaintext length), then TypeScript; byte-identical across both,
+  three ciphers, both KDFs and every stream boundary; a published vector held
+  in both; seven frozen fixtures; RECOVERY.md's commands claim v4 and
+  `recovery_test.py` executes them against v4 containers the app wrote. v4
+  is written on request only, so the paper vault does not grow by default;
+  the self-extracting page keeps its v3 container and its writer refuses v4.
+  The app can already open a v4 backup; a switch to write one is separate.
+- **Releases carry a GitHub build attestation** on the tarball and on
+  `SHA256SUMS`, beside the Sigstore signature and not in place of it, so
+  `gh attestation verify` checks the same bytes with nothing but GitHub's CLI.
+  VERIFYING.md says what it asserts and why `--signer-workflow` is not
+  optional.
+
 ## Keymaker v2.3.0
 
 One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),

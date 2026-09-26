@@ -198,6 +198,9 @@ jobs:
     permissions:
       contents: read
       id-token: write
+      # For the build attestation below. Write access to attestations only;
+      # nothing in this job can touch the repository or the release.
+      attestations: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -267,6 +270,21 @@ jobs:
           tar -xzf "$GITHUB_WORKSPACE/keymaker-$TAG.tar.gz"
           cd "keymaker-$TAG"
           sha256sum -c SHA256SUMS
+
+      # GitHub's own build attestation, beside the Sigstore signature and not
+      # in place of it. The signature over SHA256SUMS is what docs/VERIFYING.md
+      # teaches and what the notes print. This is a second, independent
+      # statement about the same bytes — SLSA provenance, signed through
+      # GitHub's Sigstore instance by this run — that `gh attestation verify`
+      # checks with nothing but GitHub's CLI installed. The subjects are what a
+      # user downloads: the tarball and the manifest inside it. Attested after
+      # the archive has been unpacked and checked above, so a broken package is
+      # never attested.
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            keymaker-${{ github.ref_name }}.tar.gz
+            out/SHA256SUMS
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

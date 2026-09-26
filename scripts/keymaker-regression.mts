@@ -339,7 +339,8 @@ async function main() {
       // default lives here rather than in the JSON so the six v1 entries could
       // stay byte-identical when v2 was added — see the generator's note.
       const version = fx.version ?? 1;
-      const expected = version === 3 ? "keym-v3" : version === 2 ? "keym-v2" : "keym-v1";
+      const expected =
+        version === 4 ? "keym-v4" : version === 3 ? "keym-v3" : version === 2 ? "keym-v2" : "keym-v1";
       try {
         // §4.8. A `both` vector opens with the password *and* its shares and
         // with nothing less, so it goes through the v2 module with both; the
@@ -357,7 +358,7 @@ async function main() {
           `v${version} ${fx.name} (${fx.kdf} / ${fx.cipher}${fx.keyFile ? " / +keyfile" : ""})`
         );
         const expectedVerdict =
-          version === 3 ? (fx.slotTableAuthentic as boolean) : null;
+          version === 3 || version === 4 ? (fx.slotTableAuthentic as boolean) : null;
         check(
           res.slotTableAuthentic === expectedVerdict,
           `v${version} ${fx.name} — slot table reported as ` +
@@ -466,19 +467,20 @@ async function main() {
     const v1Count = meta.fixtures.filter((f: any) => (f.version ?? 1) === 1).length;
     const v2Count = meta.fixtures.filter((f: any) => f.version === 2).length;
     const v3Count = meta.fixtures.filter((f: any) => f.version === 3).length;
+    const v4Count = meta.fixtures.filter((f: any) => f.version === 4).length;
     const shamirCount = meta.fixtures.filter((f: any) => f.shamir).length;
     const passkeyCount = meta.fixtures.filter((f: any) => f.passkey).length;
     const pageCount = meta.fixtures.filter((f: any) => f.selfextract).length;
     const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
     const bothCount = meta.fixtures.filter((f: any) => f.both).length;
     check(
-      fixtureCount === 35 && v1Count === 6 && v2Count === 13 && v3Count === 16 &&
+      fixtureCount === 42 && v1Count === 6 && v2Count === 13 && v3Count === 16 && v4Count === 7 &&
         shamirCount === 6 && passkeyCount === 6 && pageCount === 1 && strippedCount === 1 &&
         bothCount === 3,
-      `corpus covers all three versions and all three ciphers per slot type ` +
-        `(${v1Count} v1 + ${v2Count} v2 + ${v3Count} v3, of which ${shamirCount} share ` +
+      `corpus covers all four versions and all three ciphers per slot type ` +
+        `(${v1Count} v1 + ${v2Count} v2 + ${v3Count} v3 + ${v4Count} v4, of which ${shamirCount} share ` +
         `sets, ${passkeyCount} passkey slots, ${bothCount} password-and-shares slots, ` +
-        `${pageCount} self-extracting page and ${strippedCount} stripped slot table = ${fixtureCount}/35)`
+        `${pageCount} self-extracting page and ${strippedCount} stripped slot table = ${fixtureCount}/42)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);
@@ -1180,6 +1182,93 @@ async function main() {
       sharesOnly.length === 1 && !/Argon2id/.test(sharesOnly[0]!) && /shares/.test(sharesOnly[0]!),
       `a share-only backup is not told its password uses Argon2id (got ${JSON.stringify(sharesOnly)})`
     );
+  }
+
+  // ---- 10. v4 padding (docs/FORMAT-V4-DESIGN.md) ----
+  //
+  // The reader's refusals (§4.4, every step) are exercised in
+  // reference/keym2.py's selftest against streams its own sealer produces, and
+  // the two implementations are held to the same bytes by crosstest2.py. What
+  // this section pins is the TypeScript on its own: the arithmetic the
+  // document publishes, the boundary every stream can sit on, and the one
+  // property v4 exists for — that the container's length stops moving with the
+  // plaintext's.
+  {
+    console.log("\n10. v4 padding");
+    const {
+      encryptKeym2,
+      decryptKeym2,
+      keym2PaddedLen,
+      keym2SlotLen,
+      KEYM2_CHUNK_SIZE,
+      KEYM2_VERSION_V3,
+      KEYM2_VERSION_V4,
+    } = await import("../src/lib/keym-v2.ts");
+    const aes = { kdf: PBKDF2_FAST, cipher: CipherId.AES_256_GCM };
+
+    for (const [n, want] of [
+      [8, 256], [256, 256], [257, 272], [300, 304], [1000, 1024], [1025, 1088],
+      [65544, 67584], [1048584, 1081344], [100000008, 100663296],
+    ] as const) {
+      check(keym2PaddedLen(n) === want, `v4 §4.2: paddedLen(${n}) === ${want}`);
+    }
+    let refused = false;
+    try {
+      keym2PaddedLen(7);
+    } catch {
+      refused = true;
+    }
+    check(refused, "v4 §4.2: a stream shorter than its prefix is not a length");
+    let monotone = true;
+    for (let n = 8; n < 70000; n++) {
+      if (keym2PaddedLen(n) < n || keym2PaddedLen(n + 1) < keym2PaddedLen(n)) monotone = false;
+    }
+    check(monotone, "v4 §4.2: paddedLen never shrinks and never steps down");
+
+    // §1.1 closed: one container length for every plaintext under the floor.
+    const floorLen = 57 + keym2SlotLen(CipherId.AES_256_GCM) + 256 + 16;
+    const lens = new Set<number>();
+    for (const L of [0, 1, 75, 150, 170, 247, 248]) {
+      lens.add((await encryptKeym2(new Uint8Array(L), PASSWORD, null, aes, KEYM2_VERSION_V4)).length);
+    }
+    check(
+      lens.size === 1 && lens.has(floorLen),
+      `v4 §4.3: every plaintext up to 248 bytes is a ${floorLen}-byte container (got ${[...lens].join(", ")})`
+    );
+    check(
+      (await encryptKeym2(new Uint8Array(249), PASSWORD, null, aes, KEYM2_VERSION_V4)).length === floorLen + 16,
+      "v4 §4.3: 249 bytes is the first plaintext past the floor"
+    );
+    const v3a = (await encryptKeym2(new Uint8Array(75), PASSWORD, null, aes, KEYM2_VERSION_V3)).length;
+    const v3b = (await encryptKeym2(new Uint8Array(150), PASSWORD, null, aes, KEYM2_VERSION_V3)).length;
+    check(v3b - v3a === 75, "v2 §8 still holds for v3: its lengths differ by the plaintext's");
+
+    // Every boundary a stream can sit on: the floor, one full chunk, and the
+    // first byte that needs a second chunk. Random bytes, so a reader that
+    // returned padding or dropped a tail byte cannot pass by coincidence.
+    for (const L of [0, 1, 248, 249, 256, 257, KEYM2_CHUNK_SIZE - 8, KEYM2_CHUNK_SIZE - 7]) {
+      // In 64 KiB slices: getRandomValues refuses a larger buffer in one call.
+      const msg = new Uint8Array(L);
+      for (let at = 0; at < L; at += 65536) webcrypto.getRandomValues(msg.subarray(at, Math.min(L, at + 65536)));
+      const ct = await encryptKeym2(msg, PASSWORD, null, aes, KEYM2_VERSION_V4);
+      const got = await decryptKeym2(ct, PASSWORD, null);
+      check(
+        got.data.length === L && got.data.every((b, i) => b === msg[i]) && got.slotTableAuthentic === true,
+        `v4: a ${L}-byte plaintext round-trips exactly, with v3's table verdict`
+      );
+    }
+
+    // §2: the version byte is inside every AAD, so a relabelled container opens
+    // in neither direction. This is what makes a version byte, rather than a
+    // flag, the right place for a change to what the plaintext bytes mean.
+    const four = await encryptKeym2(enc.encode("relabel me"), PASSWORD, null, aes, KEYM2_VERSION_V4);
+    const three = await encryptKeym2(enc.encode("relabel me"), PASSWORD, null, aes, KEYM2_VERSION_V3);
+    const asThree = Uint8Array.from(four);
+    asThree[4] = KEYM2_VERSION_V3;
+    const asFour = Uint8Array.from(three);
+    asFour[4] = KEYM2_VERSION_V4;
+    await rejects("v4 §2: a v4 container relabelled v3 is refused", () => decryptKeym2(asThree, PASSWORD, null));
+    await rejects("v4 §2: a v3 container relabelled v4 is refused", () => decryptKeym2(asFour, PASSWORD, null));
   }
 
   // ---- Summary ----

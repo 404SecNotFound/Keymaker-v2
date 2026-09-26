@@ -1990,6 +1990,8 @@ older reader, and `--capacity` still overrides the size.
   standing between a mistake and a permanent one. That decision is now settled
   rather than open — the format is frozen (§9), so padding is a v3 question.
   README.md states the leak plainly rather than leaving it to be discovered.
+  *Answered by [FORMAT-V4-DESIGN.md](FORMAT-V4-DESIGN.md): v4 pads the payload,
+  on request. v2 and v3 containers are exactly as this bullet says.*
 
 - **The slot table is authenticated slot-by-slot, not as a whole.** §5.3 keeps
   `slot_count` out of every AAD so a table stays editable by someone holding one

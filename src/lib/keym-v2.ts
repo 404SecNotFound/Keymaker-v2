@@ -66,6 +66,26 @@ import { dropIgnorable, stripIgnorable } from "./keym-text";
 
 export const KEYM2_VERSION_V2 = 0x02;
 export const KEYM2_VERSION_V3 = 0x03;
+/** v4 (FORMAT-V4-DESIGN.md): v3's header over a padded payload. */
+export const KEYM2_VERSION_V4 = 0x04;
+
+/** v2, v3 or v4: the versions this module reads and writes. */
+function isKnownKeym2Version(version: number): boolean {
+  return version === KEYM2_VERSION_V2 || version === KEYM2_VERSION_V3 || version === KEYM2_VERSION_V4;
+}
+
+/**
+ * v3 §3 and v4 §2: a `container_id` in the core header and a MAC over the slot
+ * table. Everything but v2 has both, and v4 changed neither.
+ */
+export function keym2HasAuthenticatedTable(version: number): boolean {
+  return version === KEYM2_VERSION_V3 || version === KEYM2_VERSION_V4;
+}
+
+/** v4 §4: the payload seals a length-prefixed, zero-padded stream. */
+export function keym2IsPadded(version: number): boolean {
+  return version === KEYM2_VERSION_V4;
+}
 
 /**
  * The version this implementation *writes* by default.
@@ -92,6 +112,11 @@ export const KEYM2_VERSION_V3 = 0x03;
  * Nothing rewrites an existing backup. v1 and v2 containers stay readable
  * indefinitely (v3 §6), and moving one to v3 means decrypting and re-encrypting
  * it, which is the owner's decision and needs their secret.
+ *
+ * v4 (FORMAT-V4-DESIGN.md) pads the payload and is written on request only:
+ * pass `KEYM2_VERSION_V4`. v4 §6 says MAY, not SHOULD, and leaves this default
+ * alone, because the cost lands on the writer's medium — on paper, more bytes
+ * are more symbols — and because the §7.2 page's reader stops at v3.
  */
 export const KEYM2_VERSION = KEYM2_VERSION_V3;
 
@@ -120,7 +145,7 @@ const SLOT_TABLE_OFFSET_V3 = 57;
  */
 function coreHeaderLen(version: number): number {
   if (version === KEYM2_VERSION_V2) return KEYM2_CORE_HEADER_LEN;
-  if (version === KEYM2_VERSION_V3) return CORE_HEADER_LEN_V3;
+  if (keym2HasAuthenticatedTable(version)) return CORE_HEADER_LEN_V3;
   reject();
 }
 
@@ -130,7 +155,7 @@ export function keym2SlotCountOffset(version: number): number {
 
 export function keym2SlotTableOffset(version: number): number {
   if (version === KEYM2_VERSION_V2) return SLOT_TABLE_OFFSET;
-  if (version === KEYM2_VERSION_V3) return SLOT_TABLE_OFFSET_V3;
+  if (keym2HasAuthenticatedTable(version)) return SLOT_TABLE_OFFSET_V3;
   reject();
 }
 
@@ -372,8 +397,8 @@ function packCoreHeader(
   version: number = KEYM2_VERSION_V2,
   containerId: Uint8Array = EMPTY
 ): Uint8Array {
-  if (version === KEYM2_VERSION_V3 && containerId.length !== CONTAINER_ID_LEN) {
-    throw new KeymakerError("invalid-input", "KEYM v3 requires a 16-byte container id.");
+  if (keym2HasAuthenticatedTable(version) && containerId.length !== CONTAINER_ID_LEN) {
+    throw new KeymakerError("invalid-input", "KEYM v3 and v4 require a 16-byte container id.");
   }
   if (version === KEYM2_VERSION_V2 && containerId.length !== 0) {
     throw new KeymakerError("invalid-input", "KEYM v2 containers have no container id.");
@@ -384,7 +409,7 @@ function packCoreHeader(
   header[5] = cipher;
   header[6] = flags;
   // byte 7 stays zero — §3 reserved
-  if (version === KEYM2_VERSION_V3) header.set(containerId, 8);
+  if (keym2HasAuthenticatedTable(version)) header.set(containerId, 8);
   return header;
 }
 
@@ -435,9 +460,10 @@ export function parseKeym2CoreHeader(data: Uint8Array): Keym2CoreHeader {
     if (data[i] !== MAGIC[i]) reject();
   }
   const version = data[4] as number;
-  // v3 §6: a v3 reader MUST open v1, v2 and v3. v1 has its own module; here the
-  // bound is v2 or v3, and anything else is an unknown version.
-  if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) reject();
+  // v3 §6: a v3 reader MUST open v1, v2 and v3, and v4 §6 adds v4. v1 has its
+  // own module; here the bound is v2, v3 or v4, and anything else is an unknown
+  // version — which is how a v3-only reader refuses 0x04, as v4 §6 relies on.
+  if (!isKnownKeym2Version(version)) reject();
   if (data.length < keym2SlotTableOffset(version)) reject();
 
 
@@ -459,7 +485,7 @@ export function parseKeym2CoreHeader(data: Uint8Array): Keym2CoreHeader {
     flags,
     tagOverhead: tagOverheadFor(cipher),
     version,
-    containerId: version === KEYM2_VERSION_V3 ? data.slice(8, 8 + CONTAINER_ID_LEN) : EMPTY,
+    containerId: keym2HasAuthenticatedTable(version) ? data.slice(8, 8 + CONTAINER_ID_LEN) : EMPTY,
   };
 }
 
@@ -510,7 +536,7 @@ function parseKeym2Container(data: Uint8Array): Keym2Container {
     // Read at a fixed offset, deliberately without consulting `slot_count` —
     // that is why v3 §3 puts the MAC *before* the table rather than after it.
     slotTableMac:
-      core.version === KEYM2_VERSION_V3
+      keym2HasAuthenticatedTable(core.version)
         ? data.subarray(SLOT_TABLE_MAC_OFFSET_V3, SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN)
         : null,
   };
@@ -1056,6 +1082,70 @@ function nonceFor(index: number, isFinal: boolean): Uint8Array {
  * so only a byte-equality check between implementations can catch a
  * disagreement. A round-trip test inside one implementation cannot.
  */
+// ---------------------------------------------------------------------------
+// v4 §4: the padded stream
+// ---------------------------------------------------------------------------
+
+/** v4 §4.1, `uint64_be(L)`. */
+const PAD_PREFIX_LEN = 8;
+/** v4 §4.3, the smallest stream. */
+const PAD_FLOOR = 256;
+
+/** floor(log2 n) for a safe integer, exactly. `Math.log2` rounds 2^k − 1 up to
+ *  k for large k, which would put such a length in the wrong bucket. */
+function floorLog2(n: number): number {
+  return n.toString(2).length - 1;
+}
+
+/**
+ * v4 §4.2. The stream length for a prefixed plaintext of `n = 8 + L` bytes:
+ * the floor at or below it, and above it Padmé — `n` rounded up to a multiple
+ * of `2^(E − S)`, `E = floor(log2 n)`, `S = floor(log2 E) + 1`. A function of
+ * the format, like the chunk size; the reader verifies it rather than trusting
+ * the writer's arithmetic.
+ */
+export function keym2PaddedLen(n: number): number {
+  if (!Number.isSafeInteger(n) || n < PAD_PREFIX_LEN) {
+    throw new KeymakerError("invalid-input", "a padded stream carries at least its 8-byte prefix.");
+  }
+  if (n <= PAD_FLOOR) return PAD_FLOOR;
+  const e = floorLog2(n);
+  const s = floorLog2(e) + 1;
+  const unit = 2 ** (e - s);
+  return Math.ceil(n / unit) * unit;
+}
+
+/** v4 §4.1. Prefix, plaintext, zeros. A fresh buffer is already zero. */
+function padStream(plaintext: Uint8Array): Uint8Array {
+  const n = PAD_PREFIX_LEN + plaintext.length;
+  const stream = new Uint8Array(keym2PaddedLen(n));
+  new DataView(stream.buffer, stream.byteOffset, PAD_PREFIX_LEN).setBigUint64(0, BigInt(plaintext.length), false);
+  stream.set(plaintext, PAD_PREFIX_LEN);
+  return stream;
+}
+
+/**
+ * v4 §4.4, its six steps in its order. Every failure is §6's generic
+ * rejection. Step 3 runs on the 64-bit value before it is narrowed to a
+ * number, so a prefix no conforming writer emits cannot be led past
+ * `Number.MAX_SAFE_INTEGER` into a length that compares as something else.
+ *
+ * The zero check has no cryptographic job — the AEAD already covers every
+ * byte — and exists so the two implementations agree on every input (§4.5).
+ */
+function unpadStream(stream: Uint8Array): Uint8Array {
+  if (stream.length < PAD_PREFIX_LEN) reject();
+  const claimed = new DataView(stream.buffer, stream.byteOffset, stream.byteLength).getBigUint64(0, false);
+  if (claimed > BigInt(stream.length - PAD_PREFIX_LEN)) reject();
+  const length = Number(claimed);
+  if (stream.length !== keym2PaddedLen(PAD_PREFIX_LEN + length)) reject();
+  const end = PAD_PREFIX_LEN + length;
+  let nonzero = 0;
+  for (let i = end; i < stream.length; i++) nonzero |= stream[i] as number;
+  if (nonzero !== 0) reject();
+  return stream.slice(PAD_PREFIX_LEN, end);
+}
+
 function chunkCount(plaintextLength: number): number {
   return Math.max(1, Math.ceil(plaintextLength / KEYM2_CHUNK_SIZE));
 }
@@ -1486,8 +1576,8 @@ export async function encryptKeym2(
   crypto.getRandomValues(masterKey);
   // v3 §4. Drawn once, here, and never changed for the life of the file — not
   // on enrolment, not on revocation. Not a secret, so it is not erased.
-  const containerId = version === KEYM2_VERSION_V3 ? new Uint8Array(CONTAINER_ID_LEN) : EMPTY;
-  if (version === KEYM2_VERSION_V3) crypto.getRandomValues(containerId);
+  const containerId = keym2HasAuthenticatedTable(version) ? new Uint8Array(CONTAINER_ID_LEN) : EMPTY;
+  if (keym2HasAuthenticatedTable(version)) crypto.getRandomValues(containerId);
   try {
     return await encryptKeym2WithExplicitSecrets(
       plaintext,
@@ -1556,7 +1646,7 @@ export async function encryptKeym2WithExplicitSecrets(
   }
   validateKdfParams(options.kdf, "encrypt");
 
-  if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) {
+  if (!isKnownKeym2Version(version)) {
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
   }
   const prefix = packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt);
@@ -1593,7 +1683,7 @@ async function writeKeym2(
   prefix: Uint8Array,
   slotKey: () => Promise<Uint8Array>
 ): Promise<Uint8Array> {
-  if (version !== KEYM2_VERSION_V2 && version !== KEYM2_VERSION_V3) {
+  if (!isKnownKeym2Version(version)) {
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
   }
   const coreBytes = packCoreHeader(cipher, 0, version, containerId);
@@ -1620,23 +1710,28 @@ async function writeKeym2(
     secureErase(key);
   }
 
+  // v4 §4.1: what gets chunked is the padded stream, not the plaintext. Built
+  // once, here, and erased on the way out, since it is a second copy of the
+  // plaintext with a length prefix and zeros attached.
+  const stream = keym2IsPadded(version) ? padStream(plaintext) : plaintext;
   const keys = await payloadKeys(masterKey, cipher);
   try {
-    const count = chunkCount(plaintext.length);
+    const count = chunkCount(stream.length);
     // v3 §3 puts the MAC between slot_count and the table. It is computed over
     // the finished record, so the table has to exist before the head does.
     const head: Uint8Array[] = [coreBytes, new Uint8Array([1])];
-    if (version === KEYM2_VERSION_V3) {
+    if (keym2HasAuthenticatedTable(version)) {
       head.push(await computeSlotTableMac(coreBytes, [record], masterKey));
     }
     const parts: Uint8Array[] = [...head, record];
     for (let i = 0; i < count; i++) {
-      const chunk = plaintext.subarray(i * KEYM2_CHUNK_SIZE, (i + 1) * KEYM2_CHUNK_SIZE);
+      const chunk = stream.subarray(i * KEYM2_CHUNK_SIZE, (i + 1) * KEYM2_CHUNK_SIZE);
       parts.push(await seal(cipher, keys, nonceFor(i, i === count - 1), chunk, coreBytes));
     }
     return concat(parts);
   } finally {
     secureErase(keys.chachaKey);
+    if (stream !== plaintext) secureErase(stream);
   }
 }
 
@@ -1677,7 +1772,7 @@ export async function encryptKeym2WithSharesRequired(
   const masterKey = explicit?.masterKey ?? crypto.getRandomValues(new Uint8Array(MASTER_KEY_LEN));
   const containerId =
     explicit?.containerId ??
-    (version === KEYM2_VERSION_V3 ? crypto.getRandomValues(new Uint8Array(CONTAINER_ID_LEN)) : EMPTY);
+    (keym2HasAuthenticatedTable(version) ? crypto.getRandomValues(new Uint8Array(CONTAINER_ID_LEN)) : EMPTY);
   const shareSecret = explicit?.shareSecret ?? crypto.getRandomValues(new Uint8Array(SHARE_VALUE_LEN));
   if (salt.length !== SALT_LEN || masterKey.length !== MASTER_KEY_LEN || shareSecret.length !== SHARE_VALUE_LEN) {
     throw new KeymakerError("invalid-input", "KEYM v2 requires 32-byte salts and secrets.");
@@ -1817,7 +1912,7 @@ export async function addShamirSlotKeym2(
   let tableMac: Uint8Array | null = null;
   try {
     record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
-    if (parsed.core.version === KEYM2_VERSION_V3) {
+    if (keym2HasAuthenticatedTable(parsed.core.version)) {
       tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
     }
   } finally {
@@ -1972,7 +2067,7 @@ export async function addPasskeySlotKeym2(
   let tableMac: Uint8Array | null = null;
   try {
     record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
-    if (parsed.core.version === KEYM2_VERSION_V3) {
+    if (keym2HasAuthenticatedTable(parsed.core.version)) {
       tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
     }
   } finally {
@@ -2133,9 +2228,20 @@ export async function decryptKeym2(
     // and the originals. Only the caller's copy should survive — on a 100 MB
     // file the difference is a second complete copy of the plaintext sitting
     // in memory until the collector happens to reach it.
-    const data = concat(out);
+    const stream = concat(out);
     for (const chunk of out) secureErase(chunk);
     out.length = 0;
+    // v4 §4.4: only now, with every chunk verified and the final flag seen.
+    // `unpadStream` copies the plaintext out; the stream — a second copy, with
+    // the padding attached — is erased whether or not the checks pass.
+    let data = stream;
+    if (keym2IsPadded(parsed.core.version)) {
+      try {
+        data = unpadStream(stream);
+      } finally {
+        secureErase(stream);
+      }
+    }
     return { data, keyFileUsed: slot.keyFileUsed, core: parsed.core, slot, slotTableAuthentic };
 
   } finally {
@@ -2473,7 +2579,7 @@ export function inspectKeym2(
 }
 
 /**
- * Does this look like a binary container this module handles — v2 or v3?
+ * Does this look like a binary container this module handles — v2, v3 or v4?
  *
  * The versions are named rather than compared against `KEYM2_VERSION`. Written
  * that way this asked "is this the version we currently *write*", which is a
@@ -2484,5 +2590,5 @@ export function inspectKeym2(
 export function isKeym2Binary(data: Uint8Array): boolean {
   if (data.length < 5) return false;
   for (let i = 0; i < MAGIC.length; i++) if (data[i] !== MAGIC[i]) return false;
-  return data[4] === KEYM2_VERSION_V2 || data[4] === KEYM2_VERSION_V3;
+  return isKnownKeym2Version(data[4] as number);
 }

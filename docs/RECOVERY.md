@@ -38,13 +38,14 @@ its dependencies, or any part of the JavaScript.
 
 **There are two scripts because there are two generations of the format.**
 `keym2.py` reads everything Keymaker writes today: **v3**, the current default,
-and **v2** before it. `keym.py` reads **v1**, which came first. All three stay
+**v4**, which it writes when asked to hide the length of what is inside, and
+**v2** before them. `keym.py` reads **v1**, which came first. All four stay
 readable forever; neither script reads the other's generation, and step 2 tells
 you which one you have. Keep both — an old backup needs the old script, and *old
 backups are the ones most likely to need this page.*
 
-You do not need to work out whether you have v2 or v3. `keym2.py` reads both and
-says which it found; the distinction matters to the format, not to you.
+You do not need to work out whether you have v2, v3 or v4. `keym2.py` reads all
+three and says which it found; the distinction matters to the format, not to you.
 
 **If you enrolled a passkey, it will not help you here.** A passkey is quick
 access, not a backup. It only answers at the website it was created on, so if
@@ -95,12 +96,12 @@ If your backup is **text**, the first six characters say it outright:
 
 | Starts with | Version | Script |
 |---|---|---|
-| `keym2:` | v3 or v2 | `keym2.py` |
+| `keym2:` | v4, v3 or v2 | `keym2.py` |
 | `KEYM1:` | v1 | `keym.py` |
 
-**`keym2:` covers both v3 and v2 on purpose.** The prefix names the generation,
+**`keym2:` covers v4, v3 and v2 on purpose.** The prefix names the generation,
 not the revision, so a backup written today and one written before v3 existed
-look identical here — and both open with the same script. If you want to know
+look identical here — and all of them open with the same script. If you want to know
 which one you are holding, `keym2.py inspect` says so.
 
 Note the case. `keym2:` and `KEYM1:` differ by one letter and it is deliberate —
@@ -110,7 +111,7 @@ If your backup is a **file**, ask each script in turn. Neither needs a password
 and neither can damage the file:
 
 ```bash
-python3 keym2.py inspect --in backup.keym     # v3 or v2
+python3 keym2.py inspect --in backup.keym     # v4, v3 or v2
 python3 keym.py  inspect --in backup.keym     # v1
 ```
 
@@ -160,7 +161,7 @@ and whether a key file is required, before doing anything else.
 Those values are authenticated: if decryption later succeeds, they were not
 tampered with. Until then, treat them as claims the file makes about itself.
 
-**About `slots`.** A v3 or v2 container can hold up to eight ways of unlocking the
+**About `slots`.** A v4, v3 or v2 container can hold up to eight ways of unlocking the
 same data, and any one of them opens it. Containers written by the app have one
 for the password, plus one for recovery shares or a passkey if either was set
 up when it was made. If yours says more than one, any of the secrets listed will
@@ -169,7 +170,7 @@ work, and you only need one of them.
 ## Step 4 — Decrypt
 
 ```bash
-python3 keym2.py decrypt --in backup.keym --out recovered.txt     # v3 or v2
+python3 keym2.py decrypt --in backup.keym --out recovered.txt     # v4, v3 or v2
 python3 keym.py  decrypt --in backup.keym --out recovered.txt     # v1
 ```
 

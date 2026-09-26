@@ -29,6 +29,8 @@ import {
   KEYM2_VERSION,
   KEYM2_VERSION_V2,
   KEYM2_VERSION_V3,
+  KEYM2_VERSION_V4,
+  keym2HasAuthenticatedTable,
   keym2SlotCountOffset,
   keym2SlotTableOffset,
   keym2SlotLen,
@@ -380,7 +382,7 @@ export function ContainerInspector({
             <span
               className={cn(
                 "inline-block h-1.5 w-1.5 rounded-full",
-                versionShown === KEYM2_VERSION_V3 ? "bg-success" : "bg-warning"
+                keym2HasAuthenticatedTable(versionShown) ? "bg-success" : "bg-warning"
               )}
               aria-hidden="true"
             />
@@ -431,13 +433,16 @@ export function ContainerInspector({
 
           <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
             <Check>Header declares {parsed.cipherLabel}</Check>
-            {parsed.version === KEYM2_VERSION_V3 ? (
-              <Check>v3 authenticates the slot table on unlock</Check>
+            {keym2HasAuthenticatedTable(parsed.version) ? (
+              <Check>v{parsed.version} authenticates the slot table on unlock</Check>
             ) : (
               <div className="flex items-center gap-2 text-[12px] text-warning/90">
                 <TriangleAlert className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                 <span>v2 slot table is not authenticated — v3 added that</span>
               </div>
+            )}
+            {parsed.version === KEYM2_VERSION_V4 && (
+              <Check>v4 pads the payload, so the length does not state the plaintext&apos;s</Check>
             )}
             <Check>
               Opens without this app —{" "}
