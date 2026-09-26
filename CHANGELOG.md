@@ -1,10 +1,15 @@
 # Changelog
 
-## Unreleased
+## Keymaker v2.3.0
+
+One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),
+which a container carries only when its owner chooses it. Every container
+v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
+(three vectors are added), and both parity gates pass.
 
 One format revision, opt-in: **KEYM v4** (`docs/FORMAT-V4-DESIGN.md`), a delta
-on v3 whose only change is a padded payload. Nothing the app writes today
-changes, and every v2 and v3 container reads exactly as before.
+on v3 whose only change is a padded payload. Nothing the app writes by
+default changes, and every v2 and v3 container reads exactly as before.
 
 ### Added
 - **KEYM v4: the container's length no longer states the plaintext's.** v2 §8
@@ -39,15 +44,6 @@ changes, and every v2 and v3 container reads exactly as before.
   `gh attestation verify` checks the same bytes with nothing but GitHub's CLI.
   VERIFYING.md says what it asserts and why `--signer-workflow` is not
   optional.
-
-## Keymaker v2.3.0
-
-One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),
-which a container carries only when its owner chooses it. Every container
-v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
-(three vectors are added), and both parity gates pass.
-
-### Added
 - **Recovery strips scan back in.** The paper vault has always printed a QR on
   every recovery strip, and nothing in the app could read one into the shares
   box. The shares box now has *Scan share QR images*, and a scan on the Decrypt
