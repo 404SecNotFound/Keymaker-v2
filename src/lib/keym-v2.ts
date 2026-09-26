@@ -1204,9 +1204,12 @@ export interface Keym2Secrets {
  * incorrect" for a share set that was never read. Same failure, same answer as
  * `loadHashWasm` and `loadNoble`: a typed `dependency-unavailable` error, and the
  * rejection is not cached, so a later attempt imports again.
+ *
+ * Exported, like keymaker-crypto.ts's `loadKeym2`, so nothing else needs a bare
+ * `import()` of the Shamir module; scripts/secret-erase-core-test.mjs fails on one.
  */
 let shamirModulePromise: Promise<typeof import("./keym-v2-shamir")> | null = null;
-function loadShamir(): Promise<typeof import("./keym-v2-shamir")> {
+export function loadShamir(): Promise<typeof import("./keym-v2-shamir")> {
   if (!shamirModulePromise) {
     shamirModulePromise = import("./keym-v2-shamir").catch((cause: unknown) => {
       shamirModulePromise = null;

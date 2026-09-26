@@ -42,6 +42,7 @@ import {
   loadHashWasm,
   type KeymakerOptions,
   type DetectedFormat,
+  loadKeym2,
 } from "./keymaker-crypto";
 import type { Argon2Sample } from "./kdf-calibration";
 
@@ -246,7 +247,7 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
           // §4.6. Enrolled here rather than in the page so the share secret and
           // the coefficients are generated, used and dropped inside the worker's
           // heap — the same reason the derivation lives here.
-          const { addShamirSlotKeym2 } = await import("./keym-v2");
+          const { addShamirSlotKeym2 } = await loadKeym2();
           const enrolled = await addShamirSlotKeym2(
             new Uint8Array(out),
             { password: req.password, keyFile: keyFileForSlots },
@@ -265,7 +266,7 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
           // container has to exist before a slot can be added to it. The rule
           // that a passkey never travels alone is satisfied structurally here —
           // `out` already carries the passphrase slot encryptContainer wrote.
-          const { addPasskeySlotKeym2 } = await import("./keym-v2");
+          const { addPasskeySlotKeym2 } = await loadKeym2();
           const enrolled = await addPasskeySlotKeym2(
             new Uint8Array(out),
             { password: req.password, keyFile: keyFileForSlots },

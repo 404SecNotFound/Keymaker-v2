@@ -192,7 +192,9 @@ v2.2.0 wrote reads exactly as before, the existing fixture corpus is unchanged
 - **A module that failed to load could still read as a wrong password.** The
   KEYM v2 module itself, and the Shamir code used when adding shares, were
   imported without the typed "could not be loaded" error the other lazily
-  loaded modules use.
+  loaded modules use. Every other lazy import of either module (the page, the
+  no-worker fallback and the worker) now goes through the same two loaders,
+  and a test fails if a bare one comes back.
 - **Decoded share records were not erased.** The record a share decodes to,
   the checksum input built from it, a record refused for its padding bits, and
   the value dropped by two callers that needed only a share's set id or index

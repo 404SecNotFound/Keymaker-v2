@@ -34,7 +34,7 @@ import esbuild from "esbuild";
 import { createHash } from "node:crypto";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { dirname, join } from "node:path";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -500,6 +500,47 @@ for (const [name, password, keyFile] of [
   ok(again.error === null && Buffer.from(again.value.data).toString() === entry.plaintext,
      "once the keym-v2 chunk is reachable the same call opens the container (the failure was not cached)",
      why(again.error));
+}
+
+// ---------------------------------------------------------------------------
+// The two loaders above are the only dynamic imports of keym-v2.ts and
+// keym-v2-shamir.ts in src. Twenty-one other sites (the page, crypto-client.ts's
+// fallback, the worker) used a bare `import()`. None can fail today: the page
+// imports keym-v2 statically and the worker is one bundle. But each is where the
+// untyped failure would come back the day that stops being true, and no call
+// can model it while the static import is there. So it is checked in the source.
+// ---------------------------------------------------------------------------
+{
+  const LOADERS = new Map([
+    ["keymaker-crypto.ts", 'keym2Promise = import("./keym-v2")'],
+    ["keym-v2.ts", 'shamirModulePromise = import("./keym-v2-shamir")'],
+  ]);
+  const bare = /(?<!typeof\s)\bimport\s*\(\s*["'`][^"'`]*\bkeym-v2(?:-shamir)?["'`]\s*\)/g;
+  const offenders = [];
+  const walk = (dir) => {
+    for (const d of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, d.name);
+      if (d.isDirectory()) walk(path);
+      else if (/\.(ts|tsx|mts|js|mjs)$/.test(d.name)) {
+        readFileSync(path, "utf8").split("\n").forEach((line, i) => {
+          for (const m of line.matchAll(bare)) {
+            if (LOADERS.get(d.name) && line.includes(LOADERS.get(d.name))) continue;
+            offenders.push(`${path.slice(ROOT.length + 1)}:${i + 1}: ${m[0]}`);
+          }
+        });
+      }
+    }
+  };
+  walk(join(ROOT, "src"));
+  ok(offenders.length === 0,
+     "keym-v2 and keym-v2-shamir are imported lazily only through loadKeym2 and loadShamir",
+     offenders.join("; "));
+  // The pattern itself has to see the forms it guards against, or a clean
+  // result means nothing.
+  for (const form of ['await import("@/lib/keym-v2")', "import('./keym-v2-shamir')", "import( \"../lib/keym-v2\" )"]) {
+    ok(form.match(bare) !== null, `the guard recognises ${form}`);
+  }
+  ok('Promise<typeof import("./keym-v2")>'.match(bare) === null, "the guard ignores a type-only import()");
 }
 {
   const CHUNK = "keym-v2-shamir.enrol-chunk.mjs";

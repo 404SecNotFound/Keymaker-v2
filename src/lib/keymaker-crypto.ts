@@ -549,9 +549,13 @@ export function isArgon2idAvailable(): Promise<boolean> {
  * browser's own error, and a decrypt reported it as a wrong password. Same
  * answer as `loadHashWasm`, `loadNoble` and keym-v2.ts's `loadShamir`: a typed
  * `dependency-unavailable` error, and the rejection is not cached.
+ *
+ * Exported because this is the only way into keym-v2.ts that is not a static
+ * import. scripts/secret-erase-core-test.mjs fails on any bare `import()` of it
+ * elsewhere in src, since each one is a place the same failure could return.
  */
 let keym2Promise: Promise<typeof import("./keym-v2")> | null = null;
-function loadKeym2(): Promise<typeof import("./keym-v2")> {
+export function loadKeym2(): Promise<typeof import("./keym-v2")> {
   if (!keym2Promise) {
     keym2Promise = import("./keym-v2").catch((cause: unknown) => {
       keym2Promise = null;
