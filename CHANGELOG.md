@@ -21,7 +21,19 @@ changes, and every v2 and v3 container reads exactly as before.
   `recovery_test.py` executes them against v4 containers the app wrote. v4
   is written on request only, so the paper vault does not grow by default;
   the self-extracting page keeps its v3 container and its writer refuses v4.
-  The app can already open a v4 backup; a switch to write one is separate.
+- **"Hide the size of what is inside"**, under Advanced on the Encrypt tab, is
+  how the app writes v4. Off by default, with the cost stated beside it: up
+  to 248 bytes plus under 7%, more symbols on paper, and older readers
+  cannot open it. A browser test shows a one-byte and a 200-byte secret
+  sealing to the same length.
+- **Re-seal an old backup.** With a v2, v1 or IttyBitz backup open, the
+  Decrypt tab says its list of ways in is not authenticated and offers to
+  re-seal it. The button carries the recovered text to the Encrypt tab (a
+  recovered file, already downloaded, is asked for), and the ordinary seal
+  writes today's format with a password the owner types. Shares and
+  passkeys are not carried over, and the notice says so. Not a one-click
+  re-encrypt on purpose: the password is cleared on success and the
+  plaintext erased, and a silent re-seal would have to keep both.
 
 ## Keymaker v2.3.0
 
