@@ -58,6 +58,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      # README's "Run it locally" list against package.json, and README's
+      # audit-scope disclaimer against SECURITY-AUDIT.md. The list once named
+      # eleven of thirty-eight test scripts. Cheap, so it runs early.
+      - name: README documents every test script and the audit scope
+        run: npm run test:readme
+
       # The denominator of the passphrase generator's entropy claim. A dropped
       # or duplicated entry would make every bit count the UI prints an
       # overstatement, and nothing else in the suite would notice.
