@@ -245,6 +245,22 @@ export function useEncryptorState() {
    * one reports that part of it has changed since it was written.
    */
   const [slotTableWarning, setSlotTableWarning] = useState(false);
+  /**
+   * v4 §6: padding is the owner's choice, off until they make it. On, the
+   * writer emits a KEYM v4 container whose length states only the bucket
+   * the plaintext falls in; off, the usual v3.
+   */
+  const [hideSize, setHideSize] = useState(false);
+  /**
+   * The re-seal offer: the format of the backup just opened, when that
+   * format is older than today's (v1, v2, IttyBitz), or null. v3 §6 says a
+   * v2 backup moves to v3 only by decrypting and re-encrypting, and that it
+   * is the owner's decision; this is where the decision is put in front of
+   * them, with the backup open.
+   */
+  const [resealOffer, setResealOffer] = useState<DetectedFormat | null>(null);
+  /** What a started re-seal carried to the Encrypt tab: the text, or nothing (a file). */
+  const [resealNotice, setResealNotice] = useState<"text" | "file" | null>(null);
   const [showDecryptedText, setShowDecryptedText] = useState(false);
   const [useKeyFile, setUseKeyFile] = useState(false);
   const [keyFile, setKeyFile] = useState<File | null>(null);
@@ -1094,6 +1110,8 @@ export function useEncryptorState() {
     setShowDecryptedText(false);
     setDecryptInfo(null);
     setSlotTableWarning(false);
+    setResealOffer(null);
+    setResealNotice(null);
     setVerifyResult(null);
     setSealedPeek(null);
     setReceipt(null);
@@ -1300,6 +1318,26 @@ export function useEncryptorState() {
     if (!returning) resetState();
   }, [mode, resetState]);
   
+  /**
+   * Carry the recovered result to the Encrypt tab as its input, and let the
+   * ordinary seal write today's format. Deliberately not a one-click
+   * re-encrypt: the password was cleared on success (U13) and the plaintext
+   * buffer erased, so a silent re-seal would have to keep both. Recovered
+   * text is already on screen, so it travels; a recovered file was
+   * downloaded and is not kept, so the owner is asked to choose it.
+   *
+   * The mode change resets the form (as every tab change does), so what is
+   * carried is set after it; React applies the updates in order.
+   */
+  const startReseal = useCallback(() => {
+    const kind = inputType;
+    const carried = kind === "text" ? outputText : null;
+    handleModeChange("encrypt");
+    setInputType(kind);
+    if (carried !== null) setTextSecret(carried);
+    setResealNotice(kind);
+  }, [inputType, outputText, handleModeChange]);
+
   const handleInputTypeChange = useCallback((newType: InputChoice) => {
       // Same reasoning as resetState: an operation started against File mode
       // must not deliver its result into Text mode. This was the reproducible
@@ -1904,6 +1942,8 @@ export function useEncryptorState() {
     setShowDecryptedText(false);
     setDecryptInfo(null);
     setSlotTableWarning(false);
+    setResealOffer(null);
+    setResealNotice(null);
     setVerifyResult(null);
     setSealedPeek(null);
     setDecryptedQrStatus({ kind: "idle" });
@@ -1991,7 +2031,7 @@ export function useEncryptorState() {
           inputBuffer,
           mutablePassword,
           keyFileBuffer,
-          { kdf, cipher: cipherChoice },
+          { kdf, cipher: cipherChoice, padded: hideSize },
           shamirEnabled
             ? { threshold: shamirThreshold, count: shamirCount, withPassword: sharesNeedPassword }
             : undefined,
@@ -2329,6 +2369,16 @@ export function useEncryptorState() {
         // and the sealed table is not recoverable from the tampered one, so
         // "something changed" is the whole of what is known.
         setSlotTableWarning(decryptResult.slotTableAuthentic === false);
+        // v3 §6 and §7: a v2 container is still strippable and there is no
+        // in-place upgrade, so this is the moment to say so — with the backup
+        // open, to the person holding its secret. v1 and IttyBitz files have
+        // the same gap and more. Not on a verify-only run: nothing was kept
+        // that could be carried over.
+        setResealOffer(
+          verifying || decryptResult.format === "keym-v3" || decryptResult.format === "keym-v4"
+            ? null
+            : decryptResult.format
+        );
 
         if (verifying) {
           // Reaching this line *is* the result: decryptViaWorker throws unless
@@ -2474,7 +2524,7 @@ export function useEncryptorState() {
     // the render before the user touched any of them, so the share path took
     // the no-credential exit while every control leading to it looked live —
     // a click that did nothing at all, with no error to explain it.
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, hideSize, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -3019,6 +3069,8 @@ export function useEncryptorState() {
     obscureFilename, setObscureFilename,
     decryptInfo, setDecryptInfo,
     slotTableWarning, setSlotTableWarning,
+    hideSize, setHideSize,
+    resealOffer, startReseal, resealNotice,
     showDecryptedText, setShowDecryptedText,
     useKeyFile, setUseKeyFile,
     keyFile, setKeyFile,
