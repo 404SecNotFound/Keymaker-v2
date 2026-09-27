@@ -43,7 +43,7 @@ OUT = ROOT / "reference" / "conformance-requirements.txt"
 # --no-deps, which is how the floor job had to run.
 PY_VERSIONS = ("3.12", "3.10")
 
-# Every manylinux tag an ubuntu-latest runner accepts that a pinned wheel is
+# Every manylinux tag an ubuntu-24.04 runner accepts that a pinned wheel is
 # published under, newest first. This was manylinux_2_17 alone, which cannot
 # resolve argon2-cffi-bindings 26.1.0 (published for manylinux_2_26/2_28 only):
 # regenerating quietly fell back to 21.2.0, a version CI had never run.

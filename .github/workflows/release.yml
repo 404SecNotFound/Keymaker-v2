@@ -50,7 +50,7 @@ jobs:
   # this), keeping the fast-fail property while still refusing to sign or
   # publish anything the suites have not passed.
   preflight:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -149,7 +149,7 @@ jobs:
 
   build:
     needs: [verify-crypto, verify-ci, verify-conformance, verify-browser]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -194,7 +194,7 @@ jobs:
   # Same run, so no permission beyond the ones below. See deploy.yml.
   sign:
     needs: [build, verify-ci]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
       id-token: write
@@ -297,7 +297,7 @@ jobs:
 
   publish:
     needs: sign
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:

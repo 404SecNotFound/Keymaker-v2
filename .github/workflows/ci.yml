@@ -38,7 +38,7 @@ env:
 
 jobs:
   ci:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -371,7 +371,7 @@ jobs:
       fail-fast: false
       matrix:
         channel: [development, release]
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -422,6 +422,15 @@ jobs:
   #    supported, and a verifier on a newer major who gets different bytes has
   #    been told to expect a match.
   #
+  # Every job in every workflow names `ubuntu-24.04` rather than
+  # `ubuntu-latest`. The sign job in deploy.yml and release.yml compares the
+  # manifest it is about to sign against these legs'
+  # (scripts/check-reproduced-manifest.mjs), and GitHub moves the `latest`
+  # label to a new image gradually, so during a migration two jobs of one run
+  # can land on different Ubuntu releases. A publish refused for that would be
+  # the label moving, not the build. Moving to a newer image is a deliberate
+  # change across the workflows, made between releases.
+  #
   # Not varied: OS and CPU architecture. Both cost real runner time, and neither
   # is claimed — docs/VERIFYING.md states the boundary rather than leaving a
   # reader to assume it is wider than this.
@@ -442,7 +451,7 @@ jobs:
           - id: node24
             node: 24
             dir: keymaker
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -491,7 +500,7 @@ jobs:
 
   reproducible-elsewhere-compare:
     needs: reproducible-elsewhere
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:

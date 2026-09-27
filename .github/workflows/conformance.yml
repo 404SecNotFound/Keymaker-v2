@@ -27,7 +27,7 @@ permissions: {}
 
 jobs:
   conformance:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -104,7 +104,7 @@ jobs:
   # TypeScript and add nothing about the Python version.
   reference-python-floor:
     name: Reference self-tests on Python 3.10 (the RECOVERY.md floor)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
@@ -157,7 +157,7 @@ jobs:
   # primitive it touches and why these two scripts do not reach it. An
   # exemption with a reason beside it is a decision; a blanket warning is not.
   audit:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     steps:
