@@ -28,6 +28,7 @@ import type { InspectorPlan } from "@/components/container-inspector";
 import type { CommandBarItem } from "@/components/command-bar";
 import { emptySeedWords, seedWordsFromText } from "@/components/seed-grid";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES } from "@/lib/keym-v2";
+import { accessPolicy, describeWayIn, enrolsPasskey, shamirRequestOf, type AccessPolicy } from "@/lib/access-policy";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeAllQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
@@ -1814,6 +1815,23 @@ export function useEncryptorState() {
     });
   }, [toast, decryptedQrStatus.kind]);
 
+  /**
+   * Which credentials will open the backup this form is about to write. The
+   * inheritance plan, the inspector, the receipt and the worker request all
+   * read this one answer; each used to derive its own from the switches, and
+   * with "The strips need the password too" on they disagreed.
+   */
+  const policy: AccessPolicy = useMemo(
+    () =>
+      accessPolicy({
+        keyFile: useKeyFile && keyFile !== null,
+        shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
+        sharesNeedPassword,
+        passkey: passkeyEnabled,
+      }),
+    [useKeyFile, keyFile, shamirEnabled, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled]
+  );
+
   const processData = useCallback(async () => {
     // Reentrancy guard.
     //
@@ -2015,7 +2033,7 @@ export function useEncryptorState() {
         // value the container does not yet contain.
         let passkey: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
         // §4.8 rules a passkey out: it would open the backup on its own.
-        if (passkeyEnabled && !(shamirEnabled && sharesNeedPassword)) {
+        if (enrolsPasskey(policy)) {
           const { derivePrfSalt } = await loadKeym2();
           const { enrolPasskey } = await import("@/lib/webauthn-prf");
           const slotSalt = crypto.getRandomValues(new Uint8Array(32));
@@ -2032,9 +2050,7 @@ export function useEncryptorState() {
           mutablePassword,
           keyFileBuffer,
           { kdf, cipher: cipherChoice, padded: hideSize },
-          shamirEnabled
-            ? { threshold: shamirThreshold, count: shamirCount, withPassword: sharesNeedPassword }
-            : undefined,
+          shamirRequestOf(policy),
           passkey
         );
         resultBuffer = encrypted.data;
@@ -2062,7 +2078,7 @@ export function useEncryptorState() {
           setIssuedShares({
             threshold: shamirThreshold,
             shares: encrypted.shares,
-            withPassword: sharesNeedPassword,
+            withPassword: !policy.sharesOpenAlone,
           });
         }
         // **Do not put an `await` between here and the delivery below.**
@@ -2091,17 +2107,7 @@ export function useEncryptorState() {
           to,
           kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
           cipher: cipherLabelOf(cipherChoice),
-          waysIn:
-            shamirEnabled && sharesNeedPassword
-              ? [
-                  `${useKeyFile && keyFile ? "Passphrase + key file" : "Passphrase"} and ` +
-                    `${shamirThreshold}-of-${shamirCount} recovery shares, both needed`,
-                ]
-              : [
-                  useKeyFile && keyFile ? "Passphrase + key file" : "Passphrase",
-                  ...(shamirEnabled ? [`${shamirThreshold}-of-${shamirCount} recovery shares`] : []),
-                  ...(passkeyEnabled ? ["passkey"] : []),
-                ],
+          waysIn: policy.waysIn.map(describeWayIn),
           bytes: resultBuffer.byteLength,
           onScreen,
           shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
@@ -2524,7 +2530,7 @@ export function useEncryptorState() {
     // the render before the user touched any of them, so the share path took
     // the no-credential exit while every control leading to it looked live —
     // a click that did nothing at all, with no error to explain it.
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, hideSize, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, hideSize, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey, policy]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -2657,13 +2663,12 @@ export function useEncryptorState() {
       kdfLabel: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
       cipherLabel: cipherLabelOf(cipherChoice),
       cipherId: cipherChoice,
-      keyFile: useKeyFile && keyFile !== null,
-      shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
-      // The encrypt-side enrol switch. `usePasskey` is the decrypt-side unlock
-      // choice, false on this tab, so the plan used to omit the passkey slot
-      // the worker was about to write: one way in and one byte-map segment
-      // short.
-      passkey: passkeyEnabled,
+      // From the same policy the worker request is built from, so the plan
+      // draws the slots that will be written: one for §4.8, not two, and no
+      // passkey slot the worker would refuse. The passkey enrol switch is read
+      // there, not `usePasskey`, which is the decrypt-side unlock choice and
+      // false on this tab.
+      waysIn: policy.waysIn,
       inputBytes:
         inputType === "file"
           ? (file?.size ?? null)
@@ -2673,8 +2678,7 @@ export function useEncryptorState() {
     };
   }, [
     mode, kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism,
-    cipherChoice, useKeyFile, keyFile, shamirEnabled, shamirThreshold,
-    shamirCount, passkeyEnabled, inputType, file, textSecret,
+    cipherChoice, policy, inputType, file, textSecret,
   ]);
 
   /** What the next printed sheet says about rehearsal, or nothing yet. */
@@ -3083,6 +3087,7 @@ export function useEncryptorState() {
     verifyResult, setVerifyResult,
     isRecoveryOpen, setIsRecoveryOpen,
     inheritanceOpen, setInheritanceOpen,
+    accessPolicy: policy,
     isCommandBarOpen, setIsCommandBarOpen,
     isApplePlatform,
     clipboardTimeoutRef,

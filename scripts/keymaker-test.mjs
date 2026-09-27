@@ -26,6 +26,7 @@ const ENTRY_BY_MODE = {
   regression: "keymaker-regression.mts",
   "keym2-dispatch": "keym2-dispatch.mts",
   calibration: "kdf-calibration-test.mts",
+  "access-policy": "access-policy-test.mts",
 };
 const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
 const entry = join(HERE, ENTRY_BY_MODE[mode]);

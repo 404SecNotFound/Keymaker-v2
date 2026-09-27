@@ -136,3 +136,62 @@ test("following the plan, encrypting issues the heir's shares", async ({ page })
   await expect(dialog.getByText(/^KMSHARE2:/).first()).toBeVisible();
   await expect(dialog.getByText(/^KMSHARE2:/)).toHaveCount(3);
 });
+
+/**
+ * Roadmap 9.1. The warning follows "The strips need the password too".
+ *
+ * It used to read threshold and count and nothing else, so with the strips set
+ * to need the password it still told the owner that any k shares open the
+ * backup on their own: the opposite of what the worker writes, on the one
+ * panel where someone decides how their heirs will get in. The control is the
+ * toggle itself: the sentence must change when it goes on and change back
+ * when it goes off, so a warning that ignored it fails either way.
+ */
+test("the warning follows whether the strips need the password too", async ({ page }) => {
+  await openPlan(page);
+  const warning = page.getByTestId("inheritance-warning");
+  await expect(warning).toContainText("any 2 of the 3 shares open this backup on their own");
+
+  const needsPassword = visible(page.locator("#shares-need-password"));
+  await needsPassword.click();
+  await expect(needsPassword).toHaveAttribute("aria-checked", "true");
+
+  await expect(warning, "the plan still says the shares open the backup without the password").not.toContainText(
+    "on their own"
+  );
+  await expect(warning).toContainText("only together with the password");
+  await expect(warning).toContainText("any 2 of the 3 shares and the password");
+
+  // The numbers still follow the form under this setting too.
+  await visible(page.locator("#shamir-count")).fill("4");
+  await expect(warning).toContainText("any 2 of the 4 shares and the password");
+
+  // The form's own explanation of recovery shares follows the same setting.
+  await visible(page.getByRole("button", { name: "What are recovery shares?" })).focus();
+  const tip = page.getByRole("tooltip");
+  await expect(tip, "the tooltip still says the shares open it without the password").toContainText(
+    "only together with the password"
+  );
+  await expect(tip).not.toContainText("without the password");
+  await page.keyboard.press("Escape");
+
+  await needsPassword.click();
+  await expect(needsPassword).toHaveAttribute("aria-checked", "false");
+  await expect(warning).toContainText("any 2 of the 4 shares open this backup on their own");
+});
+
+test("turning recovery shares off leaves no share instructions behind", async ({ page }) => {
+  await openPlan(page);
+  const warning = page.getByTestId("inheritance-warning");
+  await expect(warning).toContainText("any 2 of the 3 shares");
+
+  await sharesSwitch(page).click();
+  await expect(sharesSwitch(page)).not.toBeChecked();
+
+  // The panel is still up (switching shares off is not a dismissal), and it no
+  // longer describes a share set the form will not issue.
+  await expect(plan(page)).toBeVisible();
+  await expect(warning).not.toContainText("any 2 of the 3 shares");
+  await expect(warning).toContainText("Recovery shares are off");
+  await expect(plan(page)).not.toContainText("Recovery shares are turned on");
+});

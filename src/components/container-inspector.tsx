@@ -40,6 +40,7 @@ import {
   describeUnlockCost,
 } from "@/lib/keym-v2";
 import { cn } from "@/lib/utils";
+import type { WayIn } from "@/lib/access-policy";
 import { SealedStatus } from "@/components/sealed-status";
 
 /** What the encrypt form has declared, restated — not predicted. */
@@ -48,9 +49,12 @@ export interface InspectorPlan {
   cipherLabel: string;
   /** The cipher as an id, so the byte map can size slots the way §6 does. */
   cipherId: CipherId;
-  keyFile: boolean;
-  shares: { threshold: number; count: number } | null;
-  passkey: boolean;
+  /**
+   * One entry per slot the worker will write, from the same access policy the
+   * worker request is built from. §4.8 is one slot, not a passphrase slot and a
+   * share slot, and a passkey it rules out is not listed.
+   */
+  waysIn: WayIn[];
   inputBytes: number | null;
 }
 
@@ -349,7 +353,7 @@ export function ContainerInspector({
   const showPlanDetail = hasInput || asked;
 
   /** Slot 0 is always the passphrase; §6 appends the optional ones in this order. */
-  const waysIn = plan ? 1 + (plan.shares ? 1 : 0) + (plan.passkey ? 1 : 0) : 0;
+  const waysIn = plan ? plan.waysIn.length : 0;
 
   const title =
     parsed && parsed !== "legacy"
@@ -509,35 +513,44 @@ export function ContainerInspector({
             ways in · as configured
           </p>
           <div>
-            <div className={rowClasses}>
-              <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">0</span>
-              <span className="font-medium text-foreground">
-                {plan.keyFile ? "Passphrase + key file" : "Passphrase"}
-              </span>
-              <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
-                {plan.kdfLabel}
-              </span>
-            </div>
-            {plan.shares && (
-              <div className={rowClasses}>
-                <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">1</span>
-                <span className="font-medium text-foreground">Share set</span>
-                <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
-                  any {plan.shares.threshold} of {plan.shares.count}
-                </span>
+            {plan.waysIn.map((way, index) => (
+              <div key={way.kind} className={rowClasses}>
+                <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">{index}</span>
+                {way.kind === "password" ? (
+                  <>
+                    <span className="font-medium text-foreground">
+                      {way.keyFile ? "Passphrase + key file" : "Passphrase"}
+                    </span>
+                    <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
+                      {plan.kdfLabel}
+                    </span>
+                  </>
+                ) : way.kind === "shares" ? (
+                  <>
+                    <span className="font-medium text-foreground">Share set</span>
+                    <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
+                      any {way.threshold} of {way.count}
+                    </span>
+                  </>
+                ) : way.kind === "password-and-shares" ? (
+                  <>
+                    <span className="font-medium text-foreground">
+                      {way.keyFile ? "Passphrase + key file" : "Passphrase"} and share set
+                    </span>
+                    <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
+                      any {way.threshold} of {way.count}, both needed · {plan.kdfLabel}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <span className="font-medium text-foreground">Passkey</span>
+                    <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
+                      WebAuthn PRF · HKDF-SHA-256
+                    </span>
+                  </>
+                )}
               </div>
-            )}
-            {plan.passkey && (
-              <div className={rowClasses}>
-                <span className="w-4 shrink-0 font-mono text-[12px] text-subtle-foreground">
-                  {plan.shares ? 2 : 1}
-                </span>
-                <span className="font-medium text-foreground">Passkey</span>
-                <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
-                  WebAuthn PRF · HKDF-SHA-256
-                </span>
-              </div>
-            )}
+            ))}
           </div>
 
           <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
