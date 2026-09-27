@@ -44,6 +44,7 @@
     "test:palette": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/palette-audit.mjs",
     "test:icons": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/icon-audit.mjs",
     "test:screenshots": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/screenshot-audit.mjs",
+    "test:readme": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/readme-scripts-test.mjs",
     "analyze": "ANALYZE=true next build --webpack",
     "build:worker": "node scripts/build-crypto-worker.mjs",
     "verify:reproducible": "node scripts/verify-reproducible.mjs",
