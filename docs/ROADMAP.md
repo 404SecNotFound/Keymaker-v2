@@ -1007,8 +1007,9 @@ nothing above says anything about real passkeys.
 **Other reconciliation.** PR #222 already limits the README's audit claim to the
 KEYM v1 scope, and `seal-verdict.ts` already narrows the sealed claim, so the
 assurance-language work starts from there. The sentence claiming AEAD
-authentication always requires producing plaintext was not found in the
-README, the docs or `src/`; it is not treated as a defect until it is.
+authentication always requires producing plaintext is in 2.3 above, which also
+says the verify-only plaintext stays in the worker heap; 9.2 shows it does not.
+Both are corrected with the assurance-language work.
 
 ---
 
