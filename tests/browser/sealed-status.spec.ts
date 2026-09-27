@@ -170,6 +170,24 @@ test("the in-place check hashes the cached build against the manifest it shipped
       .filter((l) => /  _next\/static\/.*\.(js|css)$/.test(l)).length;
     expect(chunks, "the manifest lists no chunks — is out/ a build?").toBeGreaterThan(0);
     expect(checked, "fewer files checked than the build precaches").toBeGreaterThanOrEqual(chunks + 1);
+
+    // "N of N" is a count of what was cached, not of the build. Files the
+    // manifest lists but the cache does not hold are skipped, so the result
+    // has to say how many, measured against the manifest on disk; a result
+    // that said only "N of N match" read as the whole build checked.
+    const listed = manifest
+      .toString("utf8")
+      .split("\n")
+      .filter((l) => /^[a-f0-9]{64}  .+$/.test(l.trim())).length;
+    if (listed > checked) {
+      await expect(result(page), "the result hid the files it did not check").toContainText(
+        `The other ${listed - checked} of its ${listed} files are not cached, so they were not checked.`
+      );
+    } else {
+      await expect(result(page)).not.toContainText("are not cached");
+    }
+    // Consistency with a manifest that came from the same place is not origin.
+    await expect(result(page)).toContainText("consistent, not who made it");
   } finally {
     await context.close();
   }

@@ -301,13 +301,13 @@ function DowngradeDiagram() {
 
 function VerifyDiagram() {
   return (
-    <Figure caption="Verify only. The container is decrypted and authenticated in the worker, the plaintext is discarded, and the result names the method that worked and the size. Nothing reaches the screen, the clipboard, or a file.">
+    <Figure caption="Verify only. The container is decrypted and authenticated in the worker. The plaintext comes back to the page, which zeroes it without rendering it, and the result names the method that worked and the size. Nothing reaches the screen, the clipboard, or a file.">
       <div className="km-docs-flow">
         <Box title="Container + a way in" />
         <Arrow />
         <Box title="Decrypt in the worker" detail="authenticate every layer" mark="blue" />
         <Arrow />
-        <Box title="Discard plaintext" />
+        <Box title="Discard plaintext" detail="zeroed in the page, never shown" />
         <Arrow />
         <Box title="Opens · 2.1 KB · password" detail="the whole report" mark="ember" />
       </div>
@@ -612,7 +612,7 @@ export function DocsGuide({ onNavigate, assetBase = "" }: { onNavigate?: ((targe
           </p>
           <H3>What this page can prove about itself</H3>
           <Bullets items={[
-            <><strong>The sealed status</strong> under the inspector shows three facts the page establishes locally, never telemetry: the served policy forbids every network destination (<code>default-src</code>, <code>connect-src</code> and <code>form-action</code> all <code>'none'</code>, read from the document rather than typed), whether the browser is online, and whether the running build's files hash to the manifest it shipped with.</>,
+            <><strong>The sealed status</strong> under the inspector shows three facts the page establishes locally, never telemetry: the served policy blocks the page from opening connections (<code>default-src</code>, <code>connect-src</code> and <code>form-action</code> all <code>'none'</code>, read from the document rather than typed), whether the browser is online, and whether the running build's files hash to the manifest it shipped with.</>,
             <><strong>The verify page</strong> states the commit this build claims to be and prints the commands that check the served files against a signed manifest, on your machine. It never says <em>verified</em>, because only you can run the check.</>,
             <><strong>No asymmetric cryptography</strong> anywhere in the container path, enforced by a test. No RSA, no elliptic curves, no key exchange. Harvest-now-decrypt-later does not apply: there is no key exchange to record. Grover's algorithm halves the effective strength of a 256-bit key to about 128 bits, which is comfortable, and halves the effective entropy of your passphrase, which is the existing weakness restated.</>,
             <><strong>Old files keep opening.</strong> KEYM v1 and v2 containers and legacy IttyBitz files are covered by a fixture corpus of real ciphertexts from earlier releases, gated in CI.</>,

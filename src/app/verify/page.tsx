@@ -252,7 +252,9 @@ export default function VerifyBuild() {
       </h2>
 
       <p className="mt-3 text-[15px] leading-relaxed text-muted-foreground">
-        The first two checks prove GitHub built <em>something</em> and served it to you intact. They
+        The first two checks show that this repository&apos;s workflow built <em>something</em>, and
+        that the copy you downloaded is it, as long as the signer identity came from somewhere other
+        than this page. They
         say nothing about whether that something matches the code you can read. The build is
         reproducible — two clean builds of one commit produce identical bytes, and CI enforces it on
         every change — so you can settle that yourself by rebuilding{" "}
@@ -290,8 +292,9 @@ export default function VerifyBuild() {
         </li>
         <li>
           <strong className="text-foreground">Not that the code is correct.</strong> Verification
-          says the bytes you ran match the source in the repository. Whether that source is any good
-          is what the audit, the test suites and the independent Python implementation are for.
+          says the files you downloaded and checked match the source in the repository. Whether that
+          source is any good is what review, the test suites and the independent Python
+          implementation are for, and the review on record does not cover the current format.
         </li>
         <li>
           <strong className="text-foreground">Not that the repository is honest.</strong> Anyone who

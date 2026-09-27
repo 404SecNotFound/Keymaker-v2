@@ -228,7 +228,8 @@ AES-256-GCM, **no** AAD and **no** NFC normalization — see
 - **Error messages** are generic on decryption failure to avoid oracle
   leakage (wrong password vs. corruption are indistinguishable).
 - Non-extractable CryptoKeys are used for all AES keys; ChaCha keys exist
-  as raw bytes only for the lifetime of the operation and are zeroed.
+  as raw bytes only for the lifetime of the operation, and are zero-filled
+  after it on the same best-effort basis as every other buffer here.
 
 ## 11. Test vectors
 

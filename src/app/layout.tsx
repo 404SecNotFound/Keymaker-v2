@@ -42,7 +42,6 @@ export const metadata: Metadata = {
     'SeedQR',
     'seed phrase backup',
     'offline encryption',
-    'zero knowledge',
     'file encryption',
     'PWA',
     'open source',

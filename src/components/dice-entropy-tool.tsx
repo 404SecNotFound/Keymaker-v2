@@ -355,7 +355,7 @@ export function DiceEntropyTool() {
                 onClick={() => setRollLog("")}
                 className="text-[12px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
               >
-                Clear the log from memory
+                Clear the log
               </button>
             )}
           </div>

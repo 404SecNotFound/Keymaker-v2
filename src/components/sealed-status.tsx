@@ -61,7 +61,7 @@ export function readCsp(): string | null {
 export type VerifyOutcome =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "ok"; checked: number; manifestDigest: string }
+  | { kind: "ok"; checked: number; listed: number; manifestDigest: string }
   | { kind: "mismatch"; checked: number; wrong: string[]; manifestDigest: string }
   | { kind: "unavailable"; reason: string };
 
@@ -174,7 +174,7 @@ export async function verifyCachedBuild(): Promise<VerifyOutcome> {
     };
   }
   return wrong.length === 0
-    ? { kind: "ok", checked, manifestDigest }
+    ? { kind: "ok", checked, listed: entries.length, manifestDigest }
     : { kind: "mismatch", checked, wrong, manifestDigest };
 }
 
@@ -262,11 +262,11 @@ export function SealedStatus({ writes }: { writes: number }) {
             aria-hidden="true"
           />
         </button>
-        {/* "nothing leaves" rather than the old "nothing is uploaded": three
-            characters shorter is what keeps this line to one row at the
-            inspector's desktop width now that the first claim carries a
-            disclosure, and it is the phrase the policy row above it proves. */}
-        <span>nothing leaves</span>
+        {/* "no connections", the same length as the "nothing leaves" it
+            replaces, which kept this line to one row at the inspector's desktop
+            width. "Nothing leaves" claimed more than the policy row above it
+            proves: SEALED_CLAIM says blocking connections is not every way out. */}
+        <span>no connections</span>
         {offline && (
           <span data-testid="offline-notice" className="flex items-center gap-1.5 text-foreground">
             <WifiOff className="h-3.5 w-3.5" aria-hidden="true" />
@@ -387,7 +387,12 @@ export function SealedStatus({ writes }: { writes: number }) {
                 >
                   <CheckCircle2 className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" aria-hidden="true" />
                   {verify.checked} of {verify.checked} cached files match the manifest this build
-                  shipped. Manifest sha256{" "}
+                  shipped.{" "}
+                  {verify.listed > verify.checked
+                    ? `The other ${verify.listed - verify.checked} of its ${verify.listed} files are not cached, so they were not checked. `
+                    : ""}
+                  The manifest came with the build, so this shows the copy is consistent, not who
+                  made it. Manifest sha256{" "}
                   <span className="break-all font-mono text-[12px]">{verify.manifestDigest}</span> —
                   the digest <em>Verify this build</em> should agree with.
                 </p>

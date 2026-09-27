@@ -542,7 +542,7 @@ export function ContainerInspector({
 
           <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
             <Check>Payload sealed with {plan.cipherLabel}</Check>
-            <Check>Slot table authenticated — a removed slot can&apos;t hide</Check>
+            <Check>Slot table authenticated — a change made without a key is reported</Check>
             <Check>
               Opens without this app —{" "}
               <span className="font-mono text-[12px]">keym2.py</span>

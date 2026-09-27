@@ -204,7 +204,7 @@ export function AudioStegoTool() {
         clearSecrets();
         toast({
           title: "Locked — secrets cleared",
-          description: `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any recovered secret were wiped from memory.`,
+          description: `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any recovered secret were cleared from the page.`,
         });
       }
     }, 1000);

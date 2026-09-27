@@ -70,7 +70,10 @@ Argon2id freezes the tab for 1–3 s today. A Worker buys four things at once:
 a responsive UI, real cancel/progress, transferable `ArrayBuffer`s that kill
 the double copies, and — the part that matters most — **a separate heap** for
 key material, away from React state and DOM strings. `worker-src 'self'` is
-already in the CSP. This also unblocks 2.2 and 2.5.
+already in the CSP. This also unblocks 2.2 and 2.5. *Corrected 27 September
+2026.* The derived keys stay in the worker, but the password is typed into the
+page and a decrypted result is returned to it, including on a verify-only run
+(9.2), so those two cross the boundary.
 
 ### 2.2 Signed build provenance — **shipped**
 

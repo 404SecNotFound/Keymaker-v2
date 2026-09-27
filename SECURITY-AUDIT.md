@@ -114,10 +114,13 @@ Three consequences beyond responsiveness:
 - **Cancellation is real.** Terminating the worker actually stops a synchronous
   WASM derivation. Previously an abandoned operation ran to completion
   regardless, burning CPU and battery for a result nobody would receive.
-- **Key material has its own heap.** Passwords, derived keys and plaintext live
-  in a separate realm from React state and the DOM. Not a hard boundary — a
-  compromised page can still postMessage — but the accidental exposure surface
-  is much smaller.
+- **Key derivation has its own heap.** Derived keys live in a separate realm from
+  React state and the DOM. Not a hard boundary — a compromised page can still
+  postMessage — but the accidental exposure surface is much smaller.
+  *Corrected 27 September 2026.* This bullet said passwords and plaintext live
+  there too. The password is typed into the page and sent to the worker, and a
+  decrypted result is returned to the page, to be shown or, on a verify-only
+  run, zeroed without being shown.
 - **The B1 race widened.** It was previously unreachable on the Argon2id path
   *because* the tab was frozen. Now that the tab responds, a user really can
   switch tabs mid-derivation on every path, so the Phase 1 sequence guard went
