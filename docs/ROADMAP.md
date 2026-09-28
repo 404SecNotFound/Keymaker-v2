@@ -1031,6 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
+| 9.6 | in_progress | Section 06, the creation workflow. 06a below; the visible re-sequencing, the expert view and the recovery-test lifetimes follow |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1184,6 +1185,47 @@ checks that bad input costs no derivation and that a failed write returns no
 container and no shares. `crosstest2.py` compares the same bytes against the
 Python reference's three-step path. `test:secret-erase-core` holds the new
 writer to the ownership rules in 9.4.
+
+### 9.6 The creation workflow (handover Section 06), part a
+
+What the page says about the backup on screen is now held to that backup.
+`src/lib/backup-workflow.ts` is a pure model of where the backup is (editing,
+a job working, created) and what has been done with it (downloads and prints
+started). It accepts a result only from the job it is waiting on, so a job the
+user has moved on from cannot put the page back into a success state. The page
+already checked for staleness before writing; this is a second check that can
+be tested without a browser.
+
+Fixed with it, each found by reading the hook:
+
+- Starting a new encrypt cleared the output but not the receipt. The old
+  receipt stayed up through the run, a Stop and a failure, and its Print,
+  Download and Rehearse buttons did nothing.
+- After a seal, changing the content, the access rule, the KDF, the cipher or
+  size hiding left the receipt reading as a description of the form. It now
+  says what changed, and so does the Recovery tab.
+- A download or print was never recorded, so the Recovery tab said "Not saved
+  yet" for good. It now says when an export was started, and that the page
+  cannot see whether it was kept.
+- Both paper-vault prints and the download awaited module loads and then acted
+  without checking whether a wipe, lock or new job had cleared the backup in
+  the meantime. The shares dialog's would have printed the shares after a wipe.
+- A rehearsal interrupted by Stop or an input switch stayed on "Opening…".
+- The exact AND/OR rule appeared only inside Advanced, in a tooltip or in the
+  inheritance plan. It is now shown above the Encrypt button, in the receipt's
+  own words.
+
+**Not yet done in Section 06.** The visible sequence (material, access rule,
+review, creation, saved-copy check, recovery preparation), the expert view for
+format and KDF detail, the verify result that outlives its input, testing from
+the Recovery tab wiping the receipt, the auto-lock clearing evidence while the
+shares stay open, and the production screenshots with usability notes.
+
+**Checks.** `npm run test:backup-workflow` holds the model's rules, including
+four stale-job cases. `tests/browser/workflow-evidence.spec.ts` holds the page
+to them: the rule before creation, the receipt coming down when a new job
+starts and staying down after a Stop, the change notice on the receipt and the
+Recovery tab, and a download recorded as started.
 
 ---
 

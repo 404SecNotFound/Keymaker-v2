@@ -105,7 +105,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     blockedByPasswordPolicy, isProcessButtonDisabled, printPaperVault,
     rehearseFromPaper, downloadContainer, clipboardSecondsLeft,
     clipboardClearPending, clearClipboardNow, lockSecondsLeft, wipeAck,
-    wipeNow,
+    wipeNow, backupDiffers, accessRule,
   } = useEncryptorContext();
 
   // Key-file toggle + picker/generator. Rendered in place on the Decrypt
@@ -1450,6 +1450,19 @@ export function SecretForm({ mode }: { mode: Mode }) {
               nothing
             </dd>
           </dl>
+          {/* Section 06. The receipt describes the backup below it. Once the
+              form above has moved on, say so, and say what moved, rather than
+              leaving a "Sealed." that reads as a description of the form. */}
+          {backupDiffers && (
+            <p
+              data-testid="receipt-stale"
+              className="rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning"
+            >
+              Changed since this backup was made: {backupDiffers.join(", ")}. This receipt,
+              and any download, print or rehearsal of it, describes the backup below, not
+              the form above. Encrypt again to make a backup from the form as it is now.
+            </p>
+          )}
           {receipt.onScreen ? (
             <div className="flex flex-wrap gap-2">
               <Button type="button" variant="secondary" size="sm" onClick={() => void printPaperVault()} className="rounded-lg">
@@ -1767,6 +1780,15 @@ export function SecretForm({ mode }: { mode: Mode }) {
           unfilled pill; the `disabled:opacity-40` that used to be on this
           className made the app's primary action a mid grey block, reading as
           an ordinary button rather than an unavailable one. */}
+      {/* Section 06: the exact rule, in the receipt's words, before the
+          backup exists. Each way in opens it on its own, hence "or"; a way in
+          that needs two things says "both needed" inside its own wording. */}
+      {mode === 'encrypt' && accessRule && (
+        <p data-testid="access-rule" className="mt-3 text-[12.5px] leading-snug text-muted-foreground">
+          Opens with: <span className="text-foreground">{accessRule}</span>
+        </p>
+      )}
+
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}

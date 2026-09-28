@@ -290,6 +290,12 @@ jobs:
       - name: One derivation per new backup
         run: npm run test:slot-transaction
 
+      # Section 06. The page's creation workflow: a job the user has moved on
+      # from cannot put the page back into a success state, and the page can
+      # say what has changed since the backup on screen was made.
+      - name: Backup workflow rules
+        run: npm run test:backup-workflow
+
       # parseKeym() consumes fully attacker-controlled binary before any of it
       # has been authenticated. Seeded and deterministic, so a CI failure
       # reproduces exactly.

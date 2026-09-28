@@ -16,7 +16,11 @@ export function RecoveryTab() {
     mode, receipt, rehearsal, downloadContainer, printPaperVault,
     handleModeChange, returnToBackupTest, printoutInputRef, checkPrintout,
     printoutBusy, printoutFindings, setIsRecoveryOpen, openInheritance,
+    exportsStarted, backupDiffers,
   } = useEncryptorContext();
+  // Local time, to the minute: when the page asked, not when anything was kept.
+  const when = (iso: string) =>
+    new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 
   return (
     <TabsContent value="recovery" className="mt-0" tabIndex={-1}>
@@ -27,9 +31,25 @@ export function RecoveryTab() {
             <>
               <p className="text-sm text-foreground">Container created · {formatBytes(receipt.bytes)}</p>
               <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{receipt.cipher} · {receipt.kdf}</p>
+              {backupDiffers && (
+                <p data-testid="recovery-stale" className="mt-2 text-[12.5px] leading-snug text-warning">
+                  The form on the Encrypt tab has changed since this backup was made ({backupDiffers.join(", ")}).
+                  Everything here describes the backup that was made.
+                </p>
+              )}
               <dl className="km-recovery-facts">
                 <div><dt>Recovery shares</dt><dd>{receipt.shares ? `${receipt.shares.threshold} of ${receipt.shares.count} needed` : "Not included"}</dd></div>
-                <div><dt>Saved copy</dt><dd>{receipt.onScreen ? "Not saved yet. It is on screen: download it or print the paper backup" : "Downloaded when encryption finished. Check your downloads folder"}</dd></div>
+                <div><dt>Saved copy</dt><dd data-testid="recovery-saved-copy">{
+                  !receipt.onScreen
+                    ? "Downloaded when encryption finished. Check your downloads folder"
+                    : exportsStarted.download || exportsStarted.print
+                      ? [
+                          exportsStarted.download && `Download started at ${when(exportsStarted.download)}`,
+                          exportsStarted.print && `Paper vault sent to print at ${when(exportsStarted.print)}`,
+                        ].filter(Boolean).join(" · ") +
+                        ". The browser does not tell this page whether the file was kept or the sheet printed, so check that it was."
+                      : "Not saved yet. It is on screen: download it or print the paper backup"
+                }</dd></div>
                 <div><dt>Recovery test</dt><dd>{rehearsal.kind === "ok" ? `Rehearsed on ${rehearsal.on}${rehearsal.strips.length > 0 ? ` with strips ${rehearsal.strips.join(" and ")}` : ""}` : "Not tested yet in this session"}</dd></div>
               </dl>
               {receipt.onScreen ? (

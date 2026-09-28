@@ -3,6 +3,16 @@
 ## Unreleased
 
 ### Fixed
+- **The receipt described backups that were no longer on screen.** Starting
+  a new encryption left the previous receipt up, with buttons that did
+  nothing, through the run, a Stop and a failure. Changing the settings after
+  a seal left the receipt reading as a description of the form. The receipt
+  now comes down when a new job starts, and says what has changed since its
+  backup was made. The Recovery tab records when a download or print was
+  started, and says that the page cannot see whether it was kept. The paper
+  vault and download no longer act after a wipe or lock that happened while
+  they were loading, and the exact rule for opening the backup is shown above
+  the Encrypt button before anything is written.
 - **Several claims said more than the app establishes.** The verify page and
   `docs/VERIFYING.md` now say that a matching hash shows which files were
   downloaded, not which bytes the browser ran, and that a signature's identity
