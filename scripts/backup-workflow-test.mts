@@ -19,6 +19,9 @@
  * Part c adds the "Format detail" switch. Off, KDF parameters go and
  * everything else stays: the KDF and cipher names, the version, and every
  * warning, including one that quotes a number.
+ *
+ * Part d holds a verify result to what it checked: another backup, key file,
+ * unlock method or newly typed credentials each make it stop applying.
  */
 import {
   describeAccessRule,
@@ -35,6 +38,7 @@ import {
   type WorkflowEvent,
 } from "../src/lib/backup-workflow.ts";
 import { atDetail, withoutKdfParameters } from "../src/lib/detail-level.ts";
+import { verifyChanges, type VerifiedInput } from "../src/lib/verify-evidence.ts";
 
 let passed = 0;
 let failed = 0;
@@ -302,6 +306,41 @@ check("an AND way in keeps its own wording",
     trim(readerWarned));
   check("with format detail on, nothing is trimmed",
     atDetail("Argon2id · 64 MiB · t=3 · p=4", true) === "Argon2id · 64 MiB · t=3 · p=4");
+}
+
+// ---------------------------------------------------------------------------
+// Part d: a verify result belongs to what it checked.
+// ---------------------------------------------------------------------------
+{
+  // Files are compared by identity, as the page compares File objects.
+  const fileA = { name: "a.keym" };
+  const fileB = { name: "a.keym" };
+  const key = { name: "key" };
+  const text: VerifiedInput<object> = {
+    inputType: "text", file: null, text: "keym2:AAAA", keyFile: null, useShares: false, usePasskey: false,
+  };
+  const inFile: VerifiedInput<object> = { ...text, inputType: "file", file: fileA, text: "" };
+  const eq = (a: unknown[], b: unknown[]) => JSON.stringify(a) === JSON.stringify(b);
+
+  check("the same input, nothing typed since: the result applies", verifyChanges(text, { ...text }, false).length === 0);
+  check("another pasted container is another backup",
+    eq(verifyChanges(text, { ...text, text: "keym2:BBBB" }, false), ["backup"]));
+  check("a file picked again is another backup, even with the same name",
+    eq(verifyChanges(inFile, { ...inFile, file: fileB }, false), ["backup"]));
+  check("the same file object still applies", verifyChanges(inFile, { ...inFile }, false).length === 0);
+  check("switching between file and text is another backup",
+    verifyChanges(text, { ...inFile }, false).includes("backup"));
+  check("in file mode, leftover text in the other box does not count",
+    verifyChanges(inFile, { ...inFile, text: "keym2:CCCC" }, false).length === 0);
+  check("adding a key file is reported", eq(verifyChanges(text, { ...text, keyFile: key }, false), ["key file"]));
+  check("switching to shares is a change of unlock method",
+    eq(verifyChanges(text, { ...text, useShares: true }, false), ["unlock method"]));
+  check("switching to a passkey is a change of unlock method",
+    eq(verifyChanges(text, { ...text, usePasskey: true }, false), ["unlock method"]));
+  check("a password typed since is reported as credentials", eq(verifyChanges(text, { ...text }, true), ["credentials"]));
+  check("several changes are all named, in order",
+    eq(verifyChanges(text, { ...text, text: "x", keyFile: key, useShares: true }, true),
+      ["backup", "key file", "unlock method", "credentials"]));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

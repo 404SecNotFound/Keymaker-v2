@@ -106,7 +106,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     blockedByPasswordPolicy, isProcessButtonDisabled, printPaperVault,
     rehearseFromPaper, downloadContainer, clipboardSecondsLeft,
     clipboardClearPending, clearClipboardNow, lockSecondsLeft, wipeAck,
-    wipeNow, backupDiffers, accessRule, formatDetail,
+    wipeNow, backupDiffers, accessRule, formatDetail, verifyDiffers,
   } = useEncryptorContext();
 
   // Key-file toggle + picker/generator. Rendered in place on the Decrypt
@@ -1322,7 +1322,20 @@ export function SecretForm({ mode }: { mode: Mode }) {
         A verified result subsumes the plain format line — verifyResult.detail
         is the same string — so only one of the two is ever rendered.
       */}
-      {verifyResult && mode === 'decrypt' ? (
+      {/* Section 06d. A verify is evidence about what it checked. Once the
+          form holds something else, the green result would read as a verdict
+          on the new input, so it gives way to a notice saying what changed.
+          The format line below is the same backup's, so it does not fall
+          through either. */}
+      {verifyResult && mode === 'decrypt' && verifyDiffers ? (
+        <p
+          data-testid="verify-stale"
+          className="animate-in fade-in-50 rounded-lg border border-border px-3 py-2 text-[12px] leading-snug text-muted-foreground"
+        >
+          The last check no longer describes what is entered here. Changed since:{" "}
+          <span className="text-foreground">{verifyDiffers.join(", ")}</span>. Verify again to check it.
+        </p>
+      ) : verifyResult && mode === 'decrypt' ? (
         <div
           role="status"
           data-testid="verify-result"

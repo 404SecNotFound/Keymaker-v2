@@ -19,6 +19,11 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **A verify result stayed on screen after its input changed.** Loading
+  another backup, choosing another key file, switching the unlock method or
+  typing a new password left "The backup opens with this password" beside an
+  input it had never checked. The result now gives way to a notice naming
+  what changed, and returns if the checked input is put back.
 - **The receipt described backups that were no longer on screen.** Starting
   a new encryption left the previous receipt up, with buttons that did
   nothing, through the run, a Stop and a failure. Changing the settings after

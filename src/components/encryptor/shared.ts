@@ -8,6 +8,7 @@
  * that file's own header for why the split happened. Behaviour is
  * unchanged — every function and constant here is byte-for-byte what it was.
  */
+import type { VerifiedInput } from "@/lib/verify-evidence";
 import {
   KeymakerError,
   loadKeym2,
@@ -713,6 +714,8 @@ export type VerifyResult = {
   method: OpenedBy;
   /** False when there was no worker and the check ran on the page's thread. */
   inWorker: boolean;
+  /** Section 06d. What was checked, so the page can tell when it no longer applies. */
+  checked: VerifiedInput<File>;
 };
 
 // Decrypted-result QR modal state. This is purely a display-side concern —
