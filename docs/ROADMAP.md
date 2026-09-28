@@ -1289,10 +1289,14 @@ form), every KDF and cipher name, the ways in, the version pill, the "Format:
 KEYM vN" line, every check, and every warning: the unlock cost, the v2 slot
 table, the weak-KDF heads-up and the slot-table change.
 
-`src/lib/detail-level.ts` does the trimming. The labels it trims are built as
-segments joined by " · ", and a parameter is always a segment of its own, so
-it drops only segments that are exactly a parameter. A warning that quotes a
-number is never a bare parameter, so it survives whole.
+`src/lib/detail-level.ts` does the trimming. The labels come in two shapes.
+The receipt and the inspector join segments with " · ", and a parameter is
+always a segment of its own there. The readers behind the "Format:" line put
+parameters in brackets, as in "PBKDF2 (1,000,000 iters)". Only a whole
+segment, or a parameter token inside brackets, is ever dropped. A bracket with
+no parameter in it, such as "(HKDF-SHA-256)", is kept, and running text is
+never touched, so a warning that quotes a number survives whole. The browser
+spec found the bracket shape: the first version trimmed only segments.
 
 **Not yet done in Section 06.** The verify result that outlives its input,
 testing from the Recovery tab wiping the receipt, the auto-lock clearing
@@ -1301,9 +1305,9 @@ usability notes.
 
 **Checks.** `npm run test:backup-workflow` holds the trimming: names kept,
 parameters dropped, the unlock line's version, cipher, slot note and key file
-kept, and a weak-KDF warning's numbers kept. Dropping any segment with a digit
-fails seven of those checks, and ignoring the switch fails the one that reads
-it on. `tests/browser/workflow-expert-view.spec.ts` reads each screen both
+kept, and a weak-KDF warning's numbers kept, in both shapes. Dropping any
+segment with a digit, skipping the bracket trimming, or ignoring the switch
+each fail their own checks. `tests/browser/workflow-expert-view.spec.ts` reads each screen both
 ways: the inspector, the receipt, the parsed slot rows, the Recovery tab, the
 unlock line and the self-extract notice. `container-inspector.spec.ts` now
 turns the switch on, since it is about the bytes.
