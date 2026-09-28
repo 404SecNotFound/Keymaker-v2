@@ -10,14 +10,23 @@
  *
  * The negative control is to drop the job comparison from the reducer; the
  * "stale" checks below must fail.
+ *
+ * Part b adds the visible step order. Its rule is that no step is shown as
+ * done on evidence the page does not have: a started download or print is
+ * never a checked copy, a partial printout check is never a whole one, and a
+ * rehearsal that has not run is never a prepared recovery.
  */
 import {
   describeAccessRule,
   initialWorkflow,
   latestExports,
+  mergePrintoutCoverage,
   settingsChanges,
   workflowReducer,
+  workflowSteps,
   type CreationSettings,
+  type StepInputs,
+  type StepState,
   type Workflow,
   type WorkflowEvent,
 } from "../src/lib/backup-workflow.ts";
@@ -146,6 +155,101 @@ check("three ways in are listed, then or",
 check("an AND way in keeps its own wording",
   describeAccessRule(["Passphrase and 2-of-3 recovery shares, both needed"]) ===
     "Passphrase and 2-of-3 recovery shares, both needed");
+
+// ---------------------------------------------------------------------------
+// Part b: the visible step order.
+// ---------------------------------------------------------------------------
+{
+  const created = run([{ type: "job-started", job: 1 }, { type: "sealed", job: 1, settings: SETTINGS }]);
+  const base: StepInputs = {
+    workflow: initialWorkflow,
+    hasContent: false,
+    credentialReady: false,
+    changed: null,
+    keptOnScreen: null,
+    exports: {},
+    printout: null,
+    hasShares: false,
+    rehearsed: false,
+  };
+  const states = (i: StepInputs) => workflowSteps(i).map((s) => s.state);
+  const stateOf = (i: StepInputs, id: string): StepState | undefined =>
+    workflowSteps(i).find((s) => s.id === id)?.state;
+  const eq = (a: unknown[], b: unknown[]) => JSON.stringify(a) === JSON.stringify(b);
+
+  check("there are six steps, in the order the roadmap names",
+    eq(workflowSteps(base).map((s) => s.id), ["content", "access", "review", "create", "saved-copy", "recovery"]));
+  check("an empty form: content is next, nothing is done",
+    eq(states(base), ["current", "todo", "todo", "todo", "todo", "todo"]), states(base).join(","));
+  check("content alone makes the access rule next",
+    eq(states({ ...base, hasContent: true }), ["done", "current", "todo", "todo", "todo", "todo"]));
+  check("a password alone does not mark content done",
+    stateOf({ ...base, credentialReady: true }, "content") === "current");
+  check("content and a password make review next",
+    eq(states({ ...base, hasContent: true, credentialReady: true }), ["done", "done", "current", "todo", "todo", "todo"]));
+  const working = run([{ type: "job-started", job: 1 }]);
+  check("while encrypting, creation is working and nothing is next",
+    eq(states({ ...base, workflow: working }), ["done", "done", "done", "working", "todo", "todo"]),
+    states({ ...base, workflow: working }).join(","));
+
+  const made: StepInputs = { ...base, workflow: created, keptOnScreen: true };
+  check("a new backup: created, and the saved copy is next",
+    eq(states(made), ["done", "done", "done", "done", "current", "todo"]), states(made).join(","));
+  check("a started download is started, not done",
+    stateOf({ ...made, exports: { download: "2026-09-28T10:00:00Z" } }, "saved-copy") === "started");
+  check("a started print is started, not done",
+    stateOf({ ...made, exports: { print: "2026-09-28T10:00:00Z" } }, "saved-copy") === "started");
+  check("a file-mode backup, downloaded when written, is started, not done",
+    stateOf({ ...made, keptOnScreen: false }, "saved-copy") === "started");
+  check("once a copy is started, recovery becomes next",
+    stateOf({ ...made, exports: { download: "x" } }, "recovery") === "current");
+  check("a partial printout check is started, not done",
+    stateOf({ ...made, printout: { checked: [1], total: 3 } }, "saved-copy") === "started");
+  check("every printed symbol matched is done",
+    stateOf({ ...made, printout: { checked: [1, 2, 3], total: 3 } }, "saved-copy") === "done");
+  check("recovery is not done until a rehearsal opens the backup",
+    stateOf({ ...made, hasShares: true, printout: { checked: [1], total: 1 } }, "recovery") === "current");
+  check("a rehearsal that opened it makes recovery done",
+    stateOf({ ...made, hasShares: true, rehearsed: true }, "recovery") === "done");
+  const changed = states({ ...made, changed: ["cipher"] });
+  check("a changed form flags creation and makes nothing else next",
+    eq(changed, ["done", "done", "done", "changed", "todo", "todo"]), changed.join(","));
+  check("the change notice names what changed",
+    workflowSteps({ ...made, changed: ["content", "cipher"] })[3]!.detail.includes("content, cipher"));
+  check("at most one step is next, in every combination tried", (() => {
+    for (const wf of [initialWorkflow, working, created])
+      for (const hasContent of [false, true])
+        for (const credentialReady of [false, true])
+          for (const rehearsed of [false, true])
+            for (const exports of [{}, { download: "x" }]) {
+              const n = states({ ...base, workflow: wf, hasContent, credentialReady, rehearsed, exports,
+                keptOnScreen: wf.phase === "created" ? true : null }).filter((s) => s === "current").length;
+              if (n > 1) return false;
+            }
+    return true;
+  })());
+  check("a cleared page goes back to content being next",
+    stateOf({ ...base, workflow: run([{ type: "cleared" }], created) }, "content") === "current");
+
+  // The printout coverage behind "Check saved copy".
+  const part = (index: number, total: number, belongs: "yes" | "no" | "unknown") =>
+    ({ kind: "part", index, total, belongs }) as const;
+  check("a matched symbol counts",
+    eq(mergePrintoutCoverage(null, [part(2, 3, "yes")])?.checked ?? [], [2]));
+  check("a symbol from another backup does not count",
+    mergePrintoutCoverage(null, [part(1, 3, "no")]) === null);
+  check("a symbol that cannot be matched does not count",
+    mergePrintoutCoverage(null, [part(1, 3, "unknown")]) === null);
+  check("a recovery strip is not the saved copy",
+    mergePrintoutCoverage(null, [{ kind: "strip", index: 1, threshold: 2, setCode: null, belongs: "yes" }]) === null);
+  check("a damaged symbol does not count",
+    mergePrintoutCoverage(null, [{ kind: "part-damaged", index: 1, total: 3 }]) === null);
+  const one = mergePrintoutCoverage(null, [part(1, 3, "yes")]);
+  const two = mergePrintoutCoverage(one, [part(3, 3, "yes"), part(3, 3, "yes")]);
+  check("checks accumulate, and a symbol seen twice counts once", eq(two?.checked ?? [], [1, 3]), JSON.stringify(two));
+  check("the whole backup in one code covers it",
+    eq(mergePrintoutCoverage(null, [{ kind: "backup", belongs: "yes" }]) ?? {}, { checked: [1], total: 1 }));
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

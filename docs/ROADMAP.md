@@ -1227,6 +1227,47 @@ to them: the rule before creation, the receipt coming down when a new job
 starts and staying down after a Stop, the change notice on the receipt and the
 Recovery tab, and a download recorded as started.
 
+### 9.6 The creation workflow (handover Section 06), part b
+
+The visible step order. The Encrypt tab now lists the six steps of making a
+backup: content, access rule, review, create, check saved copy, prepare
+recovery. BAR.md keeps one form with no Next-button wizard, so the list is
+status only. Every control stays where it was and nothing is gated by it.
+
+Each state comes from `workflowSteps` in `src/lib/backup-workflow.ts`, which
+marks a step done only on evidence the page has:
+
+- A download or a print is **Started**, never Done. The browser does not say
+  whether the file was kept or the sheet printed.
+- **Check saved copy** is Done only when every container symbol of the
+  printout has been photographed on the Recovery tab and matched to this
+  backup. Symbols can be checked across several photos and the checks add up.
+  Recovery strips do not count, and neither does a symbol that cannot be
+  matched or comes from another backup.
+- **Prepare recovery** is Done only after a rehearsal from the shares opened
+  the backup.
+- Once the form moves on from the backup on screen, **Create** reads Changed
+  and says what changed, and no later step is offered as next.
+
+Every state is a word as well as a colour, and the step to act on carries
+`aria-current="step"`.
+
+**Not yet done in Section 06.** The expert view for format and KDF detail, the
+verify result that outlives its input, testing from the Recovery tab wiping
+the receipt, the auto-lock clearing evidence while the shares stay open, and
+the production screenshots with usability notes. A password-only backup has
+no rehearsal on this page, so its recovery step stays at "to do" and points
+to a verify on the Decrypt tab, which today clears the receipt.
+
+**Checks.** `npm run test:backup-workflow` holds the step rules: started is
+never done, a partial printout check is never complete, only matched
+container symbols count, recovery waits for a rehearsal, and at most one step
+is next. Breaking any of the first four in the model fails its own checks.
+`tests/browser/workflow-steps.spec.ts` holds the page to them: the steps
+following the form, the job and a download; a saved copy done only after
+every printed symbol matched, with one of several shown as partial; and
+recovery done only after a rehearsal.
+
 ---
 
 ## Ongoing — not a phase, a standing obligation
