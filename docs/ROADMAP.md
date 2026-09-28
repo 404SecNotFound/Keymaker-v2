@@ -1029,7 +1029,7 @@ Both are corrected with the assurance-language work.
 |---|---|---|
 | 9.1 | merged | PR #224, in `main` at `cc77330` (`src/lib/access-policy.ts` present) |
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
-| 9.3 | merged | PR #229 (PR #228 merged into its stacked base, not `main`, and #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
+| 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
 
 `verified` means the implementation and its automated checks passed. It says
