@@ -952,6 +952,67 @@ format without trusting the app or its author.
 
 ---
 
+## Phase 9, assurance work
+
+Four confirmed defects and the checks that found them. None of them changes the
+on-disk format. Each gets its own PR, based on `main`, in the order 9.1, 9.3,
+9.2, 9.4.
+
+### 9.0 Baseline at `40c521b`, 27 September 2026
+
+A reconciliation before any change. Every claim below was reproduced on this
+tree with synthetic inputs, and nothing in `src/` or `reference/` was modified to
+produce it. The probes drove the shipping code (the worker was loaded as-is with
+a stand-in `self`), not a reimplementation of it.
+
+**Findings**
+
+| # | Finding | Status | Evidence |
+|---|---|---|---|
+| 9.1 | The inheritance plan ignores "The strips need the password too" | Still present | `InheritancePlan` receives only threshold and count. In Chromium, turning the option on leaves the plan's text unchanged, and it still says "any 2 of the 3 shares open this backup on their own". The form's own summary is correct ("both needed"), so the two disagree on the same screen. |
+| 9.2 | Verify-only and rehearsal bring the plaintext into the page | Still present, mitigated | The worker accepts `ping`, `encrypt`, `decrypt` and `calibrate` only. Both paths send `decrypt`, and its response carries `data`, which is the plaintext byte for byte. The page never renders it and zeroes it at once (`finishOperation`, `runRehearsal`), so the exposure is a copy in the page's heap, not a display. |
+| 9.3 | Creating a backup with extra ways in derives the password once per way in | Still present | Counted at the worker boundary, table below. `encryptContainer` derives once, then `addShamirSlotKeym2` and `addPasskeySlotKeym2` each derive again to unwrap the master key they need. Password AND shares (§4.8) already derives once. |
+| 9.4 | Shamir polynomial coefficients are never erased | Still present | `shamirSplit` draws `(k-1)*32` bytes with `getRandomValues` and returns without zeroing them. A retained reference to the draw is still non-zero after return at 2-of-3, 3-of-5 and 8-of-16. Caller-supplied coefficients (the conformance path) are left untouched, which is correct and must stay so. |
+| 9.5 | Cold recovery from the recovery kit alone | Works as documented | With networking removed (`unshare -n`) and only the four kit files, `pip install -r requirements.txt` fails and `keym2.py` cannot import `argon2`. With the wheels downloaded in advance, as RECOVERY.md Step 1 says to, both a PBKDF2 password container and an Argon2id ChaCha20 container with a 2-of-3 share set recover byte for byte. A container with one flipped byte is refused with no output file. RECOVERY.md already states the kit carries no wheels and why. |
+
+**Password derivations at creation** (Node 22, this container, one run each;
+timings are indicative only)
+
+| Ways in | PBKDF2 (1,000,000 iterations) | Argon2id (t=3, 64 MiB, p=4) |
+|---|---|---|
+| Password | 1 (201 ms) | 1 (359 ms) |
+| Password or shares | 2 (394 ms) | 2 (575 ms) |
+| Password or shares or passkey | 3 (547 ms) | 3 (868 ms) |
+| Password and shares (§4.8) | 1 (200 ms) | 1 (294 ms) |
+
+**Checks on this tree**, all exit 0.
+
+| Check | Result |
+|---|---|
+| `typecheck`, `test:readme`, `test:calibration`, `test:release-gate`, `test:reproduced-manifest`, `build` | pass |
+| `test:keymaker` | 297 passed |
+| `test:keym2-dispatch` | 76 passed |
+| `test:fuzz2` | 6,023 assertions |
+| `test:fuzz3` | 4,853 assertions |
+| `test:shamir` | 19 assertions |
+| `test:secret-erase-core` | pass |
+| `keym2.py selftest` | 680 checks |
+| `crosstest2.py` | 445 passed, v2, v3 and v4 byte for byte |
+| `recovery_test.py` | 185 passed |
+
+**Not run here.** Firefox and WebKit are not installed in this environment, so
+browser coverage for them is CI's. No physical authenticator was available, so
+nothing above says anything about real passkeys.
+
+**Other reconciliation.** PR #222 already limits the README's audit claim to the
+KEYM v1 scope, and `seal-verdict.ts` already narrows the sealed claim, so the
+assurance-language work starts from there. The sentence claiming AEAD
+authentication always requires producing plaintext is in 2.3 above, which also
+says the verify-only plaintext stays in the worker heap; 9.2 shows it does not.
+Both are corrected with the assurance-language work.
+
+---
+
 ## Ongoing — not a phase, a standing obligation
 
 - **Dependency surface.** `@noble/ciphers` and `hash-wasm` are good choices and
@@ -982,7 +1043,7 @@ outstanding across every session and each one costs minutes.
 
 | # | What | Why it matters |
 |---|---|---|
-| O1 | **About panel and topics are empty** on a public repo | The one-line description is the entire first impression, and topics are how anyone finds this at all |
+| O1 | ~~**About panel and topics are empty** on a public repo~~ **Done.** Description and 16 topics set, checked 27 September 2026 | The one-line description is the entire first impression, and topics are how anyone finds this at all |
 | O2 | **Two stale `claude/*` branches** on the old repo | Force-push was permission-denied |
 | O3 | **The live site has never been opened on a phone** | Several rounds of UI change have shipped; this container is egress-blocked from the deployed site, so it cannot be checked here. It is also 6.5's gate |
 | O5 | **`v2.0.0` is tagged on `origin`, but lightweight** — the ref points straight at `3251b1b`, and the annotated tag object carrying the release message exists only locally | 6.2 wanted an *annotated* tag because the message becomes the "What changed" section; a lightweight ref has no message for it to read. Moving a published tag is an owner decision, not a step — it rewrites a ref other people may already have fetched |
