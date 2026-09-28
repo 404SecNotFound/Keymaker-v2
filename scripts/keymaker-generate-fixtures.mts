@@ -41,6 +41,7 @@ import {
   addPasskeySlotKeym2,
   encryptKeym2,
   encryptKeym2WithSharesRequired,
+  encryptKeym2WithSlots,
   keym2SlotLen,
   KEYM2_VERSION_V3,
   KEYM2_VERSION_V4,
@@ -569,6 +570,47 @@ async function main() {
     });
     wrote++;
     console.log(`wrote ${file} (${container.byteLength} bytes, password and 5 shares)`);
+  }
+
+  // Roadmap 9.3: a backup with every way in (password, a 3-of-5 share set, a
+  // passkey), written in one operation by encryptKeym2WithSlots, the path the
+  // app now takes. The corpus had no container with all three slots, and this
+  // is the shape an owner who sets up inheritance with a security key gets.
+  // Added after the §4.8 vectors so every earlier entry keeps its place.
+  for (const cipher of CIPHERS) {
+    const name = `v3-slots-${cipher.slug}`;
+    const file = `${name}.keym`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+      continue;
+    }
+    const plaintext = `Keymaker fixture — v3 password, shares 3-of-5 and passkey, one write / ${cipher.name}`;
+    const prfOutput = crypto.getRandomValues(new Uint8Array(32));
+    const { container, shares } = await encryptKeym2WithSlots(
+      new TextEncoder().encode(plaintext),
+      PASSWORD,
+      null,
+      { kdf: PBKDF2_V2_PARAMS, cipher: cipher.id },
+      { shamir: { threshold: 3, count: 5 }, passkey: { prfOutput, salt: crypto.getRandomValues(new Uint8Array(32)) } },
+      KEYM2_VERSION_V3
+    );
+    writeFileSync(join(DIR, file), Buffer.from(container));
+    fixtures.push({
+      name,
+      file,
+      version: 3,
+      kdf: "pbkdf2",
+      cipher: cipher.name,
+      keyFile: false,
+      plaintext,
+      shamir: { threshold: 3, shares },
+      passkey: { prfOutputHex: Buffer.from(prfOutput).toString("hex") },
+      slotTableAuthentic: true,
+    });
+    wrote++;
+    console.log(`wrote ${file} (${container.byteLength} bytes, password, 5 shares and a passkey in one write)`);
   }
 
   writeFileSync(

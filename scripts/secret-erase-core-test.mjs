@@ -608,7 +608,7 @@ const secureEraseLocal = (v) => v && v.fill(0);
     `export { shamirSplit, encodeShareV2, combineShares, SHARE_VALUE_LEN } from "./keym-v2-shamir";
      export {
        addShamirSlotKeym2, addPasskeySlotKeym2, encryptKeym2WithExplicitSecrets,
-       encryptKeym2WithSharesRequired, KEYM2_VERSION_V3,
+       encryptKeym2WithSharesRequired, encryptKeym2WithSlots, KEYM2_VERSION_V3,
      } from "./keym-v2";
      export { KdfId, CipherId } from "./keymaker-crypto";`
   );
@@ -806,6 +806,38 @@ const secureEraseLocal = (v) => v && v.fill(0);
       const leftParts = parts.flatMap((p) => holders(run.seen, p.value, { exact: true }));
       ok(leftParts.length === 0, `after ${label} no share value survives outside the strings returned`, none(leftParts));
     }
+  }
+
+  // -- encryptKeym2WithSlots (roadmap 9.3): every way in, in one write ---------
+  // Salts and the container id are pinned so every 32-byte draw is a secret:
+  // the master key, the share secret, and the coefficients.
+  for (const inject of [false, true]) {
+    const prf = U8.from({ length: 32 }, (_, i) => (i * 43 + 3) & 0xff);
+    const prfBefore = U8.from(prf);
+    failEncrypt = inject;
+    const run = await watch(() =>
+      s.encryptKeym2WithSlots(PLAIN, PASSWORD, null, OPTIONS,
+        { shamir: { threshold: 3, count: 5 }, passkey: { prfOutput: prf, salt: SALT2 } },
+        s.KEYM2_VERSION_V3, { salt: SALT, containerId: CID, shareSalt: SALT2 })
+    );
+    failEncrypt = false;
+    const label = inject ? "a failed one-operation write" : "a one-operation write";
+    ok(inject ? run.error?.message === "injected: encrypt refused" : run.error === null && run.value?.shares?.length === 5,
+       inject ? "a failure during the one-operation write reaches the caller as itself"
+              : "a backup with a password, a 3-of-5 share set and a passkey is written in one operation",
+       run.error ? String(run.error.message) : "");
+    const drawn = secretDraws(run.drawn);
+    ok(drawn.length === 3, `${label} draws the master key, the share secret and the coefficients (not vacuous)`,
+       `${drawn.length} draws`);
+    const leftDraws = survivingDraws(run.seen, run.drawn);
+    ok(leftDraws.length === 0, `after ${label} no copy of the master key, the share secret or the coefficients survives`,
+       leftDraws.join("; "));
+    if (drawn.length === 3) {
+      const parts = s.shamirSplit(hex(drawn[1].copy), 3, 5, hex(drawn[2].copy));
+      const leftParts = parts.flatMap((p) => holders(run.seen, p.value, { exact: true }));
+      ok(leftParts.length === 0, `after ${label} no share value survives outside the strings returned`, none(leftParts));
+    }
+    ok(same(prf, prfBefore), `${label} leaves the caller's PRF output unchanged`);
   }
 
   crypto.getRandomValues = nativeRandom;

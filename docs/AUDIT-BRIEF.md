@@ -107,7 +107,7 @@ is a promise that a container written on that day still opens.
 |---|---|---|
 | 9.1 | The inheritance plan contradicted the AND setting | roadmap 9.1; fixed in PR #224, merged |
 | 9.2 | Verify-only and rehearsal brought the plaintext into the page, which zeroed it without rendering it | roadmap 9.2; fixed by the worker's `verify` operation in PR #226, merged |
-| 9.3 | Creating a backup with extra ways in derives the password once per way in | roadmap 9.3 |
+| 9.3 | Creating a backup with extra ways in derived the password once per way in | roadmap 9.3; fixed, derived once, not yet merged |
 | 9.4 | Shamir polynomial coefficients were not erased after the split, with four related gaps | roadmap 9.4; fixed, not yet merged |
 | §10 | Whether 1 MiB chunks and a cap of eight slots are the right constants | FORMAT-V2-DESIGN §10, open rows |
 | — | The 100 MB user-visible size cap, which the format did not lift | SECURITY-AUDIT.md, "Remaining work" |

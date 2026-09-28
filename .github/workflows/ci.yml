@@ -284,6 +284,12 @@ jobs:
       - name: Verify keeps the plaintext in the worker
         run: npm run test:verify-transport
 
+      # Roadmap 9.3. Creating a backup with extra ways in derives the password
+      # once, writes the same bytes as enrolling them one by one, and refuses
+      # bad input before any derivation.
+      - name: One derivation per new backup
+        run: npm run test:slot-transaction
+
       # parseKeym() consumes fully attacker-controlled binary before any of it
       # has been authenticated. Seeded and deterministic, so a CI failure
       # reproduces exactly.

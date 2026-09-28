@@ -474,13 +474,13 @@ async function main() {
     const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
     const bothCount = meta.fixtures.filter((f: any) => f.both).length;
     check(
-      fixtureCount === 42 && v1Count === 6 && v2Count === 13 && v3Count === 16 && v4Count === 7 &&
-        shamirCount === 6 && passkeyCount === 6 && pageCount === 1 && strippedCount === 1 &&
+      fixtureCount === 45 && v1Count === 6 && v2Count === 13 && v3Count === 19 && v4Count === 7 &&
+        shamirCount === 9 && passkeyCount === 9 && pageCount === 1 && strippedCount === 1 &&
         bothCount === 3,
       `corpus covers all four versions and all three ciphers per slot type ` +
         `(${v1Count} v1 + ${v2Count} v2 + ${v3Count} v3 + ${v4Count} v4, of which ${shamirCount} share ` +
         `sets, ${passkeyCount} passkey slots, ${bothCount} password-and-shares slots, ` +
-        `${pageCount} self-extracting page and ${strippedCount} stripped slot table = ${fixtureCount}/42)`
+        `${pageCount} self-extracting page and ${strippedCount} stripped slot table = ${fixtureCount}/45)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);

@@ -23,6 +23,7 @@
 import {
   encryptContainer,
   encryptContainerWithSharesRequired,
+  encryptContainerWithSlots,
   decryptData,
   secureErase,
   KeymakerError,
@@ -30,7 +31,6 @@ import {
   type KeymakerOptions,
   type DetectedFormat,
   type OpenedBy,
-  loadKeym2,
 } from "./keymaker-crypto";
 import type { CryptoRequest, CryptoResponse } from "./crypto-worker";
 import { ProbePolicy, PROBE_TIMEOUT_MS } from "./worker-probe-policy";
@@ -368,19 +368,12 @@ async function encryptViaWorkerInner(
   const w = (await ready()) ? spawn() : null;
   if (!w) {
     lastRunUsedWorker = false;
-    // encryptContainer zeroes the caller's key-file buffer in its `finally` —
-    // that is its documented contract. Anything enrolled *after* it therefore
-    // needs its own copy, taken before the call. Reading `keyFile` afterwards
-    // yields zeros, the slot key derives from the wrong material, and the
-    // enrolment fails with "Decryption failed." in the middle of an encryption.
-    // Not taken for §4.8's single-slot write, which returns before any
-    // enrolment could read it, and so before anything would erase it.
-    const keyFileForSlots =
-      keyFile && (shamir || passkey) && !shamir?.withPassword ? new Uint8Array(keyFile.slice(0)) : null;
     try {
-      // §4.8, the same branch the worker takes: one slot that needs the
-      // password and the strips together, and nothing beside it.
+      // The same three branches the worker takes, through the same calls, so a
+      // browser without a Worker writes the same backup, slot for slot.
       if (shamir?.withPassword) {
+        // §4.8: one slot that needs the password and the strips together, and
+        // nothing beside it.
         if (passkey) {
           throw new KeymakerError(
             "invalid-input",
@@ -391,60 +384,15 @@ async function encryptViaWorkerInner(
           data, password, keyFile, options, shamir.threshold, shamir.count
         );
       }
-      let out = await encryptContainer(data, password, keyFile, options);
-      let shares: string[] | undefined;
-      try {
-        // Shamir first, then passkey — the order crypto-worker.ts uses.
-        //
-        // This path used to enrol the passkey first, purely because the early
-        // return for "no share set" sat between the two blocks. Same slots, but
-        // in the other order, so a browser that fell back produced a *different
-        // container* from the same inputs: [passphrase, passkey, shamir] rather
-        // than [passphrase, shamir, passkey]. Both open, which is why nothing
-        // noticed — nothing exercises this call with both options set. The
-        // fallback exists so a browser without a Worker writes the same backup,
-        // and "the same backup" has to include the byte layout.
-        if (shamir) {
-          // The no-worker fallback has to do the same work, or enabling shares
-          // would silently produce a container with no share slot on a browser
-          // where the Worker failed to start — a backup the heirs cannot open,
-          // reported as success.
-          const { addShamirSlotKeym2 } = await loadKeym2();
-          const enrolled = await addShamirSlotKeym2(
-            new Uint8Array(out),
-            { password, keyFile: keyFileForSlots },
-            shamir.threshold,
-            shamir.count
-          );
-          out = enrolled.container.buffer.slice(
-            enrolled.container.byteOffset,
-            enrolled.container.byteOffset + enrolled.container.byteLength
-          ) as ArrayBuffer;
-          shares = enrolled.shares;
-        }
-
-        // §4.7, and the same argument: a browser where the Worker failed to start
-        // must not quietly produce a container with no passkey slot, reported as
-        // success.
-        if (passkey) {
-          const { addPasskeySlotKeym2 } = await loadKeym2();
-          const enrolled = await addPasskeySlotKeym2(
-            new Uint8Array(out),
-            { password, keyFile: keyFileForSlots },
-            passkey.prfOutput,
-            passkey.salt
-          );
-          out = enrolled.buffer.slice(
-            enrolled.byteOffset,
-            enrolled.byteOffset + enrolled.byteLength
-          ) as ArrayBuffer;
-        }
-      } finally {
-        // In a `finally` now: the copy outlives two awaits that can each throw,
-        // and an enrolment that fails part-way used to leave it in the heap.
-        secureErase(keyFileForSlots);
+      if (shamir || passkey) {
+        // Roadmap 9.3: every way in, in one write, so the password is derived
+        // once. It used to be derived again for each slot enrolled after it.
+        return await encryptContainerWithSlots(data, password, keyFile, options, {
+          shamir: shamir ? { threshold: shamir.threshold, count: shamir.count } : undefined,
+          passkey,
+        });
       }
-      return { data: out, shares };
+      return { data: await encryptContainer(data, password, keyFile, options) };
     } finally {
       // The worker path transfers `data`, which detaches it and so erases this
       // side's only copy of the plaintext. The no-worker fallback never
@@ -460,33 +408,22 @@ async function encryptViaWorkerInner(
 
   const id = nextId++;
   // Transferring detaches these buffers on this side, which is the point: one
-  // copy of the plaintext, in the realm doing the work.
+  // copy of the plaintext, and of the key file, in the realm doing the work.
   //
-  // The key file is *not* transferred when a share set is being enrolled: the
-  // worker needs it twice, once for the container and once to unwrap the slot
-  // it is about to add, and a detached buffer cannot be read a second time.
+  // The key file used to be structured-cloned when a share set or passkey was
+  // enrolled, because the worker read it twice (once to write, once to reopen
+  // the container for each enrolment) and the page erased its own copy
+  // afterwards. The worker now writes every slot in one call and reads it once,
+  // so it is transferred on every path and no copy stays here to erase.
   const transfer: Transferable[] = [data];
-  // A transferred buffer is detached on this side, so it can only be handed
-  // over when nothing here needs it afterwards. Both enrolment paths re-derive
-  // from the key file inside the worker, so neither may transfer it.
-  if (keyFile && !shamir && !passkey) transfer.push(keyFile);
+  if (keyFile) transfer.push(keyFile);
 
-  try {
-    const res = await post<Extract<CryptoResponse, { op: "encrypt"; ok: true }>>(
-      w,
-      { id, op: "encrypt", data, password, keyFile, options, shamir, passkey },
-      transfer
-    );
-    return { data: res.data, shares: res.shares };
-  } finally {
-    // When a share or passkey slot is enrolled the key file is *not* transferred
-    // (see above): the worker needs it twice, so it is structured-cloned, and
-    // the worker erases only its own copy. The page's copy — half the key
-    // material — would otherwise outlive the operation in this heap, so erase it
-    // here. This runs only on the non-transfer path, so `keyFile` is never
-    // detached and `secureErase` never touches a zero-length transferred buffer.
-    if (keyFile && (shamir || passkey)) secureErase(keyFile);
-  }
+  const res = await post<Extract<CryptoResponse, { op: "encrypt"; ok: true }>>(
+    w,
+    { id, op: "encrypt", data, password, keyFile, options, shamir, passkey },
+    transfer
+  );
+  return { data: res.data, shares: res.shares };
 }
 
 /**
