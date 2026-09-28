@@ -106,9 +106,9 @@ is a promise that a container written on that day still opens.
 | # | Finding | Where |
 |---|---|---|
 | 9.1 | The inheritance plan contradicted the AND setting | roadmap 9.1; fixed in PR #224, merged |
-| 9.2 | Verify-only and rehearsal brought the plaintext into the page, which zeroed it without rendering it | roadmap 9.2; fixed by the worker's `verify` operation, not yet merged |
+| 9.2 | Verify-only and rehearsal brought the plaintext into the page, which zeroed it without rendering it | roadmap 9.2; fixed by the worker's `verify` operation in PR #226, merged |
 | 9.3 | Creating a backup with extra ways in derives the password once per way in | roadmap 9.3 |
-| 9.4 | Shamir polynomial coefficients are not erased after the split | roadmap 9.4 |
+| 9.4 | Shamir polynomial coefficients were not erased after the split, with four related gaps | roadmap 9.4; fixed, not yet merged |
 | §10 | Whether 1 MiB chunks and a cap of eight slots are the right constants | FORMAT-V2-DESIGN §10, open rows |
 | — | The 100 MB user-visible size cap, which the format did not lift | SECURITY-AUDIT.md, "Remaining work" |
 
@@ -146,7 +146,7 @@ only a design argument says so.
 | Two independent implementations agree | FORMAT-V2-DESIGN §10 | `crosstest2.py`, comparing emitted bytes | The Python having been written from the spec, not from the TypeScript |
 | A backup can be recovered without the app | RECOVERY.md | `recovery_test.py`; roadmap 9.5 (cold, offline, with pre-downloaded wheels) | The reader having Python and the two pinned libraries, or their wheels saved in advance |
 | Verify-only and the rehearsal keep the plaintext in the worker | roadmap 2.3 and 9.2; the app | `test:verify-transport` (every message the worker posts back, for every format); `tests/browser/verify-confinement.spec.ts` (what reaches the page); `tests/browser/verify-recovery-lock.spec.ts` (the rendered page) | A browser with a working worker. Without one the check runs in the page and says so. The password and a passkey's PRF output are still handled in the page |
-| Secrets are erased after use | the app's code; SECURITY.md | `test:secret-erase`, `test:secret-erase-core`, `test:encrypt-input-erase` | Best effort only: JavaScript gives no guarantee that a copy was not made elsewhere, and 9.4 is a known gap |
+| Secrets are erased after use | the app's code; SECURITY.md | `test:secret-erase`, `test:secret-erase-core`, `test:encrypt-input-erase` | Best effort only: JavaScript gives no guarantee that a copy was not made elsewhere. Ownership of each buffer is in roadmap 9.4 |
 | The published build is the one the source produces | VERIFYING.md | `reproducible` and `reproducible-elsewhere` CI jobs; `test:reproduced-manifest` | The builders being GitHub runners under one administrator, which is not independent reproduction |
 | A release was signed by this repository's release workflow | VERIFYING.md; release notes | Sigstore signature and GitHub build attestation on each release | The reader checking the signer identity against a value obtained outside the app |
 | v4 hides a small payload's exact length | FORMAT-V4-DESIGN §5 | `crosstest2.py` v4 vectors | Length only; the header, slot count, filename and receipt are separate metadata |
