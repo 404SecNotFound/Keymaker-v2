@@ -1288,8 +1288,8 @@ export function useEncryptorState() {
         toast({
           title: "Locked — secrets cleared",
           description: sparedShares
-            ? `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were wiped from memory. Your recovery shares are still on screen — they cannot be shown again, so only you can dismiss them. Your settings are unchanged.`
-            : `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were wiped from memory. Your settings are unchanged.`,
+            ? `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were cleared from the page. Your recovery shares are still on screen — they cannot be shown again, so only you can dismiss them. Your settings are unchanged.`
+            : `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were cleared from the page. Your settings are unchanged.`,
         });
         return;
       }

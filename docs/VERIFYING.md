@@ -300,10 +300,13 @@ KEYMAKER_BUILD_ID=<commit sha> KEYMAKER_BASE_PATH=/Keymaker-v2 npm run build
 
 Being precise here matters more than sounding reassuring.
 
-- **It does not audit the code.** Verification tells you the bytes you ran match
-  the source in the repository. Whether that source is correct is what
-  [SECURITY-AUDIT.md](../SECURITY-AUDIT.md), the test suites and the
-  independent Python implementation in `reference/` are for.
+- **It does not audit the code.** Verification tells you the files you downloaded
+  and checked match the source in the repository. Whether that source is correct
+  is what review, the test suites and the independent Python implementation in
+  `reference/` are for. The review on record,
+  [SECURITY-AUDIT.md](../SECURITY-AUDIT.md), covers the v1 core and not the
+  current format; [AUDIT-BRIEF.md](AUDIT-BRIEF.md) says what a review of the
+  current format would need.
 - **It does not protect against a compromised repository.** If someone can push
   to `main` and trigger the deploy workflow, the signature will be valid — it
   is an honest signature over a malicious build. Reproducibility does not help

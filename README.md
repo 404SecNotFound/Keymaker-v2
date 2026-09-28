@@ -778,10 +778,12 @@ because "the same command twice in the same container" is not the claim you
 need. [What that does and does not cover](docs/VERIFYING.md#what-reproducibility-is-actually-checked-against)
 is stated exactly; a different OS or CPU architecture is not enforced.
 
-Those are two different claims and both matter. The signature says the site is
-the artifact CI produced; the rebuild says that artifact matches the source you
-can read. See [`docs/VERIFYING.md`](docs/VERIFYING.md) — the first check needs
-nothing but `sha256sum`.
+Those are two different claims and both matter. The signature says the manifest
+is the one CI produced, and `sha256sum` says the files you downloaded match it.
+The rebuild says that artifact matches the source you can read. See
+[`docs/VERIFYING.md`](docs/VERIFYING.md). The file check needs nothing but
+`sha256sum`, and the signature check needs the signer identity from somewhere
+other than the site.
 
 The Argon2id suite is deliberately slow. It runs real memory-hard derivations across
 every KDF and cipher combination, and takes a few minutes.

@@ -70,7 +70,10 @@ Argon2id freezes the tab for 1–3 s today. A Worker buys four things at once:
 a responsive UI, real cancel/progress, transferable `ArrayBuffer`s that kill
 the double copies, and — the part that matters most — **a separate heap** for
 key material, away from React state and DOM strings. `worker-src 'self'` is
-already in the CSP. This also unblocks 2.2 and 2.5.
+already in the CSP. This also unblocks 2.2 and 2.5. *Corrected 27 September
+2026.* The derived keys stay in the worker, but the password is typed into the
+page and a decrypted result is returned to it, including on a verify-only run
+(9.2), so those two cross the boundary.
 
 ### 2.2 Signed build provenance — **shipped**
 
@@ -86,14 +89,18 @@ check. For a zero-server tool this is the highest-value trust item that exists.
 discard the plaintext, never render it. Tiny to build, and it makes backup
 hygiene a first-class flow. Nobody ships this.
 
-Worth stating precisely, because the honest version is narrower than the pitch:
-authenticating an AEAD ciphertext *requires producing the plaintext*. Neither
-AES-GCM nor ChaCha20-Poly1305 has a verify-the-tag-only operation and WebCrypto
-exposes no such API, so the plaintext exists in the worker heap for the length
-of one call. What verify-only removes is the part under the user's control — it
-never reaches the DOM, a Blob, the clipboard, or a file. The result reports the
-byte count as well as a tick, because "it opens" alone does not catch the right
-password on the wrong backup.
+Worth stating precisely, because the honest version is narrower than the pitch.
+Checking an AES-GCM or ChaCha20-Poly1305 tag does not in principle need the
+plaintext: both tags are computed over the ciphertext. What the app has is the
+APIs it calls, and those only verify by decrypting. WebCrypto's AES-GCM and
+`@noble/ciphers`' ChaCha20-Poly1305 both return the plaintext or throw, and a
+hand-written tag-only check is exactly the kind of custom primitive this project
+does not write. So the plaintext is produced. It was described here as staying
+in the worker heap for one call; it does not. The worker returns it to the page,
+which zeroes it at once (9.2). What verify-only removes is the part under the
+user's control: it never reaches the DOM, a Blob, the clipboard, or a file. The
+result reports the byte count as well as a tick, because "it opens" alone does
+not catch the right password on the wrong backup.
 
 ### 2.4 In-app recovery kit — **shipped**
 

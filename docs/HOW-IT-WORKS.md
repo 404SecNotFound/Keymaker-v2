@@ -109,8 +109,8 @@ transmitting data. What is true is narrower and still worth something:
 - **There is no telemetry and no transmitting code.** That is a fact about the
   source, not about the browser.
 - **You can check it.** The build is reproducible and the manifest is signed, so
-  the bytes you run are the bytes in the repository, and the repository is
-  readable.
+  you can check that the files you download are the ones the repository builds,
+  and the repository is readable.
 - **The policy still raises the cost.** `connect-src 'none'` removes the
   convenient channels; `script-src` hashes stop injected inline script from
   running at all; `worker-src 'self'` stops injected script starting a `blob:`
