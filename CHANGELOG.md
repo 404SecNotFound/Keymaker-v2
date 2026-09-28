@@ -3,6 +3,17 @@
 ## Unreleased
 
 ### Fixed
+- **Several claims said more than the app establishes.** The verify page and
+  `docs/VERIFYING.md` now say that a matching hash shows which files were
+  downloaded, not which bytes the browser ran, and that a signature's identity
+  has to be checked from outside the page. The sealed-status panel names how
+  many cached files it did not check, and says a match shows the files are
+  consistent, not who made them. Clearing the page is described as clearing it,
+  not as erasing memory. The inspector's slot-table line says a change made
+  without a key is reported, and the "zero knowledge" keyword is gone. The
+  README and `HOW-IT-WORKS.md` no longer imply the review on record covers the
+  current format, and `docs/AUDIT-BRIEF.md` scopes the review it does not yet
+  cover.
 - **The inheritance plan contradicted "The strips need the password too".**
   With that option on, the plan still told the owner that any k shares open
   the backup on their own, when the backup it was about to write opens only
