@@ -33,6 +33,16 @@
   test vector still compares byte for byte. Enrolling a share set with an
   invalid threshold is now refused before the password is derived.
 
+### Changed
+- **Creating a backup with a share set or a passkey derives the password once.**
+  The passphrase slot used to be written first and each extra way in enrolled
+  afterwards, and each enrolment derived the password again to reopen the
+  backup, so a backup with every way in cost three derivations. They are now
+  written in one operation. The backup is byte for byte what the old path wrote
+  given the same random inputs, and both the TypeScript and the Python
+  reference check that. Three test vectors with a password, a share set and a
+  passkey are added to the corpus.
+
 ## Keymaker v2.3.0
 
 One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),

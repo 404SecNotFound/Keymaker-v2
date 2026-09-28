@@ -313,11 +313,11 @@ def main() -> int:
         # Counted rather than assumed, because the corpus is append-only and a
         # fixture that silently stopped being listed would otherwise just stop
         # being tested. Update deliberately when the corpus grows.
-        check("v2+v3+v4 corpus has all thirty-six vectors: six share sets, six "
-              "passkeys, three password-and-shares, one page, one stripped table, "
-              "seven padded",
-              len(v2_fixtures) == 13 and len(v3_fixtures) == 16 and len(v4_fixtures) == 7
-              and len(shamir_fixtures) == 6 and len(passkey_fixtures) == 6
+        check("v2+v3+v4 corpus has all thirty-nine vectors: nine share sets, nine "
+              "passkeys (three of each in the one-write vectors that carry both), "
+              "three password-and-shares, one page, one stripped table, seven padded",
+              len(v2_fixtures) == 13 and len(v3_fixtures) == 19 and len(v4_fixtures) == 7
+              and len(shamir_fixtures) == 9 and len(passkey_fixtures) == 9
               and len(both_fixtures) == 3
               and len([f for f in v2_fixtures if f.get("selfextract")]) == 1
               and len(stripped_fixtures) == 1,
@@ -2020,6 +2020,66 @@ def main() -> int:
                    b"A" * 64)
         check_call("the reference opens the spliced container with its own slot",
                    lambda: keym2.decrypt(spliced, PASSWORD), b"A" * 64)
+
+        # Roadmap 9.3. The app now writes a new backup's ways in with one
+        # operation, deriving the password once. It claims the exact bytes of
+        # writing the passphrase slot and enrolling the rest one at a time,
+        # which is what the reference does here, so the two are compared byte
+        # for byte, share strings included, for every cipher, both table
+        # versions, with and without a key file.
+        print("\nOne-operation creation of every initial slot (roadmap 9.3):")
+        for tx_ver in (2, 3, 4):
+            for tx_cipher, tx_name in ((keym2.CIPHER_AES, "aes"), (keym2.CIPHER_CHACHA, "chacha"),
+                                       (keym2.CIPHER_CHAINED, "chained")):
+                for combo in ("shares", "passkey", "shares+passkey"):
+                    for tx_kf in (None, KEYFILE):
+                        tag = f"v{tx_ver} {tx_name} {combo}{' +keyfile' if tx_kf else ''}"
+                        pins = dict(salt=os.urandom(32), master_key=os.urandom(32))
+                        cid = None if tx_ver == 2 else os.urandom(16)
+                        sh = dict(salt=os.urandom(32), share_secret=os.urandom(32),
+                                  coefficients=os.urandom(64))
+                        prf, pk_salt = os.urandom(32), os.urandom(32)
+                        pt = f"one write, {tag}".encode()
+                        py_c = keym2.encrypt(pt, PASSWORD, kdf_id=keym2.KDF_PBKDF2, cipher_id=tx_cipher,
+                                             keyfile_bytes=tx_kf, iterations=600_000, version=tx_ver,
+                                             container_id=cid, **pins)
+                        py_s: list[str] = []
+                        if "shares" in combo:
+                            py_c, py_s = keym2.add_shamir_slot(py_c, PASSWORD, 3, 5,
+                                                               unlock_keyfile=tx_kf, **sh)
+                        if "passkey" in combo:
+                            py_c = keym2.add_passkey_slot(py_c, PASSWORD, prf,
+                                                          unlock_keyfile=tx_kf, salt=pk_salt)
+                        src, js_out, js_sh = tmp / "tx-pt.bin", tmp / "tx-js.keym", tmp / "tx-js.txt"
+                        src.write_bytes(pt)
+                        if js_sh.exists():
+                            js_sh.unlink()
+                        args = ["encryptslots", "--password", PASSWORD, "--in", str(src), "--out", str(js_out),
+                                "--cipher", tx_name, "--kdf", "pbkdf2", "--iterations", "600000",
+                                "--salt", pins["salt"].hex(), "--master-key", pins["master_key"].hex()]
+                        if cid is not None:
+                            args += ["--container-id", cid.hex()]
+                            if tx_ver == 4:
+                                args += ["--version", "4"]
+                        if tx_kf is not None:
+                            args += ["--keyfile", tx_kf.hex()]
+                        if "shares" in combo:
+                            args += ["--threshold", "3", "--shares", "5", "--shares-out", str(js_sh),
+                                     "--share-salt", sh["salt"].hex(), "--share-secret", sh["share_secret"].hex(),
+                                     "--share-coefficients", sh["coefficients"].hex()]
+                        if "passkey" in combo:
+                            args += ["--prf-output", prf.hex(), "--passkey-salt", pk_salt.hex()]
+                        try:
+                            bridge(*args)
+                            js_c = js_out.read_bytes()
+                            js_s = ([ln for ln in js_sh.read_text().splitlines() if ln.strip()]
+                                    if js_sh.exists() else [])
+                        except BridgeError as e:
+                            js_c, js_s = b"", [f"bridge: {e}"]
+                        check(f"{tag}: the container is byte-identical to the reference's three steps",
+                              py_c == js_c, f"py={len(py_c)}B js={len(js_c)}B")
+                        if "shares" in combo:
+                            check(f"{tag}: the five strips are the same strings", py_s == js_s)
 
 
     finally:

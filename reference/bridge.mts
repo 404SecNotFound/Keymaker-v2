@@ -63,6 +63,7 @@ import {
   KEYM2_VERSION_V4,
   addShamirSlotKeym2,
   addPasskeySlotKeym2,
+  encryptKeym2WithSlots,
   derivePrfSalt,
   dearmorKeym2,
 } from "../src/lib/keym-v2.ts";
@@ -227,6 +228,53 @@ try {
     );
     writeFileSync(outFile, Buffer.from(container));
     writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
+
+  } else if (cmd === "encryptslots") {
+    // Roadmap 9.3. A backup with a passphrase and, besides it, a share set, a
+    // passkey or both, written in one operation, with every random input
+    // pinned so crosstest2.py can compare the bytes and the share strings with
+    // the reference's three-step path (encrypt, add_shamir_slot,
+    // add_passkey_slot). The one-operation writer claims those bytes exactly.
+    const kdf: KdfParams =
+      flag("kdf") === "argon2id"
+        ? {
+            kdf: KdfId.ARGON2ID,
+            params: {
+              timeCost: Number(flag("time") ?? 2),
+              memoryKiB: Number(flag("mem") ?? 16384),
+              parallelism: Number(flag("par") ?? 2),
+            },
+          }
+        : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
+    const hex = (name: string) => {
+      const v = flag(name);
+      return v === undefined ? undefined : Uint8Array.from(Buffer.from(v, "hex"));
+    };
+    const containerId = hex("container-id");
+    const prf = hex("prf-output");
+    const { container, shares } = await encryptKeym2WithSlots(
+      new Uint8Array(inputBuf),
+      password,
+      keyFile ? new Uint8Array(keyFile) : null,
+      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
+      {
+        shamir: flag("threshold") === undefined
+          ? undefined
+          : { threshold: Number(flag("threshold")), count: Number(flag("shares")) },
+        passkey: prf === undefined ? undefined : { prfOutput: prf, salt: hex("passkey-salt")! },
+      },
+      containerId === undefined ? KEYM2_VERSION_V2 : flag("version") === "4" ? KEYM2_VERSION_V4 : KEYM2_VERSION_V3,
+      {
+        salt: hex("salt"),
+        masterKey: hex("master-key"),
+        containerId,
+        shareSalt: hex("share-salt"),
+        shareSecret: hex("share-secret"),
+        coefficients: hex("share-coefficients"),
+      }
+    );
+    writeFileSync(outFile, Buffer.from(container));
+    if (shares) writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
 
   } else if (cmd === "encryptapp") {
     const kdf: KdfParams =

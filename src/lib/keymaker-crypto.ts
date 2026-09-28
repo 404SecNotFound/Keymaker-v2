@@ -987,6 +987,66 @@ export async function encryptContainerWithSharesRequired(
   }
 }
 
+/**
+ * A new backup with a passphrase and, besides it, a share set, a passkey or
+ * both, written in one operation (roadmap 9.3). `encryptContainer`'s
+ * validation and its key-file contract (the caller's buffer is zeroed once
+ * used). The password is derived once, however many ways in there are.
+ *
+ * The worker and its no-worker fallback both call this, so the two write the
+ * same backup. §4.8's password-and-shares slot is not an option here; it is
+ * `encryptContainerWithSharesRequired`.
+ */
+export async function encryptContainerWithSlots(
+  dataBuffer: ArrayBuffer,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null,
+  options: KeymakerOptions,
+  slots: {
+    shamir?: { threshold: number; count: number } | undefined;
+    passkey?: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
+  }
+): Promise<{ data: ArrayBuffer; shares?: string[] | undefined }> {
+  validateCommon(dataBuffer, password, true);
+  if (!password) {
+    throw new KeymakerError("credential-required", "A password is required for encryption.");
+  }
+  if (!crypto.subtle) {
+    throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
+  }
+  if (!options || !options.kdf || options.cipher === undefined) {
+    throw new Error("encryptContainerWithSlots requires explicit kdf and cipher options.");
+  }
+  validateKdfParams(options.kdf, "encrypt");
+  const cipher = options.cipher;
+  if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+    throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
+  }
+  try {
+    const { encryptKeym2WithSlots, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
+    const { container, shares } = await encryptKeym2WithSlots(
+      new Uint8Array(dataBuffer),
+      password,
+      keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+      { kdf: options.kdf, cipher },
+      slots,
+      options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
+    );
+    return {
+      data: container.buffer.slice(container.byteOffset, container.byteOffset + container.byteLength) as ArrayBuffer,
+      shares,
+    };
+  } catch (error) {
+    if (isUserFacingError(error)) throw error;
+    if (error instanceof Error && /required|too (large|long)|invalid characters|not available|threshold|count/i.test(error.message)) {
+      throw error;
+    }
+    throw new Error("Encryption failed. Please try again.");
+  } finally {
+    if (keyFileBuffer) secureErase(keyFileBuffer);
+  }
+}
+
 interface ParsedKeym {
   kdf: KdfParams;
   cipher: CipherId;

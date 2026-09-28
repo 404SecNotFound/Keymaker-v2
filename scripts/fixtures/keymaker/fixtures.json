@@ -511,6 +511,75 @@
         ]
       },
       "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-slots-aes256gcm",
+      "file": "v3-slots-aes256gcm.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "aes-256-gcm",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 password, shares 3-of-5 and passkey, one write / aes-256-gcm",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE2:TS97-7WWN-WXCH-FW84-2AKR-3DT9-9C1G-3RJ4-EVB1-X4HE-YJNW-MPC4-Z8XG-T3RE-M1X0-AF2H-S7WA-J704-0CR5-GT81-MG53-T5JM-0DHK-DXQT-51PM-QG84-1G",
+          "KMSHARE2:TS97-7WWN-WXCH-FW84-2AKR-3DT9-9C1G-4Q0F-9JTK-SEJ8-ZBAD-RENP-6Z2J-R4D4-91BV-1KH7-TVAS-87FM-JEGA-28YR-A9D3-SJ2S-DF7G-ERMN-4VE3-3PNC-H0",
+          "KMSHARE2:TS97-7WWN-WXCH-FW84-2AKR-3DT9-9C1G-7S78-CN15-MF38-FGV2-0KAM-7A0A-6MMV-Z9YC-FV6H-P0D3-YWHG-P452-75X0-FN64-6W7R-36JQ-4KRJ-ZJAQ-C69D-XR",
+          "KMSHARE2:TS97-7WWN-WXCH-FW84-2AKR-3DT9-9C1G-9Y8Z-CT6Y-D0CT-6DXX-VGZ1-57BN-ZDW1-6835-VGVV-QXQQ-8P82-NCGT-EE3Z-TG2R-XKNF-2YZ0-0HF5-8FZS-F6DD-Q0",
+          "KMSHARE2:TS97-7WWN-WXCH-FW84-2AKR-3DT9-9C1G-AGFR-9XX8-01XT-PPCJ-3D03-4J9D-1X5Y-G0PJ-NRCD-V6GD-YDP6-H65J-B307-TN46-AC4S-QVMW-06E9-3449-GKDS-RC"
+        ]
+      },
+      "passkey": {
+        "prfOutputHex": "6bfbfc5e3fcac2401ec40b5d19e8309450b76806dacf35d6b5b7b348ef384bcd"
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-slots-chacha20poly1305",
+      "file": "v3-slots-chacha20poly1305.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chacha20-poly1305",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 password, shares 3-of-5 and passkey, one write / chacha20-poly1305",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE2:GVCB-FAPM-REHP-TWFZ-Q2GG-NSSF-TG1G-3EGT-M89F-AD95-Z43Z-VGVV-GKNJ-3GVT-8GMP-3ZTV-HVCY-YEHN-J5J5-E8PB-DVZE-NN2B-1825-QX2Q-FDBS-N14B-3R",
+          "KMSHARE2:GVCB-FAPM-REHP-TWFZ-Q2GG-NSSF-TG1G-5DF7-6F4Q-MH7M-90V3-GWA0-45SS-Z1FV-CGJZ-0ESM-RZD6-9RZ2-6HW6-TP70-9GB0-TFAK-91CH-G6TW-9FBP-WYHG-1G",
+          "KMSHARE2:GVCB-FAPM-REHP-TWFZ-Q2GG-NSSF-TG1G-7497-QZ8Q-SGHT-ECSJ-V35P-W4SG-17KT-YE1X-9N0Z-VRM5-DEMY-9ATQ-MVFF-PGEV-QDNA-XMYV-XBRW-TK6M-9G5S-T8",
+          "KMSHARE2:GVCB-FAPM-REHP-TWFZ-Q2GG-NSSF-TG1G-8QRE-DHVD-HTW3-2299-CBQ4-BDXY-SNCZ-K0CY-VMXG-MKNE-VC2K-VS5H-C7B4-Y5AE-HRPG-48Y3-CVAF-F7RK-0TWT-J0",
+          "KMSHARE2:GVCB-FAPM-REHP-TWFZ-Q2GG-NSSF-TG1G-AYYE-W1QD-WVAD-5EBR-7MRJ-KCXQ-7KGY-1YZW-JF4V-QMCD-ZT9F-M230-2A3B-JE1W-W2MB-DQE3-6ZEB-6QMX-HNRR-SC"
+        ]
+      },
+      "passkey": {
+        "prfOutputHex": "d9e534338ea9dcc8bd4cb590c22d53ad8f29293620b42e14241bbc7e7802376d"
+      },
+      "slotTableAuthentic": true
+    },
+    {
+      "name": "v3-slots-chained",
+      "file": "v3-slots-chained.keym",
+      "version": 3,
+      "kdf": "pbkdf2",
+      "cipher": "chained",
+      "keyFile": false,
+      "plaintext": "Keymaker fixture — v3 password, shares 3-of-5 and passkey, one write / chained",
+      "shamir": {
+        "threshold": 3,
+        "shares": [
+          "KMSHARE2:SW4S-4NZB-XG37-QNV3-ZM2S-V17X-H01G-2MA6-WQZ2-9PJG-E4VA-Z1C0-QH0H-2J2Y-H2Q9-EA0D-DZ73-PB7F-XDAH-ZCMM-5XB4-TY5A-RWN0-GS2V-BVYN-78SY-TG",
+          "KMSHARE2:SW4S-4NZB-XG37-QNV3-ZM2S-V17X-H01G-5EM5-X4RJ-B4K0-CF4V-KM18-SDD3-7RRJ-J1DT-C39X-2Y4M-5Z6W-S2GS-64PX-FNH0-57T7-DTK8-NPKV-8DKY-GYA0-R8",
+          "KMSHARE2:SW4S-4NZB-XG37-QNV3-ZM2S-V17X-H01G-753Z-ATW7-TQYV-XS83-JDRK-YPHV-ZTQA-N4BB-72JG-ZW3R-27YH-B8M6-55N5-0FK5-Z0P8-N7AV-XPVC-2X1P-0A50-5R",
+          "KMSHARE2:SW4S-4NZB-XG37-QNV3-ZM2S-V17X-H01G-9F5V-ABE4-E5JK-JX21-N6HZ-RH5N-HT5J-MG0F-46QG-SFE0-PF0E-1VPK-58N7-YFHP-82PQ-87VE-S30S-6FDY-YF0D-10",
+          "KMSHARE2:SW4S-4NZB-XG37-QNV3-ZM2S-V17X-H01G-B4J1-XNAH-ZPZ8-3BES-MZ84-ZASD-9RAA-KN6Y-F7CX-4D9C-HQR3-KHJC-69PZ-3039-H3F5-V2WX-X781-62S5-NEZW-Z0"
+        ]
+      },
+      "passkey": {
+        "prfOutputHex": "1936f05b83fac77d103c16ca834d84fe1e7505b393eebd0a43cc34b7d26bf260"
+      },
+      "slotTableAuthentic": true
     }
   ]
 }
