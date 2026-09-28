@@ -29,6 +29,7 @@ import {
   type KeymakerErrorCode,
   type KeymakerOptions,
   type DetectedFormat,
+  type OpenedBy,
   loadKeym2,
 } from "./keymaker-crypto";
 import type { CryptoRequest, CryptoResponse } from "./crypto-worker";
@@ -556,6 +557,95 @@ export async function decryptViaWorker(
       weakKdf: res.weakKdf,
     };
   } finally {
+    secureErase(prfOutput);
+  }
+}
+
+export interface VerifyOutcome {
+  format: DetectedFormat;
+  /** The authenticated plaintext's length. The plaintext itself never arrives. */
+  bytes: number;
+  openedBy: OpenedBy;
+  keyFileUsed: boolean;
+  slotTable: "authentic" | "changed" | "not_available";
+  weakKdf: string | null;
+  /**
+   * False when there was no worker and the check ran on this page's thread.
+   *
+   * The caller has to say so. Only the worker keeps the plaintext out of the
+   * page, and a fallback that did the same work here without saying it would
+   * be the confinement claim with the confinement removed.
+   */
+  inWorker: boolean;
+}
+
+/**
+ * Prove a backup opens without handing its contents to the page (roadmap 9.2).
+ *
+ * The worker decrypts, counts, erases and answers with the count; the
+ * response carries no buffer. `decryptViaWorker` is still the call for a
+ * decrypt the user asked to see.
+ *
+ * ## With no worker
+ *
+ * The same reader runs here instead, and the plaintext it returns is erased
+ * before this function returns — but it did exist in this heap, so the
+ * outcome says `inWorker: false` and the page tells the user. Refusing to
+ * verify at all would leave someone checking a backup on a browser without
+ * workers no way to check it, and the fallback is the in-thread decrypt they
+ * could run anyway; what it must not do is claim the worker's property.
+ */
+export async function verifyViaWorker(
+  data: ArrayBuffer,
+  password: string,
+  keyFile: ArrayBuffer | null,
+  shares?: string[],
+  prfOutput?: Uint8Array
+): Promise<VerifyOutcome> {
+  try {
+    const w = (await ready()) ? spawn() : null;
+    if (!w) {
+      lastRunUsedWorker = false;
+      const result = await decryptData(data, password, keyFile, shares, prfOutput);
+      const bytes = result.data.byteLength;
+      secureErase(result.data);
+      return {
+        format: result.format,
+        bytes,
+        openedBy: result.openedBy,
+        keyFileUsed: result.keyFileUsed,
+        slotTable:
+          result.slotTableAuthentic === null
+            ? "not_available"
+            : result.slotTableAuthentic
+              ? "authentic"
+              : "changed",
+        weakKdf: result.weakKdf,
+        inWorker: false,
+      };
+    }
+    lastRunUsedWorker = true;
+
+    const id = nextId++;
+    const transfer: Transferable[] = [data];
+    if (keyFile) transfer.push(keyFile);
+
+    const res = await post<Extract<CryptoResponse, { op: "verify"; ok: true }>>(
+      w,
+      { id, op: "verify", data, password, keyFile, shares, prfOutput },
+      transfer
+    );
+    return {
+      format: res.format,
+      bytes: res.bytes,
+      openedBy: res.openedBy,
+      keyFileUsed: res.keyFileUsed,
+      slotTable: res.slotTable,
+      weakKdf: res.weakKdf,
+      inWorker: true,
+    };
+  } finally {
+    // As in decryptViaWorker: the page's copy of the PRF output, on every exit.
     secureErase(prfOutput);
   }
 }

@@ -15,6 +15,15 @@
   real container, and every credential set it does not describe is refused.
   Turning recovery shares off also no longer leaves the plan describing a
   share set that will not be issued.
+- **Verify-only and the rehearsal brought the plaintext into the page.** Both
+  asked the worker for an ordinary decrypt and zeroed the result on arrival, so
+  nothing was shown but a full copy of the secret still crossed into the page's
+  memory. They now ask for a verify, which answers with the byte count and what
+  the reader established, and never the contents. With no worker the check runs
+  in the page and the result says so. The verify result also names the kind of
+  slot that opened the backup, so strips typed with a password are reported as
+  the password and the strips together. `npm run test:verify-transport` checks
+  every message the worker sends back, for every format it reads.
 
 ## Keymaker v2.3.0
 

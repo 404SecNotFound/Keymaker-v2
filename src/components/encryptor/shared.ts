@@ -12,6 +12,7 @@ import {
   KeymakerError,
   loadKeym2,
   CipherId,
+  type OpenedBy,
 } from "@/lib/keymaker-crypto";
 import { loadShamir } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
@@ -705,7 +706,14 @@ export async function containerSetCodes(container: Uint8Array): Promise<string[]
 }
 
 /** Verify-only decrypt result — see the `verifyOnly` state in the hook. */
-export type VerifyResult = { detail: string; bytes: number; method: "password" | "recovery shares" | "passkey" };
+export type VerifyResult = {
+  detail: string;
+  bytes: number;
+  /** From the reader: which kind of slot opened it, not what was typed. */
+  method: OpenedBy;
+  /** False when there was no worker and the check ran on the page's thread. */
+  inWorker: boolean;
+};
 
 // Decrypted-result QR modal state. This is purely a display-side concern —
 // the QR is generated from the already-decrypted `outputText`. It does not
@@ -731,8 +739,8 @@ export type DecryptedQrStatus =
  * is opened with them alone — no password — through the same worker call
  * the verify-only unlock uses, and closed again without a byte reaching
  * the DOM, the clipboard, or a Blob. What is reported is that it opened,
- * how long it took, and which strips did it; the plaintext exists in the
- * worker for the length of one call and is zeroed on arrival.
+ * how long it took, and which strips did it. The worker's verify keeps the
+ * plaintext on its side and erases it there; only its length comes back.
  *
  * The pasted strips are secrets (any k of them are the password) and are
  * wiped with everything else. The outcome is not a secret, and it is not
@@ -743,7 +751,7 @@ export type DecryptedQrStatus =
 export type RehearsalState =
   | { kind: "idle" }
   | { kind: "running" }
-  | { kind: "ok"; on: string; strips: number[]; seconds: number; bytes: number }
+  | { kind: "ok"; on: string; strips: number[]; seconds: number; bytes: number; inWorker: boolean }
   | { kind: "failed"; message: string };
 
 /**

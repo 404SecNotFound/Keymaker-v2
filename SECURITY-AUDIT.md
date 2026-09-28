@@ -120,7 +120,9 @@ Three consequences beyond responsiveness:
   *Corrected 27 September 2026.* This bullet said passwords and plaintext live
   there too. The password is typed into the page and sent to the worker, and a
   decrypted result is returned to the page, to be shown or, on a verify-only
-  run, zeroed without being shown.
+  run, zeroed without being shown. *Updated 28 September 2026.* A verify-only
+  run and the rehearsal now keep the plaintext in the worker and receive only
+  its length (roadmap 9.2). An ordinary decrypt still returns it.
 - **The B1 race widened.** It was previously unreachable on the Argon2id path
   *because* the tab was frozen. Now that the tab responds, a user really can
   switch tabs mid-derivation on every path, so the Phase 1 sequence guard went

@@ -42,6 +42,7 @@ import {
   loadHashWasm,
   type KeymakerOptions,
   type DetectedFormat,
+  type OpenedBy,
   loadKeym2,
 } from "./keymaker-crypto";
 import type { Argon2Sample } from "./kdf-calibration";
@@ -80,7 +81,16 @@ export type CryptoRequest =
     }
   | {
       id: number;
-      op: "decrypt";
+      /**
+       * `verify` is `decrypt` that keeps the plaintext here (roadmap 9.2).
+       *
+       * Same inputs, same reader, a different answer: the byte count and what
+       * the reader established, never the bytes. Verify-only and the rehearsal
+       * used to take the full decrypt response and zero the plaintext on
+       * arrival, which put a whole copy of it in the page's heap to prove a
+       * backup opens — the one operation whose point is not to show it.
+       */
+      op: "decrypt" | "verify";
       data: ArrayBuffer;
       password: string;
       keyFile: ArrayBuffer | null;
@@ -124,6 +134,28 @@ export type CryptoResponse =
        * the error path below this needs no reconstruction.
        */
       slotTableAuthentic: boolean | null;
+      weakKdf: string | null;
+    }
+  /**
+   * Everything a verify is allowed to tell the page. No field here is, or is
+   * derived from, a byte of the plaintext except its length.
+   */
+  | {
+      id: number;
+      ok: true;
+      op: "verify";
+      format: DetectedFormat;
+      /** The authenticated plaintext's length. */
+      bytes: number;
+      /** Which kind of slot the reader settled on. */
+      openedBy: OpenedBy;
+      keyFileUsed: boolean;
+      /**
+       * v3 §5.2, named rather than a nullable boolean so a caller cannot read
+       * "no MAC to check" as "checked and fine". `not_available` is every
+       * format without a `slot_table_mac`: v1, v2 and both IttyBitz formats.
+       */
+      slotTable: "authentic" | "changed" | "not_available";
       weakKdf: string | null;
     }
   /**
@@ -293,6 +325,33 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       return;
     }
 
+    if (req.op === "verify") {
+      const result = await decryptData(req.data, req.password, req.keyFile, req.shares, req.prfOutput);
+      // The length is read before the erase, and the erase is unconditional:
+      // nothing between the two can throw, and nothing after it needs the bytes.
+      const bytes = result.data.byteLength;
+      secureErase(result.data);
+      const response: CryptoResponse = {
+        id: req.id,
+        ok: true,
+        op: "verify",
+        format: result.format,
+        bytes,
+        openedBy: result.openedBy,
+        keyFileUsed: result.keyFileUsed,
+        slotTable:
+          result.slotTableAuthentic === null
+            ? "not_available"
+            : result.slotTableAuthentic
+              ? "authentic"
+              : "changed",
+        weakKdf: result.weakKdf,
+      };
+      // Nothing to transfer: the response carries no buffer at all.
+      ctx.postMessage(response);
+      return;
+    }
+
     const result = await decryptData(req.data, req.password, req.keyFile, req.shares, req.prfOutput);
     const response: CryptoResponse = {
       id: req.id,
@@ -310,7 +369,16 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       id: req.id,
       ok: false,
       code: isUserFacingError(error) ? error.code : null,
-      message: error instanceof Error ? error.message : "Processing failed. Please try again.",
+      // A verify sends only messages the core has typed as safe to show. The
+      // page already shows nothing else, but this op promises that nothing
+      // secret crosses the boundary, and an untyped message is text nobody
+      // here wrote.
+      message:
+        req.op === "verify" && !isUserFacingError(error)
+          ? "Decryption failed."
+          : error instanceof Error
+            ? error.message
+            : "Processing failed. Please try again.",
     };
     ctx.postMessage(response);
   } finally {
@@ -326,6 +394,6 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     // response — a trailing call would be skipped on most exits, including
     // every failed unlock, which is the case an attacker gets to repeat.
     if (req.op === "encrypt") secureErase(req.passkey?.prfOutput);
-    if (req.op === "decrypt") secureErase(req.prfOutput);
+    if (req.op === "decrypt" || req.op === "verify") secureErase(req.prfOutput);
   }
 });

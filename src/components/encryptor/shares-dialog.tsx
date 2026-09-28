@@ -377,6 +377,8 @@ export function SharesDialog() {
                       : "the strips pasted"}{" "}
                     — {rehearsal.bytes.toLocaleString("en-US")} bytes, kept hidden. The next
                     paper vault records this as a rehearsal.
+                    {!rehearsal.inWorker &&
+                      " Checked on this page, because the background worker did not start: the contents were in this page's memory until the check finished, then cleared."}
                   </span>
                 </p>
               )}
