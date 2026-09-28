@@ -71,6 +71,7 @@ import {
   PASSPHRASE_ENTROPY_BITS,
 } from "./shared";
 import { useEncryptorContext } from "./context";
+import { atDetail } from "@/lib/detail-level";
 
 export function SecretForm({ mode }: { mode: Mode }) {
   const {
@@ -105,7 +106,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     blockedByPasswordPolicy, isProcessButtonDisabled, printPaperVault,
     rehearseFromPaper, downloadContainer, clipboardSecondsLeft,
     clipboardClearPending, clearClipboardNow, lockSecondsLeft, wipeAck,
-    wipeNow, backupDiffers, accessRule,
+    wipeNow, backupDiffers, accessRule, formatDetail,
   } = useEncryptorContext();
 
   // Key-file toggle + picker/generator. Rendered in place on the Decrypt
@@ -1338,7 +1339,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
                   : "this password"}
           </p>
           <p className="mt-1 text-[12px] leading-snug text-success/90">
-            {verifyResult.detail} · {formatBytes(verifyResult.bytes)} of contents,
+            {atDetail(verifyResult.detail, formatDetail)} · {formatBytes(verifyResult.bytes)} of contents,
             authenticated and discarded without being shown.
           </p>
           {!verifyResult.inWorker && (
@@ -1356,7 +1357,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
       ) : decryptInfo && mode === 'decrypt' ? (
         <p className="animate-in fade-in-50 rounded-lg bg-inset px-3 py-2 text-[12px] text-muted-foreground">
           <Info className="mr-1.5 inline h-3.5 w-3.5 align-[-2px]" />
-          {decryptInfo}
+          {atDetail(decryptInfo, formatDetail)}
         </p>
       ) : null}
 
@@ -1437,7 +1438,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
             </dd>
             <dt className="text-muted-foreground">Protected by</dt>
             <dd className="min-w-0 font-mono text-[12px] text-foreground">
-              <span data-testid="receipt-kdf">{receipt.kdf}</span>
+              <span data-testid="receipt-kdf">{atDetail(receipt.kdf, formatDetail)}</span>
               {" · "}
               <span data-testid="receipt-cipher">{receipt.cipher}</span>
             </dd>
@@ -1706,7 +1707,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
         place the choice can be taught at the moment it means anything.
       */}
       {mode === 'encrypt' && outputText.startsWith('keym2:') && (
-        <SelfExtractExport armored={outputText} />
+        <SelfExtractExport armored={outputText} formatDetail={formatDetail} />
       )}
 
       {/*

@@ -189,6 +189,13 @@ export function useEncryptorState() {
   // Advanced encryption options (Encrypt tab only — the KEYM container is
   // self-describing, so decryption needs no knobs).
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  /**
+   * Section 06, part c. "Format detail": KDF parameters, header bytes and
+   * offsets. Off by default and never stored, since the app keeps nothing
+   * between visits. Off still names every KDF and cipher, every way in, the
+   * version and every warning; see `lib/detail-level.ts`.
+   */
+  const [formatDetail, setFormatDetail] = useState(false);
   // Argon2id is the default: the user who never opens Advanced should get the
   // memory-hard KDF, not the weaker one. It needs WebAssembly, though, so
   // availability is probed on mount and we fall back visibly rather than
@@ -3236,6 +3243,7 @@ export function useEncryptorState() {
     showPassword, setShowPassword,
     showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
+    formatDetail, setFormatDetail,
     kdfChoice, setKdfChoice,
     argon2Available, setArgon2Available,
     argonTimeCost, setArgonTimeCost,

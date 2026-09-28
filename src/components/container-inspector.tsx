@@ -42,6 +42,8 @@ import {
 import { cn } from "@/lib/utils";
 import type { WayIn } from "@/lib/access-policy";
 import { SealedStatus } from "@/components/sealed-status";
+import { Switch } from "@/components/ui/switch";
+import { atDetail } from "@/lib/detail-level";
 
 /** What the encrypt form has declared, restated — not predicted. */
 export interface InspectorPlan {
@@ -298,7 +300,7 @@ function parsePeek(peek: Uint8Array): ParsedPeek | "legacy" | null {
 const rowClasses =
   "flex items-baseline gap-2.5 border-t border-border px-4 py-2 text-[12.5px]";
 
-function SlotList({ slots }: { slots: SlotRow[] }) {
+function SlotList({ slots, formatDetail }: { slots: SlotRow[]; formatDetail: boolean }) {
   return (
     <div>
       {slots.map((slot) => (
@@ -308,7 +310,7 @@ function SlotList({ slots }: { slots: SlotRow[] }) {
           </span>
           <span className="font-medium text-foreground">{slot.label}</span>
           <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
-            {slot.detail}
+            {atDetail(slot.detail, formatDetail)}
           </span>
         </div>
       ))}
@@ -331,6 +333,8 @@ export function ContainerInspector({
   peek,
   className,
   sealing = false,
+  formatDetail = true,
+  onFormatDetailChange,
 }: {
   mode: "encrypt" | "decrypt";
   plan: InspectorPlan | null;
@@ -338,6 +342,14 @@ export function ContainerInspector({
   className?: string;
   /** True while the worker is writing the container the plan describes. */
   sealing?: boolean;
+  /**
+   * Section 06c. Off, the pane leaves out header bytes, offsets and KDF
+   * parameters. The byte map, the names, the version and every check and
+   * warning stay. See `lib/detail-level.ts`.
+   */
+  formatDetail?: boolean;
+  /** Present when the page offers the switch. */
+  onFormatDetailChange?: (on: boolean) => void;
 }) {
   const parsed = useMemo(() => (peek ? parsePeek(peek) : null), [peek]);
 
@@ -394,11 +406,26 @@ export function ContainerInspector({
           </span>
         )}
       </header>
+      {onFormatDetailChange && (
+        <div className="flex items-center gap-2 px-4 pb-2">
+          <Switch
+            id="format-detail"
+            checked={formatDetail}
+            onCheckedChange={onFormatDetailChange}
+            data-testid="format-detail-switch"
+          />
+          <label htmlFor="format-detail" className="cursor-pointer text-[12px] text-muted-foreground">
+            Format detail (header bytes, offsets, KDF parameters)
+          </label>
+        </div>
+      )}
 
       {/* ── The bytes ─────────────────────────────────────────────── */}
       {parsed && parsed !== "legacy" ? (
         <>
-          <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
+          {formatDetail && (
+          <>
+          <div data-testid="inspector-hex" className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
             <span className="mr-2 text-subtle-foreground">0000</span>
             {parsed.headHex.map((hex, i) => (
               <span
@@ -422,6 +449,8 @@ export function ContainerInspector({
               slot count @ 0x{parsed.slotCountOffset.toString(16).toUpperCase().padStart(2, "0")}
             </span>
           </div>
+          </>
+          )}
 
           {/* Widths from the parsed offsets, so the map cannot disagree with
               the rows below it. `slots.length` rather than the count byte: a
@@ -433,7 +462,7 @@ export function ContainerInspector({
           <p className="px-4 pb-1 pt-3 font-mono text-[12px] uppercase tracking-[0.1em] text-subtle-foreground">
             {parsed.slotCount === 1 ? "1 slot" : `${parsed.slotCount} slots`} · ways in
           </p>
-          <SlotList slots={parsed.slots} />
+          <SlotList slots={parsed.slots} formatDetail={formatDetail} />
 
           <div className="mt-auto space-y-1.5 border-t border-border px-4 py-3">
             <Check>Header declares {parsed.cipherLabel}</Check>
@@ -488,7 +517,9 @@ export function ContainerInspector({
         </>
       ) : mode === "encrypt" && plan ? (
         <>
-          <div className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
+          {formatDetail && (
+          <>
+          <div data-testid="inspector-hex" className="mx-4 overflow-x-auto rounded-md border border-border bg-background px-3 py-2 font-mono text-[12px] leading-relaxed">
             <span className="mr-2 text-subtle-foreground">0000</span>
             {["4B", "45", "59", "4D"].map((hex) => (
               <span key={hex} className="mr-1.5 font-medium text-foreground">
@@ -503,6 +534,8 @@ export function ContainerInspector({
           <p className="px-4 pb-1 pt-2 font-mono text-[12px] text-subtle-foreground">
             salts and nonces are drawn fresh at seal time
           </p>
+          </>
+          )}
 
           {/* The plan side of the same map: version is what this app writes,
               slot count is the ways-in the form has declared. Restated, not
@@ -522,7 +555,7 @@ export function ContainerInspector({
                       {way.keyFile ? "Passphrase + key file" : "Passphrase"}
                     </span>
                     <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
-                      {plan.kdfLabel}
+                      {atDetail(plan.kdfLabel, formatDetail)}
                     </span>
                   </>
                 ) : way.kind === "shares" ? (
@@ -538,7 +571,7 @@ export function ContainerInspector({
                       {way.keyFile ? "Passphrase + key file" : "Passphrase"} and share set
                     </span>
                     <span className="ml-auto text-right font-mono text-[12px] text-muted-foreground">
-                      any {way.threshold} of {way.count}, both needed · {plan.kdfLabel}
+                      any {way.threshold} of {way.count}, both needed · {atDetail(plan.kdfLabel, formatDetail)}
                     </span>
                   </>
                 ) : (
