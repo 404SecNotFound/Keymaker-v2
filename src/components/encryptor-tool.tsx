@@ -36,6 +36,8 @@ import { WorkspaceTab } from "./encryptor/workspace-tab";
 import { RecoveryTab } from "./encryptor/recovery-tab";
 import { SharesDialog } from "./encryptor/shares-dialog";
 import { RecoveryKitDialog } from "./encryptor/recovery-kit-dialog";
+import { WorkflowSteps } from "./encryptor/workflow-steps";
+import { cn } from "@/lib/utils";
 import { BASE_PATH, KEYMAKER_REPO, APP_VERSION, IS_RELEASE_BUILD, DOORS } from "./encryptor/shared";
 
 export function EncryptorTool() {
@@ -46,7 +48,7 @@ export function EncryptorTool() {
     pageCopy, activePage, navigateWorkspace, currentDoor, openDoor,
     openInheritance, inspectorPlan, sealedPeek, decryptPeek,
     commandBarCommands, paperVault, cameraOpen, setCameraOpen,
-    handleQrImageFiles, setIsRecoveryOpen,
+    handleQrImageFiles, setIsRecoveryOpen, steps,
   } = state;
 
   return (
@@ -115,7 +117,17 @@ export function EncryptorTool() {
                 ))}
               </div>
             )}
-            <div className={mode === "tools" || mode === "audio" ? "km-utility-panel" : "km-workbench"}>
+            <div
+              className={cn(
+                mode === "tools" || mode === "audio" ? "km-utility-panel" : "km-workbench",
+                workspacePage === "workbench" && mode === "encrypt" && "km-with-steps"
+              )}
+            >
+              {/* Section 06b. First in the DOM, so it reads first and comes
+                  first on a narrow screen; on a wide one the grid puts it
+                  above the container pane, so the form still starts at the
+                  top of the page. */}
+              {workspacePage === "workbench" && mode === "encrypt" && <WorkflowSteps steps={steps} />}
               <section className="km-editor">
                 <TabsContent value="encrypt" className="mt-0" tabIndex={-1}><SecretForm mode="encrypt" /></TabsContent>
                 <TabsContent value="decrypt" className="mt-0" tabIndex={-1}><SecretForm mode="decrypt" /></TabsContent>

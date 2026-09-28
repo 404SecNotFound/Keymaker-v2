@@ -55,7 +55,12 @@ export function WorkflowSteps({ steps }: { steps: Step[] }) {
           </li>
         ))}
       </ol>
-      <div data-testid="workflow-step-detail" aria-live="polite" className="km-steps-detail">
+      {/* No aria-live here. It would re-announce on every keystroke, and
+          Radix's modal hiding (the aria-hidden package) keeps every live
+          region and its ancestors exposed, so a live region here left
+          controls mounted later behind the shares dialog reachable. The
+          step to act on is marked with aria-current instead. */}
+      <div data-testid="workflow-step-detail" className="km-steps-detail">
         {described.map((st) => (
           <p key={st.id} data-step={st.id}>
             <span className="text-foreground">{st.label}.</span> {st.detail}
