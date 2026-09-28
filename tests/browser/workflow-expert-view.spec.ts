@@ -32,7 +32,8 @@ test("the inspector leaves out bytes and KDF parameters until format detail is o
   await expect(pane(page)).not.toContainText(/\bt=\d/);
 
   await showFormatDetail(page);
-  await expect(visible(page.getByTestId("inspector-hex"))).toContainText("4B 45 59 4D");
+  // The gaps between bytes are margins, so the text runs together.
+  await expect(visible(page.getByTestId("inspector-hex"))).toContainText("4B45594D");
   await expect(pane(page)).toContainText("salts and nonces are drawn fresh at seal time");
   await expect(pane(page)).toContainText(/Argon2id · \d+ MiB · t=\d+ · p=\d+/);
 
@@ -79,7 +80,7 @@ test("the unlock line keeps the version and cipher, and drops only the parameter
   const line = visible(page.getByText(/^Format: KEYM v3/));
   await expect(line).toHaveText("Format: KEYM v3 · PBKDF2 · AES-256-GCM");
   await showFormatDetail(page);
-  await expect(line).toHaveText("Format: KEYM v3 · PBKDF2 · 1,000,000 iterations · AES-256-GCM");
+  await expect(line).toHaveText("Format: KEYM v3 · PBKDF2 (1,000,000 iters) · AES-256-GCM");
 });
 
 test("the self-extract notice keeps its trade-off and leaves the per-format reasons to format detail", async ({ page }) => {

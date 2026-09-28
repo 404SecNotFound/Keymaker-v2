@@ -281,6 +281,25 @@ check("an AND way in keeps its own wording",
   check("a weak-KDF warning keeps the numbers it quotes",
     trim(warned).includes("made with 100,000 PBKDF2 iterations, below the 1,000,000 this version writes"), trim(warned));
   check("a label with no parameters is unchanged", trim("AES-256-GCM") === "AES-256-GCM");
+  // The readers' shape, which the unlock line uses: parameters in brackets.
+  check("the reader's PBKDF2 label loses its bracketed iterations",
+    trim("Format: KEYM v3 · PBKDF2 (1,000,000 iters) · AES-256-GCM") === "Format: KEYM v3 · PBKDF2 · AES-256-GCM",
+    trim("Format: KEYM v3 · PBKDF2 (1,000,000 iters) · AES-256-GCM"));
+  check("the reader's Argon2id label loses its bracketed parameters",
+    trim("Argon2id (64 MiB, t=3, p=4)") === "Argon2id", trim("Argon2id (64 MiB, t=3, p=4)"));
+  check("a both-needed slot keeps the KDF name inside its bracket",
+    trim("password and share set, both needed (PBKDF2 1,000,000 iters)") ===
+      "password and share set, both needed (PBKDF2)",
+    trim("password and share set, both needed (PBKDF2 1,000,000 iters)"));
+  check("a bracket naming an algorithm is kept",
+    trim("passkey / WebAuthn PRF (HKDF-SHA-256)") === "passkey / WebAuthn PRF (HKDF-SHA-256)");
+  const readerWarned =
+    "Format: KEYM v3 · PBKDF2 (100,000 iters) · AES-256-GCM — Heads up: this backup was made with " +
+    "100,000 PBKDF2 iterations, below the 1,000,000 this version writes. It opened fine.";
+  check("the reader's shape keeps a weak-KDF warning's numbers too",
+    trim(readerWarned).includes("made with 100,000 PBKDF2 iterations, below the 1,000,000 this version writes") &&
+      !trim(readerWarned).includes("(100,000 iters)"),
+    trim(readerWarned));
   check("with format detail on, nothing is trimmed",
     atDetail("Argon2id · 64 MiB · t=3 · p=4", true) === "Argon2id · 64 MiB · t=3 · p=4");
 }
