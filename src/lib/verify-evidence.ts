@@ -52,3 +52,13 @@ export function verifyChanges<F>(
   if (typedSince) changes.push("credentials");
   return changes;
 }
+
+/**
+ * SHA-256 of a container, in hex (Section 06e). The page keeps this for the
+ * backup it created, so a later verify can tell whether it opened that exact
+ * backup. A container is ciphertext, and its hash is not a secret either.
+ */
+export async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as Uint8Array<ArrayBuffer>);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, "0")).join("");
+}

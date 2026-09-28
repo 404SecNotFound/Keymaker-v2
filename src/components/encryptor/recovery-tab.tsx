@@ -14,11 +14,19 @@ import { atDetail } from "@/lib/detail-level";
 
 export function RecoveryTab() {
   const {
-    mode, receipt, rehearsal, downloadContainer, printPaperVault,
+    receipt, rehearsal, downloadContainer, printPaperVault,
     handleModeChange, returnToBackupTest, printoutInputRef, checkPrintout,
     printoutBusy, printoutFindings, setIsRecoveryOpen, openInheritance,
-    exportsStarted, backupDiffers, formatDetail,
+    exportsStarted, backupDiffers, formatDetail, workflow,
   } = useEncryptorContext();
+  // Section 06e. Verifies that opened this exact backup, on either tab.
+  const verified = workflow.phase === "created" ? workflow.verified : [];
+  const fromDisk = verified.find((v) => v.fromFile);
+  const openedWith = (how: string) =>
+    how === "passkey" ? "the passkey"
+      : how === "shares" ? "recovery shares"
+      : how === "passphrase-and-shares" ? "the password and recovery shares"
+      : "the password";
   // Local time, to the minute: when the page asked, not when anything was kept.
   const when = (iso: string) =>
     new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
@@ -28,7 +36,7 @@ export function RecoveryTab() {
       <div className="km-recovery-grid">
         <section className="km-form-section" aria-labelledby="recovery-current-title">
           <div className="km-section-heading"><span className="km-section-number">01</span><h2 id="recovery-current-title">Current backup</h2></div>
-          {mode === "encrypt" && receipt ? (
+          {receipt ? (
             <>
               <p className="text-sm text-foreground">Container created · {formatBytes(receipt.bytes)}</p>
               <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{receipt.cipher} · {atDetail(receipt.kdf, formatDetail)}</p>
@@ -41,7 +49,9 @@ export function RecoveryTab() {
               <dl className="km-recovery-facts">
                 <div><dt>Recovery shares</dt><dd>{receipt.shares ? `${receipt.shares.threshold} of ${receipt.shares.count} needed` : "Not included"}</dd></div>
                 <div><dt>Saved copy</dt><dd data-testid="recovery-saved-copy">{
-                  !receipt.onScreen
+                  fromDisk
+                    ? `A saved file was loaded at ${when(fromDisk.at)}, matched this backup byte for byte, and opened with ${openedWith(fromDisk.how)}.`
+                    : !receipt.onScreen
                     ? "Downloaded when encryption finished. Check your downloads folder"
                     : exportsStarted.download || exportsStarted.print
                       ? [
@@ -51,7 +61,7 @@ export function RecoveryTab() {
                         ". The browser does not tell this page whether the file was kept or the sheet printed, so check that it was."
                       : "Not saved yet. It is on screen: download it or print the paper backup"
                 }</dd></div>
-                <div><dt>Recovery test</dt><dd>{rehearsal.kind === "ok" ? `Rehearsed on ${rehearsal.on}${rehearsal.strips.length > 0 ? ` with strips ${rehearsal.strips.join(" and ")}` : ""}` : "Not tested yet in this session"}</dd></div>
+                <div><dt>Recovery test</dt><dd data-testid="recovery-test">{rehearsal.kind === "ok" ? `Rehearsed on ${rehearsal.on}${rehearsal.strips.length > 0 ? ` with strips ${rehearsal.strips.join(" and ")}` : ""}` : verified.length > 0 ? `Verified with ${openedWith(verified[verified.length - 1]!.how)} at ${when(verified[verified.length - 1]!.at)}` : "Not tested yet in this session"}</dd></div>
               </dl>
               {receipt.onScreen ? (
                 <div className="km-action-row">
@@ -85,7 +95,7 @@ export function RecoveryTab() {
             <h3 id="printout-check-title" className="text-[13px] font-medium text-foreground">Check a printout</h3>
             <p className="km-help">
               Photograph printed recovery strips or container symbols, one at a time or a whole sheet at once. Keymaker confirms each code reads back intact
-              {mode === "encrypt" && receipt
+              {receipt
                 ? " and belongs to the backup created in this session."
                 : ". There is no backup from this session to compare it with, so it cannot say which backup it belongs to."}{" "}
               Nothing is opened and no password is needed.

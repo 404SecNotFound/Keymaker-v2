@@ -38,7 +38,7 @@ export function SharesDialog() {
     issuedShares, setIssuedShares, setRehearsalOpen, setRehearsalInput,
     setRehearsalPassword, setRehearsalInputRejected, lockSecondsLeft,
     keepOpen, backupFitsOnStrip, stripsCarryBackup, setStripsCarryBackup,
-    handleCopy, outputText, toast, setPaperVault, rehearsalStamp,
+    handleCopy, createdArmor, toast, setPaperVault, rehearsalStamp,
     rehearsalOpen, rehearsalInput, handleRehearsalInputChange,
     rehearsalInputRejected, rehearsalPassword, rehearsal, rehearsalLines,
     runRehearsal, operationToken, isCurrentOperation, recordExport,
@@ -200,7 +200,7 @@ export function SharesDialog() {
               variant="ghost"
               size="sm"
               // Gated on the container being here, the same way the encrypt-side
-              // copy of this button is. `outputText` is only written on the
+              // copy of this button is. `createdArmor` is only written on the
               // *text* branch; encrypting a file downloads the container and
               // leaves it empty. Ungated, this called dearmorKeym2('') — which
               // fails its prefix check and throws — inside an async handler with
@@ -208,15 +208,15 @@ export function SharesDialog() {
               // file with shares, the button did nothing at all: no print, no
               // error, no toast. Twice, and then the user closes the dialog to
               // retry and the shares are gone.
-              disabled={!outputText.startsWith("keym2:")}
+              disabled={!createdArmor.startsWith("keym2:")}
               onClick={async () => {
-                if (!issuedShares || !outputText.startsWith("keym2:")) return;
+                if (!issuedShares || !createdArmor.startsWith("keym2:")) return;
                 // Section 06: a wipe or lock during the two awaits below clears
                 // the shares on the page, and this would still print them.
                 const token = operationToken();
                 try {
                   const { dearmorKeym2 } = await loadKeym2();
-                  const container = dearmorKeym2(outputText);
+                  const container = dearmorKeym2(createdArmor);
                   const { parts, tooLarge, setCodes } = await preparePaperParts(container);
                   if (!isCurrentOperation(token)) return;
                   recordExport("print");
@@ -263,7 +263,7 @@ export function SharesDialog() {
               type="button"
               variant="ghost"
               size="sm"
-              disabled={!outputText.startsWith("keym2:")}
+              disabled={!createdArmor.startsWith("keym2:")}
               aria-expanded={rehearsalOpen}
               aria-controls="rehearsal-panel"
               onClick={() => setRehearsalOpen((v) => !v)}
@@ -272,7 +272,7 @@ export function SharesDialog() {
               <Timer className="mr-2 h-3.5 w-3.5" />
               Rehearse now
             </Button>
-            {!outputText.startsWith("keym2:") && (
+            {!createdArmor.startsWith("keym2:") && (
               <p className="w-full text-[12px] leading-snug text-muted-foreground">
                 The paper vault prints the container beside the shares, and a file
                 container is downloaded rather than kept on screen — so it is not

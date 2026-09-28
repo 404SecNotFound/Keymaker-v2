@@ -22,6 +22,9 @@
  *
  * Part d holds a verify result to what it checked: another backup, key file,
  * unlock method or newly typed credentials each make it stop applying.
+ *
+ * Part e counts a verify of this exact backup as evidence: a recovery test,
+ * and a saved-copy check when the bytes came from a file on disk.
  */
 import {
   describeAccessRule,
@@ -341,6 +344,42 @@ check("an AND way in keeps its own wording",
   check("several changes are all named, in order",
     eq(verifyChanges(text, { ...text, text: "x", keyFile: key, useShares: true }, true),
       ["backup", "key file", "unlock method", "credentials"]));
+}
+
+// ---------------------------------------------------------------------------
+// Part e: a verify of this exact backup is evidence.
+// ---------------------------------------------------------------------------
+{
+  const made = run([{ type: "job-started", job: 7 }, { type: "sealed", job: 7, settings: SETTINGS }]);
+  const pasted = { how: "passphrase" as const, fromFile: false, at: "2026-09-28T16:00:00Z" };
+  const loaded = { how: "passphrase" as const, fromFile: true, at: "2026-09-28T16:05:00Z" };
+  const stepsOf = (wf: Workflow) =>
+    workflowSteps({
+      workflow: wf, hasContent: false, credentialReady: false, changed: null, keptOnScreen: true,
+      exports: {}, printout: null, hasShares: false, rehearsed: false,
+    });
+  const stateOf = (wf: Workflow, id: string) => stepsOf(wf).find((st) => st.id === id)?.state;
+
+  check("a verify is ignored before a backup exists",
+    JSON.stringify(run([{ type: "verified", check: pasted }])) === JSON.stringify(initialWorkflow));
+  check("a verify is ignored while a job is running",
+    JSON.stringify(run([{ type: "job-started", job: 8 }, { type: "verified", check: pasted }])) ===
+      JSON.stringify({ phase: "working", job: 8 }));
+  const afterPaste = run([{ type: "verified", check: pasted }], made);
+  check("a verify is recorded on the backup it opened",
+    afterPaste.phase === "created" && afterPaste.verified.length === 1);
+  check("a pasted verify makes recovery done", stateOf(afterPaste, "recovery") === "done");
+  check("a pasted verify is not a saved copy: the page pasted its own copy",
+    stateOf(afterPaste, "saved-copy") !== "done", String(stateOf(afterPaste, "saved-copy")));
+  const afterLoad = run([{ type: "verified", check: loaded }], made);
+  check("a verify of a loaded file makes the saved copy done", stateOf(afterLoad, "saved-copy") === "done");
+  check("and recovery done", stateOf(afterLoad, "recovery") === "done");
+  check("the recovery sentence names what opened it",
+    stepsOf(run([{ type: "verified", check: { ...pasted, how: "shares" } }], made))
+      .find((st) => st.id === "recovery")!.detail.includes("the recovery shares"));
+  check("a new job drops the evidence of the old backup",
+    run([{ type: "verified", check: loaded }, { type: "job-started", job: 9 }], made).phase === "working");
+  check("a wipe drops it", run([{ type: "verified", check: loaded }, { type: "cleared" }], made).phase === "editing");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
