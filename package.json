@@ -10,6 +10,7 @@
     "test:keymaker": "node scripts/keymaker-test.mjs",
     "test:keym2-dispatch": "node scripts/keymaker-test.mjs keym2-dispatch",
     "test:calibration": "node scripts/keymaker-test.mjs calibration",
+    "test:access-policy": "node scripts/keymaker-test.mjs access-policy",
     "test:fuzz": "node scripts/keymaker-test.mjs fuzz",
     "test:fuzz2": "node scripts/keymaker-test.mjs fuzz2",
     "test:fuzz3": "node scripts/keymaker-test.mjs fuzz3",

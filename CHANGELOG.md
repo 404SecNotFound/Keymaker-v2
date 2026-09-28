@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- **The inheritance plan contradicted "The strips need the password too".**
+  With that option on, the plan still told the owner that any k shares open
+  the backup on their own, when the backup it was about to write opens only
+  with the password and the shares together. The inspector's plan pane drew
+  the same backup as two ways in (three with the passkey switch still on) where
+  the worker writes one, and the "Recovery shares" explanation said the shares
+  open it without the password. All three now read one access policy, the same
+  one the worker request is built from, and `npm run test:access-policy` holds
+  that policy against the shipping worker: every way in it describes opens a
+  real container, and every credential set it does not describe is refused.
+  Turning recovery shares off also no longer leaves the plan describing a
+  share set that will not be issued.
+
 ## Keymaker v2.3.0
 
 One additive format change: a new slot type, `0x03` (FORMAT-V2-DESIGN §4.8),

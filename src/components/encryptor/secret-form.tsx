@@ -86,7 +86,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     hideSize, setHideSize, resealOffer, startReseal, resealNotice,
     useKeyFile, keyFile, setKeyFile, isLoading, unlockCostNotice,
     isCryptoAvailable, isQrModalOpen, setIsQrModalOpen, verifyOnly, setVerifyOnly,
-    verifyResult, inheritanceOpen, setInheritanceOpen,
+    verifyResult, inheritanceOpen, setInheritanceOpen, accessPolicy,
     isDecryptedQrModalOpen, setIsDecryptedQrModalOpen,
     isDecryptedQrRevealed, setIsDecryptedQrRevealed, decryptedQrStatus,
     textInputRejected, textSecretSeedStatus, outputTextForQr,
@@ -162,8 +162,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     <div className="km-workform space-y-5">
       {mode === "encrypt" && inheritanceOpen && (
         <InheritancePlan
-          threshold={shamirThreshold}
-          count={shamirCount}
+          policy={accessPolicy}
           onDismiss={() => setInheritanceOpen(false)}
         />
       )}
@@ -1144,11 +1143,22 @@ export function SecretForm({ mode }: { mode: Mode }) {
                               Recovery shares
                             </Label>
                             <InfoTip label="What are recovery shares?">
-                              <p>
-                                Splits a second way in across several printed codes. Any{" "}
-                                {shamirThreshold} of the {shamirCount} open this container — without
-                                the password. Fewer than {shamirThreshold} reveal nothing at all.
-                              </p>
+                              {/* From the access policy, so this follows "The strips
+                                  need the password too" instead of contradicting it. */}
+                              {accessPolicy.waysIn.some((w) => w.kind === "password-and-shares") ? (
+                                <p>
+                                  Splits a way in across several printed codes. As set below, they
+                                  open this container only together with the password, so it takes
+                                  the password and any {shamirThreshold} of the {shamirCount}. Fewer
+                                  than {shamirThreshold} reveal nothing at all.
+                                </p>
+                              ) : (
+                                <p>
+                                  Splits a second way in across several printed codes. Any{" "}
+                                  {shamirThreshold} of the {shamirCount} open this container — without
+                                  the password. Fewer than {shamirThreshold} reveal nothing at all.
+                                </p>
+                              )}
                             </InfoTip>
                           </div>
                         </div>

@@ -271,6 +271,13 @@ jobs:
       - name: KDF calibration solver
         run: npm run test:calibration
 
+      # Roadmap 9.1. The inheritance plan, the inspector, the receipt and the
+      # worker request all read one access policy. This holds that policy
+      # against the shipping worker: every way in it describes must open a real
+      # container, and every credential set it does not describe must fail.
+      - name: Access policy against the worker
+        run: npm run test:access-policy
+
       # parseKeym() consumes fully attacker-controlled binary before any of it
       # has been authenticated. Seeded and deterministic, so a CI failure
       # reproduces exactly.

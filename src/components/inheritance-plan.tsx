@@ -12,22 +12,31 @@
  * user acts on; it tells them, in order, which of those to use.
  *
  * The honest framing is stated here and not only where the shares are set,
- * because this panel is where someone decides to set up an inheritance at all:
- * any `threshold` shares open the container without the password, so each share
- * is as sensitive as the password itself. Roadmap, "Honest framing to preserve".
+ * because this panel is where someone decides to set up an inheritance at all.
+ * What it says follows the backup the form will actually write, read from the
+ * same access policy the worker request is built from: by default any
+ * `threshold` shares open the container without the password, so each share is
+ * as sensitive as the password itself; with "The strips need the password too"
+ * (§4.8) the shares open nothing alone, so the heirs need the password as well.
+ * It used to say the first in both cases. Roadmap, "Honest framing to
+ * preserve", and 9.1.
  */
 
 import { ScrollText, X } from "lucide-react";
+import { sharesOf, type AccessPolicy } from "@/lib/access-policy";
 
 export function InheritancePlan({
-  threshold,
-  count,
+  policy,
   onDismiss,
 }: {
-  threshold: number;
-  count: number;
+  policy: AccessPolicy;
   onDismiss: () => void;
 }) {
+  const shares = sharesOf(policy);
+  const combined = policy.waysIn.find((w) => w.kind === "password-and-shares");
+  const secret = combined?.keyFile ? "the password and the key file" : "the password";
+  const them = combined?.keyFile ? "them" : "it";
+  const lost = combined?.keyFile ? "Lose either" : "Lose it";
   return (
     <section
       data-testid="inheritance-plan"
@@ -58,10 +67,28 @@ export function InheritancePlan({
         data-testid="inheritance-warning"
         className="rounded-md bg-warning/10 px-3 py-2 text-[12px] leading-snug text-warning"
       >
-        You keep your password. Your heirs hold recovery shares, and any{" "}
-        {threshold} of the {count} shares open this backup on their own. Each
-        share is as sensitive as the password itself, so give them to different
-        people and keep them apart.
+        {!shares ? (
+          <>
+            Recovery shares are off, so there is nothing yet for your heirs to
+            hold. Turn recovery shares on in the form below.
+          </>
+        ) : combined ? (
+          <>
+            You keep your password. Your heirs hold recovery shares, but this
+            backup is set so the shares open it only together with {secret}. It
+            takes any {shares.threshold} of the {shares.count} shares and{" "}
+            {secret}, all needed. Without {secret} the shares open nothing, so
+            your heirs must also be able to get {them}, for example from a sealed
+            letter kept apart from the shares. {lost} and the backup is lost.
+          </>
+        ) : (
+          <>
+            You keep your password. Your heirs hold recovery shares, and any{" "}
+            {shares.threshold} of the {shares.count} shares open this backup on
+            their own. Each share is as sensitive as the password itself, so give
+            them to different people and keep them apart.
+          </>
+        )}
       </p>
 
       <ol className="list-decimal space-y-1.5 pl-5 text-[13px] leading-snug text-foreground/90">
@@ -70,8 +97,9 @@ export function InheritancePlan({
           text such as account details and instructions.
         </li>
         <li data-testid="inheritance-step">
-          Recovery shares are already turned on. Set how many shares exist and
-          how many are needed to open it, in the form below.
+          {shares
+            ? "Recovery shares are turned on. Set how many shares exist and how many are needed to open it, in the form below."
+            : "Turn recovery shares on in the form below, then set how many shares exist and how many are needed to open it."}
         </li>
         <li data-testid="inheritance-step">
           Encrypt, and write the shares down once. They are shown a single time

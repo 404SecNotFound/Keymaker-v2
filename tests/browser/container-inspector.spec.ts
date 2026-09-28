@@ -118,6 +118,44 @@ test("encrypt: passkey quick access is itemised as a way in before sealing", asy
   await expect(byteMapSlots(page), "the plan left out the passkey slot it will write").toHaveCount(2);
 });
 
+/**
+ * Roadmap 9.1. §4.8 writes one slot, and the plan has to say so.
+ *
+ * The plan used to count a passphrase slot, a share slot and, with the enrol
+ * switch still on, a passkey slot: three ways in for a container the worker
+ * writes with one, and a passkey the worker refuses. It now reads the same
+ * access policy the worker request is built from. The passkey half is reached
+ * the way a user can reach it: the strips-need-password switch turns the
+ * passkey off only when it is flipped, so turning shares off, the passkey on
+ * and shares back on leaves both set.
+ */
+test("encrypt: shares that need the password are one way in, and no passkey is drawn beside them", async ({ page }) => {
+  await enableShares(page, 2, 3);
+  await visible(page.getByRole("button", { name: "Show the header it will write" })).click();
+  await expect(byteMapSlots(page)).toHaveCount(2);
+
+  const needsPassword = visible(page.locator("#shares-need-password"));
+  await needsPassword.click();
+  await expect(needsPassword).toHaveAttribute("aria-checked", "true");
+
+  await expect(byteMapSlots(page), "the plan drew §4.8 as two slots").toHaveCount(1);
+  await expect(inspector(page)).toContainText("both needed");
+  await expect(inspector(page)).not.toContainText("Share set");
+
+  const passkeySwitch = page.locator("#passkey-enabled");
+  if ((await passkeySwitch.count()) === 0) return; // no passkey control on this engine
+  const sharesSwitch = visible(page.getByRole("switch", { name: "Recovery shares" }));
+  await sharesSwitch.click();
+  await expect(sharesSwitch).toHaveAttribute("aria-checked", "false");
+  await visible(passkeySwitch).click();
+  await expect(visible(passkeySwitch)).toHaveAttribute("aria-checked", "true");
+  await sharesSwitch.click();
+  await expect(sharesSwitch).toHaveAttribute("aria-checked", "true");
+
+  await expect(byteMapSlots(page), "the plan drew a passkey slot §4.8 rules out").toHaveCount(1);
+  await expect(inspector(page)).not.toContainText("WebAuthn PRF");
+});
+
 test("encrypt: real input opens the itemisation without being asked", async ({ page }) => {
   await useTextMode(page);
   const pane = inspector(page);

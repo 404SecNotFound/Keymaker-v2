@@ -610,6 +610,7 @@ npm run test:recovery     # the documented recovery procedure, end to end
 # Focused suites, each holding one defect class fixed
 npm run test:wordlist             # the bundled EFF list against EFF's own checksum
 npm run test:password-policy      # the advisory password floor accepts and refuses the right secrets
+npm run test:access-policy        # every way in the form describes opens a real container, and no other does
 npm run test:recovery-envelopes   # KMPART2 names a corrupt part, a truncated tail, a mixed set
 npm run test:passkey-binding      # passkey enrolment's second tap is bound to the credential it made
 npm run test:secret-erase         # the page's key-file buffer is erased after a worker encrypt
