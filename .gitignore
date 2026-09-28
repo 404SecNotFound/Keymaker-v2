@@ -32,6 +32,7 @@ scripts/.generate.build.mjs
 scripts/.keym2-dispatch.build.mjs
 scripts/.calibration.build.mjs
 scripts/.access-policy.build.mjs
+scripts/.verify-transport.build.mjs
 scripts/.shamir.build.mjs
 *.tsbuildinfo
 

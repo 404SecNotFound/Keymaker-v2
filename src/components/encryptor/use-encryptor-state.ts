@@ -72,6 +72,7 @@ import {
   encryptViaWorker,
   calibrateViaWorker,
   decryptViaWorker,
+  verifyViaWorker,
   cancelAllCryptoWork,
   warmCryptoWorker,
 } from "@/lib/crypto-client";
@@ -482,8 +483,8 @@ export function useEncryptorState() {
    * is opened with them alone — no password — through the same worker call
    * the verify-only unlock uses, and closed again without a byte reaching
    * the DOM, the clipboard, or a Blob. What is reported is that it opened,
-   * how long it took, and which strips did it; the plaintext exists in the
-   * worker for the length of one call and is zeroed on arrival.
+   * how long it took, and which strips did it. The worker's verify keeps the
+   * plaintext on its side and erases it there; only its length comes back.
    *
    * The pasted strips are secrets (any k of them are the password) and are
    * wiped with everything else. The outcome is not a secret, and it is not
@@ -1904,7 +1905,8 @@ export function useEncryptorState() {
      * having forgotten which buffer it meant.
      */
     const finishOperation = (
-      buffer: ArrayBuffer,
+      // null on the verify path, where no plaintext ever reached this thread.
+      buffer: ArrayBuffer | null,
       // null on the encrypt side: the receipt is the announcement there.
       notice: { title: string; description: string } | null
     ) => {
@@ -1912,7 +1914,7 @@ export function useEncryptorState() {
       // construction copies the bytes, and the decoded string and base64
       // output are separate allocations. Matters most on decrypt, where this
       // held the plaintext.
-      new Uint8Array(buffer).fill(0);
+      if (buffer) new Uint8Array(buffer).fill(0);
 
       // B1: an operation the user has moved on from announces nothing and
       // wipes nothing. The erase above is unconditional because the buffer is
@@ -2281,7 +2283,127 @@ export function useEncryptorState() {
           }
         }
 
+        /**
+         * The info line: what was opened, and how. Shared by the decrypt and
+         * the verify so the two cannot describe the same file differently.
+         * It awaits the v2 module, so callers check staleness after it.
+         */
+        const describeOpened = async (opened: {
+          format: DetectedFormat;
+          weakKdf: string | null;
+          keyFileUsed: boolean;
+          slotTable: "authentic" | "changed" | "not_available";
+        }): Promise<string> => {
+          // Info line + legacy-format nudge.
+          //
+          // 6.1. These name a *container*, so they carry the format's name and
+          // not the application's. "Keymaker v2" became ambiguous the moment the
+          // app's own version reached 2.0.0: `Format: Keymaker v2` gives a reader
+          // no way to tell whether it describes the file they just opened or the
+          // program that opened it — and this line is exactly where someone looks
+          // when a file will not open. The legacy labels below already carry
+          // their own format's name, which is why they never had the problem.
+          const formatLabels: Record<DetectedFormat, string> = {
+            "keym-v1": "KEYM v1",
+            "keym-v2": "KEYM v2",
+            "keym-v3": "KEYM v3",
+            "keym-v4": "KEYM v4",
+            "ibtz-v1": "IttyBitz v1 (legacy)",
+            "ibtz-v0": "IttyBitz v0 (legacy)",
+          };
+          let info = `Format: ${formatLabels[opened.format]}`;
+          // Set when the container was written with derivation parameters weaker
+          // than this version would use. It changes nothing about the decryption
+          // that just succeeded — the file opened, on the terms it was written —
+          // and is appended below purely so the owner knows to consider
+          // re-encrypting rather than inheriting the weakness unaware.
+          // Taken from the reader, which knows which slot answered. It used to be
+          // taken from `inspect…(headerPeek)`, which reads slot 0 — correct for
+          // the one-slot containers this app writes, and wrong for every other
+          // shape: unlock a two-slot container with the heir's share set and the
+          // advisory described the owner's passphrase slot. Worse, an attacker
+          // who can reorder a table chooses which slot is at index 0, and so
+          // chooses which KDF the owner is told about.
+          //
+          // The labels beside it still come from the header. Those describe the
+          // *container* — its cipher, its slot count — which is a property of the
+          // file rather than of the way in, and slot 0's KDF label is the
+          // conventional summary of it.
+          if (opened.format === "keym-v1") {
+            const inspected = inspectKeym(headerPeek);
+            if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
+          } else if (
+            opened.format === "keym-v2" ||
+            opened.format === "keym-v3" ||
+            opened.format === "keym-v4"
+          ) {
+            // One inspector for both: every field it reads sits at a
+            // version-dependent offset it already resolves from the header.
+            const { inspectKeym2 } = await loadKeym2();
+            const inspected = inspectKeym2(headerPeek);
+            if (inspected) {
+              info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
+              // Only worth saying when it is not the one-slot case every
+              // container this version writes has.
+              //
+              // Read from the header, and `slot_count` is the one header byte no
+              // AEAD covers (§5.3). Slot 0's KDF label is authenticated only if
+              // slot 0 is what opened it. Both are covered when a v3 slot table
+              // authenticates; otherwise, with more than one slot, the line says
+              // where they came from rather than presenting them as checked.
+              if (inspected.slots > 1) {
+                info += ` · ${inspected.slots} slots`;
+                if (opened.slotTable !== "authentic") info += " (read from the file, not authenticated)";
+              }
+            }
+          }
+          if (opened.weakKdf) {
+            info +=
+              ` — Heads up: this backup was made with ${opened.weakKdf}. It opened fine and ` +
+              `its contents are intact. Re-encrypting it here would store the same ` +
+              `secret behind today's stronger settings.`;
+          }
+          if (opened.keyFileUsed) info += " · key file";
+          return info;
+        };
+
         if (isStale()) return;
+
+        if (verifying) {
+          // Roadmap 9.2. The worker answers with a count, not the contents:
+          // there is no plaintext on this thread to render, encode, download
+          // or scan, so none of the non-verifying path below can run on it.
+          // Reaching the next line *is* the result — the worker throws unless
+          // the AEAD tag verifies, so the container is intact and the
+          // credentials are right. The byte count is reported because "it
+          // opens, and it is the size you expect" catches the right password
+          // on the wrong backup, which a bare tick does not.
+          const verified = await verifyViaWorker(
+            inputBuffer,
+            mutablePassword,
+            keyFileBuffer,
+            suppliedShares.length > 0 ? suppliedShares : undefined,
+            prfOutput
+          );
+          const info = await describeOpened(verified);
+          if (isStale()) return;
+          setDecryptInfo(info);
+          setSlotTableWarning(verified.slotTable === "changed");
+          // Nothing was kept that could be carried over.
+          setResealOffer(null);
+          setVerifyResult({
+            detail: info,
+            bytes: verified.bytes,
+            method: verified.openedBy,
+            inWorker: verified.inWorker,
+          });
+          finishOperation(null, {
+            title: "Verified — the backup opens",
+            description: "The contents were checked and discarded without being shown.",
+          });
+          return;
+        }
+
         const decryptResult = await decryptViaWorker(
           inputBuffer,
           mutablePassword,
@@ -2304,68 +2426,17 @@ export function useEncryptorState() {
           return true;
         };
 
-        // Info line + legacy-format nudge.
-        //
-        // 6.1. These name a *container*, so they carry the format's name and
-        // not the application's. "Keymaker v2" became ambiguous the moment the
-        // app's own version reached 2.0.0: `Format: Keymaker v2` gives a reader
-        // no way to tell whether it describes the file they just opened or the
-        // program that opened it — and this line is exactly where someone looks
-        // when a file will not open. The legacy labels below already carry
-        // their own format's name, which is why they never had the problem.
-        const formatLabels: Record<DetectedFormat, string> = {
-          "keym-v1": "KEYM v1",
-          "keym-v2": "KEYM v2",
-          "keym-v3": "KEYM v3",
-          "keym-v4": "KEYM v4",
-          "ibtz-v1": "IttyBitz v1 (legacy)",
-          "ibtz-v0": "IttyBitz v0 (legacy)",
-        };
-        let info = `Format: ${formatLabels[decryptResult.format]}`;
-        // Set when the container was written with derivation parameters weaker
-        // than this version would use. It changes nothing about the decryption
-        // that just succeeded — the file opened, on the terms it was written —
-        // and is appended below purely so the owner knows to consider
-        // re-encrypting rather than inheriting the weakness unaware.
-        // Taken from the reader, which knows which slot answered. It used to be
-        // taken from `inspect…(headerPeek)`, which reads slot 0 — correct for
-        // the one-slot containers this app writes, and wrong for every other
-        // shape: unlock a two-slot container with the heir's share set and the
-        // advisory described the owner's passphrase slot. Worse, an attacker
-        // who can reorder a table chooses which slot is at index 0, and so
-        // chooses which KDF the owner is told about.
-        //
-        // The labels beside it still come from the header. Those describe the
-        // *container* — its cipher, its slot count — which is a property of the
-        // file rather than of the way in, and slot 0's KDF label is the
-        // conventional summary of it.
-        const weakKdf = decryptResult.weakKdf;
-        if (decryptResult.format === "keym-v1") {
-          const inspected = inspectKeym(headerPeek);
-          if (inspected) info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
-        } else if (
-          decryptResult.format === "keym-v2" ||
-          decryptResult.format === "keym-v3" ||
-          decryptResult.format === "keym-v4"
-        ) {
-          // One inspector for both: every field it reads sits at a
-          // version-dependent offset it already resolves from the header.
-          const { inspectKeym2 } = await loadKeym2();
-          const inspected = inspectKeym2(headerPeek);
-          if (inspected) {
-            info += ` · ${inspected.kdfLabel} · ${inspected.cipherLabel}`;
-            // Only worth saying when it is not the one-slot case every
-            // container this version writes has.
-            if (inspected.slots > 1) info += ` · ${inspected.slots} slots`;
-          }
-        }
-        if (weakKdf) {
-          info +=
-            ` — Heads up: this backup was made with ${weakKdf}. It opened fine and ` +
-            `its contents are intact. Re-encrypting it here would store the same ` +
-            `secret behind today's stronger settings.`;
-        }
-        if (decryptResult.keyFileUsed) info += " · key file";
+        const info = await describeOpened({
+          format: decryptResult.format,
+          weakKdf: decryptResult.weakKdf,
+          keyFileUsed: decryptResult.keyFileUsed,
+          slotTable:
+            decryptResult.slotTableAuthentic === null
+              ? "not_available"
+              : decryptResult.slotTableAuthentic
+                ? "authentic"
+                : "changed",
+        });
         if (abandonIfStale()) return;
         setDecryptInfo(info);
         // v3 §5.2. `false` only ever arrives after a slot has already opened
@@ -2378,32 +2449,12 @@ export function useEncryptorState() {
         // v3 §6 and §7: a v2 container is still strippable and there is no
         // in-place upgrade, so this is the moment to say so — with the backup
         // open, to the person holding its secret. v1 and IttyBitz files have
-        // the same gap and more. Not on a verify-only run: nothing was kept
-        // that could be carried over.
+        // the same gap and more.
         setResealOffer(
-          verifying || decryptResult.format === "keym-v3" || decryptResult.format === "keym-v4"
+          decryptResult.format === "keym-v3" || decryptResult.format === "keym-v4"
             ? null
             : decryptResult.format
         );
-
-        if (verifying) {
-          // Reaching this line *is* the result: decryptViaWorker throws unless
-          // the AEAD tag verifies, so the container is intact and the password
-          // and key file are right.
-          //
-          // Everything the non-verifying path does with the plaintext —
-          // rendering it, encoding it to base64, building a Blob, downloading
-          // it, running the BIP-39 detector over it — is skipped. The byte
-          // count is reported because "it opens, and it is the size you
-          // expect" catches a class of mistake that a bare tick does not: the
-          // right password on the wrong backup.
-          setVerifyResult({ detail: info, bytes: resultBuffer.byteLength, method: suppliedShares.length > 0 ? "recovery shares" : usePasskey ? "passkey" : "password" });
-          finishOperation(resultBuffer, {
-            title: "Verified — the backup opens",
-            description: "The contents were checked and discarded without being shown.",
-          });
-          return;
-        }
         // Deliberately not a toast of its own. TOAST_LIMIT is 1, so the
         // unconditional "Success!" below replaced this one the instant it
         // appeared and nobody ever read the re-encryption nudge. One toast,
@@ -2751,9 +2802,10 @@ export function useEncryptorState() {
   /**
    * The rehearsal itself. Identical to the heir's unlock — the worker, the
    * shares, no password — and different from every other decrypt in what
-   * happens next: nothing. The buffer is zeroed on arrival and its length is
-   * the only thing that survives. A result that lands after a wipe or a lock
-   * has moved the operation counter is discarded, like any other.
+   * happens next: nothing. The worker keeps the plaintext and sends back its
+   * length, which is the only thing that survives (roadmap 9.2). A result that
+   * lands after a wipe or a lock has moved the operation counter is discarded,
+   * like any other.
    */
   const runRehearsal = useCallback(async () => {
     if (!issuedShares || !outputText.startsWith("keym2:")) return;
@@ -2769,15 +2821,17 @@ export function useEncryptorState() {
       const container = dearmorKeym2(outputText).slice();
       // §4.8. Strips that need the password are rehearsed with it, the way an
       // heir would have to open the backup.
-      const result = await decryptViaWorker(
+      //
+      // Roadmap 9.2. A verify, not a decrypt: the worker answers with the
+      // length and the plaintext never reaches this thread. It used to arrive
+      // whole and be zeroed on the next line, which is a copy of the secret in
+      // the page's heap to prove something that does not need it.
+      const result = await verifyViaWorker(
         container.buffer as ArrayBuffer,
         issuedShares.withPassword ? rehearsalPassword : "",
         null,
         strips
       );
-      // The plaintext exists on this thread for exactly this long.
-      const bytes = result.data.byteLength;
-      new Uint8Array(result.data).fill(0);
       if (isStale()) return;
       const used = strips
         .map((s) => issuedShares.shares.indexOf(s) + 1)
@@ -2788,7 +2842,8 @@ export function useEncryptorState() {
         on: new Date().toISOString().slice(0, 10),
         strips: used,
         seconds: (performance.now() - started) / 1000,
-        bytes,
+        bytes: result.bytes,
+        inWorker: result.inWorker,
       });
       // The pasted strips have done their job; the ones above are still there.
       setRehearsalInput("");

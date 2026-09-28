@@ -278,6 +278,12 @@ jobs:
       - name: Access policy against the worker
         run: npm run test:access-policy
 
+      # Roadmap 9.2. Verify-only and the rehearsal ask the worker for a byte
+      # count instead of the plaintext. This sends the shipping worker every
+      # container in the corpus and inspects each message it posts back.
+      - name: Verify keeps the plaintext in the worker
+        run: npm run test:verify-transport
+
       # parseKeym() consumes fully attacker-controlled binary before any of it
       # has been authenticated. Seeded and deterministic, so a CI failure
       # reproduces exactly.

@@ -1329,12 +1329,25 @@ export function SecretForm({ mode }: { mode: Mode }) {
         >
           <p className="flex items-center gap-2 text-[13px] font-medium text-success">
             <ShieldCheck className="h-4 w-4 shrink-0" />
-            The backup opens with {verifyResult.method === "password" ? "this password" : verifyResult.method === "passkey" ? "this passkey" : "these recovery shares"}
+            The backup opens with {verifyResult.method === "passkey"
+              ? "this passkey"
+              : verifyResult.method === "shares"
+                ? "these recovery shares"
+                : verifyResult.method === "passphrase-and-shares"
+                  ? "this password and these recovery shares"
+                  : "this password"}
           </p>
           <p className="mt-1 text-[12px] leading-snug text-success/90">
             {verifyResult.detail} · {formatBytes(verifyResult.bytes)} of contents,
             authenticated and discarded without being shown.
           </p>
+          {!verifyResult.inWorker && (
+            <p data-testid="verify-in-page" className="mt-1.5 text-[12px] leading-snug text-muted-foreground">
+              Checked on this page, because the background worker did not start. The
+              contents were in this page&apos;s memory until the check finished, then
+              cleared.
+            </p>
+          )}
           <p className="mt-1.5 text-[12px] leading-snug text-muted-foreground">
             The size is worth a glance: the right password on the wrong backup still
             verifies.

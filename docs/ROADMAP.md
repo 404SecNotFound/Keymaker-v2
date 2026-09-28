@@ -73,7 +73,9 @@ key material, away from React state and DOM strings. `worker-src 'self'` is
 already in the CSP. This also unblocks 2.2 and 2.5. *Corrected 27 September
 2026.* The derived keys stay in the worker, but the password is typed into the
 page and a decrypted result is returned to it, including on a verify-only run
-(9.2), so those two cross the boundary.
+(9.2), so those two cross the boundary. *Updated 28 September 2026.* Verify-only
+and the rehearsal no longer return it (9.2). An ordinary decrypt still does,
+because showing the result is what it is for.
 
 ### 2.2 Signed build provenance — **shipped**
 
@@ -97,7 +99,10 @@ APIs it calls, and those only verify by decrypting. WebCrypto's AES-GCM and
 hand-written tag-only check is exactly the kind of custom primitive this project
 does not write. So the plaintext is produced. It was described here as staying
 in the worker heap for one call; it does not. The worker returns it to the page,
-which zeroes it at once (9.2). What verify-only removes is the part under the
+which zeroes it at once (9.2). *Updated 28 September 2026.* It now stays there.
+The worker's `verify` answers with the byte count and what the reader
+established, and with no worker the check runs in the page and the result says
+so (9.2). What verify-only removes is the part under the
 user's control: it never reaches the DOM, a Blob, the clipboard, or a file. The
 result reports the byte count as well as a tick, because "it opens" alone does
 not catch the right password on the wrong backup.
@@ -1017,6 +1022,54 @@ assurance-language work starts from there. The sentence claiming AEAD
 authentication always requires producing plaintext is in 2.3 above, which also
 says the verify-only plaintext stays in the worker heap; 9.2 shows it does not.
 Both are corrected with the assurance-language work.
+
+### Status
+
+| # | State | Record |
+|---|---|---|
+| 9.1 | merged | PR #224, in `main` at `cc77330` (`src/lib/access-policy.ts` present) |
+| 9.2 | verified | The change described in 9.2 below. Checks and negative controls are in its PR |
+| 9.3 | not_started | |
+| 9.4 | not_started | |
+
+`verified` means the implementation and its automated checks passed. It says
+nothing about an independent review.
+
+### 9.2 Verify-only and the rehearsal keep the plaintext in the worker
+
+The worker has a fourth operation, `verify`. It takes the same inputs as
+`decrypt` and calls the same reader, then counts the plaintext, zeroes it and
+answers with the count. The response holds the format, the byte count, the kind
+of slot that opened it (`openedBy`, from the reader rather than from what was
+typed), whether a key file was used, the slot table verdict and the weak-KDF
+advisory. The slot table verdict is `authentic`, `changed` or `not_available`,
+so no MAC and a MAC that checked cannot be confused. A failed verify sends only
+messages the core has typed as safe to show. Verify-only and the rehearsal both
+use it, and an ordinary decrypt is unchanged.
+
+The info line on a verify names the slot count as read from the file and not
+authenticated when the container has more than one slot and no v3 slot table
+MAC vouches for it. `slot_count` is the one header byte no AEAD covers (§5.3).
+
+**Decision, with no worker.** The check falls back to the same reader on the
+page's thread, erases the plaintext before returning, and the result says that
+it ran in the page. The alternatives were refusing to verify without a worker,
+which leaves a browser without workers no way to check a backup, and a silent
+fallback, which claims the worker's property without having it. Neither format
+nor fixtures change. To reverse it, return the `decrypt` response to both
+callers. The transport test would then fail, which is the point of it.
+
+**What is not claimed.** A passkey's PRF output is still obtained on the page,
+because `navigator.credentials` does not exist in a worker, and the password is
+still typed there. Only the plaintext is kept out.
+
+**Checks.** `npm run test:verify-transport` sends the shipping worker every
+container in the corpus and the legacy IttyBitz vectors, and inspects every
+message it posts back for buffers, Blobs, object URLs and the plaintext. It also
+runs the same scan over an ordinary decrypt, which must find it.
+`tests/browser/verify-confinement.spec.ts` records what reaches the page from
+the worker during a verify and a rehearsal, a Stop, a switch to Encrypt, and a
+page with no worker.
 
 ---
 

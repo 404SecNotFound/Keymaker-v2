@@ -301,13 +301,13 @@ function DowngradeDiagram() {
 
 function VerifyDiagram() {
   return (
-    <Figure caption="Verify only. The container is decrypted and authenticated in the worker. The plaintext comes back to the page, which zeroes it without rendering it, and the result names the method that worked and the size. Nothing reaches the screen, the clipboard, or a file.">
+    <Figure caption="Verify only. The container is decrypted and authenticated in the worker, which erases the plaintext there and sends the page only its size, the way in that worked, and what the file's authentication showed. Without a worker the check runs in the page, and the result says so.">
       <div className="km-docs-flow">
         <Box title="Container + a way in" />
         <Arrow />
         <Box title="Decrypt in the worker" detail="authenticate every layer" mark="blue" />
         <Arrow />
-        <Box title="Discard plaintext" detail="zeroed in the page, never shown" />
+        <Box title="Discard plaintext" detail="erased in the worker, never sent" />
         <Arrow />
         <Box title="Opens · 2.1 KB · password" detail="the whole report" mark="ember" />
       </div>
