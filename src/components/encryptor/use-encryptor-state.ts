@@ -21,6 +21,7 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useReducer,
   type ChangeEvent,
   type DragEvent,
 } from "react";
@@ -29,6 +30,14 @@ import type { CommandBarItem } from "@/components/command-bar";
 import { emptySeedWords, seedWordsFromText } from "@/components/seed-grid";
 import { armorKeym2, KEYM2_HEADER_PEEK_BYTES } from "@/lib/keym-v2";
 import { accessPolicy, describeWayIn, enrolsPasskey, shamirRequestOf, type AccessPolicy } from "@/lib/access-policy";
+import {
+  describeAccessRule,
+  initialWorkflow,
+  latestExports,
+  settingsChanges,
+  workflowReducer,
+  type CreationSettings,
+} from "@/lib/backup-workflow";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeAllQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
@@ -538,6 +547,13 @@ export function useEncryptorState() {
    * the output it describes.
    */
   const [receipt, setReceipt] = useState<Receipt | null>(null);
+  /**
+   * Section 06. Where the backup on screen is in its life, with the job that
+   * wrote it and every export started from it. See `lib/backup-workflow.ts`:
+   * it accepts a result only from the job it is waiting on, so a stale job
+   * cannot put the page back into a success state.
+   */
+  const [workflow, dispatchWorkflow] = useReducer(workflowReducer, initialWorkflow);
   // Whether the backup on screen fits one printed symbol, so the shares
   // dialog can offer to put it on every strip. Recomputed for each share set,
   // and the choice itself starts off again with each.
@@ -1054,6 +1070,8 @@ export function useEncryptorState() {
     const stopped = cancelAllCryptoWork();
     setIsLoading(false);
     setUnlockCostNotice(null);
+    // Same as an input switch: a rehearsal stopped here has no completion path left.
+    setRehearsal((r) => (r.kind === "running" ? { kind: "idle" } : r));
     // `stopped` is false when there was no worker to terminate — a browser
     // where the script could not load, running the derivation in this realm.
     // Moving opSeqRef still guarantees the result is discarded, but WebCrypto
@@ -1117,6 +1135,7 @@ export function useEncryptorState() {
     setVerifyResult(null);
     setSealedPeek(null);
     setReceipt(null);
+    dispatchWorkflow({ type: "cleared" });
 
     // Anything rendering a secret.
     setIsQrModalOpen(false);
@@ -1380,6 +1399,10 @@ export function useEncryptorState() {
       setIsDecryptedQrRevealed(false);
       setDecryptedQrStatus({ kind: "idle" });
       setReceipt(null);
+      dispatchWorkflow({ type: "cleared" });
+      // A rehearsal this switch disowned would otherwise say "Opening…" for
+      // good: its completion path is now stale and writes nothing.
+      setRehearsal((r) => (r.kind === "running" ? { kind: "idle" } : r));
       setWipeAck(false);
   }, [textSecret]);
 
@@ -1967,6 +1990,16 @@ export function useEncryptorState() {
     setVerifyResult(null);
     setSealedPeek(null);
     setDecryptedQrStatus({ kind: "idle" });
+    if (mode === 'encrypt') {
+      // Section 06. The output this receipt described was cleared on the line
+      // above, so the receipt goes with it, and with it the rehearsal of that
+      // backup. Left standing, it described a container no longer on screen,
+      // through a run, a Stop and a failure, and its Print, Download and
+      // Rehearse buttons did nothing because the output they act on was gone.
+      setReceipt(null);
+      setRehearsal({ kind: "idle" });
+      dispatchWorkflow({ type: "job-started", job: opId });
+    }
 
     // Verify-only is a decrypt-side control; it must not silently apply to an
     // encrypt run if the user toggles it and then switches mode.
@@ -2104,6 +2137,13 @@ export function useEncryptorState() {
         // What the receipt says about protection comes from the same
         // functions the inspector's plan pane uses; the parsed pane says it
         // again from the bytes, and receipt.spec.ts holds the two together.
+        const sealedWith: CreationSettings = {
+          inputType: inputType === 'file' ? 'file' : 'text',
+          kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
+          cipher: cipherLabelOf(cipherChoice),
+          padded: hideSize,
+          waysIn: policy.waysIn,
+        };
         const receiptOf = (from: string, to: string, onScreen: boolean): Receipt => ({
           from,
           to,
@@ -2123,6 +2163,7 @@ export function useEncryptorState() {
             if (isStale()) return;
             triggerDownload(blob, outName);
             setReceipt(receiptOf(file!.name, outName, false));
+            dispatchWorkflow({ type: "sealed", job: opId, settings: sealedWith });
             setFile(null);
         } else {
             if (isStale()) return;
@@ -2132,8 +2173,13 @@ export function useEncryptorState() {
             // trying to recover. Dynamically imported for the same reason the
             // crypto core imports it that way.
             const { armorKeym2 } = await loadKeym2();
+            // The staleness check above ran before this await. The module is
+            // usually cached, so the gap is a microtask, but "usually" is not
+            // the rule the rest of this function keeps.
+            if (isStale()) return;
             setOutputText(armorKeym2(new Uint8Array(resultBuffer)));
             setReceipt(receiptOf("text", "keym2: container, on screen", true));
+            dispatchWorkflow({ type: "sealed", job: opId, settings: sealedWith });
             setTextSecret('');
             // The grid's cells hold the same plaintext; sealed means gone.
             setSeedWords((w) => w.map(() => ""));
@@ -2575,6 +2621,10 @@ export function useEncryptorState() {
       if (!isStale()) {
         setIsLoading(false);
       }
+      // Ends this job's wait if nothing sealed it: a failure, a Stop, or a
+      // switch. The reducer ignores it when the job did seal, and when a newer
+      // job is being waited on, so this never ends anyone else's.
+      if (mode === 'encrypt') dispatchWorkflow({ type: "job-ended", job: opId });
     }
     // §4.6 additions: useShares, shareInput, shamirEnabled, shamirThreshold and
     // shamirCount. Omitting them left processData closing over the values from
@@ -2747,9 +2797,14 @@ export function useEncryptorState() {
    */
   const printPaperVault = useCallback(async () => {
     if (!outputText.startsWith("keym2:")) return;
+    // Section 06: both awaits below are time in which a wipe, a lock or a new
+    // job can clear this backup. The print must not go ahead after that.
+    const seq = opSeqRef.current;
     const { dearmorKeym2 } = await loadKeym2();
     const container = dearmorKeym2(outputText);
     const { parts, tooLarge, setCodes } = await preparePaperParts(container);
+    if (opSeqRef.current !== seq) return;
+    dispatchWorkflow({ type: "export-started", how: "print", at: new Date().toISOString() });
     setPaperVault({
       container,
       parts,
@@ -2762,12 +2817,48 @@ export function useEncryptorState() {
 
   const downloadContainer = useCallback(async () => {
     if (!outputText.startsWith("keym2:")) return;
+    const seq = opSeqRef.current;
     const { dearmorKeym2 } = await loadKeym2();
+    if (opSeqRef.current !== seq) return;
     triggerDownload(
       new Blob([dearmorKeym2(outputText).slice()]),
       `keymaker-${randomFilenameSuffix()}.keym`
     );
+    dispatchWorkflow({ type: "export-started", how: "download", at: new Date().toISOString() });
   }, [outputText]);
+
+  /**
+   * For work outside this hook that awaits before acting on a backup (the
+   * shares dialog's print): take a token first, and act only if it is still
+   * current. A wipe, a lock, a switch or a new job moves it.
+   */
+  const operationToken = useCallback(() => opSeqRef.current, []);
+  const isCurrentOperation = useCallback((token: number) => opSeqRef.current === token, []);
+  const recordExport = useCallback((how: "download" | "print") => {
+    dispatchWorkflow({ type: "export-started", how, at: new Date().toISOString() });
+  }, []);
+
+  /**
+   * What the form says now, in the terms a backup is sealed with, and what
+   * has changed since the one on screen was written. Content is compared
+   * separately: after a seal the input is emptied, so anything in it is new.
+   */
+  const currentSettings = useMemo<CreationSettings>(() => ({
+    inputType: inputType === 'file' ? 'file' : 'text',
+    kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
+    cipher: cipherLabelOf(cipherChoice),
+    padded: hideSize,
+    waysIn: policy.waysIn,
+  }), [inputType, kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism, cipherChoice, hideSize, policy]);
+  const backupDiffers = useMemo(() => {
+    if (workflow.phase !== "created") return null;
+    const changes: string[] = settingsChanges(workflow.sealed, currentSettings);
+    const newContent = inputType === 'file' ? file !== null : textSecret.length > 0;
+    if (newContent) changes.unshift("content");
+    return changes.length > 0 ? changes : null;
+  }, [workflow, currentSettings, inputType, file, textSecret]);
+  const exportsStarted = useMemo(() => latestExports(workflow), [workflow]);
+  const accessRule = useMemo(() => describeAccessRule(policy.waysIn.map(describeWayIn)), [policy]);
 
   const rehearseFromPaper = useCallback(() => {
     const armored = outputText;
@@ -3170,6 +3261,8 @@ export function useEncryptorState() {
     stripsCarryBackup, setStripsCarryBackup,
     backupFitsOnStrip,
     rehearsalOpen, setRehearsalOpen,
+    workflow, backupDiffers, exportsStarted, accessRule,
+    operationToken, isCurrentOperation, recordExport,
     rehearsalInput, setRehearsalInput,
     rehearsalPassword, setRehearsalPassword,
     rehearsalInputRejected, setRehearsalInputRejected,

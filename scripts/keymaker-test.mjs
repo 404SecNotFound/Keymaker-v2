@@ -28,6 +28,7 @@ const ENTRY_BY_MODE = {
   calibration: "kdf-calibration-test.mts",
   "access-policy": "access-policy-test.mts",
   "verify-transport": "verify-transport-test.mts",
+  "backup-workflow": "backup-workflow-test.mts",
 };
 const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
 const entry = join(HERE, ENTRY_BY_MODE[mode]);

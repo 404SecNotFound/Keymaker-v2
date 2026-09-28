@@ -41,7 +41,7 @@ export function SharesDialog() {
     handleCopy, outputText, toast, setPaperVault, rehearsalStamp,
     rehearsalOpen, rehearsalInput, handleRehearsalInputChange,
     rehearsalInputRejected, rehearsalPassword, rehearsal, rehearsalLines,
-    runRehearsal,
+    runRehearsal, operationToken, isCurrentOperation, recordExport,
   } = useEncryptorContext();
 
   return (
@@ -211,10 +211,15 @@ export function SharesDialog() {
               disabled={!outputText.startsWith("keym2:")}
               onClick={async () => {
                 if (!issuedShares || !outputText.startsWith("keym2:")) return;
+                // Section 06: a wipe or lock during the two awaits below clears
+                // the shares on the page, and this would still print them.
+                const token = operationToken();
                 try {
                   const { dearmorKeym2 } = await loadKeym2();
                   const container = dearmorKeym2(outputText);
                   const { parts, tooLarge, setCodes } = await preparePaperParts(container);
+                  if (!isCurrentOperation(token)) return;
+                  recordExport("print");
                   setPaperVault({
                     container,
                     parts,
