@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Added
+- **The steps of making a backup are shown on the Encrypt tab.** Content,
+  access rule, review, create, check saved copy and prepare recovery, each
+  marked with what the page actually knows. It is status, not a wizard, and
+  nothing is gated by it. A download or print is shown as started, never done,
+  because the browser does not say whether anything was kept. The saved copy
+  is marked done only when every printed container symbol has been
+  photographed on the Recovery tab and matched to this backup, and recovery
+  only when a rehearsal from the shares has opened it.
+
 ### Fixed
 - **The receipt described backups that were no longer on screen.** Starting
   a new encryption left the previous receipt up, with buttons that did

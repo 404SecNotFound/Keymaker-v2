@@ -71,6 +71,7 @@ import {
   PASSPHRASE_ENTROPY_BITS,
 } from "./shared";
 import { useEncryptorContext } from "./context";
+import { WorkflowSteps } from "./workflow-steps";
 
 export function SecretForm({ mode }: { mode: Mode }) {
   const {
@@ -105,7 +106,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     blockedByPasswordPolicy, isProcessButtonDisabled, printPaperVault,
     rehearseFromPaper, downloadContainer, clipboardSecondsLeft,
     clipboardClearPending, clearClipboardNow, lockSecondsLeft, wipeAck,
-    wipeNow, backupDiffers, accessRule,
+    wipeNow, backupDiffers, accessRule, steps,
   } = useEncryptorContext();
 
   // Key-file toggle + picker/generator. Rendered in place on the Decrypt
@@ -166,6 +167,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
           onDismiss={() => setInheritanceOpen(false)}
         />
       )}
+      {mode === "encrypt" && <WorkflowSteps steps={steps} />}
       <div className="space-y-5">
         <section className="km-form-section" aria-labelledby={`${mode}-content-title`}>
         <div className="km-section-heading">
