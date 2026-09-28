@@ -1029,7 +1029,7 @@ Both are corrected with the assurance-language work.
 |---|---|---|
 | 9.1 | merged | PR #224, in `main` at `cc77330` (`src/lib/access-policy.ts` present) |
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
-| 9.3 | not_started | |
+| 9.3 | verified | The change described in 9.3 below. Stacked on 9.4's PR, which it builds on |
 | 9.4 | verified | The change described in 9.4 below. Checks and negative controls are in its PR |
 
 `verified` means the implementation and its automated checks passed. It says
@@ -1131,6 +1131,59 @@ value. It does this after success and after a failure injected into
 `crypto.subtle.encrypt`, and checks that the injected error is the one the
 caller sees. It also checks that caller-owned inputs come back unchanged, and
 that an invalid threshold is refused before any key is derived.
+
+### 9.3 A new backup's ways in are written in one operation
+
+`encryptKeym2WithSlots` writes a new backup's passphrase slot, share set and
+passkey slot together, in the order the enrolment path adds them. The master
+key it generates is still in hand, so the password is derived once and the
+share and passkey slots take only their HKDF. The worker and its no-worker
+fallback both call it, through `encryptContainerWithSlots`, whenever a share set
+or a passkey is asked for. §4.8's password-and-shares slot is a different
+composition and still has its own writer. Enrolling into an existing backup
+still uses `addShamirSlotKeym2` and `addPasskeySlotKeym2`.
+
+**Same bytes.** Given the same random inputs the container and its share strings
+are exactly those of writing the passphrase slot and enrolling the rest one at
+a time. A slot's wrap depends only on its own prefix and the core header, the
+payload never depends on the table, and the v3 MAC is computed once over the
+finished table either way. So nothing about the format changes, and a reader
+cannot tell which path wrote a backup.
+
+**Refused before the derivation.** The password, the KDF parameters, the
+version, the share threshold and count, and the passkey's sizes are all checked
+before the password is derived.
+
+**Password derivations at creation, after** (the before column is 9.0's)
+
+| Ways in | Before | After |
+|---|---|---|
+| Password | 1 | 1 |
+| Password or shares | 2 | 1 |
+| Password or passkey | 2 | 1 |
+| Password or shares or passkey | 3 | 1 |
+| Password and shares (§4.8) | 1 | 1 |
+
+The same counts hold for PBKDF2 and Argon2id. Wall-clock times are in the PR,
+with the device they were measured on. The saving is in the key derivation
+only, so it is not a promise that creating a backup is that many times faster
+everywhere.
+
+**Key file.** The worker now reads the page's key file once, so the page
+transfers it on every path rather than cloning it and erasing its own copy
+afterwards.
+
+**Fixtures.** Three vectors are appended, `v3-slots-*` for each cipher, each
+with a password, a 3-of-5 share set and a passkey. The corpus had no container
+with all three. Both corpus counts move from 42 to 45.
+
+**Checks.** `npm run test:slot-transaction` counts derivations through the
+shipping worker, compares the bytes with the enrolment path for every cipher,
+version, slot combination and key-file case, opens the result every way, and
+checks that bad input costs no derivation and that a failed write returns no
+container and no shares. `crosstest2.py` compares the same bytes against the
+Python reference's three-step path. `test:secret-erase-core` holds the new
+writer to the ownership rules in 9.4.
 
 ---
 

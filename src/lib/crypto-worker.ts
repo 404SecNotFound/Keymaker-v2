@@ -35,6 +35,7 @@
 import {
   encryptContainer,
   encryptContainerWithSharesRequired,
+  encryptContainerWithSlots,
   KeymakerError,
   secureErase,
   decryptData,
@@ -43,7 +44,6 @@ import {
   type KeymakerOptions,
   type DetectedFormat,
   type OpenedBy,
-  loadKeym2,
 } from "./keymaker-crypto";
 import type { Argon2Sample } from "./kdf-calibration";
 
@@ -243,81 +243,38 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     }
 
     if (req.op === "encrypt") {
-      // encryptContainer zeroes the caller's key-file buffer in its `finally` —
-      // that is its documented contract. Anything enrolled *after* it therefore
-      // has to hold its own copy, taken before the call. Reading `keyFile`
-      // afterwards yields zeros, the slot key derives from the wrong material,
-      // and the enrolment fails with "Decryption failed." in the middle of an
-      // encryption.
-      const keyFileForSlots =
-        req.keyFile && (req.shamir || req.passkey) && !req.shamir?.withPassword
-          ? new Uint8Array(req.keyFile.slice(0))
-          : null;
       let out: ArrayBuffer;
       let shares: string[] | undefined;
-      try {
-        if (req.shamir?.withPassword) {
-          // §4.8. One slot that takes the password and the shares together, and
-          // nothing else: a passphrase or passkey slot beside it would open the
-          // backup with one half, which is what this choice rules out.
-          if (req.passkey) {
-            throw new KeymakerError(
-              "invalid-input",
-              "A passkey would open this backup on its own, and it was set to need the password and the strips together."
-            );
-          }
-          const written = await encryptContainerWithSharesRequired(
-            req.data, req.password, req.keyFile, req.options, req.shamir.threshold, req.shamir.count
-          );
-          out = written.data;
-          shares = written.shares;
-        } else {
-          out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
-        }
-
-        if (req.shamir && !req.shamir.withPassword) {
-          // §4.6. Enrolled here rather than in the page so the share secret and
-          // the coefficients are generated, used and dropped inside the worker's
-          // heap — the same reason the derivation lives here.
-          const { addShamirSlotKeym2 } = await loadKeym2();
-          const enrolled = await addShamirSlotKeym2(
-            new Uint8Array(out),
-            { password: req.password, keyFile: keyFileForSlots },
-            req.shamir.threshold,
-            req.shamir.count
-          );
-          out = enrolled.container.buffer.slice(
-            enrolled.container.byteOffset,
-            enrolled.container.byteOffset + enrolled.container.byteLength
-          ) as ArrayBuffer;
-          shares = enrolled.shares;
-        }
-
+      if (req.shamir?.withPassword) {
+        // §4.8. One slot that takes the password and the shares together, and
+        // nothing else: a passphrase or passkey slot beside it would open the
+        // backup with one half, which is what this choice rules out.
         if (req.passkey) {
-          // §4.7. Added after encryption for the same reason a share set is: the
-          // container has to exist before a slot can be added to it. The rule
-          // that a passkey never travels alone is satisfied structurally here —
-          // `out` already carries the passphrase slot encryptContainer wrote.
-          const { addPasskeySlotKeym2 } = await loadKeym2();
-          const enrolled = await addPasskeySlotKeym2(
-            new Uint8Array(out),
-            { password: req.password, keyFile: keyFileForSlots },
-            req.passkey.prfOutput,
-            req.passkey.salt
+          throw new KeymakerError(
+            "invalid-input",
+            "A passkey would open this backup on its own, and it was set to need the password and the strips together."
           );
-          out = enrolled.buffer.slice(
-            enrolled.byteOffset,
-            enrolled.byteOffset + enrolled.byteLength
-          ) as ArrayBuffer;
         }
-      } finally {
-        // The copy taken above so the enrolments could still read it. Same
-        // standard encryptContainer applies to the original. In a `finally`,
-        // as crypto-client.ts's fallback already does: the copy outlives three
-        // awaits that can each throw, and the `catch` below turns a throw into
-        // an ordinary response, so an enrolment that failed part-way left half
-        // the key material in this heap with nothing left to erase it.
-        secureErase(keyFileForSlots);
+        const written = await encryptContainerWithSharesRequired(
+          req.data, req.password, req.keyFile, req.options, req.shamir.threshold, req.shamir.count
+        );
+        out = written.data;
+        shares = written.shares;
+      } else if (req.shamir || req.passkey) {
+        // Roadmap 9.3. Every way in, in one write: the password is derived
+        // once and the share and passkey slots wrap the master key that write
+        // is still holding. This used to be encryptContainer followed by one
+        // enrolment per extra way in, and each enrolment opened the container
+        // again, which meant deriving the password again. The share secret and
+        // the coefficients are still generated, used and dropped in this heap.
+        const written = await encryptContainerWithSlots(req.data, req.password, req.keyFile, req.options, {
+          shamir: req.shamir ? { threshold: req.shamir.threshold, count: req.shamir.count } : undefined,
+          passkey: req.passkey,
+        });
+        out = written.data;
+        shares = written.shares;
+      } else {
+        out = await encryptContainer(req.data, req.password, req.keyFile, req.options);
       }
 
       const response: CryptoResponse = { id: req.id, ok: true, op: "encrypt", data: out, shares };

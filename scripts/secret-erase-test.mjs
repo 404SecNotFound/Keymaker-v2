@@ -39,8 +39,9 @@ const ok = (cond, msg) => {
 // A stubbed crypto worker. It answers the readiness ping and the encrypt
 // request, and — crucially — detaches every buffer the client passes in the
 // transfer list, exactly as a real Worker's postMessage does. So a buffer the
-// client transfers ends up detached here, and one it structured-clones (the key
-// file, on the share/passkey path) stays intact — which is the whole point.
+// client transfers ends up detached here, and one it structured-clones would
+// stay intact. Since roadmap 9.3 the key file is transferred on every path,
+// share set and passkey included, so none is left on the page.
 class FakeWorker {
   constructor() { this.messageListeners = []; }
   addEventListener(type, fn) { if (type === "message") this.messageListeners.push(fn); }
@@ -71,8 +72,8 @@ const m = await import(pathToFileURL(out).href);
 const OPTIONS = { kdf: { kdf: 1, params: { timeCost: 3, memoryKiB: 65536, parallelism: 1 } }, cipher: 0 };
 const keyBytes = (n) => Uint8Array.from({ length: n }, (_, i) => (i * 13 + 7) & 0xff);
 
-// 1. The finding: key file + a Shamir share set, on the worker path. The key
-// file is not transferred (it is cloned), so the page's copy must be erased.
+// 1. Key file + a Shamir share set, on the worker path. This used to clone the
+// key file and erase the page's copy afterwards; it is now transferred.
 {
   const keyFile = keyBytes(48);
   const buf = keyFile.buffer;
@@ -80,11 +81,14 @@ const keyBytes = (n) => Uint8Array.from({ length: n }, (_, i) => (i * 13 + 7) & 
     new Uint8Array([9, 9, 9]).buffer, "pw", buf, OPTIONS, { threshold: 2, count: 3 }
   );
   ok(res && Array.isArray(res.shares) && res.shares.length === 3, "worker path enrolled the share set");
-  ok(buf.byteLength === 48 && new Uint8Array(buf).every((b) => b === 0),
-     "the page's key-file copy is zeroed after an encrypt-with-shares (not transferred, so still ours)");
+  // Roadmap 9.3: the worker writes every slot in one call and reads the key
+  // file once, so it is transferred like the plain path's. Detached is
+  // stronger than zeroed: there is no page copy left to erase.
+  ok(buf.byteLength === 0,
+     "the page keeps no key-file copy after an encrypt-with-shares (transferred, so detached)");
 }
 
-// 2. Same for a passkey slot: key file cloned, not transferred → must be erased.
+// 2. Same for a passkey slot: the key file is transferred, so nothing is left here.
 {
   const keyFile = keyBytes(48);
   const buf = keyFile.buffer;
@@ -92,8 +96,8 @@ const keyBytes = (n) => Uint8Array.from({ length: n }, (_, i) => (i * 13 + 7) & 
     new Uint8Array([9, 9, 9]).buffer, "pw", buf, OPTIONS, undefined,
     { prfOutput: new Uint8Array(32).fill(5), salt: new Uint8Array(32).fill(6) }
   );
-  ok(buf.byteLength === 48 && new Uint8Array(buf).every((b) => b === 0),
-     "the page's key-file copy is zeroed after an encrypt-with-passkey");
+  ok(buf.byteLength === 0,
+     "the page keeps no key-file copy after an encrypt-with-passkey (transferred, so detached)");
 }
 
 // 3. Control that the erase is scoped, not blind: with no share/passkey slot the

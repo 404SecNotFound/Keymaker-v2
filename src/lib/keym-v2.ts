@@ -1683,6 +1683,35 @@ async function writeKeym2(
   prefix: Uint8Array,
   slotKey: () => Promise<Uint8Array>
 ): Promise<Uint8Array> {
+  return writeKeym2Slots(plaintext, cipher, masterKey, version, containerId, [{ prefix, slotKey }]);
+}
+
+/** One slot to write: its prefix, and how to derive the key that wraps the master key into it. */
+interface Keym2SlotSpec {
+  prefix: Uint8Array;
+  slotKey: () => Promise<Uint8Array>;
+}
+
+/**
+ * A container with every slot in `slots`, in that order, all wrapping the same
+ * master key, and the payload under it.
+ *
+ * The bytes are exactly those of writing the first slot and enrolling the rest
+ * one by one: a slot's wrap is keyed and authenticated by nothing but its own
+ * prefix and the core header, the payload never depends on the table, and the
+ * v3 MAC is computed once over the finished table either way. What differs is
+ * the work. Enrolling a slot into an existing container first has to open it,
+ * which means deriving the password again; here the master key is still in
+ * hand, so each credential is derived once (roadmap 9.3).
+ */
+async function writeKeym2Slots(
+  plaintext: Uint8Array,
+  cipher: CipherId,
+  masterKey: Uint8Array,
+  version: number,
+  containerId: Uint8Array,
+  slots: Keym2SlotSpec[]
+): Promise<Uint8Array> {
   if (!isKnownKeym2Version(version)) {
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
   }
@@ -1698,16 +1727,25 @@ async function writeKeym2(
   // reason that has nothing to do with the header being wrong.
   parseKeym2CoreHeader(concat([coreBytes, new Uint8Array(keym2SlotTableOffset(version) - coreBytes.length)]));
 
-  if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + tagOverheadFor(cipher))])) === null) {
-    throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
+  if (slots.length < 1 || slots.length > KEYM2_MAX_SLOTS) {
+    throw new KeymakerError("invalid-input", `A container holds 1 to ${KEYM2_MAX_SLOTS} slots.`);
+  }
+  // Every prefix is checked before any key is derived, so a slot the writer
+  // would refuse costs nothing.
+  for (const { prefix } of slots) {
+    if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + tagOverheadFor(cipher))])) === null) {
+      throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
+    }
   }
 
-  const key = await slotKey();
-  let record: Uint8Array;
-  try {
-    record = concat([prefix, await wrapMasterKey(cipher, key, masterKey, concat([coreBytes, prefix]))]);
-  } finally {
-    secureErase(key);
+  const records: Uint8Array[] = [];
+  for (const { prefix, slotKey } of slots) {
+    const key = await slotKey();
+    try {
+      records.push(concat([prefix, await wrapMasterKey(cipher, key, masterKey, concat([coreBytes, prefix]))]));
+    } finally {
+      secureErase(key);
+    }
   }
 
   // v4 §4.1: what gets chunked is the padded stream, not the plaintext. Built
@@ -1719,11 +1757,11 @@ async function writeKeym2(
     const count = chunkCount(stream.length);
     // v3 §3 puts the MAC between slot_count and the table. It is computed over
     // the finished record, so the table has to exist before the head does.
-    const head: Uint8Array[] = [coreBytes, new Uint8Array([1])];
+    const head: Uint8Array[] = [coreBytes, new Uint8Array([records.length])];
     if (keym2HasAuthenticatedTable(version)) {
-      head.push(await computeSlotTableMac(coreBytes, [record], masterKey));
+      head.push(await computeSlotTableMac(coreBytes, records, masterKey));
     }
-    const parts: Uint8Array[] = [...head, record];
+    const parts: Uint8Array[] = [...head, ...records];
     for (let i = 0; i < count; i++) {
       const chunk = stream.subarray(i * KEYM2_CHUNK_SIZE, (i + 1) * KEYM2_CHUNK_SIZE);
       parts.push(await seal(cipher, keys, nonceFor(i, i === count - 1), chunk, coreBytes));
@@ -1802,6 +1840,161 @@ export async function encryptKeym2WithSharesRequired(
     // Every part's value, not only the ones the loop above reached: a write
     // that failed before it, or an encode that threw part-way, used to leave
     // all of them, or the rest, in the heap (Section 04).
+    for (const part of parts) secureErase(part.value);
+    if (!explicit?.shareSecret) secureErase(shareSecret);
+    if (!explicit?.masterKey) secureErase(masterKey);
+  }
+}
+
+/** The slots a new backup opens with besides its passphrase. See `encryptKeym2WithSlots`. */
+export interface Keym2InitialSlots {
+  /** §4.6. A k-of-n share set, any k of which open the backup on their own. */
+  shamir?: { threshold: number; count: number } | undefined;
+  /** §4.7. The authenticator's PRF output for `derivePrfSalt(salt)`, and that slot salt. */
+  passkey?: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
+}
+
+/**
+ * A new backup with every way in it starts with, written in one operation
+ * (roadmap 9.3, Section 05): a passphrase slot, then a share set, then a
+ * passkey, in the order the enrolment path adds them.
+ *
+ * Writing the passphrase slot and then enrolling the others derived the
+ * password once per slot, because each enrolment has to open the container to
+ * reach its master key. Here the master key is generated in this function and
+ * is still in hand, so the password is derived once, the share and passkey
+ * slots take only their HKDF, and the bytes are exactly the enrolment path's
+ * given the same random inputs. `test:slot-transaction` and `crosstest2.py`
+ * both compare them.
+ *
+ * This is an OR of ways in. §4.8's password-and-shares slot is a different
+ * composition and stays `encryptKeym2WithSharesRequired`; nothing here makes
+ * one. Enrolling into an existing backup stays `addShamirSlotKeym2` and
+ * `addPasskeySlotKeym2`, which need the unwrap this avoids.
+ *
+ * Everything that can be refused is refused before the password is derived:
+ * the password, the KDF parameters, the version, the share threshold and
+ * count, and the passkey's sizes.
+ *
+ * Ownership: the master key, the share secret, the coefficients and each
+ * share value are this function's when it draws them, and are erased on every
+ * exit. What `explicit` supplies (conformance only, §4.5) and the PRF output
+ * are the caller's and are left untouched.
+ */
+export async function encryptKeym2WithSlots(
+  plaintext: Uint8Array,
+  password: string,
+  keyFile: Uint8Array | null,
+  options: Keym2Options,
+  slots: Keym2InitialSlots,
+  version: number = KEYM2_VERSION,
+  explicit?: {
+    salt?: Uint8Array;
+    masterKey?: Uint8Array;
+    containerId?: Uint8Array;
+    shareSalt?: Uint8Array;
+    shareSecret?: Uint8Array;
+    coefficients?: Uint8Array;
+  }
+): Promise<{ container: Uint8Array; shares?: string[] }> {
+  if (!password) {
+    throw new KeymakerError("credential-required", "A password is required for encryption.");
+  }
+  validateKdfParams(options.kdf, "encrypt");
+  if (!isKnownKeym2Version(version)) {
+    throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
+  }
+  if (slots.passkey) {
+    if (slots.passkey.prfOutput.length !== KEYM2_PRF_OUTPUT_LEN) {
+      throw new KeymakerError("invalid-input", "A WebAuthn PRF output is 32 bytes.");
+    }
+    if (slots.passkey.salt.length !== SALT_LEN) {
+      throw new KeymakerError("invalid-input", "KEYM v2 requires a 32-byte salt.");
+    }
+  }
+  const shamirModule = slots.shamir ? await loadShamir() : null;
+
+  const salt = explicit?.salt ?? crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const shareSalt = slots.shamir ? explicit?.shareSalt ?? crypto.getRandomValues(new Uint8Array(SALT_LEN)) : null;
+  const containerId =
+    explicit?.containerId ??
+    (keym2HasAuthenticatedTable(version) ? crypto.getRandomValues(new Uint8Array(CONTAINER_ID_LEN)) : EMPTY);
+  if (salt.length !== SALT_LEN || (shareSalt !== null && shareSalt.length !== SALT_LEN)) {
+    throw new KeymakerError("invalid-input", "KEYM v2 requires 32-byte salts.");
+  }
+
+  const masterKey = explicit?.masterKey ?? crypto.getRandomValues(new Uint8Array(MASTER_KEY_LEN));
+  const shareSecret =
+    slots.shamir && shamirModule
+      ? explicit?.shareSecret ?? crypto.getRandomValues(new Uint8Array(shamirModule.SHARE_VALUE_LEN))
+      : null;
+  let parts: { index: number; value: Uint8Array }[] = [];
+  try {
+    if (masterKey.length !== MASTER_KEY_LEN) {
+      throw new KeymakerError("invalid-input", "KEYM v2 requires a 32-byte master key.");
+    }
+    // Split before anything is derived: it validates k and n, and a refused
+    // split should cost nothing.
+    if (slots.shamir && shamirModule && shareSecret) {
+      parts = shamirModule.shamirSplit(shareSecret, slots.shamir.threshold, slots.shamir.count, explicit?.coefficients);
+    }
+
+    const specs: Keym2SlotSpec[] = [
+      {
+        prefix: packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt),
+        slotKey: async () => {
+          // The one password derivation this backup's creation costs.
+          const kdfInput = await buildKdfInput(password, keyFile);
+          try {
+            return await deriveSlotKey(kdfInput, salt, options.kdf);
+          } finally {
+            secureErase(kdfInput);
+          }
+        },
+      },
+    ];
+    if (shareSalt && shareSecret) {
+      specs.push({
+        prefix: packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, shareSalt, KEYM2_SLOT_TYPE_SHAMIR),
+        slotKey: async () => {
+          const slotSecret = buildShamirInput(shareSecret);
+          try {
+            return await deriveSlotKey(slotSecret, shareSalt, { kdf: KEYM2_KDF_HKDF });
+          } finally {
+            secureErase(slotSecret);
+          }
+        },
+      });
+    }
+    if (slots.passkey) {
+      const { prfOutput, salt: passkeySalt } = slots.passkey;
+      specs.push({
+        prefix: packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, passkeySalt, KEYM2_SLOT_TYPE_PASSKEY),
+        slotKey: async () => {
+          const slotSecret = buildPasskeyInput(prfOutput);
+          try {
+            return await deriveSlotKey(slotSecret, passkeySalt, { kdf: KEYM2_KDF_HKDF });
+          } finally {
+            secureErase(slotSecret);
+          }
+        },
+      });
+    }
+
+    const container = await writeKeym2Slots(plaintext, options.cipher, masterKey, version, containerId, specs);
+
+    if (!shareSalt || !shamirModule || !slots.shamir) return { container };
+    // Encoded only once the container exists: a write that failed returns no
+    // shares, so nobody is handed strips for a backup that was never made.
+    const setId = await shamirModule.shareSetIdV2(shareSalt);
+    const shares: string[] = [];
+    for (const part of parts) {
+      shares.push(
+        await shamirModule.encodeShareV2({ setId, threshold: slots.shamir.threshold, index: part.index, value: part.value })
+      );
+    }
+    return { container, shares };
+  } finally {
     for (const part of parts) secureErase(part.value);
     if (!explicit?.shareSecret) secureErase(shareSecret);
     if (!explicit?.masterKey) secureErase(masterKey);
