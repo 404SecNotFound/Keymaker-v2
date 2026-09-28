@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- **A "Format detail" switch.** Header bytes, offsets and KDF parameters are
+  now off by default, in the container pane, the receipt, the Recovery tab
+  and the Decrypt tab's format line, and the self-extract notice keeps its
+  trade-off without the per-format reasons. The switch in the container pane
+  shows them. KDF and cipher names, the format version, the byte map and
+  every warning stay on screen either way. The switch is not stored.
 - **The steps of making a backup are shown on the Encrypt tab.** Content,
   access rule, review, create, check saved copy and prepare recovery, each
   marked with what the page actually knows. It is status, not a wizard, and

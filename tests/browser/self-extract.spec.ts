@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
-import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
+import { visible, useTextMode, selectCrypto, showFormatDetail, STRONG_PASSWORD } from "./helpers";
 
 const REPO_ROOT = resolve(__dirname, "../..");
 const BRIDGE = resolve(REPO_ROOT, "reference/bridge.mjs");
@@ -201,6 +201,8 @@ test.describe("§7.2 self-extracting page", () => {
 
   test("an Argon2id backup is refused, and says what would have to change", async ({ page }) => {
     await encryptWith(page, "argon2id");
+    // The per-format reasons are format detail (Section 06c).
+    await showFormatDetail(page);
 
     await expect(visible(page.getByTestId("selfextract-download"))).toHaveCount(0);
     const notice = visible(page.getByTestId("selfextract-unavailable"));

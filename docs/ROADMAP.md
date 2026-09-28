@@ -1031,7 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
-| 9.6 | in_progress | Section 06, the creation workflow. 06a below; the visible re-sequencing, the expert view and the recovery-test lifetimes follow |
+| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order) and c (format detail switch) below; the recovery-test lifetimes, screenshots and usability notes follow |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1267,6 +1267,46 @@ is next. Breaking any of the first four in the model fails its own checks.
 following the form, the job and a download; a saved copy done only after
 every printed symbol matched, with one of several shown as partial; and
 recovery done only after a rehearsal.
+
+### 9.6 The creation workflow (handover Section 06), part c
+
+The expert view. Format and KDF detail used to be on screen by default:
+header bytes and offsets in the inspector, full KDF parameters on the
+receipt, the Recovery tab and the Decrypt tab's "Format:" line, and a list
+of per-format reasons under the self-extract notice after every text
+encrypt with the default Argon2id.
+
+One switch, **Format detail**, in the inspector header, now controls them.
+It is off by default and it is not stored: the app keeps nothing between
+visits, so every load starts with it off.
+
+Off, the page leaves out the header hex row, the magic, version-byte and
+offset line, the "salts and nonces" line, KDF parameters (memory, time cost,
+parallelism, iterations), and the self-extract notice's list of reasons.
+
+Off, the page still shows the byte map (BAR.md keeps the preview beside the
+form), every KDF and cipher name, the ways in, the version pill, the "Format:
+KEYM vN" line, every check, and every warning: the unlock cost, the v2 slot
+table, the weak-KDF heads-up and the slot-table change.
+
+`src/lib/detail-level.ts` does the trimming. The labels it trims are built as
+segments joined by " · ", and a parameter is always a segment of its own, so
+it drops only segments that are exactly a parameter. A warning that quotes a
+number is never a bare parameter, so it survives whole.
+
+**Not yet done in Section 06.** The verify result that outlives its input,
+testing from the Recovery tab wiping the receipt, the auto-lock clearing
+evidence while the shares stay open, and the production screenshots with
+usability notes.
+
+**Checks.** `npm run test:backup-workflow` holds the trimming: names kept,
+parameters dropped, the unlock line's version, cipher, slot note and key file
+kept, and a weak-KDF warning's numbers kept. Dropping any segment with a digit
+fails seven of those checks, and ignoring the switch fails the one that reads
+it on. `tests/browser/workflow-expert-view.spec.ts` reads each screen both
+ways: the inspector, the receipt, the parsed slot rows, the Recovery tab, the
+unlock line and the self-extract notice. `container-inspector.spec.ts` now
+turns the switch on, since it is about the bytes.
 
 ---
 

@@ -10,13 +10,14 @@ import { Button } from "@/components/ui/button";
 import { TabsContent } from "@/components/ui/tabs";
 import { BASE_PATH, formatBytes } from "./shared";
 import { useEncryptorContext } from "./context";
+import { atDetail } from "@/lib/detail-level";
 
 export function RecoveryTab() {
   const {
     mode, receipt, rehearsal, downloadContainer, printPaperVault,
     handleModeChange, returnToBackupTest, printoutInputRef, checkPrintout,
     printoutBusy, printoutFindings, setIsRecoveryOpen, openInheritance,
-    exportsStarted, backupDiffers,
+    exportsStarted, backupDiffers, formatDetail,
   } = useEncryptorContext();
   // Local time, to the minute: when the page asked, not when anything was kept.
   const when = (iso: string) =>
@@ -30,7 +31,7 @@ export function RecoveryTab() {
           {mode === "encrypt" && receipt ? (
             <>
               <p className="text-sm text-foreground">Container created · {formatBytes(receipt.bytes)}</p>
-              <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{receipt.cipher} · {receipt.kdf}</p>
+              <p className="mt-2 text-[13px] leading-relaxed text-muted-foreground">{receipt.cipher} · {atDetail(receipt.kdf, formatDetail)}</p>
               {backupDiffers && (
                 <p data-testid="recovery-stale" className="mt-2 text-[12.5px] leading-snug text-warning">
                   The form on the Encrypt tab has changed since this backup was made ({backupDiffers.join(", ")}).
