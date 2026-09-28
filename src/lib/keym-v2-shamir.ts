@@ -173,20 +173,30 @@ export function shamirSplit(
     coeffs = coefficients;
   }
 
-  const parts: ShamirPart[] = [];
-  for (let x = 1; x <= n; x++) {
-    const value = new Uint8Array(width);
-    for (let j = 0; j < width; j++) {
-      // Horner, from the highest-degree coefficient down to the secret byte.
-      let acc = 0;
-      for (let c = k - 1; c >= 1; c--) {
-        acc = gfMul(acc, x) ^ (coeffs[(c - 1) * width + j] as number);
+  // Ownership (roadmap 9.4). Coefficients drawn here are this function's and
+  // are erased on the way out: any one of them with one share narrows the
+  // secret, and nothing after the loop needs them. Coefficients a conformance
+  // harness passed in are the caller's, reused across calls to compare bytes,
+  // and are left exactly as they came. `secret` is always the caller's; each
+  // part's value is returned, so erasing it is the caller's job too.
+  try {
+    const parts: ShamirPart[] = [];
+    for (let x = 1; x <= n; x++) {
+      const value = new Uint8Array(width);
+      for (let j = 0; j < width; j++) {
+        // Horner, from the highest-degree coefficient down to the secret byte.
+        let acc = 0;
+        for (let c = k - 1; c >= 1; c--) {
+          acc = gfMul(acc, x) ^ (coeffs[(c - 1) * width + j] as number);
+        }
+        value[j] = gfMul(acc, x) ^ (secret[j] as number);
       }
-      value[j] = gfMul(acc, x) ^ (secret[j] as number);
+      parts.push({ index: x, value });
     }
-    parts.push({ index: x, value });
+    return parts;
+  } finally {
+    if (coefficients === undefined) secureErase(coeffs);
   }
-  return parts;
 }
 
 /**
@@ -280,8 +290,14 @@ export async function packShare(share: Share): Promise<Uint8Array> {
   }
   if (share.index < 1 || share.index > 255) usage("Share index must be 1..255.");
 
+  // `body` is a copy of the share value, made here and used only to build the
+  // record, so it is erased here. The record returned is the caller's.
   const body = concat([share.setId, new Uint8Array([share.threshold, share.index]), share.value]);
-  return concat([body, await shareChecksum(body)]);
+  try {
+    return concat([body, await shareChecksum(body)]);
+  } finally {
+    secureErase(body);
+  }
 }
 
 function bytesEqual(a: Uint8Array, b: Uint8Array): boolean {
@@ -387,7 +403,15 @@ export function b32Decode(text: string, nbytes: number): Uint8Array {
 }
 
 export async function encodeShare(share: Share): Promise<string> {
-  const body = b32Encode(await packShare(share));
+  // The packed record holds the share value and is needed only until it is
+  // text. The string is the one copy meant to leave; the record is erased.
+  const record = await packShare(share);
+  let body: string;
+  try {
+    body = b32Encode(record);
+  } finally {
+    secureErase(record);
+  }
   const groups: string[] = [];
   for (let i = 0; i < body.length; i += SHARE_GROUP) {
     groups.push(body.slice(i, i + SHARE_GROUP));
@@ -564,8 +588,13 @@ export async function packShareV2(share: Share): Promise<Uint8Array> {
     usage(`Share threshold must be ${SHAMIR_K_MIN}..${SHAMIR_K_MAX}.`);
   }
   if (share.index < 1 || share.index > 255) usage("Share index must be 1..255.");
+  // As in packShare: the body is this function's copy of the value.
   const body = concat([share.setId, new Uint8Array([share.threshold, share.index]), share.value]);
-  return concat([body, await shareChecksumV2(body)]);
+  try {
+    return concat([body, await shareChecksumV2(body)]);
+  } finally {
+    secureErase(body);
+  }
 }
 
 /** §4.6 v2 and §6, for one share. Parsing is validation, as with `parseShare`. */
@@ -589,7 +618,14 @@ export async function parseShareV2(record: Uint8Array): Promise<Share> {
 }
 
 export async function encodeShareV2(share: Share): Promise<string> {
-  const body = b32Encode(await packShareV2(share));
+  // As in encodeShare: the record is erased once it is text.
+  const record = await packShareV2(share);
+  let body: string;
+  try {
+    body = b32Encode(record);
+  } finally {
+    secureErase(record);
+  }
   const groups: string[] = [];
   for (let i = 0; i < body.length; i += SHARE_GROUP) {
     groups.push(body.slice(i, i + SHARE_GROUP));

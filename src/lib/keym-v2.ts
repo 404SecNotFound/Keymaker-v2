@@ -1778,10 +1778,11 @@ export async function encryptKeym2WithSharesRequired(
     throw new KeymakerError("invalid-input", "KEYM v2 requires 32-byte salts and secrets.");
   }
 
+  let parts: { index: number; value: Uint8Array }[] = [];
   try {
     // Split first: it validates k and n, and a refused split should cost
     // nothing, not an Argon2id derivation.
-    const parts = shamirSplit(shareSecret, threshold, count, explicit?.coefficients);
+    parts = shamirSplit(shareSecret, threshold, count, explicit?.coefficients);
     const prefix = packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt, KEYM2_SLOT_TYPE_BOTH);
     const container = await writeKeym2(plaintext, options.cipher, masterKey, version, containerId, prefix, async () => {
       const kdfInput = await buildKdfInput(password, keyFile);
@@ -1795,10 +1796,13 @@ export async function encryptKeym2WithSharesRequired(
     const shares: string[] = [];
     for (const part of parts) {
       shares.push(await encodeShareV2({ setId, threshold, index: part.index, value: part.value }));
-      secureErase(part.value);
     }
     return { container, shares };
   } finally {
+    // Every part's value, not only the ones the loop above reached: a write
+    // that failed before it, or an encode that threw part-way, used to leave
+    // all of them, or the rest, in the heap (Section 04).
+    for (const part of parts) secureErase(part.value);
     if (!explicit?.shareSecret) secureErase(shareSecret);
     if (!explicit?.masterKey) secureErase(masterKey);
   }
@@ -1878,72 +1882,89 @@ export async function addShamirSlotKeym2(
   if (parsed.records.length >= KEYM2_MAX_SLOTS) {
     throw new KeymakerError("invalid-input", `A container can hold at most ${KEYM2_MAX_SLOTS} slots.`);
   }
-  const { master } = await unwrapMasterKey(parsed, secrets);
-  // Before the KDF, not after: a refused edit should be the cheap outcome.
-  await requireAuthenticSlotTable(parsed, master);
-
   // The salt is chosen before the shares exist, because share_set_id derives
   // from it (§4.6). Two slots cannot share a salt without sharing a set id.
+  // Checked before the unwrap, so a refusal never has a master key to clean up.
   const salt = explicit?.salt ?? crypto.getRandomValues(new Uint8Array(SALT_LEN));
   if (salt.length !== SALT_LEN) {
     throw new KeymakerError("invalid-input", "KEYM v2 requires a 32-byte salt.");
   }
+
+  // Ownership (roadmap 9.4, Section 04). This function draws the share secret
+  // and, through the split, the coefficients; it unwraps the master key; and it
+  // holds each share's value until it is text. Every one of those is erased in
+  // the `finally` below, on success and on every failure. What `explicit`
+  // supplies is the conformance harness's, reused across calls, and is left
+  // untouched.
   const shareSecret = explicit?.shareSecret ?? crypto.getRandomValues(new Uint8Array(SHARE_VALUE_LEN));
-
-  const prefix = packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, salt, KEYM2_SLOT_TYPE_SHAMIR);
-  // Same round-trip through the reader's own validator as the passphrase path.
-  if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + parsed.core.tagOverhead)])) === null) {
-    throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
-  }
-
-  // `finally` for the same reason as the passphrase writer above.
-  const slotSecret = buildShamirInput(shareSecret);
-  let slotKey: Uint8Array;
+  let parts: { index: number; value: Uint8Array }[] = [];
+  let master: Uint8Array | null = null;
   try {
-    slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
-  } finally {
-    secureErase(slotSecret);
-  }
+    // Split first, as the §4.8 writer does: it validates k and n, and a
+    // refused split should cost nothing, not a derivation.
+    parts = shamirSplit(shareSecret, threshold, count, explicit?.coefficients);
 
-  let record: Uint8Array;
-  // v3 §5.3. Recomputed here, inside the try, because `master` is erased on the
-  // way out of it and the MAC is the last thing that needs it. Enrolment
-  // re-seals the table; it does not touch any other slot or the payload.
-  let tableMac: Uint8Array | null = null;
-  try {
-    record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
-    if (keym2HasAuthenticatedTable(parsed.core.version)) {
-      tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
+    master = (await unwrapMasterKey(parsed, secrets)).master;
+    // Before the KDF, not after: a refused edit should be the cheap outcome.
+    await requireAuthenticSlotTable(parsed, master);
+
+    const prefix = packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, salt, KEYM2_SLOT_TYPE_SHAMIR);
+    // Same round-trip through the reader's own validator as the passphrase path.
+    if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + parsed.core.tagOverhead)])) === null) {
+      throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
     }
+
+    // `finally` for the same reason as the passphrase writer above.
+    const slotSecret = buildShamirInput(shareSecret);
+    let slotKey: Uint8Array;
+    try {
+      slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
+    } finally {
+      secureErase(slotSecret);
+    }
+
+    let record: Uint8Array;
+    // v3 §5.3. Recomputed here, while `master` is still live: the MAC is the
+    // last thing that needs it. Enrolment re-seals the table; it does not
+    // touch any other slot or the payload.
+    let tableMac: Uint8Array | null = null;
+    try {
+      record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
+      if (keym2HasAuthenticatedTable(parsed.core.version)) {
+        tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
+      }
+    } finally {
+      secureErase(slotKey);
+    }
+
+    // New share sets are written v2 (KMSHARE2): a 128-bit set id and checksum,
+    // and diagnostics a v1 share cannot carry. The container slot is unchanged, so
+    // the set id's first four bytes still equal `shareSetId(salt)`, and the unwrap
+    // guard compares each share over its own full length against the 16-byte id.
+    const setId = await shareSetIdV2(salt);
+
+    const shares: string[] = [];
+    for (const part of parts) {
+      shares.push(await encodeShareV2({ setId, threshold, index: part.index, value: part.value }));
+    }
+
+    const records = [...parsed.records, record];
+    return {
+      container: concat([
+        parsed.coreBytes,
+        new Uint8Array([records.length]),
+        ...(tableMac ? [tableMac] : []),
+        ...records,
+        parsed.payload,
+      ]),
+      shares,
+
+    };
   } finally {
-    secureErase(slotKey);
+    for (const part of parts) secureErase(part.value);
     secureErase(master);
+    if (explicit?.shareSecret === undefined) secureErase(shareSecret);
   }
-
-  // New share sets are written v2 (KMSHARE2): a 128-bit set id and checksum,
-  // and diagnostics a v1 share cannot carry. The container slot is unchanged, so
-  // the set id's first four bytes still equal `shareSetId(salt)`, and the unwrap
-  // guard compares each share over its own full length against the 16-byte id.
-  const setId = await shareSetIdV2(salt);
-
-  const shares: string[] = [];
-  for (const part of shamirSplit(shareSecret, threshold, count, explicit?.coefficients)) {
-    shares.push(await encodeShareV2({ setId, threshold, index: part.index, value: part.value }));
-  }
-  if (explicit?.shareSecret === undefined) secureErase(shareSecret);
-
-  const records = [...parsed.records, record];
-  return {
-    container: concat([
-      parsed.coreBytes,
-      new Uint8Array([records.length]),
-      ...(tableMac ? [tableMac] : []),
-      ...records,
-      parsed.payload,
-    ]),
-    shares,
-
-  };
 }
 
 /**
@@ -2044,34 +2065,41 @@ export async function addPasskeySlotKeym2(
     throw new KeymakerError("invalid-input", `A container can hold at most ${KEYM2_MAX_SLOTS} slots.`);
   }
   const { master } = await unwrapMasterKey(parsed, secrets);
-  // Before the KDF, not after: a refused edit should be the cheap outcome.
-  await requireAuthenticSlotTable(parsed, master);
-
-  const prefix = packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, salt, KEYM2_SLOT_TYPE_PASSKEY);
-  // Same round-trip through the reader's own validator as the other builders.
-  if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + parsed.core.tagOverhead)])) === null) {
-    throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
-  }
-
-  // `finally` for the same reason as the passphrase writer above.
-  const slotSecret = buildPasskeyInput(prfOutput);
-  let slotKey: Uint8Array;
-  try {
-    slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
-  } finally {
-    secureErase(slotSecret);
-  }
-
+  // Ownership (Section 04): from here the master key is this function's, and
+  // every exit erases it. It used to be erased only by a refused table check
+  // and by the wrap's own `finally`; a throw between the two, such as a slot
+  // key that failed to derive, left it in the heap.
   let record: Uint8Array;
   // v3 §5.3, as in addShamirSlotKeym2: re-seal the table before `master` goes.
   let tableMac: Uint8Array | null = null;
   try {
-    record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
-    if (keym2HasAuthenticatedTable(parsed.core.version)) {
-      tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
+    // Before the KDF, not after: a refused edit should be the cheap outcome.
+    await requireAuthenticSlotTable(parsed, master);
+
+    const prefix = packSlotPrefix({ kdf: KEYM2_KDF_HKDF }, 0, salt, KEYM2_SLOT_TYPE_PASSKEY);
+    // Same round-trip through the reader's own validator as the other builders.
+    if (parseKeym2Slot(concat([prefix, new Uint8Array(MASTER_KEY_LEN + parsed.core.tagOverhead)])) === null) {
+      throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
+    }
+
+    // `finally` for the same reason as the passphrase writer above.
+    const slotSecret = buildPasskeyInput(prfOutput);
+    let slotKey: Uint8Array;
+    try {
+      slotKey = await deriveSlotKey(slotSecret, salt, { kdf: KEYM2_KDF_HKDF });
+    } finally {
+      secureErase(slotSecret);
+    }
+
+    try {
+      record = concat([prefix, await wrapMasterKey(parsed.core.cipher, slotKey, master, concat([parsed.coreBytes, prefix]))]);
+      if (keym2HasAuthenticatedTable(parsed.core.version)) {
+        tableMac = await computeSlotTableMac(parsed.coreBytes, [...parsed.records, record], master);
+      }
+    } finally {
+      secureErase(slotKey);
     }
   } finally {
-    secureErase(slotKey);
     secureErase(master);
   }
 

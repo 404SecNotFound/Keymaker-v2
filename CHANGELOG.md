@@ -24,6 +24,14 @@
   slot that opened the backup, so strips typed with a password are reported as
   the password and the strips together. `npm run test:verify-transport` checks
   every message the worker sends back, for every format it reads.
+- **Shamir coefficients and several other key buffers were not erased.** The
+  random coefficients a share split draws, the packed share record, the share
+  values after enrolment, and on some failure paths the master key and the
+  share secret, stayed in memory after the operation that made them. Each now
+  has one owner that erases it in a `finally`, on success and on failure.
+  Coefficients supplied by the conformance harness are left untouched, so every
+  test vector still compares byte for byte. Enrolling a share set with an
+  invalid threshold is now refused before the password is derived.
 
 ## Keymaker v2.3.0
 

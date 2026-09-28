@@ -578,6 +578,241 @@ for (const [name, password, keyFile] of [
      second.error ? String(second.error.message).slice(0, 100) : "");
 }
 
+/** Erase a buffer the test itself was handed, so the next census does not find it. */
+const secureEraseLocal = (v) => v && v.fill(0);
+
+// ---------------------------------------------------------------------------
+// Roadmap 9.4 and Section 04: buffers the Shamir code generates for itself.
+//
+// The coefficients `shamirSplit` draws are the only thing between one share
+// and the secret; the share secret and the master key are the secret. None of
+// them is reachable from outside the call, so every `getRandomValues` draw made
+// during an operation is copied the moment it is drawn, and afterwards the
+// census is searched for each copy. A draw that is still anywhere in memory is
+// one nobody will erase. Draws shorter than 32 bytes are nonces, which are
+// written into the container in the clear, and are not searched for. Salts and
+// container ids are passed in explicitly below, so no public 32-byte value is
+// drawn.
+//
+// Failures are injected by making `crypto.subtle.encrypt` throw once the
+// operation is under way. The error the caller sees has to be that one: a
+// cleanup that threw would replace it.
+//
+// And the other side of ownership: buffers the caller passed in (the
+// conformance path's fixed coefficients, a share's value, a PRF output, the
+// secret being split) come back byte for byte unchanged.
+// ---------------------------------------------------------------------------
+{
+  const s = await bundle(
+    "shamir-owned",
+    `export { shamirSplit, encodeShareV2, combineShares, SHARE_VALUE_LEN } from "./keym-v2-shamir";
+     export {
+       addShamirSlotKeym2, addPasskeySlotKeym2, encryptKeym2WithExplicitSecrets,
+       encryptKeym2WithSharesRequired, KEYM2_VERSION_V3,
+     } from "./keym-v2";
+     export { KdfId, CipherId } from "./keymaker-crypto";`
+  );
+
+  const nativeRandom = crypto.getRandomValues.bind(crypto);
+  let draws = null;
+  crypto.getRandomValues = (view) => {
+    const filled = nativeRandom(view);
+    if (draws) draws.push({ view, copy: Buffer.from(view.buffer, view.byteOffset, view.byteLength).toString("hex") });
+    return filled;
+  };
+  const subtle = crypto.subtle;
+  const nativeDeriveBits = subtle.deriveBits.bind(subtle);
+  let derivations = 0;
+  subtle.deriveBits = (...args) => {
+    derivations++;
+    return nativeDeriveBits(...args);
+  };
+  const nativeEncrypt = subtle.encrypt.bind(subtle);
+  let failEncrypt = false;
+  subtle.encrypt = (...args) => {
+    if (failEncrypt) return Promise.reject(new Error("injected: encrypt refused"));
+    return nativeEncrypt(...args);
+  };
+
+  /** observe(), recording draws as well. */
+  const watch = async (fn) => {
+    draws = [];
+    const run = await observe(fn);
+    const drawn = draws;
+    draws = null;
+    return { ...run, drawn };
+  };
+  /** Secret draws (32 bytes and over) still held anywhere the census saw, as "size@index". */
+  const survivingDraws = (seen, drawn) =>
+    drawn
+      .map((d, i) => ({ d, i }))
+      .filter(({ d }) => d.view.byteLength >= 32)
+      .flatMap(({ d, i }) => holders(seen, hex(d.copy)).map((size) => `${d.view.byteLength}-byte draw #${i} in a ${size}-byte buffer`));
+  const secretDraws = (drawn) => drawn.filter((d) => d.view.byteLength >= 32);
+
+  const OPTIONS = { kdf: { kdf: s.KdfId.PBKDF2, params: { iterations: 600_000 } }, cipher: s.CipherId.AES_256_GCM };
+  const PLAIN = U8.from(Buffer.from("owned-buffer canary payload 4c1d", "utf8"));
+  const SALT = U8.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
+  const SALT2 = U8.from({ length: 32 }, (_, i) => (i * 11 + 5) & 0xff);
+  const CID = U8.from({ length: 16 }, (_, i) => (i * 13 + 1) & 0xff);
+  const MASTER = U8.from({ length: 32 }, (_, i) => (i * 17 + 9) & 0xff);
+  const same = (a, b) => Buffer.from(a).equals(Buffer.from(b));
+
+  // -- shamirSplit, drawing its own coefficients ------------------------------
+  for (const [k, n] of [[2, 3], [3, 5], [8, 16]]) {
+    const secret = U8.from({ length: 32 }, (_, i) => (i * 5 + k) & 0xff);
+    const before = U8.from(secret);
+    const run = await watch(() => s.shamirSplit(secret, k, n));
+    const coeffDraws = run.drawn.filter((d) => d.view.byteLength === (k - 1) * 32);
+    ok(run.error === null && coeffDraws.length === 1,
+       `${k}-of-${n}: the split draws its (k-1)*32 coefficient bytes in one call (the check below is not vacuous)`,
+       run.error ? String(run.error) : `${coeffDraws.length} draws of ${(k - 1) * 32} bytes`);
+    ok(coeffDraws.every((d) => d.view.every((b) => b === 0)),
+       `${k}-of-${n}: the coefficients are zero once the split returns`);
+    ok(survivingDraws(run.seen, run.drawn).length === 0,
+       `${k}-of-${n}: no copy of the coefficients survives the split`, survivingDraws(run.seen, run.drawn).join("; "));
+    ok(same(secret, before), `${k}-of-${n}: the secret being split is the caller's and is not modified`);
+    for (const part of run.value ?? []) secureEraseLocal(part.value);
+  }
+
+  // -- shamirSplit, conformance path: caller-supplied coefficients ------------
+  {
+    const secret = U8.from({ length: 32 }, (_, i) => (i * 3 + 1) & 0xff);
+    const coeffs = U8.from({ length: 64 }, (_, i) => (i * 19 + 7) & 0xff);
+    const coeffsBefore = U8.from(coeffs);
+    const first = s.shamirSplit(secret, 3, 5, coeffs);
+    const second = s.shamirSplit(secret, 3, 5, coeffs);
+    ok(same(coeffs, coeffsBefore), "caller-supplied coefficients are the caller's: unchanged after the split");
+    ok(first.every((p, i) => same(p.value, second[i].value)),
+       "with fixed coefficients the split is deterministic, so conformance vectors still compare byte for byte");
+  }
+
+  // -- encodeShareV2 -----------------------------------------------------------
+  {
+    const value = U8.from({ length: 32 }, (_, i) => (i * 23 + 11) & 0xff);
+    const share = { setId: U8.from({ length: 16 }, (_, i) => i), threshold: 3, index: 2, value };
+    const run = await observe(() => s.encodeShareV2(share));
+    ok(run.error === null && typeof run.value === "string", "encodeShareV2 encodes a share");
+    const left = holders(run.seen, value, { except: [value.buffer] });
+    ok(left.length === 0, "encoding a share leaves no copy of its value behind (the packed record and its body)", none(left));
+    ok(same(share.value, U8.from({ length: 32 }, (_, i) => (i * 23 + 11) & 0xff)),
+       "the share value passed in is the caller's: unchanged after encoding");
+  }
+
+  // A v3 AES container with a known master key, to enrol into.
+  const base = await s.encryptKeym2WithExplicitSecrets(PLAIN, PASSWORD, null, OPTIONS, SALT, U8.from(MASTER), s.KEYM2_VERSION_V3, CID);
+
+  // -- addShamirSlotKeym2, success --------------------------------------------
+  {
+    const run = await watch(() => s.addShamirSlotKeym2(base, { password: PASSWORD, keyFile: null }, 3, 5, { salt: SALT2 }));
+    ok(run.error === null && run.value?.shares?.length === 5, "a 3-of-5 share set enrols", run.error ? String(run.error) : "");
+    ok(secretDraws(run.drawn).length === 2,
+       "the enrolment draws two secrets of its own, the share secret and the coefficients (the checks below are not vacuous)",
+       `${secretDraws(run.drawn).length} draws`);
+    const leftDraws = survivingDraws(run.seen, run.drawn);
+    ok(leftDraws.length === 0, "after an enrolment no copy of the share secret or the coefficients survives", leftDraws.join("; "));
+    const leftMaster = holders(run.seen, MASTER);
+    ok(leftMaster.length === 0, "after an enrolment no copy of the unwrapped master key survives", none(leftMaster));
+    // Guarded: if the enrolment threw, the lines below would throw too and
+    // take every later check in this section with them, which hides exactly
+    // the failure a control is looking for. The failure is already recorded.
+    if (run.error === null && secretDraws(run.drawn).length === 2) {
+      // The share values, recomputed outside the census from the drawn secrets.
+      const [secretDraw, coeffDraw] = secretDraws(run.drawn);
+      const parts = s.shamirSplit(hex(secretDraw.copy), 3, 5, hex(coeffDraw.copy));
+      const leftParts = parts.flatMap((p) => holders(run.seen, p.value, { exact: true }));
+      ok(leftParts.length === 0, "after an enrolment no share value survives outside the strings returned", none(leftParts));
+      // The returned strings still open the container, so erasing did not reach them.
+      const recovered = await s.combineShares(run.value.shares.slice(0, 3));
+      ok(same(recovered, hex(secretDraw.copy)), "the shares returned reconstruct the share secret that was drawn");
+    }
+  }
+
+  // -- addShamirSlotKeym2, a failure after the secrets exist ------------------
+  {
+    failEncrypt = true;
+    const run = await watch(() => s.addShamirSlotKeym2(base, { password: PASSWORD, keyFile: null }, 3, 5, { salt: SALT2 }));
+    failEncrypt = false;
+    ok(run.error?.message === "injected: encrypt refused",
+       "a failure while wrapping the new slot reaches the caller as itself", run.error ? String(run.error.message) : "no error");
+    ok(secretDraws(run.drawn).length === 2, "the share secret and coefficients existed when it failed (the check is not vacuous)",
+       `${secretDraws(run.drawn).length} draws`);
+    const leftDraws = survivingDraws(run.seen, run.drawn);
+    ok(leftDraws.length === 0, "after a failed enrolment no copy of the share secret or the coefficients survives", leftDraws.join("; "));
+    const leftMaster = holders(run.seen, MASTER);
+    ok(leftMaster.length === 0, "after a failed enrolment no copy of the unwrapped master key survives", none(leftMaster));
+  }
+
+  // -- addShamirSlotKeym2, refused after the master key is unwrapped ----------
+  {
+    const run = await watch(() =>
+      s.addShamirSlotKeym2(base, { password: PASSWORD, keyFile: null }, 3, 5, { salt: U8.from({ length: 16 }) })
+    );
+    ok(run.error?.code === "invalid-input", "an enrolment with a 16-byte salt is refused",
+       run.error ? `${run.error.code}: ${run.error.message}` : "no error");
+    const leftMaster = holders(run.seen, MASTER);
+    ok(leftMaster.length === 0, "a refused enrolment leaves no copy of the master key", none(leftMaster));
+  }
+
+  // -- addShamirSlotKeym2, an invalid threshold is refused before the KDF -----
+  {
+    derivations = 0;
+    const run = await watch(() => s.addShamirSlotKeym2(base, { password: PASSWORD, keyFile: null }, 9, 5, { salt: SALT2 }));
+    ok(run.error?.code === "invalid-input", "a threshold above the share count is refused",
+       run.error ? `${run.error.code}: ${run.error.message}` : "no error");
+    ok(derivations === 0, "it is refused before any key is derived, so the master key is never unwrapped",
+       `${derivations} derivation(s)`);
+    const leftDraws = survivingDraws(run.seen, run.drawn);
+    ok(leftDraws.length === 0, "and the share secret drawn before the refusal does not survive it", leftDraws.join("; "));
+  }
+
+  // -- addPasskeySlotKeym2 -----------------------------------------------------
+  {
+    const prf = U8.from({ length: 32 }, (_, i) => (i * 31 + 13) & 0xff);
+    const prfBefore = U8.from(prf);
+    const good = await observe(() => s.addPasskeySlotKeym2(base, { password: PASSWORD, keyFile: null }, prf, SALT2));
+    ok(good.error === null, "a passkey slot enrols", good.error ? String(good.error) : "");
+    ok(same(prf, prfBefore), "the PRF output is the caller's: unchanged after the enrolment (the client erases its own copy)");
+    const leftGood = holders(good.seen, MASTER);
+    ok(leftGood.length === 0, "after a passkey enrolment no copy of the master key survives", none(leftGood));
+
+    failEncrypt = true;
+    const bad = await observe(() => s.addPasskeySlotKeym2(base, { password: PASSWORD, keyFile: null }, prf, SALT2));
+    failEncrypt = false;
+    ok(bad.error?.message === "injected: encrypt refused", "a failed passkey wrap reaches the caller as itself",
+       bad.error ? String(bad.error.message) : "no error");
+    const leftBad = holders(bad.seen, MASTER);
+    ok(leftBad.length === 0, "after a failed passkey enrolment no copy of the master key survives", none(leftBad));
+  }
+
+  // -- encryptKeym2WithSharesRequired (§4.8) ------------------------------------
+  for (const inject of [false, true]) {
+    failEncrypt = inject;
+    const run = await watch(() =>
+      s.encryptKeym2WithSharesRequired(PLAIN, PASSWORD, null, OPTIONS, 3, 5, s.KEYM2_VERSION_V3, { salt: SALT, containerId: CID })
+    );
+    failEncrypt = false;
+    const label = inject ? "a failed §4.8 write" : "a §4.8 write";
+    ok(inject ? run.error?.message === "injected: encrypt refused" : run.error === null,
+       inject ? "a failure during the §4.8 write reaches the caller as itself" : "a §4.8 container with a 3-of-5 set is written",
+       run.error ? String(run.error.message) : "");
+    const draws3 = secretDraws(run.drawn);
+    ok(draws3.length === 3, `${label} draws the master key, the share secret and the coefficients (not vacuous)`, `${draws3.length} draws`);
+    const leftDraws = survivingDraws(run.seen, run.drawn);
+    ok(leftDraws.length === 0, `after ${label} no copy of the master key, the share secret or the coefficients survives`,
+       leftDraws.join("; "));
+    if (draws3.length === 3) {
+      const parts = s.shamirSplit(hex(draws3[1].copy), 3, 5, hex(draws3[2].copy));
+      const leftParts = parts.flatMap((p) => holders(run.seen, p.value, { exact: true }));
+      ok(leftParts.length === 0, `after ${label} no share value survives outside the strings returned`, none(leftParts));
+    }
+  }
+
+  crypto.getRandomValues = nativeRandom;
+  subtle.encrypt = nativeEncrypt;
+  subtle.deriveBits = nativeDeriveBits;
+}
+
 await settle();
 console.log(failed === 0 ? "\nAll core secret-erase checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

@@ -1028,9 +1028,9 @@ Both are corrected with the assurance-language work.
 | # | State | Record |
 |---|---|---|
 | 9.1 | merged | PR #224, in `main` at `cc77330` (`src/lib/access-policy.ts` present) |
-| 9.2 | verified | The change described in 9.2 below. Checks and negative controls are in its PR |
+| 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | not_started | |
-| 9.4 | not_started | |
+| 9.4 | verified | The change described in 9.4 below. Checks and negative controls are in its PR |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1070,6 +1070,67 @@ runs the same scan over an ordinary decrypt, which must find it.
 `tests/browser/verify-confinement.spec.ts` records what reaches the page from
 the worker during a verify and a rehearsal, a Stop, a switch to Encrypt, and a
 page with no worker.
+
+### 9.4 Secret buffers have an owner, and the owner erases them
+
+`shamirSplit` now erases the coefficients it draws, in a `finally`. Coefficients
+a conformance harness passes in are left untouched, so the vectors still compare
+byte for byte. The same audit found four more gaps of the same kind.
+
+- `packShare` and `packShareV2` left their copy of the share value (the record
+  body) in memory, and `encodeShare` and `encodeShareV2` left the packed record.
+- `addShamirSlotKeym2` never erased the share values after encoding them, and
+  erased the share secret only on success.
+- The same function and `addPasskeySlotKeym2` erased the unwrapped master key
+  only on a refused slot table or inside the wrap. A throw between the two left
+  it in memory.
+- The §4.8 writer erased each share value only as the loop reached it, so a
+  write that failed first left all of them.
+
+Each is now erased in a `finally`. `addShamirSlotKeym2` also splits before it
+unwraps, so an invalid threshold is refused before any key is derived.
+
+**Who owns what**
+
+| Buffer | Made by | Erased by |
+|---|---|---|
+| Shamir coefficients, drawn | `shamirSplit` | `shamirSplit`, before it returns |
+| Shamir coefficients, passed in | the conformance harness | nobody here, they are the caller's |
+| Share values (the split's parts) | `shamirSplit` | the function that called the split, once the values are text |
+| Packed share record and its body | `packShare`, `encodeShare` and their v2 forms | the function that made them |
+| Decoded share values | `decodeShare` and its v2 form | `combineShares` |
+| Reconstructed share secret | `combineShares` | its caller (the unwrap paths), in a `finally` |
+| Share secret, drawn | the writer or enroller that drew it | the same function, in a `finally` |
+| Password bytes, KDF input, key-file digest | `buildKdfInput`, `keyfileDigest` | the function that made them |
+| PRF output | the page, from the authenticator | the client and the worker, each its own copy |
+| Passkey slot secret | `buildPasskeyInput` | the enroller or reader that asked for it |
+| Slot keys | `deriveSlotKey` | the writer, enroller or reader that asked for it |
+| Master key, generated | the writer | the writer, in a `finally` |
+| Master key, unwrapped | `unwrapMasterKey` | the enroller or reader that asked for it, in a `finally` |
+
+All of this is best effort. JavaScript can erase a buffer it holds a reference
+to. It cannot erase copies an engine or Web Crypto made, and it cannot erase a
+string.
+
+**Decision, the worker's lifetime.** One worker is kept and reused, and a
+finished operation does not terminate it. Stop, the auto-lock, a mode or input
+switch and unmount already terminate it, which is what cancellation needs. The
+alternative was to terminate after every secret-bearing operation. That makes
+the whole worker heap unreachable at once, which is stronger than erasing named
+buffers. But every following operation would then pay for a new readiness probe
+and a new wasm instance, and a termination sent as one response lands could kill
+an operation already queued behind it and report it as a failure. Erasing what
+each function owns, as tested below, is the chosen boundary. To reverse it,
+terminate and reset readiness in `crypto-client.ts` once each encrypt, decrypt
+or verify settles, and re-run the worker and Stop browser tests.
+
+**Checks.** `npm run test:secret-erase-core` copies every `getRandomValues` draw
+made during a split, an enrolment or a §4.8 write, and afterwards searches every
+buffer the core allocated for each copy, for the master key and for every share
+value. It does this after success and after a failure injected into
+`crypto.subtle.encrypt`, and checks that the injected error is the one the
+caller sees. It also checks that caller-owned inputs come back unchanged, and
+that an invalid threshold is refused before any key is derived.
 
 ---
 
