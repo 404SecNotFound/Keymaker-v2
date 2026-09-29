@@ -19,6 +19,10 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The Recovery tab reported a change nobody made.** After testing a backup on
+  the Decrypt tab, it said the Encrypt form's content had changed, because the
+  two tabs share their input. Content and input type are now compared only on
+  the Encrypt tab.
 - **The auto-lock forgot the backup its spared shares open.** With recovery
   shares on screen, the lock kept the shares but cleared the receipt, the
   steps and a passed rehearsal. It now keeps what is known about that backup

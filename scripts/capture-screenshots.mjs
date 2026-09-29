@@ -372,6 +372,12 @@ try {
   // in its own pass because it needs a real container, and the walkthrough has
   // just made one — a second Argon2id encryption to photograph the same panel
   // would cost a minute of CI for nothing.
+  // The README says this shot shows the parameters read back from the header.
+  // Since Section 06c those are behind the "Format detail" switch, off by
+  // default, so it is turned on for this one capture and off again after, and
+  // every other shot shows the page as a first visit does.
+  const formatDetail = visible(page.getByTestId('format-detail-switch'));
+  await formatDetail.click();
   await settle();
   // Viewport-width band, not an element capture, so this matches the other
   // panel shots at 2360px wide with even padding rather than the 960px
@@ -383,6 +389,7 @@ try {
     28
   );
   console.log('captured 07-decrypt-detection.png');
+  await formatDetail.click();
 
   await visible(page.getByLabel(/Verify only/i)).click();
   await visible(page.getByRole('button', { name: /^Verify Text$/i })).click();
@@ -397,6 +404,38 @@ try {
     join(SHOTS, 'walkthrough-4-verified.png')
   );
   console.log('captured walkthrough-4-verified.png');
+
+  // ---- Section 06. What the page knows about the backup after that verify.
+  // The walkthrough pasted the page's own container, so the verify matched
+  // the backup it made: the steps show the recovery test as done, and the
+  // saved copy as not yet checked, because nothing was saved.
+  //
+  // 14: a password typed after the check is a new attempt, and the result
+  // says it no longer describes what is entered.
+  const passwordAgain = visible(page.getByPlaceholder('Enter decryption password'));
+  await passwordAgain.fill('a different password, typed after the check');
+  const staleNotice = visible(page.getByTestId('verify-stale'));
+  await staleNotice.waitFor();
+  await settle();
+  await shotRegion(staleNotice, staleNotice, join(SHOTS, '14-verify-stale.png'), 28);
+  console.log('captured 14-verify-stale.png');
+  await passwordAgain.fill('');
+
+  // 13: the Recovery tab still has the backup, now tested.
+  await visible(page.getByRole('tab', { name: 'Recovery', exact: true })).click();
+  const current = visible(page.locator('section[aria-labelledby="recovery-current-title"]'));
+  await current.waitFor();
+  await settle();
+  await shotRegion(current, current, join(SHOTS, '13-recovery-tested.png'), 28);
+  console.log('captured 13-recovery-tested.png');
+
+  // walkthrough-5: back on Encrypt, the steps.
+  await visible(page.getByRole('tab', { name: 'Encrypt', exact: true })).click();
+  const steps = visible(page.getByTestId('workflow-steps'));
+  await steps.waitFor();
+  await settle();
+  await shotRegion(steps, steps, join(SHOTS, 'walkthrough-5-steps.png'), 28);
+  console.log('captured walkthrough-5-steps.png');
 } finally {
   await context.close();
   await browser.close();

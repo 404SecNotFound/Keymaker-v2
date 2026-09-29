@@ -50,6 +50,9 @@ test("testing from the Recovery tab keeps the backup, and counts as a recovery t
   await tab(page, "Recovery").click();
   await expect(page.getByText(/No newly created backup/)).toHaveCount(0);
   await expect(visible(page.getByTestId("recovery-test"))).toContainText(/Verified with the password at \d{1,2}[:.]\d{2}/);
+  // The Decrypt tab's text box holds the pasted container; that is not a
+  // change to the Encrypt form (Section 06g, found in the screenshots).
+  await expect(page.getByTestId("recovery-stale"), "the Decrypt side's input read as a change").toHaveCount(0);
 
   // And the Encrypt tab has it back as it was: receipt, container, steps.
   await tab(page, "Encrypt").click();
@@ -71,6 +74,10 @@ test("verifying the downloaded file checks the saved copy", async ({ page }) => 
   await tab(page, "Decrypt").click();
   await page.locator("#decrypt-file").setInputFiles({ name: "backup.keym", mimeType: "application/octet-stream", buffer: saved });
   await verifyOnDecrypt(page);
+  // File mode on the Decrypt tab, for a Text-mode backup: neither the input
+  // type nor the loaded file is a change to the Encrypt form.
+  await tab(page, "Recovery").click();
+  await expect(page.getByTestId("recovery-stale"), "the Decrypt side's input read as a change").toHaveCount(0);
 
   await tab(page, "Encrypt").click();
   await expect(step(page, "saved-copy")).toHaveAttribute("data-state", "done");
