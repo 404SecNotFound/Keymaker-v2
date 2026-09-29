@@ -42,6 +42,14 @@ test("the inspector leaves out bytes and KDF parameters until format detail is o
   await expect(detailSwitch(page)).toHaveAttribute("aria-checked", "false");
 });
 
+test("the Format detail switch has a short label and still says what it shows", async ({ page }) => {
+  // Usability finding S7: the label carried the whole list and wrapped.
+  await page.goto("/");
+  await expect(visible(page.locator('label[for="format-detail"]'))).toHaveText("Format detail");
+  await expect(detailSwitch(page)).toHaveAccessibleName("Format detail");
+  await expect(detailSwitch(page)).toHaveAccessibleDescription("Shows header bytes, offsets and KDF parameters.");
+});
+
 test("the pane's first-visit copy promises only what the detail level shows", async ({ page }) => {
   // Usability finding S2: with Format detail off the itemisation has no
   // header bytes, so the copy must not promise them.
