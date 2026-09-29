@@ -539,7 +539,7 @@ export function useEncryptorState() {
   /**
    * Section 06. Which container symbols of this backup's printout have been
    * photographed back and matched to it, across every check since it was
-   * written. The "Check saved copy" step is done only when all of them have.
+   * written. The "Saved copy" step is done only when all of them have.
    */
   const [printoutCoverage, setPrintoutCoverage] = useState<PrintoutCoverage | null>(null);
   const [printoutBusy, setPrintoutBusy] = useState(false);

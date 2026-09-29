@@ -81,7 +81,7 @@ test("verifying the downloaded file checks the saved copy", async ({ page }) => 
 
   await tab(page, "Encrypt").click();
   await expect(step(page, "saved-copy")).toHaveAttribute("data-state", "done");
-  await expect(page.getByTestId("workflow-step-detail")).not.toContainText("Check saved copy.");
+  await expect(page.getByTestId("workflow-step-detail")).not.toContainText("Saved copy.");
   await expect(step(page, "recovery")).toHaveAttribute("data-state", "done");
   await tab(page, "Recovery").click();
   await expect(visible(page.getByTestId("recovery-saved-copy"))).toContainText("matched this backup byte for byte");

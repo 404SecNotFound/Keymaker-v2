@@ -74,7 +74,7 @@ test("the steps follow the form, the job and the exports, and a download is only
   await expect(visible(page.getByTestId("seal-receipt"))).toBeVisible({ timeout: 60_000 });
   await expectStep(page, "create", "done", "Done");
   await expectStep(page, "saved-copy", "current", "Next");
-  await expect(page.getByTestId("workflow-step-detail")).toContainText("Check saved copy.");
+  await expect(page.getByTestId("workflow-step-detail")).toContainText("Saved copy.");
 
   const download = page.waitForEvent("download");
   await visible(page.getByRole("button", { name: /Download \.keym/ })).click();
@@ -142,4 +142,22 @@ test("recovery is done only after a rehearsal from the shares opens the backup",
   await expectStep(page, "recovery", "done", "Done");
   // Printing the sheet was never asked for, so the saved copy is still next.
   await expectStep(page, "saved-copy", "current", "Next");
+});
+
+test("the step grid's rows line up at the width the screenshots use", async ({ page }) => {
+  // Usability finding S3: a label that wrapped pushed its state word below its
+  // neighbours', and the one-line label beside it sat off the row's top.
+  await page.setViewportSize({ width: 1180, height: 1140 });
+  await page.goto("/");
+  const tops = async (selector: string) =>
+    page.getByTestId("workflow-steps").locator(selector).evaluateAll((els) =>
+      els.map((el) => Math.round(el.getBoundingClientRect().top))
+    );
+  const labels = await tops(".km-step-label");
+  const states = await tops(".km-step-state");
+  expect(labels).toHaveLength(6);
+  for (const [name, ys] of [["labels", labels], ["states", states]] as const) {
+    expect(new Set(ys.slice(0, 3)).size, `row 1 ${name} are not level: ${ys.slice(0, 3)}`).toBe(1);
+    expect(new Set(ys.slice(3, 6)).size, `row 2 ${name} are not level: ${ys.slice(3, 6)}`).toBe(1);
+  }
 });
