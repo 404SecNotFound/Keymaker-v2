@@ -25,7 +25,12 @@ export interface VerifiedInput<F> {
 }
 
 /** A part of the form that no longer matches what was checked. */
-export type VerifyChange = "backup" | "key file" | "unlock method" | "credentials";
+/**
+ * Each value is shown to the owner as it is. "password or recovery shares"
+ * replaced "credentials", the page's word rather than theirs (usability
+ * finding S5).
+ */
+export type VerifyChange = "backup" | "key file" | "unlock method" | "password or recovery shares";
 
 /**
  * What changed since the check, in the order the page lists it. Empty when
@@ -49,7 +54,7 @@ export function verifyChanges<F>(
   if (checked.useShares !== now.useShares || checked.usePasskey !== now.usePasskey) {
     changes.push("unlock method");
   }
-  if (typedSince) changes.push("credentials");
+  if (typedSince) changes.push("password or recovery shares");
   return changes;
 }
 

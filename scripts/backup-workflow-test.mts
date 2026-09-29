@@ -340,10 +340,10 @@ check("an AND way in keeps its own wording",
     eq(verifyChanges(text, { ...text, useShares: true }, false), ["unlock method"]));
   check("switching to a passkey is a change of unlock method",
     eq(verifyChanges(text, { ...text, usePasskey: true }, false), ["unlock method"]));
-  check("a password typed since is reported as credentials", eq(verifyChanges(text, { ...text }, true), ["credentials"]));
+  check("a password typed since is reported in the owner's words", eq(verifyChanges(text, { ...text }, true), ["password or recovery shares"]));
   check("several changes are all named, in order",
     eq(verifyChanges(text, { ...text, text: "x", keyFile: key, useShares: true }, true),
-      ["backup", "key file", "unlock method", "credentials"]));
+      ["backup", "key file", "unlock method", "password or recovery shares"]));
 }
 
 // ---------------------------------------------------------------------------
