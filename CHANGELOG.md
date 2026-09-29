@@ -19,6 +19,10 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The auto-lock forgot the backup its spared shares open.** With recovery
+  shares on screen, the lock kept the shares but cleared the receipt, the
+  steps and a passed rehearsal. It now keeps what is known about that backup
+  and still clears the secrets. With no shares on screen it behaves as before.
 - **Testing a backup from the Recovery tab destroyed it.** The test switched to
   the Decrypt tab, and the switch cleared the receipt, the steps and, in Text
   mode, the page's only copy of the container. The created backup now

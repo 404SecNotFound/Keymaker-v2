@@ -1351,7 +1351,13 @@ export function useEncryptorState() {
         lastActivityRef.current = Date.now();
         setLockSecondsLeft(null);
         const sparedShares = issuedSharesRef.current !== null;
-        clearSensitiveState({ sparingIssuedShares: true });
+        // Section 06f. When the shares stay, so does what the page knows about
+        // the backup they open: the receipt, its header, the steps' evidence
+        // and a passed rehearsal. None of it is a secret, and clearing it left
+        // the dialog showing strips for a backup the rest of the page no longer
+        // described. The secrets go either way. Without shares on screen the
+        // lock still clears the backup, as it did before.
+        clearSensitiveState({ sparingIssuedShares: true, keepingBackup: sparedShares });
         toast({
           title: "Locked — secrets cleared",
           description: sparedShares
