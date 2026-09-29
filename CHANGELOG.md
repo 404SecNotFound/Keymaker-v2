@@ -39,6 +39,13 @@
   the Decrypt tab, it said the Encrypt form's content had changed, because the
   two tabs share their input. Content and input type are now compared only on
   the Encrypt tab.
+- **The auto-lock destroyed an unsaved Text-mode backup.** With no recovery
+  shares on screen, the lock cleared the container in the output box, which
+  is the page's only copy until it is saved, along with its receipt and
+  steps. The lock now keeps them and still clears the password, plaintext,
+  key file and any decrypted output. The timer no longer re-arms for the
+  container alone. A File-mode backup, already downloaded, is cleared as
+  before.
 - **The auto-lock forgot the backup its spared shares open.** With recovery
   shares on screen, the lock kept the shares but cleared the receipt, the
   steps and a passed rehearsal. It now keeps what is known about that backup

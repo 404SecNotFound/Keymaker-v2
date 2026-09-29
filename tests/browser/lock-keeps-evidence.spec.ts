@@ -10,8 +10,13 @@ import { visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
  * showed strips for a backup the rest of the page no longer described.
  *
  * With shares on screen the lock now keeps that evidence and still clears the
- * secrets. Without shares it still clears the backup, which the second test
- * pins so the change cannot quietly widen.
+ * secrets.
+ *
+ * Decided afterwards: without shares the lock also keeps an unsaved Text-mode
+ * backup, which is the page's only copy of the container. The container is
+ * ciphertext. The rest of the file pins the edges of that decision: decrypted
+ * output is never kept, the timer does not re-arm for the container alone,
+ * and a File-mode backup, already downloaded, is still cleared.
  */
 
 const SECRET = "lock-evidence synthetic secret, not a real one";
@@ -70,19 +75,113 @@ test("with shares on screen, the lock keeps the receipt, the steps and a passed 
   await expect(visible(page.getByTestId("recovery-test"))).toContainText("Rehearsed on");
 });
 
-test("without shares on screen, the lock still clears the backup", async ({ page }) => {
-  await sealText(page, false);
-  await expect(visible(page.getByTestId("seal-receipt"))).toBeVisible({ timeout: 60_000 });
-
+/** Nothing touched for longer than the lock allows: the warning, then the lock. */
+async function idleUntilLocked(page: Page) {
   await page.clock.runFor("04:40");
   await expect(page.getByRole("button", { name: /Keep open/i }).first()).toBeAttached();
   await page.clock.runFor("00:50");
   await expect(page.getByRole("button", { name: /Keep open/i })).toHaveCount(0);
+}
+
+const output = (page: Page) => visible(page.locator("#output-text"));
+
+/**
+ * Nothing warns within the next 4:40. Read once, after a real second for
+ * React to draw anything the fake clock just triggered. Not `toHaveCount(0)`:
+ * it retries, the page's clock keeps running, and a warning that is there
+ * goes away when its lock fires, so the retry passes.
+ */
+async function expectNoLockWarning(page: Page, message: string) {
+  await page.clock.runFor("04:40");
+  await page.waitForTimeout(1_000);
+  expect(await page.getByRole("button", { name: /Keep open/i }).count(), message).toBe(0);
+}
+
+/**
+ * Sealing clears the plaintext and the password, so afterwards only the
+ * container is on screen and there is nothing for the lock to clear. A
+ * password typed for the next backup is a secret again, and arms it.
+ */
+async function typeNextPassword(page: Page) {
+  await visible(page.getByPlaceholder("Enter a strong password")).fill("a password for the next backup");
+}
+
+/** Is `text` in any text box on the page, visible or not? */
+const onPage = (page: Page, text: string) =>
+  page.evaluate((t) => [...document.querySelectorAll("textarea, input")].some((el) => (el as HTMLInputElement).value.includes(t)), text);
+
+test("without shares, the lock keeps an unsaved Text backup and clears the secrets", async ({ page }) => {
+  await sealText(page, false);
+  await expect(visible(page.getByTestId("seal-receipt"))).toBeVisible({ timeout: 60_000 });
+  await expect(output(page)).toHaveValue(/^keym2:/);
+  const armored = await output(page).inputValue();
+
+  // Only the container is on screen: nothing to lock, so no warning comes.
+  // 4:40 is inside the warning window; a lock that had fired by 5:30 would
+  // already have taken its warning away.
+  await expectNoLockWarning(page, "the lock's timer counts the container it keeps");
+  await page.clock.runFor("01:00");
+  await expect(output(page)).toHaveValue(armored);
+
+  await typeNextPassword(page);
+  await idleUntilLocked(page);
+  // The secret went.
+  await expect(visible(page.getByPlaceholder("Enter a strong password"))).toHaveValue("");
+  // The backup stayed: the container, the receipt and the steps.
+  await expect(output(page), "the lock cleared the only copy of an unsaved backup").toHaveValue(armored);
+  await expect(visible(page.getByTestId("seal-receipt"))).toBeVisible();
+  await expect(step(page, "create")).toHaveAttribute("data-state", "done");
+  await visible(page.getByRole("tab", { name: "Recovery", exact: true })).click();
+  await expect(page.getByText(/No newly created backup/)).toHaveCount(0);
+
+  // With only the container left there is nothing to lock, so the timer
+  // stays off instead of firing again every five minutes.
+  await expectNoLockWarning(page, "the timer re-armed for a container the lock keeps");
+  // A wipe is still offered, and still takes the backup.
+  await visible(page.getByRole("tab", { name: "Encrypt", exact: true })).click();
+  await visible(page.getByRole("button", { name: /Wipe now/ })).click();
   await expect(page.getByTestId("seal-receipt")).toHaveCount(0);
-  await expect(visible(page.locator('[data-testid="workflow-steps"] li[data-step="create"]'))).not.toHaveAttribute(
-    "data-state",
-    "done"
-  );
+});
+
+test("the lock never keeps decrypted output", async ({ page }) => {
+  await sealText(page, false);
+  await expect(output(page)).toHaveValue(/^keym2:/, { timeout: 60_000 });
+  const armored = await output(page).inputValue();
+
+  await visible(page.getByRole("tab", { name: "Decrypt", exact: true })).click();
+  await useTextMode(page);
+  await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+  await visible(page.getByPlaceholder("Enter decryption password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+  await expect(output(page)).toHaveValue(SECRET, { timeout: 60_000 });
+
+  await idleUntilLocked(page);
+  expect(await onPage(page, SECRET), "the lock kept decrypted plaintext on screen").toBe(false);
+  // Back on the Encrypt tab, the backup is still there.
+  await visible(page.getByRole("tab", { name: "Encrypt", exact: true })).click();
+  await expect(output(page)).toHaveValue(armored);
+  await expect(visible(page.getByTestId("seal-receipt"))).toBeVisible();
+});
+
+test("a File-mode backup, already downloaded, is still cleared by the lock", async ({ page }) => {
+  await page.clock.install();
+  await page.goto("/");
+  await selectCrypto(page, "pbkdf2", "aes");
+  await visible(page.getByRole("button", { name: "File", exact: true })).click();
+  await page.setInputFiles('input[type="file"]', {
+    name: "notes.txt",
+    mimeType: "text/plain",
+    buffer: Buffer.from(SECRET),
+  });
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  const download = page.waitForEvent("download", { timeout: 90_000 });
+  await visible(page.getByRole("button", { name: /^Encrypt File$/i })).click();
+  await download;
+  await expect(visible(page.getByTestId("seal-receipt"))).toBeVisible({ timeout: 60_000 });
+
+  await typeNextPassword(page);
+  await idleUntilLocked(page);
+  await expect(page.getByTestId("seal-receipt")).toHaveCount(0);
   await visible(page.getByRole("tab", { name: "Recovery", exact: true })).click();
   await expect(visible(page.getByText(/No newly created backup/))).toBeVisible();
 });
