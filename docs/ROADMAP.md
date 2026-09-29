@@ -1031,7 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
-| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input), e (testing keeps the backup), f (the lock keeps evidence beside spared shares) and g (production screenshots and usability notes) below; the open usability findings follow |
+| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input), e (testing keeps the backup), f (the lock keeps evidence beside spared shares, and an unsaved Text-mode backup) and g (production screenshots and usability notes) below; the open usability findings follow |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1416,10 +1416,24 @@ change does. None of it is a secret. The password, plaintext, key file and
 any pasted strips are still cleared. Without shares on screen the lock still
 clears the backup, exactly as before.
 
-**Open question, not changed here.** A lock with no shares on screen still
-clears a Text-mode backup that was never saved, which is the page's only copy
-of the container. The container is ciphertext, so keeping it would not expose
-anything, but it would change what the lock promises.
+**Decided afterwards: the lock keeps an unsaved Text-mode backup.** Without
+shares on screen the lock used to clear a Text-mode backup that was never
+saved, which is the page's only copy of the container. It now keeps it: the
+container in the output box, the receipt, the steps' evidence and a passed
+rehearsal. The container is ciphertext, so keeping it exposes nothing. The
+password, plaintext, key file, pasted strips and any decrypted output are
+still cleared, and only the exact container this page created is kept, so
+decrypted output on the Decrypt tab never is. The lock's timer no longer
+counts that container as something to lock, so it does not fire again every
+five minutes with nothing left to clear. "Wipe now" still takes the backup.
+A File-mode backup was downloaded when it was made, and the lock still
+clears what the page knows about it.
+
+`lock-keeps-evidence.spec.ts` covers the kept Text backup, the timer staying
+off with only the container on screen, decrypted output being cleared and a
+File-mode backup being cleared. Keeping nothing, counting the container in
+the timer, keeping any output and keeping a File-mode backup each built and
+failed their own test.
 
 **Not yet done in Section 06.** The production screenshots with usability
 notes.

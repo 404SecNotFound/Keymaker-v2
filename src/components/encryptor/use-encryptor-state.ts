@@ -629,7 +629,7 @@ export function useEncryptorState() {
   const [decryptPeek, setDecryptPeek] = useState<Uint8Array | null>(null);
   /**
    * Read by the auto-lock interval, which closes over state from the render
-   * that armed it. The effect depends on `hasSecretsOnScreen` only, so by the
+   * that armed it. The effect depends on `hasSecretsToLock` only, so by the
    * time the interval fires `issuedShares` in its closure may be a tick old —
    * and this decides which of two toasts the user is told, so it has to be
    * current rather than nearly current.
@@ -1126,7 +1126,11 @@ export function useEncryptorState() {
     });
   }, [toast]);
 
-  const clearSensitiveState = useCallback((opts?: { sparingIssuedShares?: boolean; keepingBackup?: boolean }) => {
+  const clearSensitiveState = useCallback((opts?: {
+    sparingIssuedShares?: boolean;
+    keepingBackup?: boolean;
+    keepingContainer?: boolean;
+  }) => {
     // Disown any operation still running. A KDF cannot be cancelled from here —
     // that needs the Worker in Phase 2 — but it can be made harmless: once the
     // counter moves, the in-flight operation's completion path goes quiet
@@ -1163,7 +1167,14 @@ export function useEncryptorState() {
     // The lock used to keep the shares and wipe this, so the dialog went on
     // showing strips that now opened nothing, its Print paper vault button
     // went dark, and the note under it blamed "a file container".
-    if (!(opts?.sparingIssuedShares && issuedSharesRef.current !== null)) setOutputText('');
+    //
+    // `keepingContainer` keeps it for the same reason without shares: the
+    // lock leaves an unsaved Text-mode backup on screen. Only the exact
+    // container this page created is kept. On the Decrypt tab the box holds
+    // decrypted output, which never matches it and is cleared.
+    if (!(opts?.sparingIssuedShares && issuedSharesRef.current !== null)) {
+      setOutputText((t) => (opts?.keepingContainer && t !== "" && t === createdRef.current?.armored ? t : ""));
+    }
     setShowDecryptedText(false);
     setDecryptInfo(null);
     setSlotTableWarning(false);
@@ -1263,14 +1274,18 @@ export function useEncryptorState() {
    * nothing. The timer exists for the state that matters — a password, a
    * plaintext secret, a decrypted result — so it only runs when that exists.
    */
-  const hasSecretsOnScreen =
+  const hasSecretsToLock =
     password.length > 0 ||
     textSecret.length > 0 ||
     // Mirrored into `textSecret` on every change, so this clause is never the
     // one that fires — it is here so the list stays the same list as the one
     // in `clearSensitiveState`, by construction rather than by remembering.
     seedWords.some(Boolean) ||
-    outputText.length > 0 ||
+    // The container this page created is ciphertext, and the lock keeps it.
+    // Counting it here re-armed the timer forever after a lock, with nothing
+    // left to clear. Anything else in the box, decrypted output included, is
+    // still a secret.
+    (outputText.length > 0 && outputText !== createdArmor) ||
     // KM-R03. Share-only decryption is the case this predicate missed: an heir
     // has no password and may have decrypted a *file*, so all three of the
     // above can be empty while the textarea holds enough shares to open the
@@ -1294,6 +1309,13 @@ export function useEncryptorState() {
     file !== null ||
     keyFile !== null;
 
+  /**
+   * Is there anything a wipe would clear? Everything the lock would, plus the
+   * backup's container, which a wipe takes and the lock keeps. "Wipe now" and
+   * its command stay available while the container is on screen.
+   */
+  const hasSecretsOnScreen = hasSecretsToLock || outputText.length > 0;
+
   const keepOpen = useCallback(() => {
     lastActivityRef.current = Date.now();
     setLockSecondsLeft(null);
@@ -1312,7 +1334,7 @@ export function useEncryptorState() {
    * tool — sees no chrome at all.
    */
   useEffect(() => {
-    if (!hasSecretsOnScreen) {
+    if (!hasSecretsToLock) {
       setLockSecondsLeft(null);
       return;
     }
@@ -1355,14 +1377,27 @@ export function useEncryptorState() {
         // the backup they open: the receipt, its header, the steps' evidence
         // and a passed rehearsal. None of it is a secret, and clearing it left
         // the dialog showing strips for a backup the rest of the page no longer
-        // described. The secrets go either way. Without shares on screen the
-        // lock still clears the backup, as it did before.
-        clearSensitiveState({ sparingIssuedShares: true, keepingBackup: sparedShares });
+        // described. The secrets go either way.
+        //
+        // A Text-mode backup is kept the same way without shares. Its
+        // container exists only on this page until it is saved, it is
+        // ciphertext, and clearing it on a timer destroyed a backup the owner
+        // had not yet copied. A File-mode backup was downloaded when it was
+        // made, so the lock still clears what the page knows about it.
+        const keptText = !!createdRef.current?.armored;
+        clearSensitiveState({
+          sparingIssuedShares: true,
+          keepingBackup: sparedShares || keptText,
+          keepingContainer: keptText,
+        });
+        const cleared = `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were cleared from the page.`;
         toast({
           title: "Locked — secrets cleared",
           description: sparedShares
-            ? `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were cleared from the page. Your recovery shares are still on screen — they cannot be shown again, so only you can dismiss them. Your settings are unchanged.`
-            : `Nothing was touched for ${AUTO_LOCK_MS / 60_000} minutes, so the password and any decrypted output were cleared from the page. Your settings are unchanged.`,
+            ? `${cleared} Your recovery shares are still on screen — they cannot be shown again, so only you can dismiss them. Your settings are unchanged.`
+            : keptText
+              ? `${cleared} Your encrypted backup is still on the Encrypt tab, so you can save it. Your settings are unchanged.`
+              : `${cleared} Your settings are unchanged.`,
         });
         return;
       }
@@ -1373,7 +1408,7 @@ export function useEncryptorState() {
       for (const event of events) window.removeEventListener(event, bump);
       clearInterval(id);
     };
-  }, [hasSecretsOnScreen, clearSensitiveState, toast]);
+  }, [hasSecretsToLock, clearSensitiveState, toast]);
 
   const handleModeChange = useCallback((newMode: string) => {
     setWorkspacePage("workbench");
