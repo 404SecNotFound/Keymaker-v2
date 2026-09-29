@@ -246,6 +246,13 @@ const OPENED_WITH: Record<VerifiedBackup["how"], string> = {
   "passphrase-and-shares": "the password and the recovery shares",
 };
 
+/**
+ * The two ways to turn a saved copy from started into done (usability finding
+ * S4: the step used to say "check the copy" without saying how).
+ */
+const HOW_TO_CHECK =
+  "To check it, load the saved file on the Decrypt tab and verify it, or photograph every printed symbol on the Recovery tab.";
+
 export const STEP_LABELS: Record<StepId, string> = {
   content: "Content",
   access: "Access rule",
@@ -330,9 +337,9 @@ export function workflowSteps(i: StepInputs): Step[] {
         ? s(
             "saved-copy",
             "started",
-            `${said.join(". ")}. The page cannot see whether a copy was kept; photograph the printout on the Recovery tab to check it.`
+            `${said.join(". ")}. The page cannot see whether a copy was kept. ${HOW_TO_CHECK}`
           )
-        : s("saved-copy", "todo", "Download it or print the paper vault, then check the copy.")
+        : s("saved-copy", "todo", `Download it or print the paper vault. ${HOW_TO_CHECK}`)
     );
   }
 

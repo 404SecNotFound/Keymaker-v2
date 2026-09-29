@@ -19,6 +19,9 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The saved-copy step did not say how to check the copy.** It now names both
+  ways: load the saved file on the Decrypt tab and verify it, or photograph
+  every printed symbol on the Recovery tab.
 - **The step list's rows did not line up.** Two labels wrapped and pushed their
   state words out of line. They are now "Saved copy" and "Recovery test", and
   each step keeps its state on the row's bottom line whatever its label does.
