@@ -1031,7 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
-| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input), e (testing keeps the backup) and f (the lock keeps evidence beside spared shares) below; screenshots and usability notes follow |
+| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input), e (testing keeps the backup), f (the lock keeps evidence beside spared shares) and g (production screenshots and usability notes) below; the open usability findings follow |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1431,6 +1431,40 @@ fire with no shares and checks that the backup goes. It proves the lock fired
 from the page itself: the warning appears and then goes without a click.
 Reverting the change fails the first test, and keeping the backup on every
 lock fails the second.
+
+### 9.6 The creation workflow (handover Section 06), part g
+
+The production screenshots and usability notes. `scripts/capture-screenshots.mjs`
+recaptures every README and walkthrough shot from the production export, and now
+also:
+
+- takes `07-decrypt-detection.png` with Format detail on, because the README
+  says that shot shows the parameters read back from the header, and turns it
+  off again so every other shot shows a first visit;
+- adds `walkthrough-5-steps.png`, the steps after the walkthrough's own verify,
+  and places it in `docs/WALKTHROUGH.md` Part 2 with what each state means;
+- adds `13-recovery-tested.png` and `14-verify-stale.png` for the notes.
+
+The notes are in `docs/reports/USABILITY-2026-09-29.md`. They are one reviewer
+reading the captured screens, not a study with users.
+
+**Found and fixed.** The first capture of the Recovery tab after a test said the
+Encrypt form had changed since the backup was made ("content"), which nobody
+had done. The input type, the text box and the chosen file are shared with the
+Decrypt tab, and the check read the Decrypt side's input as the Encrypt form's.
+Content and input type are now compared only while the form is on the Encrypt
+tab; the settings still count everywhere.
+
+**Found and left open.** The container pane's first-visit copy promises "header
+byte by header byte" when Format detail is off; the step grid's rows do not
+line up where labels wrap; "Check saved copy" does not say how to check; the
+stale-verify notice says "credentials"; long Recovery-tab sentences are set in
+monospace; the Format detail label wraps. Each changes what an owner reads, so
+each is for its own reviewed change. The report has a recommendation for each.
+
+**Checks.** `recovery-test-keeps.spec.ts` now reads the Recovery tab after a
+text-mode and a file-mode test and requires no change notice; disabling the fix
+fails both checks. `npm run test:screenshots` holds all 18 shots at 2360px.
 
 ---
 

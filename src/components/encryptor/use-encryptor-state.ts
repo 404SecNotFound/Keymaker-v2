@@ -2952,11 +2952,22 @@ export function useEncryptorState() {
   }), [inputType, kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism, cipherChoice, hideSize, policy]);
   const backupDiffers = useMemo(() => {
     if (workflow.phase !== "created") return null;
-    const changes: string[] = settingsChanges(workflow.sealed, currentSettings);
-    const newContent = inputType === 'file' ? file !== null : textSecret.length > 0;
+    // Section 06g. The input type, the text box and the chosen file are shared
+    // with the Decrypt tab. While the form is there, testing this backup, they
+    // hold the Decrypt side's input, and reading them as the Encrypt form's
+    // reported a change nobody made ("content", "input type"). Going back to
+    // Encrypt restores the backup's input type and clears the box, so they are
+    // compared only there. The settings (KDF, cipher, size hiding, ways in)
+    // belong to the Encrypt form wherever the page is, so they always count.
+    const onEncrypt = mode === 'encrypt';
+    const changes: string[] = settingsChanges(workflow.sealed, {
+      ...currentSettings,
+      inputType: onEncrypt ? currentSettings.inputType : workflow.sealed.inputType,
+    });
+    const newContent = onEncrypt && (inputType === 'file' ? file !== null : textSecret.length > 0);
     if (newContent) changes.unshift("content");
     return changes.length > 0 ? changes : null;
-  }, [workflow, currentSettings, inputType, file, textSecret]);
+  }, [workflow, currentSettings, mode, inputType, file, textSecret]);
   const exportsStarted = useMemo(() => latestExports(workflow), [workflow]);
   /**
    * Section 06d. What has changed since the verify on screen checked its
