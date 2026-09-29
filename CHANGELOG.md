@@ -19,6 +19,8 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The stale-verify notice said "credentials".** It now says "password or
+  recovery shares".
 - **The saved-copy step did not say how to check the copy.** It now names both
   ways: load the saved file on the Decrypt tab and verify it, or photograph
   every printed symbol on the Recovery tab.

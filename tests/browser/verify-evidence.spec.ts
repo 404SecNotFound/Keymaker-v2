@@ -66,7 +66,8 @@ test("a password typed after the check is not what was checked", async ({ page }
   await expect(passwordField(page)).toHaveValue("");
 
   await passwordField(page).fill("a different password entirely, 2026");
-  await expect(visible(stale(page))).toContainText("Changed since: credentials");
+  await expect(visible(stale(page))).toContainText("Changed since: password or recovery shares");
+  await expect(stale(page)).not.toContainText("credentials");
   await expect(ok(page)).toHaveCount(0);
 
   await passwordField(page).fill("");
