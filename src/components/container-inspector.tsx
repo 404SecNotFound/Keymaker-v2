@@ -498,9 +498,14 @@ export function ContainerInspector({
         <>
         <ByteMap spans={byteMapSpans(KEYM2_VERSION, plan.cipherId, waysIn)} filling={sealing} />
         <div className="px-4 pb-3" data-testid="inspector-plan-summary">
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-            Type or drop something in and this pane itemises the container it
-            will write, header byte by header byte.
+          {/* Says what the itemisation will show at the current detail level.
+              With Format detail off it shows the version, the ways in and the
+              layout, not header bytes, and promising bytes it would not show
+              was usability finding S2. */}
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground" data-testid="inspector-plan-promise">
+            {formatDetail
+              ? "Type or drop something in and this pane itemises the container it will write, header byte by header byte."
+              : "Type or drop something in and this pane itemises the container it will write: its version, its ways in and its layout."}
           </p>
           <p className="pt-2 font-mono text-[12px] text-subtle-foreground">
             {plan.cipherLabel} · {waysIn === 1 ? "1 way in" : `${waysIn} ways in`}
@@ -511,7 +516,7 @@ export function ContainerInspector({
             aria-expanded={false}
             className="km-action mt-3 rounded-md border border-border px-3 py-1 font-mono text-[12px] transition-colors hover:bg-inset focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
           >
-            Show the header it will write
+            {formatDetail ? "Show the header it will write" : "Show what it will write"}
           </button>
         </div>
         </>

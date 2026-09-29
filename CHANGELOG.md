@@ -19,6 +19,10 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The container pane promised header bytes it did not show.** With Format
+  detail off, its first-visit copy still said it would itemise the container
+  "header byte by header byte". It now names what it shows at the current
+  detail level, and so does its button.
 - **The Recovery tab reported a change nobody made.** After testing a backup on
   the Decrypt tab, it said the Encrypt form's content had changed, because the
   two tabs share their input. Content and input type are now compared only on
