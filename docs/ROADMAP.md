@@ -1031,7 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
-| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input), e (testing keeps the backup), f (the lock keeps evidence beside spared shares, and an unsaved Text-mode backup) and g (production screenshots and usability notes) below; the open usability findings follow |
+| 9.6 | merged | Section 06, the creation workflow, parts a to g below. Part a in PR #231; parts b to d landed through #235 (#232 to #234 merged into stacked bases); e, f and g in #236, #237 and #238; the six usability fixes in #239 to #244; the lock decision in #246. Released in v2.4.0 |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1583,7 +1583,9 @@ Paper     Paper vault, second pass     ─ done ─  set code · presets · vers
 Scanning  Photo and live camera        ─ done ─  every code in one photo · live camera · TEN-X Bet 1 un-held
 Docs      RECOVERY.md executed         ─ done ─  recovery_test.py runs every bash block · v1, v2, v3 · with shares
 v4        Padded payload               ─ done ─  spec · reference · parity · fixtures · the app's switch, off by default · re-seal offer
-Phase 8   Outreach                     ──────    owner-only · drafts in docs/OUTREACH.md · after the next tag
+Phase 9   Assurance work               ─ done ─  inheritance plan · claims narrowed · verify-only in the worker · buffer owners · one derivation
+§06       Creation workflow            ─ done ─  steps · format detail · evidence kept · usability fixes · v2.4.0
+Phase 8   Outreach                     ──────    owner-only · drafts in docs/OUTREACH.md · after v2.4.0 is tagged
 ```
 
 **Phase 6 goes before the rest of Phase 4, and that reverses the usual order.**

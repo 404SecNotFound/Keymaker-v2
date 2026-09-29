@@ -1,6 +1,21 @@
 # Changelog
 
-## Unreleased
+## Keymaker v2.4.0
+
+No format change. v2.4.0 writes exactly what v2.3.0 wrote, every container
+reads as before, and three fixtures are appended that pin how a new backup's
+ways in are written.
+
+The creation workflow (roadmap 9.6). The Encrypt tab shows the steps of
+making a backup and what the page knows about each one. A Format detail
+switch keeps header bytes, offsets and KDF parameters off screen until they
+are asked for. Testing a backup, changing tabs and the auto-lock no longer
+destroy an unsaved backup. The assurance work (roadmap 9.1 to 9.4)
+narrows several claims to what the app establishes, makes the inheritance
+plan honour "The strips need the password too", stops the worker
+sending the plaintext back for verify-only and the rehearsal, gives each
+secret buffer one owner that erases it, and writes a new backup's ways in
+with one derivation.
 
 ### Added
 - **A "Format detail" switch.** Header bytes, offsets and KDF parameters are
