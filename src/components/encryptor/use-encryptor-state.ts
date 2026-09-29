@@ -34,11 +34,15 @@ import {
   describeAccessRule,
   initialWorkflow,
   latestExports,
+  mergePrintoutCoverage,
   settingsChanges,
   workflowReducer,
+  workflowSteps,
   type CreationSettings,
+  type PrintoutCoverage,
 } from "@/lib/backup-workflow";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
+import { verifyChanges, type VerifiedInput } from "@/lib/verify-evidence";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeAllQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import { meetsPasswordPolicy } from "@/lib/password-policy";
@@ -186,6 +190,13 @@ export function useEncryptorState() {
   // Advanced encryption options (Encrypt tab only — the KEYM container is
   // self-describing, so decryption needs no knobs).
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  /**
+   * Section 06, part c. "Format detail": KDF parameters, header bytes and
+   * offsets. Off by default and never stored, since the app keeps nothing
+   * between visits. Off still names every KDF and cipher, every way in, the
+   * version and every warning; see `lib/detail-level.ts`.
+   */
+  const [formatDetail, setFormatDetail] = useState(false);
   // Argon2id is the default: the user who never opens Advanced should get the
   // memory-hard KDF, not the weaker one. It needs WebAssembly, though, so
   // availability is probed on mount and we fall back visibly rather than
@@ -525,6 +536,12 @@ export function useEncryptorState() {
   const [printoutFindings, setPrintoutFindings] = useState<
     { file: string; text: string; problem: boolean }[] | null
   >(null);
+  /**
+   * Section 06. Which container symbols of this backup's printout have been
+   * photographed back and matched to it, across every check since it was
+   * written. The "Check saved copy" step is done only when all of them have.
+   */
+  const [printoutCoverage, setPrintoutCoverage] = useState<PrintoutCoverage | null>(null);
   const [printoutBusy, setPrintoutBusy] = useState(false);
   const printoutInputRef = useRef<HTMLInputElement>(null);
   /** The live camera scanner, and whether this browser offers a camera at all. */
@@ -581,6 +598,7 @@ export function useEncryptorState() {
   // clears it, and lines saying "belongs to this backup" must go with it.
   useEffect(() => {
     setPrintoutFindings(null);
+    setPrintoutCoverage(null);
   }, [receipt, sealedPeek]);
   /**
    * The wipe's acknowledgment, in place of a toast. A wipe is a deliberate
@@ -2004,6 +2022,16 @@ export function useEncryptorState() {
     // Verify-only is a decrypt-side control; it must not silently apply to an
     // encrypt run if the user toggles it and then switches mode.
     const verifying = mode === 'decrypt' && verifyOnly;
+    // Section 06d. What this verify checks, taken before any await, so the
+    // result can say when the form no longer holds it.
+    const checkedInput: VerifiedInput<File> = {
+      inputType: inputType === 'file' ? 'file' : 'text',
+      file,
+      text: inputType === 'file' ? '' : textSecret,
+      keyFile,
+      useShares,
+      usePasskey,
+    };
 
     try {
       const keyFileBuffer = keyFile ? await keyFile.arrayBuffer() : null;
@@ -2442,6 +2470,7 @@ export function useEncryptorState() {
             bytes: verified.bytes,
             method: verified.openedBy,
             inWorker: verified.inWorker,
+            checked: checkedInput,
           });
           finishOperation(null, {
             title: "Verified — the backup opens",
@@ -2665,21 +2694,20 @@ export function useEncryptorState() {
    */
   const blockedByPasswordPolicy = mode === "encrypt" && !!password && !passwordMeetsPolicy;
 
+  // Seed Phrase mode seals only a phrase it has finished checking: every
+  // cell holding a word the list knows. The checksum is reported, not
+  // enforced — see the grid's header comment — so a mismatch does not
+  // withhold the button.
+  const seedIncomplete =
+    mode === 'encrypt' &&
+    inputType === 'text' &&
+    seedMode &&
+    !(bip39 !== null && seedWords.every((w) => w !== "" && bip39.isBip39Word(w)));
+
   const isProcessButtonDisabled = () => {
     if (isLoading || !isCryptoAvailable) return true;
     const hasInput = inputType === 'file' ? !!file : !!textSecret;
-    // Seed Phrase mode seals only a phrase it has finished checking: every
-    // cell holding a word the list knows. The checksum is reported, not
-    // enforced — see the grid's header comment — so a mismatch does not
-    // withhold the button.
-    if (
-      mode === 'encrypt' &&
-      inputType === 'text' &&
-      seedMode &&
-      !(bip39 !== null && seedWords.every((w) => w !== "" && bip39.isBip39Word(w)))
-    ) {
-      return true;
-    }
+    if (seedIncomplete) return true;
     // §4.6. An heir holds shares and no password, so shares are a credential
     // in their own right — requiring a password here would leave the one flow
     // this feature exists for permanently unreachable.
@@ -2858,6 +2886,43 @@ export function useEncryptorState() {
     return changes.length > 0 ? changes : null;
   }, [workflow, currentSettings, inputType, file, textSecret]);
   const exportsStarted = useMemo(() => latestExports(workflow), [workflow]);
+  /**
+   * Section 06d. What has changed since the verify on screen checked its
+   * input, or null while the form still holds exactly that. A successful
+   * check clears the password and any shares it used, so anything in them now
+   * was typed for a new attempt.
+   */
+  const verifyDiffers = useMemo(() => {
+    if (!verifyResult) return null;
+    const now: VerifiedInput<File> = {
+      inputType: inputType === 'file' ? 'file' : 'text',
+      file,
+      text: inputType === 'file' ? '' : textSecret,
+      keyFile,
+      useShares,
+      usePasskey,
+    };
+    const typedSince = password !== '' || (useShares && shareInput.trim() !== '');
+    const changes = verifyChanges(verifyResult.checked, now, typedSince);
+    return changes.length > 0 ? changes : null;
+  }, [verifyResult, inputType, file, textSecret, keyFile, useShares, usePasskey, password, shareInput]);
+  /**
+   * Section 06, part b. The six steps of making a backup, each in the state
+   * the page's own evidence supports. Status only: nothing here gates a
+   * control. See `workflowSteps` for what counts as done.
+   */
+  const steps = useMemo(() => workflowSteps({
+    workflow,
+    hasContent: (inputType === 'file' ? !!file : !!textSecret) && !seedIncomplete,
+    credentialReady: !!password && passwordMeetsPolicy,
+    changed: backupDiffers,
+    keptOnScreen: receipt ? receipt.onScreen : null,
+    exports: exportsStarted,
+    printout: printoutCoverage,
+    hasShares: !!receipt?.shares,
+    rehearsed: rehearsal.kind === "ok",
+  }), [workflow, inputType, file, textSecret, seedIncomplete, password, passwordMeetsPolicy,
+    backupDiffers, receipt, exportsStarted, printoutCoverage, rehearsal]);
   const accessRule = useMemo(() => describeAccessRule(policy.waysIn.map(describeWayIn)), [policy]);
 
   const rehearseFromPaper = useCallback(() => {
@@ -3144,6 +3209,7 @@ export function useEncryptorState() {
       }
       const backup = { container, header: mode === "encrypt" && receipt ? sealedPeek : null };
       const results: { file: string; text: string; problem: boolean }[] = [];
+      const findings: Parameters<typeof mergePrintoutCoverage>[1][number][] = [];
       for (const f of files) {
         try {
           // Every code in the photo, one line each: a whole sheet can be
@@ -3151,6 +3217,7 @@ export function useEncryptorState() {
           const texts = await decodeAllQrImage(f);
           for (const [i, text] of texts.entries()) {
             const finding = await checkPrintoutCode(text, backup);
+            findings.push(finding);
             results.push({
               file: texts.length > 1 ? `${f.name} (${i + 1} of ${texts.length})` : f.name,
               text: describePrintoutFinding(finding),
@@ -3169,6 +3236,8 @@ export function useEncryptorState() {
       // describe a backup that is no longer the one on the page.
       if (opSeqRef.current !== seq) return;
       setPrintoutFindings(results);
+      // Only a check made against the backup on screen can count towards it.
+      if (backup.container) setPrintoutCoverage((prev) => mergePrintoutCoverage(prev, findings));
     } finally {
       setPrintoutBusy(false);
     }
@@ -3206,6 +3275,7 @@ export function useEncryptorState() {
     showPassword, setShowPassword,
     showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
+    formatDetail, setFormatDetail,
     kdfChoice, setKdfChoice,
     argon2Available, setArgon2Available,
     argonTimeCost, setArgonTimeCost,
@@ -3261,7 +3331,7 @@ export function useEncryptorState() {
     stripsCarryBackup, setStripsCarryBackup,
     backupFitsOnStrip,
     rehearsalOpen, setRehearsalOpen,
-    workflow, backupDiffers, exportsStarted, accessRule,
+    workflow, backupDiffers, exportsStarted, accessRule, steps, verifyDiffers,
     operationToken, isCurrentOperation, recordExport,
     rehearsalInput, setRehearsalInput,
     rehearsalPassword, setRehearsalPassword,
