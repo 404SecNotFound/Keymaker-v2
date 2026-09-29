@@ -19,6 +19,8 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The Recovery tab set whole sentences in monospace.** The saved-copy and
+  recovery-test lines are now in the body face; short data keeps monospace.
 - **The stale-verify notice said "credentials".** It now says "password or
   recovery shares".
 - **The saved-copy step did not say how to check the copy.** It now names both

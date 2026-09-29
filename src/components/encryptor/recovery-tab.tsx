@@ -48,7 +48,7 @@ export function RecoveryTab() {
               )}
               <dl className="km-recovery-facts">
                 <div><dt>Recovery shares</dt><dd>{receipt.shares ? `${receipt.shares.threshold} of ${receipt.shares.count} needed` : "Not included"}</dd></div>
-                <div><dt>Saved copy</dt><dd data-testid="recovery-saved-copy">{
+                <div><dt>Saved copy</dt><dd data-testid="recovery-saved-copy" className="km-fact-sentence">{
                   fromDisk
                     ? `A saved file was loaded at ${when(fromDisk.at)}, matched this backup byte for byte, and opened with ${openedWith(fromDisk.how)}.`
                     : !receipt.onScreen
@@ -61,7 +61,7 @@ export function RecoveryTab() {
                         ". The browser does not tell this page whether the file was kept or the sheet printed, so check that it was."
                       : "Not saved yet. It is on screen: download it or print the paper backup"
                 }</dd></div>
-                <div><dt>Recovery test</dt><dd data-testid="recovery-test">{rehearsal.kind === "ok" ? `Rehearsed on ${rehearsal.on}${rehearsal.strips.length > 0 ? ` with strips ${rehearsal.strips.join(" and ")}` : ""}` : verified.length > 0 ? `Verified with ${openedWith(verified[verified.length - 1]!.how)} at ${when(verified[verified.length - 1]!.at)}` : "Not tested yet in this session"}</dd></div>
+                <div><dt>Recovery test</dt><dd data-testid="recovery-test" className="km-fact-sentence">{rehearsal.kind === "ok" ? `Rehearsed on ${rehearsal.on}${rehearsal.strips.length > 0 ? ` with strips ${rehearsal.strips.join(" and ")}` : ""}` : verified.length > 0 ? `Verified with ${openedWith(verified[verified.length - 1]!.how)} at ${when(verified[verified.length - 1]!.at)}` : "Not tested yet in this session"}</dd></div>
               </dl>
               {receipt.onScreen ? (
                 <div className="km-action-row">

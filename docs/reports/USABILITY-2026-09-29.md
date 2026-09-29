@@ -36,12 +36,12 @@ which `npm run test:screenshots` checks.
 | S3 | **The step grid's rows do not line up.** "Check saved copy" and "Prepare recovery" wrap to two lines at this width, so in the second row "Create" sits higher than its neighbours and the three state words sit at two heights. | **Fixed.** Both: the labels are "Saved copy" and "Recovery test", and each step is two rows with the state at the bottom, so a row's labels share a top and its states share a line even where a label still wraps. Checked by measuring the rows in `workflow-steps.spec.ts`. | Shorter labels ("Saved copy", "Recovery"), or a grid that aligns the state words on a common row. |
 | S4 | **"Check saved copy" names only half of what completes it.** Its sentence says "Download it or print the paper vault, then check the copy", but not how to check. The two ways are loading the saved file on the Decrypt tab and verifying it, or photographing every printed symbol on the Recovery tab. The walkthrough now says so; the page does not. | **Fixed.** The step's sentence names both ways, before and after a download or print has started. Checked in `test:backup-workflow`. | Name both ways in the sentence, or link to the Recovery tab's printout check. |
 | S5 | **"credentials" is the page's word, not the owner's.** The stale-verify notice says "Changed since: credentials" for a newly typed password. | **Fixed.** The notice now says "password or recovery shares". Checked in `test:backup-workflow` and `verify-evidence.spec.ts`. | "password or recovery shares". |
-| S6 | **Long sentences set in monospace.** The Recovery tab's "Saved copy" and "Recovery test" values are full sentences in the monospace data face, which reads slowly at this length. Predates Section 06. | Open, minor. | Body face for sentences; keep monospace for values such as byte counts. |
+| S6 | **Long sentences set in monospace.** The Recovery tab's "Saved copy" and "Recovery test" values are full sentences in the monospace data face, which reads slowly at this length. Predates Section 06. | **Fixed.** "Saved copy" and "Recovery test" are in the body face; "Recovery shares" keeps monospace. Checked by computed font in `recovery-test-keeps.spec.ts`. | Body face for sentences; keep monospace for values such as byte counts. |
 | S7 | **The Format detail label wraps.** "Format detail (header bytes, offsets, KDF parameters)" takes two lines in the pane header at 1180 wide. | **Fixed.** The label is "Format detail"; the list is in a tooltip beside it and in the switch's accessible description. Checked in `workflow-expert-view.spec.ts`. | Keep "Format detail" as the label and move the list into a tooltip or the pane's help text. |
 
-S1 was a defect in behaviour and is fixed here. S2 to S7 are copy and layout;
-each changes what an owner reads, so each is left for a reviewed change of its
-own rather than folded into the screenshots.
+S1 was a defect in behaviour and is fixed in the same change as this report.
+S2 to S7 are copy and layout, and each was fixed in a pull request of its own
+after the report was written; the rows above record how each was checked.
 
 ---
 

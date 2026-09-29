@@ -118,3 +118,20 @@ test("a wipe still takes the backup", async ({ page }) => {
   await tab(page, "Recovery").click();
   await expect(visible(page.getByText(/No newly created backup/))).toBeVisible();
 });
+
+test("the Recovery tab sets its sentences in the body face and its data in monospace", async ({ page }) => {
+  // Usability finding S6: whole sentences in the monospace data face read slowly.
+  await seal(page);
+  await tab(page, "Recovery").click();
+  const font = (testId: string) =>
+    visible(page.getByTestId(testId)).evaluate((el) => getComputedStyle(el).fontFamily);
+  const shares = await visible(page.locator(".km-recovery-facts dd").first()).evaluate(
+    (el) => getComputedStyle(el).fontFamily
+  );
+  const body = await visible(page.getByText(/Verification checks whether your backup opens/)).evaluate(
+    (el) => getComputedStyle(el).fontFamily
+  );
+  expect(await font("recovery-saved-copy"), "the saved-copy sentence is not in the body face").toBe(body);
+  expect(await font("recovery-test"), "the recovery-test sentence is not in the body face").toBe(body);
+  expect(shares, "the shares value lost its monospace").not.toBe(body);
+});

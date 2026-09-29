@@ -392,6 +392,9 @@
 .km-recovery-facts > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; border-top: 1px solid var(--color-border); padding: 12px 0; }
 .km-recovery-facts dt { color: var(--color-muted-foreground); }
 .km-recovery-facts dd { font-family: var(--font-mono); }
+/* Usability finding S6: a value that is a sentence reads in the body face;
+   monospace stays for short data such as "2 of 3 needed". */
+.km-recovery-facts dd.km-fact-sentence { font-family: inherit; }
 .km-recovery-options { display: grid; gap: 10px; }
 .km-recovery-options > button { justify-content: flex-start; }
 .km-help { font-size: 12px; line-height: 1.7; color: var(--color-muted-foreground); }
