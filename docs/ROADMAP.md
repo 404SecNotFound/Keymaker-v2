@@ -1031,7 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
-| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input) and e (testing keeps the backup) below; the auto-lock's evidence, screenshots and usability notes follow |
+| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input), e (testing keeps the backup) and f (the lock keeps evidence beside spared shares) below; screenshots and usability notes follow |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1401,6 +1401,36 @@ nothing; and checks a wipe still takes the backup. In the page's wiring, a
 tab switch wiping the backup again, a matched verify never recorded, any
 verify recorded without comparing bytes, and the input type not restored on
 return each built and failed their own browser tests.
+
+### 9.6 The creation workflow (handover Section 06), part f
+
+The auto-lock spares issued shares, because they exist once and the owner may
+be copying them onto paper, and since part e it also keeps the container they
+open. It still cleared everything else the page knew about that backup: the
+receipt, its header, the steps' evidence and a passed rehearsal. The shares
+dialog then showed strips for a backup the rest of the page no longer
+described, and a rehearsal the owner had just passed was forgotten.
+
+When the lock spares shares it now keeps that evidence too, the same way a tab
+change does. None of it is a secret. The password, plaintext, key file and
+any pasted strips are still cleared. Without shares on screen the lock still
+clears the backup, exactly as before.
+
+**Open question, not changed here.** A lock with no shares on screen still
+clears a Text-mode backup that was never saved, which is the page's only copy
+of the container. The container is ciphertext, so keeping it would not expose
+anything, but it would change what the lock promises.
+
+**Not yet done in Section 06.** The production screenshots with usability
+notes.
+
+**Checks.** `tests/browser/lock-keeps-evidence.spec.ts` lets the lock fire
+with shares on screen after a passed rehearsal, and checks that the shares,
+the receipt, the steps and the rehearsal all survive. A second test lets it
+fire with no shares and checks that the backup goes. It proves the lock fired
+from the page itself: the warning appears and then goes without a click.
+Reverting the change fails the first test, and keeping the backup on every
+lock fails the second.
 
 ---
 
