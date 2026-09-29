@@ -119,11 +119,11 @@ hypothesis.
 Back on **Encrypt**, the steps above the container preview now say what the page
 knows about this backup:
 
-![The six steps: content, access rule, review and create done, check saved copy next, prepare recovery done](screenshots/walkthrough-5-steps.png)
+![The six steps: content, access rule, review and create done, saved copy next, recovery test done](screenshots/walkthrough-5-steps.png)
 
-**Prepare recovery** is done because the verify opened this exact backup: the
+**Recovery test** is done because the verify opened this exact backup: the
 page compares the bytes, so a verify of some other container would not count.
-**Check saved copy** is still next, because nothing has been saved. A download
+**Saved copy** is still next, because nothing has been saved. A download
 or a print only ever reads as started, since the browser does not say whether
 the file was kept. It turns to done when you load the saved file on the Decrypt
 tab and it verifies, or when you photograph every printed symbol on the

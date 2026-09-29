@@ -251,8 +251,10 @@ export const STEP_LABELS: Record<StepId, string> = {
   access: "Access rule",
   review: "Review",
   create: "Create",
-  "saved-copy": "Check saved copy",
-  recovery: "Prepare recovery",
+  // Usability finding S3: short enough to stay on one line in the three-column
+  // grid, so each row's state words line up.
+  "saved-copy": "Saved copy",
+  recovery: "Recovery test",
 };
 
 /**

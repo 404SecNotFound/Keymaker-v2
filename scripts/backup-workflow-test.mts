@@ -243,7 +243,7 @@ check("an AND way in keeps its own wording",
   check("a cleared page goes back to content being next",
     stateOf({ ...base, workflow: run([{ type: "cleared" }], created) }, "content") === "current");
 
-  // The printout coverage behind "Check saved copy".
+  // The printout coverage behind the "Saved copy" step.
   const part = (index: number, total: number, belongs: "yes" | "no" | "unknown") =>
     ({ kind: "part", index, total, belongs }) as const;
   check("a matched symbol counts",

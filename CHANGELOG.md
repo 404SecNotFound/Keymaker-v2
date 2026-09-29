@@ -19,6 +19,9 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The step list's rows did not line up.** Two labels wrapped and pushed their
+  state words out of line. They are now "Saved copy" and "Recovery test", and
+  each step keeps its state on the row's bottom line whatever its label does.
 - **The Format detail label wrapped.** It is now two words, with what it shows
   in a tooltip beside it and in the switch's accessible description.
 - **The container pane promised header bytes it did not show.** With Format
