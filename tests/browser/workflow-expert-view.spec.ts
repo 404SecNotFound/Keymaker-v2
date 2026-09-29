@@ -42,6 +42,20 @@ test("the inspector leaves out bytes and KDF parameters until format detail is o
   await expect(detailSwitch(page)).toHaveAttribute("aria-checked", "false");
 });
 
+test("the pane's first-visit copy promises only what the detail level shows", async ({ page }) => {
+  // Usability finding S2: with Format detail off the itemisation has no
+  // header bytes, so the copy must not promise them.
+  await page.goto("/");
+  const promise = visible(page.getByTestId("inspector-plan-promise"));
+  await expect(promise).toContainText("its version, its ways in and its layout");
+  await expect(promise).not.toContainText("header byte by header byte");
+  await expect(visible(page.getByRole("button", { name: "Show what it will write" }))).toBeVisible();
+
+  await showFormatDetail(page);
+  await expect(promise).toContainText("header byte by header byte");
+  await expect(visible(page.getByRole("button", { name: "Show the header it will write" }))).toBeVisible();
+});
+
 test("the receipt, the parsed slot rows and the Recovery tab name the KDF without its parameters", async ({ page }) => {
   await page.goto("/");
   await useTextMode(page);

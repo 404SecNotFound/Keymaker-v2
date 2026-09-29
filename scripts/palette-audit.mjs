@@ -307,7 +307,7 @@ try {
   // byte map paints the spark cuts, so the sweep has to open it or the only
   // sanctioned use of those colours ships unaudited.
   await page
-    .getByRole('button', { name: 'Show the header it will write' })
+    .getByRole('button', { name: /^Show (the header|what) it will write$/ })
     .locator('visible=true')
     .first()
     .click();
