@@ -382,5 +382,21 @@ check("an AND way in keeps its own wording",
   check("a wipe drops it", run([{ type: "verified", check: loaded }, { type: "cleared" }], made).phase === "editing");
 }
 
+// Usability finding S4: the saved-copy step says how to check, before and
+// after a download or print has started.
+{
+  const made = run([{ type: "job-started", job: 3 }, { type: "sealed", job: 3, settings: SETTINGS }]);
+  const detail = (exports: Record<string, string>) =>
+    workflowSteps({
+      workflow: made, hasContent: false, credentialReady: false, changed: null, keptOnScreen: true,
+      exports, printout: null, hasShares: false, rehearsed: false,
+    }).find((st) => st.id === "saved-copy")!.detail;
+  for (const [when, exports] of [["before an export", {}], ["after a download started", { download: "x" }]] as const) {
+    const d = detail(exports);
+    check(`the saved-copy step names the Decrypt-tab check ${when}`, d.includes("load the saved file on the Decrypt tab and verify it"), d);
+    check(`the saved-copy step names the printout check ${when}`, d.includes("photograph every printed symbol on the Recovery tab"), d);
+  }
+}
+
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
