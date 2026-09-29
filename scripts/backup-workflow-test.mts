@@ -15,6 +15,13 @@
  * done on evidence the page does not have: a started download or print is
  * never a checked copy, a partial printout check is never a whole one, and a
  * rehearsal that has not run is never a prepared recovery.
+ *
+ * Part c adds the "Format detail" switch. Off, KDF parameters go and
+ * everything else stays: the KDF and cipher names, the version, and every
+ * warning, including one that quotes a number.
+ *
+ * Part d holds a verify result to what it checked: another backup, key file,
+ * unlock method or newly typed credentials each make it stop applying.
  */
 import {
   describeAccessRule,
@@ -30,6 +37,8 @@ import {
   type Workflow,
   type WorkflowEvent,
 } from "../src/lib/backup-workflow.ts";
+import { atDetail, withoutKdfParameters } from "../src/lib/detail-level.ts";
+import { verifyChanges, type VerifiedInput } from "../src/lib/verify-evidence.ts";
 
 let passed = 0;
 let failed = 0;
@@ -249,6 +258,89 @@ check("an AND way in keeps its own wording",
   check("checks accumulate, and a symbol seen twice counts once", eq(two?.checked ?? [], [1, 3]), JSON.stringify(two));
   check("the whole backup in one code covers it",
     eq(mergePrintoutCoverage(null, [{ kind: "backup", belongs: "yes" }]) ?? {}, { checked: [1], total: 1 }));
+}
+
+// ---------------------------------------------------------------------------
+// Part c: the format detail switch.
+// ---------------------------------------------------------------------------
+{
+  const trim = withoutKdfParameters;
+  check("Argon2id keeps its name and loses its parameters",
+    trim("Argon2id · 64 MiB · t=3 · p=4") === "Argon2id", trim("Argon2id · 64 MiB · t=3 · p=4"));
+  check("PBKDF2 keeps its name and loses its iterations",
+    trim("PBKDF2 · 1,000,000 iterations") === "PBKDF2");
+  check("a passkey slot keeps both algorithm names",
+    trim("WebAuthn PRF · HKDF-SHA-256") === "WebAuthn PRF · HKDF-SHA-256");
+  check("a password-and-shares slot keeps \"both needed\"",
+    trim("both needed · Argon2id · 64 MiB") === "both needed · Argon2id");
+  const unlocked =
+    "Format: KEYM v3 · PBKDF2 · 1,000,000 iterations · AES-256-GCM · 2 slots (read from the file, not authenticated)" +
+    " · key file";
+  check("the unlock line keeps the version, the cipher, the slot note and the key file",
+    trim(unlocked) === "Format: KEYM v3 · PBKDF2 · AES-256-GCM · 2 slots (read from the file, not authenticated) · key file",
+    trim(unlocked));
+  const warned =
+    "Format: KEYM v3 · PBKDF2 · 100,000 iterations · AES-256-GCM — Heads up: this backup was made with " +
+    "100,000 PBKDF2 iterations, below the 1,000,000 this version writes. It opened fine.";
+  check("a weak-KDF warning keeps the numbers it quotes",
+    trim(warned).includes("made with 100,000 PBKDF2 iterations, below the 1,000,000 this version writes"), trim(warned));
+  check("a label with no parameters is unchanged", trim("AES-256-GCM") === "AES-256-GCM");
+  // The readers' shape, which the unlock line uses: parameters in brackets.
+  check("the reader's PBKDF2 label loses its bracketed iterations",
+    trim("Format: KEYM v3 · PBKDF2 (1,000,000 iters) · AES-256-GCM") === "Format: KEYM v3 · PBKDF2 · AES-256-GCM",
+    trim("Format: KEYM v3 · PBKDF2 (1,000,000 iters) · AES-256-GCM"));
+  check("the reader's Argon2id label loses its bracketed parameters",
+    trim("Argon2id (64 MiB, t=3, p=4)") === "Argon2id", trim("Argon2id (64 MiB, t=3, p=4)"));
+  check("a both-needed slot keeps the KDF name inside its bracket",
+    trim("password and share set, both needed (PBKDF2 1,000,000 iters)") ===
+      "password and share set, both needed (PBKDF2)",
+    trim("password and share set, both needed (PBKDF2 1,000,000 iters)"));
+  check("a bracket naming an algorithm is kept",
+    trim("passkey / WebAuthn PRF (HKDF-SHA-256)") === "passkey / WebAuthn PRF (HKDF-SHA-256)");
+  const readerWarned =
+    "Format: KEYM v3 · PBKDF2 (100,000 iters) · AES-256-GCM — Heads up: this backup was made with " +
+    "100,000 PBKDF2 iterations, below the 1,000,000 this version writes. It opened fine.";
+  check("the reader's shape keeps a weak-KDF warning's numbers too",
+    trim(readerWarned).includes("made with 100,000 PBKDF2 iterations, below the 1,000,000 this version writes") &&
+      !trim(readerWarned).includes("(100,000 iters)"),
+    trim(readerWarned));
+  check("with format detail on, nothing is trimmed",
+    atDetail("Argon2id · 64 MiB · t=3 · p=4", true) === "Argon2id · 64 MiB · t=3 · p=4");
+}
+
+// ---------------------------------------------------------------------------
+// Part d: a verify result belongs to what it checked.
+// ---------------------------------------------------------------------------
+{
+  // Files are compared by identity, as the page compares File objects.
+  const fileA = { name: "a.keym" };
+  const fileB = { name: "a.keym" };
+  const key = { name: "key" };
+  const text: VerifiedInput<object> = {
+    inputType: "text", file: null, text: "keym2:AAAA", keyFile: null, useShares: false, usePasskey: false,
+  };
+  const inFile: VerifiedInput<object> = { ...text, inputType: "file", file: fileA, text: "" };
+  const eq = (a: unknown[], b: unknown[]) => JSON.stringify(a) === JSON.stringify(b);
+
+  check("the same input, nothing typed since: the result applies", verifyChanges(text, { ...text }, false).length === 0);
+  check("another pasted container is another backup",
+    eq(verifyChanges(text, { ...text, text: "keym2:BBBB" }, false), ["backup"]));
+  check("a file picked again is another backup, even with the same name",
+    eq(verifyChanges(inFile, { ...inFile, file: fileB }, false), ["backup"]));
+  check("the same file object still applies", verifyChanges(inFile, { ...inFile }, false).length === 0);
+  check("switching between file and text is another backup",
+    verifyChanges(text, { ...inFile }, false).includes("backup"));
+  check("in file mode, leftover text in the other box does not count",
+    verifyChanges(inFile, { ...inFile, text: "keym2:CCCC" }, false).length === 0);
+  check("adding a key file is reported", eq(verifyChanges(text, { ...text, keyFile: key }, false), ["key file"]));
+  check("switching to shares is a change of unlock method",
+    eq(verifyChanges(text, { ...text, useShares: true }, false), ["unlock method"]));
+  check("switching to a passkey is a change of unlock method",
+    eq(verifyChanges(text, { ...text, usePasskey: true }, false), ["unlock method"]));
+  check("a password typed since is reported as credentials", eq(verifyChanges(text, { ...text }, true), ["credentials"]));
+  check("several changes are all named, in order",
+    eq(verifyChanges(text, { ...text, text: "x", keyFile: key, useShares: true }, true),
+      ["backup", "key file", "unlock method", "credentials"]));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

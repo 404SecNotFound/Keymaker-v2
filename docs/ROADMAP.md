@@ -1031,7 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
-| 9.6 | in_progress | Section 06, the creation workflow. 06a below; the visible re-sequencing, the expert view and the recovery-test lifetimes follow |
+| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch) and d (verify result bound to its input) below; the remaining recovery-test lifetimes, screenshots and usability notes follow |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1267,6 +1267,86 @@ is next. Breaking any of the first four in the model fails its own checks.
 following the form, the job and a download; a saved copy done only after
 every printed symbol matched, with one of several shown as partial; and
 recovery done only after a rehearsal.
+
+### 9.6 The creation workflow (handover Section 06), part c
+
+The expert view. Format and KDF detail used to be on screen by default:
+header bytes and offsets in the inspector, full KDF parameters on the
+receipt, the Recovery tab and the Decrypt tab's "Format:" line, and a list
+of per-format reasons under the self-extract notice after every text
+encrypt with the default Argon2id.
+
+One switch, **Format detail**, in the inspector header, now controls them.
+It is off by default and it is not stored: the app keeps nothing between
+visits, so every load starts with it off.
+
+Off, the page leaves out the header hex row, the magic, version-byte and
+offset line, the "salts and nonces" line, KDF parameters (memory, time cost,
+parallelism, iterations), and the self-extract notice's list of reasons.
+
+Off, the page still shows the byte map (BAR.md keeps the preview beside the
+form), every KDF and cipher name, the ways in, the version pill, the "Format:
+KEYM vN" line, every check, and every warning: the unlock cost, the v2 slot
+table, the weak-KDF heads-up and the slot-table change.
+
+`src/lib/detail-level.ts` does the trimming. The labels come in two shapes.
+The receipt and the inspector join segments with " · ", and a parameter is
+always a segment of its own there. The readers behind the "Format:" line put
+parameters in brackets, as in "PBKDF2 (1,000,000 iters)". Only a whole
+segment, or a parameter token inside brackets, is ever dropped. A bracket with
+no parameter in it, such as "(HKDF-SHA-256)", is kept, and running text is
+never touched, so a warning that quotes a number survives whole. The browser
+spec found the bracket shape: the first version trimmed only segments.
+
+**Not yet done in Section 06.** The verify result that outlives its input,
+testing from the Recovery tab wiping the receipt, the auto-lock clearing
+evidence while the shares stay open, and the production screenshots with
+usability notes.
+
+**Checks.** `npm run test:backup-workflow` holds the trimming: names kept,
+parameters dropped, the unlock line's version, cipher, slot note and key file
+kept, and a weak-KDF warning's numbers kept, in both shapes. Dropping any
+segment with a digit, skipping the bracket trimming, or ignoring the switch
+each fail their own checks. `tests/browser/workflow-expert-view.spec.ts` reads each screen both
+ways: the inspector, the receipt, the parsed slot rows, the Recovery tab, the
+unlock line and the self-extract notice. `container-inspector.spec.ts` now
+turns the switch on, since it is about the bytes.
+
+### 9.6 The creation workflow (handover Section 06), part d
+
+The verify result that outlived its input. "The backup opens with this
+password" stayed on screen until a wipe or the next run. Loading another
+backup, choosing another key file, switching to shares or a passkey, or
+typing a new password left the green result beside an input it had never
+checked.
+
+The page now records what a verify checked when the check starts: the input
+type, the file (by identity, since picking a file again makes a new one) or
+the pasted container, the key file, and whether shares or a passkey were
+used. `verifyChanges` in `src/lib/verify-evidence.ts` compares that with the
+form on every render. A successful check clears the password and any shares
+it used, so anything typed there afterwards counts as a new attempt.
+
+Once anything differs, the green result gives way to a notice naming what
+changed, and the old backup's format line does not show in its place. Putting
+the checked input back brings the result back, because it is true again.
+
+**Not yet done in Section 06.** Testing from the Recovery tab wiping the
+receipt, the auto-lock clearing evidence while the shares stay open, and the
+production screenshots with usability notes. The plain format line after an
+ordinary decrypt, and the decrypted output itself, still stay after their
+input changes; that is a separate decision about plaintext on screen.
+
+**Checks.** `npm run test:backup-workflow` holds the comparison: another
+container, a file picked again under the same name, a key file, each unlock
+method and typed credentials are each a change, and leftover text in the
+other box is not. Comparing files by name, ignoring typed credentials, or
+ignoring the passkey toggle each fail their own checks.
+`tests/browser/verify-evidence.spec.ts` makes each change after a real verify
+and checks that the green result goes, that the format line does not fall
+through, and that the original input brings the result back. In the page's
+wiring, ignoring typed credentials, not comparing the pasted container, or not
+comparing the unlock method each built and failed its own browser test.
 
 ---
 

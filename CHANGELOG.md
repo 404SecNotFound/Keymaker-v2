@@ -3,6 +3,12 @@
 ## Unreleased
 
 ### Added
+- **A "Format detail" switch.** Header bytes, offsets and KDF parameters are
+  now off by default, in the container pane, the receipt, the Recovery tab
+  and the Decrypt tab's format line, and the self-extract notice keeps its
+  trade-off without the per-format reasons. The switch in the container pane
+  shows them. KDF and cipher names, the format version, the byte map and
+  every warning stay on screen either way. The switch is not stored.
 - **The steps of making a backup are shown on the Encrypt tab.** Content,
   access rule, review, create, check saved copy and prepare recovery, each
   marked with what the page actually knows. It is status, not a wizard, and
@@ -13,6 +19,11 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **A verify result stayed on screen after its input changed.** Loading
+  another backup, choosing another key file, switching the unlock method or
+  typing a new password left "The backup opens with this password" beside an
+  input it had never checked. The result now gives way to a notice naming
+  what changed, and returns if the checked input is put back.
 - **The receipt described backups that were no longer on screen.** Starting
   a new encryption left the previous receipt up, with buttons that did
   nothing, through the run, a Stop and a failure. Changing the settings after

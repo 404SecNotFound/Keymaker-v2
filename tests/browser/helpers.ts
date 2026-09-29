@@ -1,3 +1,4 @@
+import { expect } from "@playwright/test";
 import type { Page, Locator } from "@playwright/test";
 
 /**
@@ -228,4 +229,14 @@ export async function composePhoto(page: Page, pngs: Buffer[]): Promise<Buffer> 
     return canvas.toDataURL("image/png");
   }, pngs.map((b) => `data:image/png;base64,${b.toString("base64")}`));
   return Buffer.from(url.split(",")[1] as string, "base64");
+}
+
+/**
+ * Turn on "Format detail" (Section 06c): header bytes, offsets and KDF
+ * parameters. Off by default and not stored, so every page load starts off.
+ */
+export async function showFormatDetail(page: Page) {
+  const sw = visible(page.getByTestId("format-detail-switch"));
+  if ((await sw.getAttribute("aria-checked")) !== "true") await sw.click();
+  await expect(sw).toHaveAttribute("aria-checked", "true");
 }

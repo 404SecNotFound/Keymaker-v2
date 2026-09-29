@@ -1,5 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
-import { visible, useTextMode, encryptText, decryptText, STRONG_PASSWORD } from "./helpers";
+import { visible, useTextMode, encryptText, decryptText, showFormatDetail, STRONG_PASSWORD } from "./helpers";
 import { armorKeym2, dearmorKeym2, keym2SlotCountOffset, KEYM2_VERSION_V3 } from "../../src/lib/keym-v2";
 
 /**
@@ -58,6 +58,9 @@ async function enableShares(page: Page, k: number, n: number) {
 
 test.beforeEach(async ({ page }) => {
   await page.goto("/");
+  // This file is about the bytes, so it reads them with format detail on.
+  // workflow-expert-view.spec.ts covers what the pane shows with it off.
+  await showFormatDetail(page);
 });
 
 test("encrypt: with no input the pane summarises instead of itemising", async ({ page }) => {

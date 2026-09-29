@@ -42,6 +42,7 @@ import {
   type PrintoutCoverage,
 } from "@/lib/backup-workflow";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
+import { verifyChanges, type VerifiedInput } from "@/lib/verify-evidence";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeAllQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import { meetsPasswordPolicy } from "@/lib/password-policy";
@@ -189,6 +190,13 @@ export function useEncryptorState() {
   // Advanced encryption options (Encrypt tab only — the KEYM container is
   // self-describing, so decryption needs no knobs).
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
+  /**
+   * Section 06, part c. "Format detail": KDF parameters, header bytes and
+   * offsets. Off by default and never stored, since the app keeps nothing
+   * between visits. Off still names every KDF and cipher, every way in, the
+   * version and every warning; see `lib/detail-level.ts`.
+   */
+  const [formatDetail, setFormatDetail] = useState(false);
   // Argon2id is the default: the user who never opens Advanced should get the
   // memory-hard KDF, not the weaker one. It needs WebAssembly, though, so
   // availability is probed on mount and we fall back visibly rather than
@@ -2014,6 +2022,16 @@ export function useEncryptorState() {
     // Verify-only is a decrypt-side control; it must not silently apply to an
     // encrypt run if the user toggles it and then switches mode.
     const verifying = mode === 'decrypt' && verifyOnly;
+    // Section 06d. What this verify checks, taken before any await, so the
+    // result can say when the form no longer holds it.
+    const checkedInput: VerifiedInput<File> = {
+      inputType: inputType === 'file' ? 'file' : 'text',
+      file,
+      text: inputType === 'file' ? '' : textSecret,
+      keyFile,
+      useShares,
+      usePasskey,
+    };
 
     try {
       const keyFileBuffer = keyFile ? await keyFile.arrayBuffer() : null;
@@ -2452,6 +2470,7 @@ export function useEncryptorState() {
             bytes: verified.bytes,
             method: verified.openedBy,
             inWorker: verified.inWorker,
+            checked: checkedInput,
           });
           finishOperation(null, {
             title: "Verified — the backup opens",
@@ -2868,6 +2887,26 @@ export function useEncryptorState() {
   }, [workflow, currentSettings, inputType, file, textSecret]);
   const exportsStarted = useMemo(() => latestExports(workflow), [workflow]);
   /**
+   * Section 06d. What has changed since the verify on screen checked its
+   * input, or null while the form still holds exactly that. A successful
+   * check clears the password and any shares it used, so anything in them now
+   * was typed for a new attempt.
+   */
+  const verifyDiffers = useMemo(() => {
+    if (!verifyResult) return null;
+    const now: VerifiedInput<File> = {
+      inputType: inputType === 'file' ? 'file' : 'text',
+      file,
+      text: inputType === 'file' ? '' : textSecret,
+      keyFile,
+      useShares,
+      usePasskey,
+    };
+    const typedSince = password !== '' || (useShares && shareInput.trim() !== '');
+    const changes = verifyChanges(verifyResult.checked, now, typedSince);
+    return changes.length > 0 ? changes : null;
+  }, [verifyResult, inputType, file, textSecret, keyFile, useShares, usePasskey, password, shareInput]);
+  /**
    * Section 06, part b. The six steps of making a backup, each in the state
    * the page's own evidence supports. Status only: nothing here gates a
    * control. See `workflowSteps` for what counts as done.
@@ -3236,6 +3275,7 @@ export function useEncryptorState() {
     showPassword, setShowPassword,
     showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
+    formatDetail, setFormatDetail,
     kdfChoice, setKdfChoice,
     argon2Available, setArgon2Available,
     argonTimeCost, setArgonTimeCost,
@@ -3291,7 +3331,7 @@ export function useEncryptorState() {
     stripsCarryBackup, setStripsCarryBackup,
     backupFitsOnStrip,
     rehearsalOpen, setRehearsalOpen,
-    workflow, backupDiffers, exportsStarted, accessRule, steps,
+    workflow, backupDiffers, exportsStarted, accessRule, steps, verifyDiffers,
     operationToken, isCurrentOperation, recordExport,
     rehearsalInput, setRehearsalInput,
     rehearsalPassword, setRehearsalPassword,

@@ -46,7 +46,7 @@ export function EncryptorTool() {
     mode, workspacePage, compactNavigation, isLoading, qrScanBusy,
     isApplePlatform, setIsCommandBarOpen, isCommandBarOpen, navItems,
     pageCopy, activePage, navigateWorkspace, currentDoor, openDoor,
-    openInheritance, inspectorPlan, sealedPeek, decryptPeek,
+    openInheritance, inspectorPlan, sealedPeek, decryptPeek, formatDetail, setFormatDetail,
     commandBarCommands, paperVault, cameraOpen, setCameraOpen,
     handleQrImageFiles, setIsRecoveryOpen, steps,
   } = state;
@@ -135,7 +135,7 @@ export function EncryptorTool() {
                 <TabsContent value="tools" className="mt-0" tabIndex={-1} forceMount hidden={mode !== "tools" || workspacePage !== "workbench"}><DiceEntropyTool /></TabsContent>
               </section>
               {workspacePage === "workbench" && (mode === "encrypt" || mode === "decrypt") && (
-                <ContainerInspector mode={mode} plan={inspectorPlan} peek={mode === "encrypt" ? sealedPeek : decryptPeek} sealing={isLoading && mode === "encrypt"} className="km-inspector" />
+                <ContainerInspector mode={mode} plan={inspectorPlan} peek={mode === "encrypt" ? sealedPeek : decryptPeek} sealing={isLoading && mode === "encrypt"} formatDetail={formatDetail} onFormatDetailChange={setFormatDetail} className="km-inspector" />
               )}
             </div>
             {(mode === "encrypt" || mode === "decrypt") && (

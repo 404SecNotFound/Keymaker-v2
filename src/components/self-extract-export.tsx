@@ -34,7 +34,18 @@ function triggerDownload(text: string, filename: string) {
   URL.revokeObjectURL(url);
 }
 
-export function SelfExtractExport({ armored }: { armored: string }) {
+export function SelfExtractExport({
+  armored,
+  formatDetail = true,
+}: {
+  armored: string;
+  /**
+   * Section 06c. Off, the notice keeps its heading and the trade it names
+   * (PBKDF2 and AES-256-GCM, easier to open later, weaker today) and leaves
+   * out the per-format reasons, which the "Format detail" switch shows.
+   */
+  formatDetail?: boolean;
+}) {
   const [done, setDone] = useState(false);
 
   // The container is parsed once per output, not per render: dearmoring a
@@ -58,11 +69,13 @@ export function SelfExtractExport({ armored }: { armored: string }) {
         <p className="font-medium text-foreground/80">
           A self-extracting page is not available for this backup
         </p>
-        <ul className="mt-1 list-disc space-y-0.5 pl-4">
-          {reasons.map((r) => (
-            <li key={r}>{r}</li>
-          ))}
-        </ul>
+        {formatDetail && reasons.length > 0 && (
+          <ul className="mt-1 list-disc space-y-0.5 pl-4" data-testid="selfextract-reasons">
+            {reasons.map((r) => (
+              <li key={r}>{r}</li>
+            ))}
+          </ul>
+        )}
         <p className="mt-1.5">
           The page can only use what a browser has built in for ever, which means
           AES-256-GCM and PBKDF2. Choose those before encrypting if you want one —
