@@ -19,6 +19,8 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **The Format detail label wrapped.** It is now two words, with what it shows
+  in a tooltip beside it and in the switch's accessible description.
 - **The container pane promised header bytes it did not show.** With Format
   detail off, its first-visit copy still said it would itemise the container
   "header byte by header byte". It now names what it shows at the current

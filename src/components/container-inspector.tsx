@@ -43,6 +43,8 @@ import { cn } from "@/lib/utils";
 import type { WayIn } from "@/lib/access-policy";
 import { SealedStatus } from "@/components/sealed-status";
 import { Switch } from "@/components/ui/switch";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { InfoTip } from "@/components/encryptor/shared-ui";
 import { atDetail } from "@/lib/detail-level";
 
 /** What the encrypt form has declared, restated — not predicted. */
@@ -408,15 +410,28 @@ export function ContainerInspector({
       </header>
       {onFormatDetailChange && (
         <div className="flex items-center gap-2 px-4 pb-2">
+          {/* Usability finding S7: the list of what the switch shows made the
+              label wrap in the pane header. The label is now two words; the
+              list is in the tooltip for sighted readers and in the switch's
+              accessible description for everyone else. */}
           <Switch
             id="format-detail"
             checked={formatDetail}
             onCheckedChange={onFormatDetailChange}
+            aria-describedby="format-detail-help"
             data-testid="format-detail-switch"
           />
           <label htmlFor="format-detail" className="cursor-pointer text-[12px] text-muted-foreground">
-            Format detail (header bytes, offsets, KDF parameters)
+            Format detail
           </label>
+          <span id="format-detail-help" className="sr-only">
+            Shows header bytes, offsets and KDF parameters.
+          </span>
+          <TooltipProvider>
+            <InfoTip label="What format detail shows">
+              <p>Header bytes, offsets and KDF parameters.</p>
+            </InfoTip>
+          </TooltipProvider>
         </div>
       )}
 
