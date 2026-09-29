@@ -1031,7 +1031,7 @@ Both are corrected with the assurance-language work.
 | 9.2 | merged | PR #226, in `main` at `60567ac` (`scripts/verify-transport-test.mts` present) |
 | 9.3 | merged | PR #229, in `main` at `6aff83d` (PR #228 merged into its stacked base, not `main`, so #229 carried the same commit `487f8be`); `encryptKeym2WithSlots` present |
 | 9.4 | merged | PR #227, in `main` at `2adefa3` (`shamirSplit` erases the coefficients it draws) |
-| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch) and d (verify result bound to its input) below; the remaining recovery-test lifetimes, screenshots and usability notes follow |
+| 9.6 | in_progress | Section 06, the creation workflow. Parts a (evidence), b (visible step order), c (format detail switch), d (verify result bound to its input) and e (testing keeps the backup) below; the auto-lock's evidence, screenshots and usability notes follow |
 
 `verified` means the implementation and its automated checks passed. It says
 nothing about an independent review.
@@ -1257,7 +1257,7 @@ verify result that outlives its input, testing from the Recovery tab wiping
 the receipt, the auto-lock clearing evidence while the shares stay open, and
 the production screenshots with usability notes. A password-only backup has
 no rehearsal on this page, so its recovery step stays at "to do" and points
-to a verify on the Decrypt tab, which today clears the receipt.
+to a verify on the Decrypt tab, which cleared the receipt until part e.
 
 **Checks.** `npm run test:backup-workflow` holds the step rules: started is
 never done, a partial printout check is never complete, only matched
@@ -1347,6 +1347,60 @@ and checks that the green result goes, that the format line does not fall
 through, and that the original input brings the result back. In the page's
 wiring, ignoring typed credentials, not comparing the pasted container, or not
 comparing the unlock method each built and failed its own browser test.
+
+### 9.6 The creation workflow (handover Section 06), part e
+
+Testing a backup no longer destroys it. The Recovery tab's tests switch to the
+Decrypt tab, and a tab switch reset the form: the receipt, the steps, what
+had been done with the backup and, in Text mode, the page's only copy of the
+container went with it. The Recovery tab then said there was no backup.
+
+The created backup now has its own state, apart from the output box, which
+the Decrypt tab shares and uses for decrypted output. It holds the armored
+container (empty for a File-mode backup, which was downloaded and not kept),
+the SHA-256 of the container's bytes, and the input type it was made with.
+
+- A tab change keeps the backup, the receipt, the header, the evidence and a
+  passed rehearsal. None of it is a secret. Passwords, plaintext, key files
+  and issued shares are still cleared on every tab change, as before.
+- A wipe clears the backup, and so does the auto-lock, except that a lock
+  sparing issued shares keeps the container they open, as it kept the output
+  box for them before. An input switch on the Encrypt tab and a new encrypt
+  also clear it. An input switch on the Decrypt tab no longer does.
+- Back on the Encrypt tab, the container returns to the output box and the
+  form returns to the backup's input type, so the receipt does not read as
+  "changed since".
+- A verify on the Decrypt tab hashes its input before the worker takes it.
+  If the hash matches the created backup, the verify is recorded against it.
+  Any match makes **Prepare recovery** done, which closes the gap part b left
+  for a password-only backup. A match from a file loaded on the Decrypt tab
+  also makes **Check saved copy** done: that is the saved file read back from
+  disk. A match from the Recovery tab's own paste is not, since the page
+  pasted its own copy.
+- A verify of any other backup is still a green verify, and counts for
+  nothing here.
+
+One more change was needed for this to hold: every run cleared the Encrypt
+side's header peek, so once the backup survived the tab change, a verify on
+the Decrypt tab would have erased the header of the backup it was testing. It
+is now cleared only by an encrypt.
+
+**Not yet done in Section 06.** The auto-lock clearing the evidence while the
+shares dialog stays open, and the production screenshots with usability
+notes.
+
+**Checks.** `npm run test:backup-workflow` holds the evidence rules: a verify
+is recorded only against a created backup, a pasted verify is a recovery test
+and not a saved copy, a loaded file is both, and a new job or a wipe drops
+it. Counting any verify as a saved copy, accepting a verify with no backup,
+or ignoring a verify for recovery each fail their own checks.
+`tests/browser/recovery-test-keeps.spec.ts` tests from the Recovery tab and
+comes back to the receipt, the container and the steps; verifies the
+downloaded file; verifies a different backup and checks it counts for
+nothing; and checks a wipe still takes the backup. In the page's wiring, a
+tab switch wiping the backup again, a matched verify never recorded, any
+verify recorded without comparing bytes, and the input type not restored on
+return each built and failed their own browser tests.
 
 ---
 

@@ -42,7 +42,7 @@ import {
   type PrintoutCoverage,
 } from "@/lib/backup-workflow";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
-import { verifyChanges, type VerifiedInput } from "@/lib/verify-evidence";
+import { sha256Hex, verifyChanges, type VerifiedInput } from "@/lib/verify-evidence";
 import { looksLikePaperPart, describePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
 import { decodeAllQrImage, decodeQrImages, QrDecodeError } from "@/lib/qr-decode";
 import { meetsPasswordPolicy } from "@/lib/password-policy";
@@ -571,19 +571,38 @@ export function useEncryptorState() {
    * cannot put the page back into a success state.
    */
   const [workflow, dispatchWorkflow] = useReducer(workflowReducer, initialWorkflow);
+  /**
+   * Section 06e. The backup this page created, held apart from the output
+   * box. `outputText` is shared with the Decrypt tab, where it holds decrypted
+   * output, so a tab change has to clear it; the backup is ciphertext, and in
+   * Text mode this is the page's only copy of it, so testing it from the
+   * Recovery tab must not destroy it. A wipe, a lock, an input switch on the
+   * Encrypt tab and a new encrypt still clear it.
+   *
+   * `armored` is empty for a File-mode backup, which was downloaded when it
+   * was written and is not kept. `digest` is the SHA-256 of the container's
+   * bytes in either mode, so a verify can tell whether it opened this exact
+   * backup, including a saved file loaded back from disk.
+   */
+  const [created, setCreated] = useState<{ armored: string; digest: string; inputType: "file" | "text" } | null>(null);
+  const createdRef = useRef(created);
+  useEffect(() => {
+    createdRef.current = created;
+  }, [created]);
+  const createdArmor = created?.armored ?? "";
   // Whether the backup on screen fits one printed symbol, so the shares
   // dialog can offer to put it on every strip. Recomputed for each share set,
   // and the choice itself starts off again with each.
   useEffect(() => {
     setStripsCarryBackup(false);
     setBackupFitsOnStrip(false);
-    if (!issuedShares || !outputText.startsWith("keym2:")) return;
+    if (!issuedShares || !createdArmor.startsWith("keym2:")) return;
     let live = true;
     (async () => {
       try {
         const { dearmorKeym2 } = await loadKeym2();
         const { encodePaperPartsForPrint } = await import("@/lib/keym-v2-paper");
-        const parts = await encodePaperPartsForPrint(dearmorKeym2(outputText));
+        const parts = await encodePaperPartsForPrint(dearmorKeym2(createdArmor));
         if (live) setBackupFitsOnStrip(parts.length === 1);
       } catch {
         if (live) setBackupFitsOnStrip(false);
@@ -592,7 +611,7 @@ export function useEncryptorState() {
     return () => {
       live = false;
     };
-  }, [issuedShares, outputText]);
+  }, [issuedShares, createdArmor]);
 
   // Printout findings describe one backup. A new seal or a wipe replaces or
   // clears it, and lines saying "belongs to this backup" must go with it.
@@ -1107,7 +1126,7 @@ export function useEncryptorState() {
     });
   }, [toast]);
 
-  const clearSensitiveState = useCallback((opts?: { sparingIssuedShares?: boolean }) => {
+  const clearSensitiveState = useCallback((opts?: { sparingIssuedShares?: boolean; keepingBackup?: boolean }) => {
     // Disown any operation still running. A KDF cannot be cancelled from here —
     // that needs the Worker in Phase 2 — but it can be made harmless: once the
     // counter moves, the in-flight operation's completion path goes quiet
@@ -1151,9 +1170,17 @@ export function useEncryptorState() {
     setResealOffer(null);
     setResealNotice(null);
     setVerifyResult(null);
-    setSealedPeek(null);
-    setReceipt(null);
-    dispatchWorkflow({ type: "cleared" });
+    // Section 06e. A tab change keeps the created backup and what is known
+    // about it: none of it is a secret, and testing it on the Decrypt tab is
+    // the point of the Recovery tab. A wipe or a lock takes it, except that a
+    // lock sparing issued shares keeps the container they open, as it always
+    // kept the output box for them.
+    if (!opts?.keepingBackup) {
+      setSealedPeek(null);
+      setReceipt(null);
+      dispatchWorkflow({ type: "cleared" });
+      if (!(opts?.sparingIssuedShares && issuedSharesRef.current !== null)) setCreated(null);
+    }
 
     // Anything rendering a secret.
     setIsQrModalOpen(false);
@@ -1176,7 +1203,9 @@ export function useEncryptorState() {
     setRehearsalInput("");
     setRehearsalPassword("");
     setRehearsalInputRejected(null);
-    setRehearsal({ kind: "idle" });
+    // A passed rehearsal is evidence about the backup, not a secret, so it
+    // stays with the backup across a tab change.
+    setRehearsal((r) => (opts?.keepingBackup && r.kind === "ok" ? r : { kind: "idle" }));
 
     // `issuedShares` is the one thing here that cannot be got back.
     //
@@ -1204,7 +1233,7 @@ export function useEncryptorState() {
    * in `clearSensitiveState`.
    */
   const resetState = useCallback(() => {
-    clearSensitiveState();
+    clearSensitiveState({ keepingBackup: true });
     setInputType('file');
     setSeedMode(false);
     setWipeAck(false);
@@ -1355,6 +1384,14 @@ export function useEncryptorState() {
     const returning = mode === "tools" && newMode === formModeRef.current;
     formModeRef.current = newMode as Mode;
     if (!returning) resetState();
+    // Section 06e. Back on the Encrypt tab with a backup it made: put its
+    // container back in the output box and the form back on its input type,
+    // so the receipt reads as it did rather than as "changed since".
+    const kept = createdRef.current;
+    if (!returning && newMode === "encrypt" && kept) {
+      setInputType(kept.inputType);
+      if (kept.armored) setOutputText(kept.armored);
+    }
   }, [mode, resetState]);
   
   /**
@@ -1412,12 +1449,18 @@ export function useEncryptorState() {
       setShowDecryptedText(false);
       setDecryptInfo(null);
       setSlotTableWarning(false);
-      setSealedPeek(null);
       setIsDecryptedQrModalOpen(false);
       setIsDecryptedQrRevealed(false);
       setDecryptedQrStatus({ kind: "idle" });
-      setReceipt(null);
-      dispatchWorkflow({ type: "cleared" });
+      // Section 06e. On the Encrypt tab an input switch is a new form, so the
+      // backup goes. On the Decrypt tab it is someone testing that backup, and
+      // the backup stays.
+      if (formModeRef.current === "encrypt") {
+        setSealedPeek(null);
+        setReceipt(null);
+        setCreated(null);
+        dispatchWorkflow({ type: "cleared" });
+      }
       // A rehearsal this switch disowned would otherwise say "Opening…" for
       // good: its completion path is now stale and writes nothing.
       setRehearsal((r) => (r.kind === "running" ? { kind: "idle" } : r));
@@ -2006,9 +2049,12 @@ export function useEncryptorState() {
     setResealOffer(null);
     setResealNotice(null);
     setVerifyResult(null);
-    setSealedPeek(null);
     setDecryptedQrStatus({ kind: "idle" });
     if (mode === 'encrypt') {
+      // Section 06e. The Encrypt side's own state; a verify on the Decrypt tab
+      // used to clear the header of the backup it was testing.
+      setSealedPeek(null);
+      setCreated(null);
       // Section 06. The output this receipt described was cleared on the line
       // above, so the receipt goes with it, and with it the rehearsal of that
       // backup. Left standing, it described a container no longer on screen,
@@ -2183,6 +2229,11 @@ export function useEncryptorState() {
           shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
         });
 
+        // Section 06e. Taken before the bytes leave: a verify later compares
+        // its input with this to tell whether it opened this exact backup.
+        const digest = await sha256Hex(new Uint8Array(resultBuffer));
+        if (isStale()) return;
+
         if (inputType === 'file') {
             const blob = new Blob([resultBuffer]);
             const outName = obscureFilename
@@ -2190,6 +2241,7 @@ export function useEncryptorState() {
               : `${file!.name}.keym`;
             if (isStale()) return;
             triggerDownload(blob, outName);
+            setCreated({ armored: "", digest, inputType: "file" });
             setReceipt(receiptOf(file!.name, outName, false));
             dispatchWorkflow({ type: "sealed", job: opId, settings: sealedWith });
             setFile(null);
@@ -2205,7 +2257,9 @@ export function useEncryptorState() {
             // usually cached, so the gap is a microtask, but "usually" is not
             // the rule the rest of this function keeps.
             if (isStale()) return;
-            setOutputText(armorKeym2(new Uint8Array(resultBuffer)));
+            const armored = armorKeym2(new Uint8Array(resultBuffer));
+            setOutputText(armored);
+            setCreated({ armored, digest, inputType: "text" });
             setReceipt(receiptOf("text", "keym2: container, on screen", true));
             dispatchWorkflow({ type: "sealed", job: opId, settings: sealedWith });
             setTextSecret('');
@@ -2452,6 +2506,12 @@ export function useEncryptorState() {
           // credentials are right. The byte count is reported because "it
           // opens, and it is the size you expect" catches the right password
           // on the wrong backup, which a bare tick does not.
+          // Section 06e. Hashed before the worker takes the buffer. A match is a
+          // verify of this page's own backup, which the steps count as a
+          // recovery test, and as a saved-copy check when it came from a file.
+          const createdDigest = createdRef.current?.digest ?? null;
+          const inputDigest = createdDigest ? await sha256Hex(new Uint8Array(inputBuffer)) : null;
+          if (isStale()) return;
           const verified = await verifyViaWorker(
             inputBuffer,
             mutablePassword,
@@ -2472,6 +2532,12 @@ export function useEncryptorState() {
             inWorker: verified.inWorker,
             checked: checkedInput,
           });
+          if (createdDigest && inputDigest === createdDigest) {
+            dispatchWorkflow({
+              type: "verified",
+              check: { how: verified.openedBy, fromFile: inputType === 'file', at: new Date().toISOString() },
+            });
+          }
           finishOperation(null, {
             title: "Verified — the backup opens",
             description: "The contents were checked and discarded without being shown.",
@@ -2824,12 +2890,12 @@ export function useEncryptorState() {
    * strings; this is the one from paper.
    */
   const printPaperVault = useCallback(async () => {
-    if (!outputText.startsWith("keym2:")) return;
+    if (!createdArmor.startsWith("keym2:")) return;
     // Section 06: both awaits below are time in which a wipe, a lock or a new
     // job can clear this backup. The print must not go ahead after that.
     const seq = opSeqRef.current;
     const { dearmorKeym2 } = await loadKeym2();
-    const container = dearmorKeym2(outputText);
+    const container = dearmorKeym2(createdArmor);
     const { parts, tooLarge, setCodes } = await preparePaperParts(container);
     if (opSeqRef.current !== seq) return;
     dispatchWorkflow({ type: "export-started", how: "print", at: new Date().toISOString() });
@@ -2841,19 +2907,19 @@ export function useEncryptorState() {
       printedOn: new Date().toISOString().slice(0, 10),
       rehearsal: rehearsalStamp,
     });
-  }, [outputText, rehearsalStamp]);
+  }, [createdArmor, rehearsalStamp]);
 
   const downloadContainer = useCallback(async () => {
-    if (!outputText.startsWith("keym2:")) return;
+    if (!createdArmor.startsWith("keym2:")) return;
     const seq = opSeqRef.current;
     const { dearmorKeym2 } = await loadKeym2();
     if (opSeqRef.current !== seq) return;
     triggerDownload(
-      new Blob([dearmorKeym2(outputText).slice()]),
+      new Blob([dearmorKeym2(createdArmor).slice()]),
       `keymaker-${randomFilenameSuffix()}.keym`
     );
     dispatchWorkflow({ type: "export-started", how: "download", at: new Date().toISOString() });
-  }, [outputText]);
+  }, [createdArmor]);
 
   /**
    * For work outside this hook that awaits before acting on a backup (the
@@ -2926,7 +2992,7 @@ export function useEncryptorState() {
   const accessRule = useMemo(() => describeAccessRule(policy.waysIn.map(describeWayIn)), [policy]);
 
   const rehearseFromPaper = useCallback(() => {
-    const armored = outputText;
+    const armored = createdArmor;
     if (!armored.startsWith("keym2:")) return;
     // The mode change resets the form; everything below lands after it.
     handleModeChange("decrypt");
@@ -2934,7 +3000,7 @@ export function useEncryptorState() {
     setTextSecret(armored);
     setUseShares(true);
     setVerifyOnly(true);
-  }, [outputText, handleModeChange]);
+  }, [createdArmor, handleModeChange]);
 
   // The wipe's acknowledgment yields to the next thing on screen.
   useEffect(() => {
@@ -2964,7 +3030,7 @@ export function useEncryptorState() {
    * like any other.
    */
   const runRehearsal = useCallback(async () => {
-    if (!issuedShares || !outputText.startsWith("keym2:")) return;
+    if (!issuedShares || !createdArmor.startsWith("keym2:")) return;
     const strips = parseShareLines(rehearsalInput);
     if (strips.length < issuedShares.threshold) return;
     const seq = opSeqRef.current;
@@ -2974,7 +3040,7 @@ export function useEncryptorState() {
     try {
       const { dearmorKeym2 } = await loadKeym2();
       // A copy: the worker takes ownership of the buffer it is handed.
-      const container = dearmorKeym2(outputText).slice();
+      const container = dearmorKeym2(createdArmor).slice();
       // §4.8. Strips that need the password are rehearsed with it, the way an
       // heir would have to open the backup.
       //
@@ -3015,7 +3081,7 @@ export function useEncryptorState() {
           (issuedShares.withPassword ? `, and that the password is the one you set.` : `.`),
       });
     }
-  }, [issuedShares, outputText, rehearsalInput, rehearsalPassword]);
+  }, [issuedShares, createdArmor, rehearsalInput, rehearsalPassword]);
 
   /**
    * What the command bar offers, and when.
@@ -3199,15 +3265,15 @@ export function useEncryptorState() {
         "@/lib/printout-check"
       );
       let container: Uint8Array | null = null;
-      if (mode === "encrypt" && receipt?.onScreen && outputText.startsWith("keym2:")) {
+      if (receipt?.onScreen && createdArmor.startsWith("keym2:")) {
         try {
           const { dearmorKeym2 } = await loadKeym2();
-          container = dearmorKeym2(outputText);
+          container = dearmorKeym2(createdArmor);
         } catch {
           container = null;
         }
       }
-      const backup = { container, header: mode === "encrypt" && receipt ? sealedPeek : null };
+      const backup = { container, header: receipt ? sealedPeek : null };
       const results: { file: string; text: string; problem: boolean }[] = [];
       const findings: Parameters<typeof mergePrintoutCoverage>[1][number][] = [];
       for (const f of files) {
@@ -3244,7 +3310,7 @@ export function useEncryptorState() {
   };
 
   const returnToBackupTest = (withShares: boolean) => {
-    const armored = mode === "encrypt" && receipt?.onScreen ? outputText : "";
+    const armored = receipt?.onScreen ? createdArmor : "";
     handleModeChange("decrypt");
     if (armored) {
       setInputType("text");
@@ -3270,6 +3336,7 @@ export function useEncryptorState() {
     shareQrInputRef,
     textSecret, setTextSecret,
     outputText, setOutputText,
+    createdArmor,
     password, setPassword,
     generated, setGenerated,
     showPassword, setShowPassword,

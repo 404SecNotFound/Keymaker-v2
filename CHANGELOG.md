@@ -19,6 +19,13 @@
   only when a rehearsal from the shares has opened it.
 
 ### Fixed
+- **Testing a backup from the Recovery tab destroyed it.** The test switched to
+  the Decrypt tab, and the switch cleared the receipt, the steps and, in Text
+  mode, the page's only copy of the container. The created backup now
+  survives a tab change; a wipe or the auto-lock still clears it. A verify
+  that opens this exact backup, matched by its SHA-256, now counts as a
+  recovery test, and as a checked saved copy when the file was loaded from
+  disk.
 - **A verify result stayed on screen after its input changed.** Loading
   another backup, choosing another key file, switching the unlock method or
   typing a new password left "The backup opens with this password" beside an

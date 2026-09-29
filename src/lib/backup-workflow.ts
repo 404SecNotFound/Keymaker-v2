@@ -67,10 +67,29 @@ export interface ExportStarted {
   at: string;
 }
 
+/**
+ * Section 06e. A verify that opened this exact backup: the bytes it was given
+ * hashed to the ones this page wrote. `fromFile` is whether they came from a
+ * file loaded on the Decrypt tab, which is a saved copy read back from disk,
+ * rather than from the page's own copy pasted across by the Recovery tab.
+ */
+export interface VerifiedBackup {
+  how: "passphrase" | "passkey" | "shares" | "passphrase-and-shares";
+  fromFile: boolean;
+  /** ISO 8601. */
+  at: string;
+}
+
 export type Workflow =
   | { phase: "editing" }
   | { phase: "working"; job: number }
-  | { phase: "created"; job: number; sealed: CreationSettings; exports: ExportStarted[] };
+  | {
+      phase: "created";
+      job: number;
+      sealed: CreationSettings;
+      exports: ExportStarted[];
+      verified: VerifiedBackup[];
+    };
 
 export type WorkflowEvent =
   | { type: "job-started"; job: number }
@@ -78,6 +97,8 @@ export type WorkflowEvent =
   /** The job failed or was stopped. Ignored unless it is the job being waited on. */
   | { type: "job-ended"; job: number }
   | { type: "export-started"; how: ExportStarted["how"]; at: string }
+  /** A verify opened this backup's exact bytes. Ignored unless one was created. */
+  | { type: "verified"; check: VerifiedBackup }
   /** The page cleared the backup: a wipe, a lock, a mode or input switch. */
   | { type: "cleared" };
 
@@ -91,13 +112,16 @@ export function workflowReducer(state: Workflow, event: WorkflowEvent): Workflow
       return { phase: "working", job: event.job };
     case "sealed":
       if (state.phase !== "working" || state.job !== event.job) return state;
-      return { phase: "created", job: event.job, sealed: event.settings, exports: [] };
+      return { phase: "created", job: event.job, sealed: event.settings, exports: [], verified: [] };
     case "job-ended":
       if (state.phase !== "working" || state.job !== event.job) return state;
       return initialWorkflow;
     case "export-started":
       if (state.phase !== "created") return state;
       return { ...state, exports: [...state.exports, { how: event.how, at: event.at }] };
+    case "verified":
+      if (state.phase !== "created") return state;
+      return { ...state, verified: [...state.verified, event.check] };
     case "cleared":
       return initialWorkflow;
   }
@@ -214,6 +238,14 @@ export interface StepInputs {
   rehearsed: boolean;
 }
 
+/** How a verify is named in a step's sentence. */
+const OPENED_WITH: Record<VerifiedBackup["how"], string> = {
+  passphrase: "the password",
+  passkey: "the passkey",
+  shares: "the recovery shares",
+  "passphrase-and-shares": "the password and the recovery shares",
+};
+
 export const STEP_LABELS: Record<StepId, string> = {
   content: "Content",
   access: "Access rule",
@@ -273,8 +305,17 @@ export function workflowSteps(i: StepInputs): Step[] {
       : done("create", "Written on this device. Nothing left it."),
   ];
 
+  const verified = i.workflow.verified;
+  const fromDisk = verified.find((v) => v.fromFile);
   const p = i.printout;
-  if (p && p.checked.length >= p.total) {
+  if (fromDisk) {
+    steps.push(
+      done(
+        "saved-copy",
+        `The saved file was loaded, matched this backup byte for byte, and opened with ${OPENED_WITH[fromDisk.how]}.`
+      )
+    );
+  } else if (p && p.checked.length >= p.total) {
     steps.push(done("saved-copy", "Every printed container symbol was read back and matches this backup."));
   } else {
     const said: string[] = [];
@@ -295,6 +336,9 @@ export function workflowSteps(i: StepInputs): Step[] {
 
   if (i.rehearsed) {
     steps.push(done("recovery", "A rehearsal from the recovery shares opened this backup."));
+  } else if (verified.length > 0) {
+    const last = verified[verified.length - 1]!;
+    steps.push(done("recovery", `A verify opened this backup with ${OPENED_WITH[last.how]}.`));
   } else if (i.hasShares && i.keptOnScreen) {
     steps.push(s("recovery", "todo", "Rehearse recovery from the shares, the way an heir would."));
   } else {
