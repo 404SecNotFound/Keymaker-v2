@@ -44,7 +44,7 @@ test("workspace hierarchy replaces the marketing hero", async ({ page }) => {
   expect(content!.y).toBeLessThan(340);
   expect(inspector!.x).toBeGreaterThan(content!.x + 300);
   const button = page.getByRole("button", { name: "Encrypt File", exact: true });
-  await expect(button).toHaveCSS("border-radius", "8px");
+  await expect(button).toHaveCSS("border-radius", "9999px");
   await expect(button).toHaveCSS("scale", "none");
 });
 
@@ -101,29 +101,32 @@ test("typography accents separate structure, body copy and actual password feedb
   await expect(page.locator("#password-feedback")).toContainText("Generated");
 });
 
-test("cyan selection follows navigation and the selected content type", async ({ page }) => {
-  const cyan = "rgb(110, 231, 242)";
+test("signal selection follows navigation and the selected content type", async ({ page }) => {
+  // Signal Blue: selected text is off-white over the #111A29 selection ground,
+  // outlined in signal blue. Unselected stays silver, so the fill and outline
+  // carry the state as well as the text.
+  const selected = "rgb(247, 249, 252)";
   expect(await page.getByRole("tab", { name: "Encrypt", exact: true })
-    .evaluate(el => getComputedStyle(el).color)).toBe(cyan);
+    .evaluate(el => getComputedStyle(el).color)).toBe(selected);
   for (const view of ["Encrypt", "Decrypt"]) {
     await page.getByRole("tab", { name: view, exact: true }).click();
     const file = page.getByRole("button", { name: "File", exact: true });
     const text = page.getByRole("button", { name: "Text", exact: true });
     await file.click();
     await expect(file).toHaveAttribute("aria-pressed", "true");
-    await expect(file).toHaveCSS("color", cyan);
-    await expect(file).toHaveCSS("background-color", "rgb(16, 42, 50)");
-    await expect(file).toHaveCSS("border-top-color", "rgb(66, 135, 149)");
+    await expect(file).toHaveCSS("color", selected);
+    await expect(file).toHaveCSS("background-color", "rgb(17, 26, 41)");
+    await expect(file).toHaveCSS("border-top-color", "rgb(76, 141, 255)");
     await expect(text).toHaveAttribute("aria-pressed", "false");
     await expect(text).toHaveCSS("color", "rgb(177, 183, 193)");
     await text.click();
     await expect(text).toHaveAttribute("aria-pressed", "true");
-    await expect(text).toHaveCSS("color", cyan);
+    await expect(text).toHaveCSS("color", selected);
     await expect(file).toHaveCSS("color", "rgb(177, 183, 193)");
     await file.click();
   }
   await page.getByRole("tab", { name: "Recovery", exact: true }).click();
-  await expect(page.getByRole("tab", { name: "Recovery", exact: true })).toHaveCSS("color", cyan);
+  await expect(page.getByRole("tab", { name: "Recovery", exact: true })).toHaveCSS("color", selected);
   await expect(page.getByRole("button", { name: "Verify with password", exact: true })).toHaveCSS("color", "rgb(132, 185, 255)");
 });
 
@@ -136,12 +139,12 @@ test("blue actions remain distinct from disabled controls, input and mint valida
   await expect(submit).toHaveCSS("color", "rgb(148, 156, 169)");
   await expect(page.getByRole("button", { name: "Copy", exact: true })).toHaveCSS("color", "rgb(148, 156, 169)");
   await page.locator("#encrypt-file").setInputFiles({ name: "example.txt", mimeType: "text/plain", buffer: Buffer.from("test file") });
-  await expect(page.locator(".km-file-icon")).toHaveCSS("color", "rgb(110, 231, 242)");
+  await expect(page.locator(".km-file-icon")).toHaveCSS("color", "rgb(76, 141, 255)");
   await expect(page.locator(".km-file-name > span")).toHaveCSS("color", "rgb(240, 242, 245)");
   await random.click();
   await expect(submit).toBeEnabled();
-  await expect(submit).toHaveCSS("background-color", "rgb(132, 185, 255)");
-  await expect(submit).toHaveCSS("color", "rgb(17, 19, 22)");
+  await expect(submit).toHaveCSS("background-color", "rgb(20, 95, 228)");
+  await expect(submit).toHaveCSS("color", "rgb(255, 255, 255)");
   await expect(page.locator("#password")).toHaveCSS("color", "rgb(240, 242, 245)");
   await expect(page.locator("#password-feedback")).toHaveCSS("color", "rgb(105, 219, 170)");
   await page.locator("#password").focus();
@@ -153,11 +156,11 @@ test("advanced selection separates option titles from their supporting descripti
   const pbkdf = page.getByRole("button", { name: /^PBKDF2/ });
   await pbkdf.click();
   await expect(pbkdf).toHaveAttribute("aria-pressed", "true");
-  await expect(pbkdf).toHaveCSS("color", "rgb(110, 231, 242)");
+  await expect(pbkdf).toHaveCSS("color", "rgb(247, 249, 252)");
   await expect(pbkdf.locator("p").last()).toHaveCSS("color", "rgb(177, 183, 193)");
   await expect(page.locator("#use-keyfile")).toHaveAttribute("aria-checked", "false");
   await page.locator("#use-keyfile").click();
-  await expect(page.locator("#use-keyfile")).toHaveCSS("background-color", "rgb(110, 231, 242)");
+  await expect(page.locator("#use-keyfile")).toHaveCSS("background-color", "rgb(76, 141, 255)");
 });
 
 test("Advanced option copy stays inside its cards at narrow desktop and phone widths", async ({ page }) => {

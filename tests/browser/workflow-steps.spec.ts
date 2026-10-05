@@ -144,20 +144,28 @@ test("recovery is done only after a rehearsal from the shares opens the backup",
   await expectStep(page, "saved-copy", "current", "Next");
 });
 
-test("the step grid's rows line up at the width the screenshots use", async ({ page }) => {
-  // Usability finding S3: a label that wrapped pushed its state word below its
-  // neighbours', and the one-line label beside it sat off the row's top.
+test("each step's label and state share its row at the width the screenshots use", async ({ page }) => {
+  // Usability finding S3, restated for the Signal Blue list: the steps stack
+  // one per row, and a label that wraps must not push its state word off the
+  // row it names.
   await page.setViewportSize({ width: 1180, height: 1140 });
   await page.goto("/");
-  const tops = async (selector: string) =>
-    page.getByTestId("workflow-steps").locator(selector).evaluateAll((els) =>
-      els.map((el) => Math.round(el.getBoundingClientRect().top))
-    );
-  const labels = await tops(".km-step-label");
-  const states = await tops(".km-step-state");
-  expect(labels).toHaveLength(6);
-  for (const [name, ys] of [["labels", labels], ["states", states]] as const) {
-    expect(new Set(ys.slice(0, 3)).size, `row 1 ${name} are not level: ${ys.slice(0, 3)}`).toBe(1);
-    expect(new Set(ys.slice(3, 6)).size, `row 2 ${name} are not level: ${ys.slice(3, 6)}`).toBe(1);
-  }
+  const rows = await page.getByTestId("workflow-steps").locator("li").evaluateAll((items) =>
+    items.map((li) => {
+      const mid = (el: Element | null) => {
+        const r = el!.getBoundingClientRect();
+        return Math.round(r.top + r.height / 2);
+      };
+      return {
+        top: Math.round(li.getBoundingClientRect().top),
+        label: mid(li.querySelector(".km-step-label")),
+        state: mid(li.querySelector(".km-step-state")),
+      };
+    })
+  );
+  expect(rows).toHaveLength(6);
+  rows.forEach((row, i) => {
+    expect(Math.abs(row.label - row.state), `step ${i + 1} state is off its label's row`).toBeLessThanOrEqual(1);
+    if (i > 0) expect(row.top, `step ${i + 1} is not below step ${i}`).toBeGreaterThan(rows[i - 1]!.top);
+  });
 });

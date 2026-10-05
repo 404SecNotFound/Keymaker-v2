@@ -15,12 +15,13 @@ layout. Reference: [Linear on Refero](https://styles.refero.design/style/90ce588
 - Neutral Graphite grounds and the approved Spline Sans / JetBrains Mono
   typography remain. The user rejected the brown/taupe grounds in the first
   implementation preview. Linear supplies control styling, not a copied brand.
-- Flat grounds, crisp hairlines, 8px controls, 12px panels. No glass, glows,
-  gradients, pill-shaped primary buttons or marketing hero in the workbench.
+- Flat grounds, crisp hairlines, pill controls in the form, 12px panels. No
+  glass, gradients or marketing hero in the workbench. One glow, on the
+  container preview only (Signal Blue, 5 October 2026).
 - Page titles 28–32px, weight 400; section titles 15px/500; body 13–14px;
   captions/data at least 12px. Whitespace separates tasks, not decorative cards.
 - Typography accents: off-white page titles, ice-blue panel titles, action-blue
-  prompts and controls, cyan selected options and navigation, mint validation.
+  prompts and controls, signal-blue selected options and navigation, mint validation.
   Descriptions stay silver; entered content stays off-white. No color-only states.
 - Visible focus, readable contrast, reduced motion and touch targets take
   precedence over reference density.

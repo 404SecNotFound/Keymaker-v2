@@ -174,7 +174,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
           <h2 id={`${mode}-content-title`}>{mode === "encrypt" ? "Content" : "Encrypted content"}</h2>
           <span>{mode === "encrypt" ? "Choose what to protect" : "Choose a backup to open"}</span>
         </div>
-        <div className="flex gap-0.5 rounded-xl bg-inset p-1">
+        <div className="km-choice-track flex gap-0.5 bg-inset p-1">
           <button
             type="button"
             onClick={() => handleInputTypeChange('file')}

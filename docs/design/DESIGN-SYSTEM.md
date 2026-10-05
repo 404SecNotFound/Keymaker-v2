@@ -4,6 +4,12 @@ Approved 7 September 2026. Linear-inspired component styling and the approved
 Keymaker layout. Neutral black and graphite replace the earlier brown/taupe
 Nightpaper palette at the user's request. See [BAR.md](BAR.md) for the reference.
 
+**Signal Blue, approved 5 October 2026.** The grayscale shell read as "a black
+and white movie". Colour now does three jobs: one filled blue action, a blue
+signal for where you are, and a blue glow on the container preview. Grounded in
+the Refero styles for 1Password (one blue for action and the active state only)
+and Warp (one glow, on the product object). The rules below are updated to match.
+
 ## Surfaces
 
 | Token | Value | Use |
@@ -14,11 +20,13 @@ Nightpaper palette at the user's request. See [BAR.md](BAR.md) for the reference
 | Raised | #23272E | Hovered inset controls |
 | Line | #2A2E35 | Section dividers and quiet panel edges |
 | Line strong | #454B55 | Active borders and field edges |
-| Selection | #102A32 | Active navigation and selected options only |
-| Selection line | #428795 | Selected option borders, never body text |
+| Selection | #111A29 | Active navigation and selected options only |
+| Selection line | #4C8DFF | Selected option borders, never body text |
 
 No brown undertones, glass, background gradients or drop shadows. Surfaces
-separate sections through neutral lightness and crisp 1px edges.
+separate sections through neutral lightness and crisp 1px edges. The single
+exception is the container preview's blue glow (`0 0 32px 4px` at 18% of
+#217EFF): it marks the object being made, and nothing else may glow.
 
 ## Typography and contrast
 
@@ -43,9 +51,11 @@ override the visual reference.
 ## Geometry and controls
 
 - Panels: 12px radius, 22–24px padding, 16px padding on phones.
-- Inputs and buttons: 8px radius; compact navigation 6px. Switches and dots
-  remain round. Primary buttons are not pills.
-- Primary: action blue #84B9FF fill, #111316 text, #ACD0FF hover.
+- Inputs 8px radius; compact navigation 6px. Buttons in the Encrypt and
+  Decrypt form, the segmented track and the intent doors are pills. Option
+  cards and the Advanced disclosure keep 8px. Switches and dots remain round.
+- Primary: Signal Blue #145FE4 fill, #FFFFFF text (5.55:1), #2C6FEA hover
+  (4.60:1).
 - Outline actions: transparent or inset fill, line border, action-blue text.
 - Utility controls (copy, clear, reveal): neutral until focused or hovered.
 - Disabled: transparent fill, line border, muted label; not reduced opacity.
@@ -55,8 +65,9 @@ override the visual reference.
 
 ## Accent and status
 
-Container diagrams keep blue #5C7FFF and ember #FF7A47. These marks are the
-visual focal point against the neutral shell, not decorative glows behind forms.
+The container byte map is ink #F0F2F5 for magic and version, line strong
+#454B55 for header fields and signal #4C8DFF for slots. The Docs figures keep
+the earlier blue #5C7FFF and ember #FF7A47 inside `.km-docs-figure` only.
 Do not use diagram colors for form text or fill entire panels with them.
 
 Section numbers and panel headings use ice blue #9EC5FF. The marker-only
@@ -66,16 +77,18 @@ neutral silver. Ice blue marks structure, not a successful outcome.
 
 Action blue #84B9FF identifies links, task titles, upload prompts and actions
 such as Random, Passphrase and recovery verification. Hover is #ACD0FF.
-Selected options and the active destination use cyan #6EE7F2 over #102A32,
-with #428795 borders. Selection is also expressed by a filled shape, border,
+Selected options and the active destination use off-white #F7F9FC text over
+#111A29, with #4C8DFF borders. The active navigation item has no border; its
+icon turns signal blue. The current workflow step gets a signal-blue ring and
+label; done steps are mint. Selection is also expressed by a filled shape, border,
 and aria-pressed/aria-selected; it never relies on hue alone. Switch tracks
-use cyan for enabled settings, not mint: configuration is not validation.
-Within a selected card, the option title is cyan but its description stays
-silver. Filenames and entered text stay off-white, with cyan file icons.
+use signal blue for enabled settings, not mint: configuration is not validation.
+Filenames and entered text stay off-white, with signal-blue file icons on an
+inset row.
 
-Blue and cyan clear 7.40:1 and 10.26:1 respectively on raised surfaces.
-Muted text clears 5.42:1 on selection fill; selection borders clear 3.66:1
-against raised surfaces. Dark primary-button text clears 9.18:1 on blue.
+Action blue and signal blue clear 7.40:1 and 4.68:1 respectively on raised
+surfaces. Muted text clears 6.30:1 on selection fill; signal borders clear 4.68:1
+against raised surfaces. White primary-button text clears 5.55:1 on #145FE4.
 
 Semantic status uses brighter mint #69DBAA, warning #D9A23F and danger #E5624E.
 Ice blue and mint clear 8.48:1 and 8.79:1 respectively on the raised surface.

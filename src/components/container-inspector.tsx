@@ -65,7 +65,7 @@ export interface InspectorPlan {
 /* ── The byte map ─────────────────────────────────────────────────────────
  *
  * The one place the sparks are spent. § "The sparks — quarantined" permits
- * the lifted cuts #5C7FFF / #FF7A47 in data visualisation and nowhere else,
+ * the Signal Blue cut #4C8DFF in data visualisation and nowhere else,
  * and this strip is data, not decoration: each segment's width is the byte
  * extent it describes, computed from the same offsets the parser (or the
  * plan) uses, so more slots draw a longer table and a chained cipher draws
@@ -89,9 +89,9 @@ export interface ByteSpan {
 }
 
 const SPAN_FILL: Record<ByteSpan["kind"], string> = {
-  stamp: "bg-[#FF7A47]",
+  stamp: "bg-foreground",
   fields: "bg-border-strong",
-  slot: "bg-[#5C7FFF]",
+  slot: "bg-signal",
 };
 
 /**
@@ -180,7 +180,7 @@ function ByteMap({ spans, filling = false }: { spans: ByteSpan[]; filling?: bool
       </div>
       <p className="flex flex-wrap items-center gap-x-3 gap-y-1 pt-1.5 font-mono text-[12px] text-subtle-foreground">
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#FF7A47]" />
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-foreground" />
           magic+ver
         </span>
         <span className="flex items-center gap-1.5">
@@ -188,7 +188,7 @@ function ByteMap({ spans, filling = false }: { spans: ByteSpan[]; filling?: bool
           header fields
         </span>
         <span className="flex items-center gap-1.5">
-          <span className="inline-block h-1.5 w-1.5 rounded-full bg-[#5C7FFF]" />
+          <span className="inline-block h-1.5 w-1.5 rounded-full bg-signal" />
           {slots === 1 ? "1 slot" : `${slots} slots`}
         </span>
         <span className="ml-auto">{total} B → payload</span>
