@@ -355,6 +355,11 @@ try {
     .locator('visible=true')
     .first()
     .fill('correct-horse-battery-staple-9271!X');
+  // Ready to seal: the only moment the filled primary is enabled. No view
+  // above paints it, so a primary outside the palette passed this gate.
+  await page.getByRole('button', { name: /^Encrypt Text$/i }).locator('visible=true').first().waitFor({ state: 'visible' });
+  await page.waitForTimeout(400);
+  collect(await scan(page, 'encrypt · ready to seal'));
   await page.getByRole('button', { name: /^Encrypt Text$/i }).locator('visible=true').first().click();
   const sharesDialog = page.getByRole('dialog');
   await sharesDialog.getByText(/Save these 3 shares now/).waitFor({ timeout: 90_000 });
