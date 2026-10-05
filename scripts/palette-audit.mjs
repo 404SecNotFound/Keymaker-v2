@@ -42,10 +42,12 @@ const ALLOWED = new Set(
     '#090a0c', '#111316', '#191c20', '#23272e', '#2a2e35', '#454b55',
     // Text
     '#f0f2f5', '#b1b7c1', '#949ca9', '#f7f9fc', '#9ec5ff',
-    // Primary action and its ink
-    '#84b9ff', '#acd0ff', '#111316',
-    // Selected controls: cyan title, deep tinted ground, visible outline
-    '#6ee7f2', '#102a32', '#428795',
+    // Text actions (links, prompts) and their hover
+    '#84b9ff', '#acd0ff',
+    // Signal Blue: filled primary, its hover, and its white ink
+    '#145fe4', '#2c6fea',
+    // Signal: selected outline, dots, current step; selection ground
+    '#4c8dff', '#111a29',
     // Semantic status — data, not decoration
     '#69dbaa', '#d9a23f', '#e5624e',
     // The spark cuts § "The sparks — quarantined" permits for data-viz
@@ -80,13 +82,13 @@ const TOLERANCE = 10;
  * It proves the palette cannot fail. The membership sweep further down is what
  * keeps an element from inventing a ground that is not on the list.
  */
-const TEXT_TOKENS = { ink: '#f0f2f5', body: '#b1b7c1', muted: '#949ca9', heading: '#f7f9fc', structural: '#9ec5ff', action: '#84b9ff', selected: '#6ee7f2', success: '#69dbaa' };
+const TEXT_TOKENS = { ink: '#f0f2f5', body: '#b1b7c1', muted: '#949ca9', heading: '#f7f9fc', structural: '#9ec5ff', action: '#84b9ff', selected: '#f7f9fc', signal: '#4c8dff', success: '#69dbaa' };
 const GROUND_TOKENS = {
   canvas: '#090a0c',
   card: '#111316',
   inset: '#191c20',
   raised: '#23272e',
-  selection: '#102a32',
+  selection: '#111a29',
 };
 const AA_FLOOR = 4.5;
 
