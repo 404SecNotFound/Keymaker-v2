@@ -5,15 +5,21 @@ here should be posted by anyone but the account that owns the project.
 
 Three preconditions, and none is optional.
 
-1. **The release must exist before the post does.** The first thing a
-   security-minded visitor does is look for something to check `SHA256SUMS`
-   against. Push the `v2.4.0` tag first, and wait until its release page
-   carries `SHA256SUMS`, the signature and the build attestation. Posting
-   before that spends the one arrival that matters on a repo that cannot yet
-   back its own claims.
+1. **The release must exist before the post does.** Met. `v2.4.0` was
+   published on 30 September 2026, and its release page carries the tarball,
+   `SHA256SUMS` and `SHA256SUMS.sigstore`. On 5 October each showed zero
+   downloads, so no visitor has checked it yet. The build attestation was not
+   re-checked on that date; run `gh attestation verify` against the tarball
+   before posting.
 2. **Read the claims below against the code before posting.** Every claim was
-   checked against `main` on 29 September 2026, when these drafts were
-   refreshed for v2.4.0. A post is the one artefact in this project that a
+   checked against `main` on 29 September 2026, and re-checked on 5 October
+   2026. All still hold. Two notes from the re-check. The image-URL caveat is
+   about the page's own origin: `img-src 'self'` lets a request back to the
+   serving site carry data, which is why the drafts keep it. And recovery
+   with `keym2.py` needs `pip install` of the two libraries in
+   `reference/requirements.txt`, so it needs a network once, or a machine
+   that already has them (roadmap 9.5). The drafts say "no browser and no
+   npm", which stays true. A post is the one artefact in this project that a
    later commit cannot correct.
 3. **Settle how the review is described.** The drafts below say "not audited"
    and "self-reviewed". `SECURITY-AUDIT.md` calls its findings the result of
@@ -21,7 +27,8 @@ Three preconditions, and none is optional.
    four-agent swarm. `docs/AUDIT-BRIEF.md` records the conflict and says only
    the owner can settle it. A reader who finds both descriptions will quote
    them side by side, so decide which is true, make the documents agree, and
-   then make the drafts match.
+   then make the drafts match. **Still open on 5 October 2026**, and now the
+   only precondition left.
 
 ## What to lead with
 
