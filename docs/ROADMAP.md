@@ -1,6 +1,6 @@
 # Keymaker roadmap
 
-Derived from two inputs — a four-agent security audit and a competitive feature
+Derived from two inputs — a four-agent self-review and a competitive feature
 blueprint — reconciled against the code at `d48019f` and cut down hard.
 
 The blueprint proposes 25 features. **Nine survive.** The rest are cut or
