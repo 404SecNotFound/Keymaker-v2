@@ -435,16 +435,16 @@ None of the three protects a compromised device. That is the next section.
 
 ## Security model
 
-**What has been audited, and what has not.** Everything in this table is a claim
-this project makes about its own code, so the scope of outside review is part of
-reading it. [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) is real and found real
-defects. Its scope line is *the KEYM v1 container, `src/lib/keymaker-crypto.ts`,
+**What has been reviewed, and by whom.** Everything in this table is a claim
+this project makes about its own code, so the scope of review is part of
+reading it. [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) is a self-review, not an
+independent audit. It is real and found real defects. Its scope line is *the KEYM v1 container, `src/lib/keymaker-crypto.ts`,
 the encryptor UI, the dice entropy tool, the CSP build pipeline, and CI.*
 
 **The container format this app writes today is not in that scope.** KEYM v2,
 v3 and v4, the authenticated slot table, v4's padded payload, Shamir share sets,
 passkey slots, paper parts, the audio carrier and the self-extracting page all
-came later. Parts of it have been through external review passes, and those
+came later. Parts of it have been through the project's own review passes, and those
 findings are fixed, tested and traceable in the commit history, though nothing
 here records one for v4. None of it appears in that document, and no audit has
 been scoped to it.
@@ -809,7 +809,7 @@ every KDF and cipher combination, and takes a few minutes.
 | [`docs/RECOVERY.md`](docs/RECOVERY.md) | Opening a backup without Keymaker — printable |
 | [`reference/README.md`](reference/README.md) | Independent Python implementation, and why it exists |
 | [`SECURITY.md`](SECURITY.md) | Threat model and vulnerability reporting |
-| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | External review of the v1 core and the app shell. Read its scope line, it predates the v2, v3 and v4 format |
+| [`SECURITY-AUDIT.md`](SECURITY-AUDIT.md) | Self-review of the v1 core and the app shell. Read its scope line, it predates the v2, v3 and v4 format |
 | [`SECURITY-AUDIT-ITTYBITZ-2026-04.md`](SECURITY-AUDIT-ITTYBITZ-2026-04.md) | Historical IttyBitz audit — legacy core only |
 | [`CHANGELOG.md`](CHANGELOG.md) | Release history |
 

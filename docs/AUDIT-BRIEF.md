@@ -9,13 +9,12 @@ one is an owner decision (roadmap, Owner-only register). The review on record
 is [SECURITY-AUDIT.md](../SECURITY-AUDIT.md), and its scope line is the KEYM v1
 container and the application around it, not what the app writes today.
 
-**Who reviewed is described two ways, and only the owner can settle it.**
-SECURITY-AUDIT.md calls its findings the result of external review, and one of
-its sections a third-party audit by a four-agent swarm. [OUTREACH.md](OUTREACH.md)
-says the project is not audited and has a self-audit, and the README says parts
-of the current format have been through external review passes. A reviewer
-should read those findings as recorded and fixed, and should not treat any of
-them as independent assurance until the owner states who performed them.
+**Who reviewed.** Self-reviewed, settled by the owner on 6 October 2026. The
+findings in SECURITY-AUDIT.md come from the project's own review passes,
+including one by four automated review agents, and not from an independent
+party. SECURITY-AUDIT.md, the README and [OUTREACH.md](OUTREACH.md) now all say
+so. A reviewer should read those findings as recorded and fixed, not as
+independent assurance.
 
 **Baseline.** Written against `main` at `40c521b`, the tree released as
 v2.3.0 plus the three maintenance PRs merged after it. A reviewer should pin

@@ -21,14 +21,15 @@ Three preconditions, and none is optional.
    that already has them (roadmap 9.5). The drafts say "no browser and no
    npm", which stays true. A post is the one artefact in this project that a
    later commit cannot correct.
-3. **Settle how the review is described.** The drafts below say "not audited"
-   and "self-reviewed". `SECURITY-AUDIT.md` calls its findings the result of
+3. **How the review is described. Settled on 6 October 2026: self-reviewed.**
+   SECURITY-AUDIT.md, the README and `docs/AUDIT-BRIEF.md` now say so, matching
+   the drafts. The rest of this item is kept for the record. The drafts below
+   say "not audited" and "self-reviewed". `SECURITY-AUDIT.md` calls its findings the result of
    external review, and one of its sections a third-party audit by a
    four-agent swarm. `docs/AUDIT-BRIEF.md` records the conflict and says only
    the owner can settle it. A reader who finds both descriptions will quote
    them side by side, so decide which is true, make the documents agree, and
-   then make the drafts match. **Still open on 5 October 2026**, and now the
-   only precondition left.
+   then make the drafts match.
 
 ## What to lead with
 
