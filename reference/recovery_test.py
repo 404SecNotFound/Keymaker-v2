@@ -111,7 +111,7 @@ def js_encrypt(version: int, plaintext: bytes, kdf: str, cipher: str,
             "--in", str(src), "--out", str(dst)]
     if version != 1:
         args += ["--version", str(version)]
-    args += ["--iterations", "600000"] if kdf == "pbkdf2" else ["--time", "2", "--mem", "16384", "--par", "2"]
+    args += ["--iterations", "600000"] if kdf == "pbkdf2" else ["--time", "2", "--mem", "19456", "--par", "2"]
     if keyfile:
         args += ["--keyfile", keyfile.hex()]
     r = subprocess.run(["node", str(BRIDGE), *args], capture_output=True, text=True, cwd=ROOT)

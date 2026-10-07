@@ -56,6 +56,7 @@ import {
   loadNoble,
   secureErase,
   validateKdfParams,
+  writeMode,
   type KdfParams,
 } from "./keymaker-crypto";
 import { dropIgnorable, stripIgnorable } from "./keym-text";
@@ -1552,6 +1553,8 @@ async function opensFirstChunk(container: Keym2Container, master: Uint8Array): P
 export interface Keym2Options {
   kdf: KdfParams;
   cipher: CipherId;
+  /** See `KeymakerOptions.enforceWritePolicy`: the conformance bridge's opt-out. */
+  enforceWritePolicy?: boolean;
 }
 
 /**
@@ -1644,7 +1647,7 @@ export async function encryptKeym2WithExplicitSecrets(
   if (masterKey.length !== MASTER_KEY_LEN) {
     throw new KeymakerError("invalid-input", "KEYM v2 requires a 32-byte master key.");
   }
-  validateKdfParams(options.kdf, "encrypt");
+  validateKdfParams(options.kdf, writeMode(options));
 
   if (!isKnownKeym2Version(version)) {
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
@@ -1803,7 +1806,7 @@ export async function encryptKeym2WithSharesRequired(
   if (!password) {
     throw new KeymakerError("credential-required", "A password is required for encryption.");
   }
-  validateKdfParams(options.kdf, "encrypt");
+  validateKdfParams(options.kdf, writeMode(options));
   const { shamirSplit, shareSetIdV2, encodeShareV2, SHARE_VALUE_LEN } = await loadShamir();
 
   const salt = explicit?.salt ?? crypto.getRandomValues(new Uint8Array(SALT_LEN));
@@ -1900,7 +1903,7 @@ export async function encryptKeym2WithSlots(
   if (!password) {
     throw new KeymakerError("credential-required", "A password is required for encryption.");
   }
-  validateKdfParams(options.kdf, "encrypt");
+  validateKdfParams(options.kdf, writeMode(options));
   if (!isKnownKeym2Version(version)) {
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
   }

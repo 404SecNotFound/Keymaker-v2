@@ -182,7 +182,8 @@ def main() -> int:
                     kf = KEYFILE if use_kf else None
                     label = f"{kdf_name} + {cipher_name}{' + keyfile' if use_kf else ''}"
                     try:
-                        ct = encrypt(PAYLOADS["unicode"], PASSWORD, kf, kdf_id, params, cipher_id)
+                        ct = encrypt(PAYLOADS["unicode"], PASSWORD, kf, kdf_id, params, cipher_id,
+                                     enforce_write_policy=False)
                         got = js_decrypt(ct, kf, tmp)
                         check(got == PAYLOADS["unicode"], label)
                     except Exception as e:  # noqa: BLE001

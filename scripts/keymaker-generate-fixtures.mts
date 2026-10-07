@@ -75,7 +75,9 @@ const PBKDF2_V1_PARAMS: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 1
 const PBKDF2_V2_PARAMS: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 600_000 } };
 const ARGON_PARAMS: KdfParams = {
   kdf: KdfId.ARGON2ID,
-  params: { timeCost: 2, memoryKiB: 16384, parallelism: 2 },
+  // Fixtures already on disk were written at 16 MiB and are append-only;
+  // any new one is written at the current floor.
+  params: { timeCost: 2, memoryKiB: 19 * 1024, parallelism: 2 },
 };
 
 interface Combo {

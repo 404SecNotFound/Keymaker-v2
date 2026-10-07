@@ -81,7 +81,10 @@ MAX_PBKDF2_ITERATIONS = 10_000_000
 MIN_PBKDF2_ITERATIONS_WRITE = 600_000
 MAX_ARGON2_TIME_COST = 10
 MAX_ARGON2_MEMORY_KIB = 262_144
-MIN_ARGON2_MEMORY_KIB_WRITE = 8_192
+# OWASP's Argon2id minimum (19 MiB, two passes) since 7 October 2026; readers
+# stay permissive.
+MIN_ARGON2_MEMORY_KIB_WRITE = 19_456
+MIN_ARGON2_TIME_COST_WRITE = 2
 MAX_ARGON2_PARALLELISM = 8
 
 
@@ -105,7 +108,12 @@ def validate_params(kdf_id: int, params, writing: bool) -> None:
         )
         return
 
-    check("argon2 time_cost", params.time_cost, 1, MAX_ARGON2_TIME_COST)
+    check(
+        "argon2 time_cost",
+        params.time_cost,
+        MIN_ARGON2_TIME_COST_WRITE if writing else 1,
+        MAX_ARGON2_TIME_COST,
+    )
     check(
         "argon2 memory_kib",
         params.memory_kib,
@@ -296,8 +304,15 @@ def encrypt(
     kdf_id: int = KDF_ARGON2ID,
     params=None,
     cipher_id: int = CIPHER_AES_256_GCM,
+    enforce_write_policy: bool = True,
 ) -> bytes:
-    """FORMAT.md sections 6-8."""
+    """
+    FORMAT.md sections 6-8.
+
+    `enforce_write_policy=False` writes below the §3.1 policy floor. It exists
+    for crosstest.py, which has to produce the same below-floor vectors the
+    TypeScript bridge does; nothing an heir runs passes it.
+    """
     if params is None:
         params = (
             Pbkdf2Params(1_000_000)
@@ -305,7 +320,7 @@ def encrypt(
             else Argon2idParams(3, 65536, 4)
         )
 
-    validate_params(kdf_id, params, writing=True)
+    validate_params(kdf_id, params, writing=enforce_write_policy)
 
     salt_len = SALT_LEN_PBKDF2 if kdf_id == KDF_PBKDF2 else SALT_LEN_ARGON2ID
     salt = os.urandom(salt_len)

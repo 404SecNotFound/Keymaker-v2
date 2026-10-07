@@ -75,7 +75,7 @@ function hexToArrayBuffer(hex: string): ArrayBuffer {
 const PBKDF2_FAST: KdfParams = { kdf: KdfId.PBKDF2, params: { iterations: 600_000 } };
 const ARGON_FAST: KdfParams = {
   kdf: KdfId.ARGON2ID,
-  params: { timeCost: 2, memoryKiB: 16384, parallelism: 2 },
+  params: { timeCost: 2, memoryKiB: 19 * 1024, parallelism: 2 },
 };
 const KDFS: Array<[string, KdfParams]> = [
   ["pbkdf2", PBKDF2_FAST],

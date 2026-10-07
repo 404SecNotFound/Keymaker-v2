@@ -178,7 +178,7 @@ def py_encrypt(plaintext: bytes, kdf: str, cipher: str, keyfile: bytes | None,
         salt=salt,
         master_key=master_key,
         version=keym2.VERSION_V2,
-        **ARGON2,
+        **ARGON2, enforce_write_policy=False,
     )
 
 
@@ -1920,7 +1920,7 @@ def main() -> int:
                               else dict(kdf_id=keym2.KDF_ARGON2ID, time_cost=1, memory_kib=8192, parallelism=1))
                     py_c, py_s = keym2.encrypt_both(
                         pt, PASSWORD, 3, 5, cipher_id=both_cipher, version=both_ver,
-                        container_id=both_cid, **kdf_kw, **pins)
+                        container_id=both_cid, enforce_write_policy=False, **kdf_kw, **pins)
                     src, js_out, js_sh = tmp / "both-pt.bin", tmp / "both-js.keym", tmp / "both-js.txt"
                     src.write_bytes(pt)
                     args = ["encryptboth", "--password", PASSWORD, "--in", str(src), "--out", str(js_out),

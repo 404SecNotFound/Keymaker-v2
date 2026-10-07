@@ -459,7 +459,10 @@ PBKDF2_ITER_MIN, PBKDF2_ITER_MAX = 1, 10_000_000
 PBKDF2_ITER_POLICY_MIN = 600_000
 ARGON2_TIME_MIN, ARGON2_TIME_MAX = 1, 10
 ARGON2_MEM_MIN, ARGON2_MEM_MAX = 1, 262_144
-ARGON2_MEM_POLICY_MIN = 8_192
+# §6 writing floor, OWASP's Argon2id minimum since 7 October 2026. Readers
+# stay permissive; `enforce_write_policy=False` is the conformance opt-out.
+ARGON2_MEM_POLICY_MIN = 19_456
+ARGON2_TIME_POLICY_MIN = 2
 ARGON2_PAR_MIN, ARGON2_PAR_MAX = 1, 8
 
 
@@ -861,6 +864,11 @@ def check_write_policy(slot: Slot) -> None:
         raise UsageError(
             f"refusing to write Argon2id with memory_kib={slot.memory_kib}; "
             f"policy minimum is {ARGON2_MEM_POLICY_MIN}"
+        )
+    if slot.kdf_id == KDF_ARGON2ID and slot.time_cost < ARGON2_TIME_POLICY_MIN:
+        raise UsageError(
+            f"refusing to write Argon2id with time_cost={slot.time_cost}; "
+            f"policy minimum is {ARGON2_TIME_POLICY_MIN}"
         )
 
 
