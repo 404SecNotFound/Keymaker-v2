@@ -26,6 +26,29 @@ async function setVisibility(page: Page, state: "hidden" | "visible") {
   }, state);
 }
 
+const PASSWORD = "correct horse battery staple over the treetops";
+
+/**
+ * Type the password and wait until the app has taken it.
+ *
+ * `fill` waits for the field, not for React to own it. On WebKit under CI the
+ * fill can land on the server-rendered input before hydration, and hydration
+ * then puts the controlled value back to empty: the field reads "" and the app
+ * never saw a secret, so there is nothing to lock or wipe and every assertion
+ * below fails for a reason that has nothing to do with the lock. The
+ * `aria-describedby` link to the password feedback is rendered by React only
+ * when its own state holds a password, so it is the proof the fill registered.
+ * Retried for the same reason inheritance.spec.ts retries its first click.
+ */
+async function typePassword(page: Page) {
+  const password = visible(page.getByPlaceholder("Enter a strong password"));
+  await expect(async () => {
+    await password.fill(PASSWORD);
+    await expect(password).toHaveAttribute("aria-describedby", "password-feedback", { timeout: 2_000 });
+  }).toPass({ timeout: 30_000 });
+  return password;
+}
+
 async function openRollLog(page: Page) {
   await page.goto("/");
   await visible(page.getByRole("tab", { name: "Tools" })).click();
@@ -42,7 +65,7 @@ test("the dice roll log is cleared when the app wipes", async ({ page }) => {
   // not reset the form, so the password survives it and the wipe below is
   // the only thing that can clear the log.
   await page.goto("/");
-  await visible(page.getByPlaceholder("Enter a strong password")).fill("correct horse battery staple over the treetops");
+  await typePassword(page);
   await visible(page.getByRole("tab", { name: "Tools" })).click();
   await visible(page.getByRole("button", { name: /Check a roll log/ })).click();
   const log = page.locator("#roll-log");
@@ -66,14 +89,16 @@ test("the dice roll log is cleared when the tab is hidden", async ({ page }) => 
 test("a password left in a hidden tab is locked on return once the idle period has passed", async ({ page }) => {
   await page.clock.install();
   await page.goto("/");
-  const password = visible(page.getByPlaceholder("Enter a strong password"));
-  await password.fill("correct horse battery staple over the treetops");
+  const password = await typePassword(page);
 
-  // Hidden for longer than the lock allows, with no timer allowed to run:
-  // `setSystemTime` moves the wall clock without firing the interval, which
-  // is exactly what a frozen tab looks like.
+  // Hidden for longer than the lock allows, with no timer allowed to run,
+  // which is exactly what a frozen tab looks like. The clock is paused first:
+  // `setSystemTime` alone moves the wall clock, but a running clock then fires
+  // the one-second interval, which sees the elapsed time and locks by itself,
+  // so the test passed with the return-from-hidden lock removed.
   await setVisibility(page, "hidden");
   const now = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(now + 1_000);
   await page.clock.setSystemTime(now + 6 * 60_000);
   await expect(password).toHaveValue(/./);
 
@@ -84,11 +109,11 @@ test("a password left in a hidden tab is locked on return once the idle period h
 test("a short absence does not lock", async ({ page }) => {
   await page.clock.install();
   await page.goto("/");
-  const password = visible(page.getByPlaceholder("Enter a strong password"));
-  await password.fill("correct horse battery staple over the treetops");
+  const password = await typePassword(page);
 
   await setVisibility(page, "hidden");
   const now = await page.evaluate(() => Date.now());
+  await page.clock.pauseAt(now + 1_000);
   await page.clock.setSystemTime(now + 60_000);
   await setVisibility(page, "visible");
   await expect(password).toHaveValue(/./);
