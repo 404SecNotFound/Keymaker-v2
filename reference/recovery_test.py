@@ -111,7 +111,7 @@ def js_encrypt(version: int, plaintext: bytes, kdf: str, cipher: str,
             "--in", str(src), "--out", str(dst)]
     if version != 1:
         args += ["--version", str(version)]
-    args += ["--iterations", "600000"] if kdf == "pbkdf2" else ["--time", "2", "--mem", "16384", "--par", "2"]
+    args += ["--iterations", "600000"] if kdf == "pbkdf2" else ["--time", "2", "--mem", "19456", "--par", "2"]
     if keyfile:
         args += ["--keyfile", keyfile.hex()]
     r = subprocess.run(["node", str(BRIDGE), *args], capture_output=True, text=True, cwd=ROOT)
@@ -520,6 +520,28 @@ def error_paths(tmp: Path) -> None:
             mode = stat.S_IMODE(dec.stat().st_mode)
             check(mode == 0o600,
                   f"v{version} writes the plaintext owner-only, not {oct(mode)}")
+
+        # A pre-existing --out that belongs to another user is theirs;
+        # O_NOFOLLOW does not cover it. Staging one needs root, so this runs
+        # where it can.
+        foreign = tmp / f"foreign{version}.txt"
+        foreign.write_bytes(b"theirs")
+        staged = False
+        if hasattr(os, "chown") and hasattr(os, "geteuid"):
+            try:
+                os.chown(foreign, 65534, 65534)
+                staged = foreign.stat().st_uid != os.geteuid()
+            except OSError:
+                staged = False
+        if staged:
+            r = cli(version, ["decrypt", "--in", str(enc), "--out", str(foreign)],
+                    stdin="a strong test password\n")
+            check(r.returncode != 0 and "another user" in r.stderr
+                  and foreign.read_bytes() == b"theirs" and "Traceback" not in r.stderr,
+                  f"v{version} refuses a --out owned by another user and leaves it intact",
+                  r.stderr.strip()[-160:])
+        else:
+            print(f"  skip v{version} foreign-owned --out (cannot stage one here)")
 
 
 # ----------------------------------------------------------------------------

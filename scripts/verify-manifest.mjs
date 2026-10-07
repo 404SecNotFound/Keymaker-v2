@@ -32,8 +32,15 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, relative, sep } from 'node:path';
 
+// `--files-only` stops after step 1. The sign jobs run it before they sign:
+// the file-vs-manifest check used to run only after `sign-manifest.mjs`, so a
+// tampered artifact earned a Rekor-logged signature over an honest manifest
+// before anything refused it. Checking first means nothing gets signed that
+// does not already match.
+const FILES_ONLY = process.argv.includes('--files-only');
 const DIR =
-  process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..', 'out');
+  process.argv.slice(2).find((a) => !a.startsWith('--')) ||
+  join(dirname(fileURLToPath(import.meta.url)), '..', 'out');
 const MANIFEST = join(DIR, 'SHA256SUMS');
 const BUNDLE = join(DIR, 'SHA256SUMS.sigstore');
 
@@ -118,6 +125,10 @@ if (missing.length || unexpected.length || altered.length) {
   );
 }
 console.log(`verify: ${expected.size} files match the manifest`);
+if (FILES_ONLY) {
+  console.log('verify: files only, signature not checked (--files-only)');
+  process.exit(0);
+}
 
 // ---- 2. The manifest was signed by the expected identity ----
 

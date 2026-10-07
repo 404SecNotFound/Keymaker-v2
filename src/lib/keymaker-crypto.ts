@@ -77,6 +77,13 @@ export interface KeymakerOptions {
   kdf: KdfParams;
   cipher: CipherId;
   /**
+   * `false` writes below the §6 policy floor. For the conformance bridge
+   * only, which must reproduce the published vectors and the frozen fixtures
+   * exactly as written; the Python reference has the same opt-out
+   * (`enforce_write_policy=False`). Nothing the product reaches sets it.
+   */
+  enforceWritePolicy?: boolean;
+  /**
    * Write a KEYM v4 container (FORMAT-V4-DESIGN.md): the payload is padded so
    * the file's length states only which bucket the plaintext is in. Off by
    * default, and v4 §6 says why: the cost lands on the writer's medium, and
@@ -274,10 +281,15 @@ export const KDF_LIMITS = {
     maxIterations: 10_000_000,
   },
   argon2id: {
-    minTimeCost: 1,
+    /**
+     * OWASP's Argon2id minimum (19 MiB, two passes), enforced on encrypt since
+     * 7 October 2026. The old floor (one pass over 8 MiB) was about 1/24 of
+     * the default's work, and nothing told the user a container written there
+     * was weaker than advertised. Decrypt still accepts the old values.
+     */
+    minTimeCost: 2,
     maxTimeCost: 10,
-    /** 8 MiB .. 256 MiB, matching the range the UI exposes. */
-    minMemoryKiB: 8 * 1024,
+    minMemoryKiB: 19 * 1024,
     maxMemoryKiB: 256 * 1024,
     minParallelism: 1,
     maxParallelism: 8,
@@ -361,6 +373,15 @@ export function isUserFacingError(error: unknown): error is KeymakerError {
  * again on caller-supplied encryption options so that a non-UI caller (a CLI, a
  * test, a future refactor) cannot bypass the validation the sliders imply.
  */
+/**
+ * The validation mode a writer runs under: the policy floor, unless the
+ * caller opted out of it. "decrypt" is the mode that checks ceilings only,
+ * which is exactly what a below-floor conformance write needs.
+ */
+export function writeMode(options: { enforceWritePolicy?: boolean }): "encrypt" | "decrypt" {
+  return options.enforceWritePolicy === false ? "decrypt" : "encrypt";
+}
+
 export function validateKdfParams(kdf: KdfParams, mode: "encrypt" | "decrypt"): void {
   const enforceMinimums = mode === "encrypt";
 
@@ -766,7 +787,7 @@ export async function encryptData(
   // constrained them. Encryption enforces the policy floor as well as the
   // ceiling: writing a new file at 1,000 PBKDF2 iterations is a mistake worth
   // refusing, even though we will still *read* such a file.
-  validateKdfParams(kdf, "encrypt");
+  validateKdfParams(kdf, writeMode(options));
   if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
     throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
   }
@@ -906,7 +927,7 @@ export async function encryptContainer(
       "encryptContainer requires explicit kdf and cipher options — algorithm selection is the caller's decision."
     );
   }
-  validateKdfParams(options.kdf, "encrypt");
+  validateKdfParams(options.kdf, writeMode(options));
   const cipher = options.cipher;
   if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
     throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
@@ -960,7 +981,7 @@ export async function encryptContainerWithSharesRequired(
       "encryptContainerWithSharesRequired requires explicit kdf and cipher options."
     );
   }
-  validateKdfParams(options.kdf, "encrypt");
+  validateKdfParams(options.kdf, writeMode(options));
   try {
     const { encryptKeym2WithSharesRequired, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
     const { container, shares } = await encryptKeym2WithSharesRequired(
@@ -1017,7 +1038,7 @@ export async function encryptContainerWithSlots(
   if (!options || !options.kdf || options.cipher === undefined) {
     throw new Error("encryptContainerWithSlots requires explicit kdf and cipher options.");
   }
-  validateKdfParams(options.kdf, "encrypt");
+  validateKdfParams(options.kdf, writeMode(options));
   const cipher = options.cipher;
   if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
     throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);

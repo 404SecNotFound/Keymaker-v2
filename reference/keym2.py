@@ -185,6 +185,7 @@ import hmac
 import math
 import os
 import re
+import stat
 import struct
 import sys
 import unicodedata
@@ -458,7 +459,10 @@ PBKDF2_ITER_MIN, PBKDF2_ITER_MAX = 1, 10_000_000
 PBKDF2_ITER_POLICY_MIN = 600_000
 ARGON2_TIME_MIN, ARGON2_TIME_MAX = 1, 10
 ARGON2_MEM_MIN, ARGON2_MEM_MAX = 1, 262_144
-ARGON2_MEM_POLICY_MIN = 8_192
+# §6 writing floor, OWASP's Argon2id minimum since 7 October 2026. Readers
+# stay permissive; `enforce_write_policy=False` is the conformance opt-out.
+ARGON2_MEM_POLICY_MIN = 19_456
+ARGON2_TIME_POLICY_MIN = 2
 ARGON2_PAR_MIN, ARGON2_PAR_MAX = 1, 8
 
 
@@ -860,6 +864,11 @@ def check_write_policy(slot: Slot) -> None:
         raise UsageError(
             f"refusing to write Argon2id with memory_kib={slot.memory_kib}; "
             f"policy minimum is {ARGON2_MEM_POLICY_MIN}"
+        )
+    if slot.kdf_id == KDF_ARGON2ID and slot.time_cost < ARGON2_TIME_POLICY_MIN:
+        raise UsageError(
+            f"refusing to write Argon2id with time_cost={slot.time_cost}; "
+            f"policy minimum is {ARGON2_TIME_POLICY_MIN}"
         )
 
 
@@ -4924,6 +4933,31 @@ def _selftest() -> int:
         check("an existing world-readable --out file is narrowed, not left alone",
               _stat.S_IMODE(os.stat(_existing).st_mode) & 0o077 == 0)
 
+        # A pre-existing file that belongs to another user is theirs, and
+        # O_NOFOLLOW says nothing about it. Only root can stage one, so this
+        # runs where it can and says so where it cannot.
+        _foreign = os.path.join(_d, "foreign.txt")
+        open(_foreign, "wb").write(b"theirs")
+        _staged = False
+        if hasattr(os, "chown") and hasattr(os, "geteuid"):
+            try:
+                os.chown(_foreign, 65534, 65534)
+                _staged = os.stat(_foreign).st_uid != os.geteuid()
+            except OSError:
+                _staged = False
+        if _staged:
+            _refused = False
+            try:
+                with open_private(_foreign) as _fh:
+                    _fh.write(b"mine")
+            except UsageError as _e:
+                _refused = "another user" in str(_e)
+            check("a --out file owned by another user is refused", _refused)
+            check("and is left exactly as it was",
+                  open(_foreign, "rb").read() == b"theirs")
+        else:
+            print("  skip a --out file owned by another user (cannot stage one here)")
+
     # Key material passed as an argument is in the shell history and was in the
     # process list. --password has said so since keym.py; a share and a PRF
     # output open the container just as directly and said nothing.
@@ -5669,25 +5703,23 @@ def open_private(path: str):
     where a conditional is the thing someone forgets. Widening afterwards is
     one `chmod`, and it is the user's call to make.
 
-    O_CREAT's mode is ignored when the file already exists, so an existing 0644
-    `seed.txt` would otherwise keep its bits. `fchmod` on the descriptor just
-    opened covers that without the race a path-based `chmod` would have. Where
-    it is unavailable or refused — Windows, a FIFO, a filesystem with no mode
-    bits — the write still goes ahead: failing to narrow permissions is not a
-    reason to refuse someone their own plaintext.
+    Three things are refused, all for the shared machine this function exists
+    for. A symlink at `--out`: writing through it puts the plaintext wherever
+    whoever planted it chose. A regular file that already exists and belongs to
+    another user: `O_NOFOLLOW` does nothing for that, the file is theirs, and
+    writing into it hands them the plaintext. And a regular file whose mode
+    cannot be narrowed to 0600: the write would be readable by other accounts,
+    which is the one outcome this helper exists to prevent. The file is only
+    truncated after those checks pass, so a refused path is left as it was.
+
+    O_EXCL is deliberately not used. Refusing to overwrite would strand the
+    ordinary case of re-running a command after a typo, and this is a recovery
+    tool: an heir who cannot re-run `decrypt --out seed.txt` because the first
+    attempt left an empty file is worse off than one whose file gets rewritten.
+    Where there are no mode bits to narrow — Windows, a FIFO, a device — the
+    write still goes ahead, because there is nothing to narrow.
     """
-    # O_NOFOLLOW where the platform has it. Without it a symlink planted at
-    # `--out` is followed, and the fchmod below then narrows the *target's*
-    # mode to 0600 — which limits who can read the plaintext to whoever planted
-    # the link, and writes it wherever they chose. The shared machine this
-    # function exists for is the machine where that is worth doing.
-    #
-    # O_EXCL is deliberately not added with it. Refusing to overwrite would
-    # strand the ordinary case of re-running a command after a typo, and this
-    # is a recovery tool: an heir who cannot re-run `decrypt --out seed.txt`
-    # because the first attempt left an empty file is worse off than one whose
-    # file gets rewritten.
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags, 0o600)
     except OSError as e:
@@ -5703,11 +5735,31 @@ def open_private(path: str):
                 f"created the link. Remove it, or pick another path."
             ) from None
         raise UsageError(f"cannot write {path}: {e.strerror}") from None
-    if hasattr(os, "fchmod"):
-        try:
-            os.fchmod(fd, 0o600)
-        except OSError:
-            pass
+    try:
+        st = os.fstat(fd)
+        regular = stat.S_ISREG(st.st_mode)
+        if regular and hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            raise UsageError(
+                f"refusing to write {path}: it already exists and belongs to "
+                f"another user. On a shared machine that is a file someone else "
+                f"put there, and writing into it would hand them the output. "
+                f"Remove it, or pick another path."
+            )
+        if hasattr(os, "fchmod"):
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError as e:
+                if regular:
+                    raise UsageError(
+                        f"cannot make {path} readable only by you: {e.strerror}. "
+                        f"The output would be readable by other accounts, so "
+                        f"nothing was written. Pick another path."
+                    ) from None
+        if regular:
+            os.ftruncate(fd, 0)
+    except BaseException:
+        os.close(fd)
+        raise
     return os.fdopen(fd, "wb")
 
 

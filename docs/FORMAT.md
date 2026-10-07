@@ -111,9 +111,13 @@ in practice lands on a multi-gigabyte allocation.
 | Parameter | Reading (MUST reject outside) | Writing (SHOULD also enforce) |
 |---|---|---|
 | PBKDF2 `iterations` | 1 .. 10,000,000 | ≥ 600,000 |
-| Argon2id `time_cost` | 1 .. 10 | 1 .. 10 |
-| Argon2id `memory_kib` | 1 .. 262,144 | ≥ 8,192 |
+| Argon2id `time_cost` | 1 .. 10 | ≥ 2 |
+| Argon2id `memory_kib` | 1 .. 262,144 | ≥ 19,456 |
 | Argon2id `parallelism` | 1 .. 8 | 1 .. 8 |
+
+The Argon2id writing floor was raised on 7 October 2026 from `time_cost` ≥ 1
+and `memory_kib` ≥ 8,192 to OWASP's minimum (19 MiB, two passes). Readers are
+unchanged; see FORMAT-V2-DESIGN.md §6.
 
 The **upper** bounds are the security control and MUST be enforced when
 reading. The **lower** bounds are policy for newly written containers: a

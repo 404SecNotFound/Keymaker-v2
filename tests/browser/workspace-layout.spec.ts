@@ -41,7 +41,9 @@ test("workspace hierarchy replaces the marketing hero", async ({ page }) => {
   await expect(page.getByRole("tab", { name: "Encrypt", exact: true })).toHaveAttribute("aria-selected", "true");
   const content = await page.locator("#encrypt-content-title").boundingBox();
   const inspector = await page.getByTestId("container-inspector").boundingBox();
-  expect(content!.y).toBeLessThan(340);
+  // 380, not 340: the standing disclaimer under the top bar is 37px of chrome
+  // on every view, and the form still starts in the first screenful.
+  expect(content!.y).toBeLessThan(380);
   expect(inspector!.x).toBeGreaterThan(content!.x + 300);
   const button = page.getByRole("button", { name: "Encrypt File", exact: true });
   await expect(button).toHaveCSS("border-radius", "9999px");

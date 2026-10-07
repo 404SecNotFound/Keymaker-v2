@@ -107,6 +107,12 @@ jobs:
   # with no permission beyond the ones below.
   sign:
     needs: [build, verify-ci]
+    # `workflow_dispatch` accepts any ref, and the dispatched ref supplies this
+    # file: a branch could carry its own deploy.yml, its own scripts and its
+    # own content, and the only thing stopping it reaching Pages was the
+    # environment's branch policy, a repo setting the tree cannot see. The
+    # signing identity is deploy.yml on main, so only main is signed.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -143,6 +149,12 @@ jobs:
       - name: The manifest being signed is the one independent builds reproduced
         run: node scripts/check-reproduced-manifest.mjs out/SHA256SUMS reproduced
 
+      # Before signing, not only after: the files must already match the
+      # manifest, or a tampered artifact earns a logged signature over an
+      # honest manifest before the step below refuses it.
+      - name: The files match the manifest before it is signed
+        run: node scripts/verify-manifest.mjs --files-only
+
       - name: Sign the build manifest
         run: node scripts/sign-manifest.mjs
 
@@ -158,6 +170,7 @@ jobs:
 
   deploy:
     needs: sign
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     permissions:
       pages: write
