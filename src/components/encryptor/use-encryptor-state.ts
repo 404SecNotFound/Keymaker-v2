@@ -1126,11 +1126,21 @@ export function useEncryptorState() {
     });
   }, [toast]);
 
+  /**
+   * Counts every clear. Panels that hold their own secret-adjacent state and
+   * are force-mounted (the dice validator's roll log) cannot be reached by the
+   * setters above, so they watch this number instead: a change means "the app
+   * just wiped; wipe yours too". A counter rather than a callback registry so
+   * a panel that is not mounted has nothing to unregister.
+   */
+  const [wipeGeneration, setWipeGeneration] = useState(0);
+
   const clearSensitiveState = useCallback((opts?: {
     sparingIssuedShares?: boolean;
     keepingBackup?: boolean;
     keepingContainer?: boolean;
   }) => {
+    setWipeGeneration((g) => g + 1);
     // Disown any operation still running. A KDF cannot be cancelled from here —
     // that needs the Worker in Phase 2 — but it can be made harmless: once the
     // counter moves, the in-flight operation's completion path goes quiet
@@ -1348,19 +1358,7 @@ export function useEncryptorState() {
       window.addEventListener(event, bump, { passive: true });
     }
 
-    const id = setInterval(() => {
-      // An operation in progress is the user waiting on this tab, not a tab
-      // left alone. A container may ask for minutes of derivation (the §6
-      // ceiling measured at 315 s), and the lock used to fire in the middle:
-      // it cancelled the unlock the user was sitting through and wiped the
-      // password they had just typed. The idle clock starts when it finishes.
-      if (isLoadingRef.current) {
-        lastActivityRef.current = Date.now();
-        setLockSecondsLeft(null);
-        return;
-      }
-      const left = Math.ceil((AUTO_LOCK_MS - (Date.now() - lastActivityRef.current)) / 1000);
-      if (left <= 0) {
+    const lockNow = () => {
         // Re-arm before wiping. When issued shares are spared the secrets stay
         // on screen, this effect does not re-run, and the interval keeps
         // sampling, so without this line every following tick was another
@@ -1399,13 +1397,52 @@ export function useEncryptorState() {
               ? `${cleared} Your encrypted backup is still on the Encrypt tab, so you can save it. Your settings are unchanged.`
               : `${cleared} Your settings are unchanged.`,
         });
+    };
+
+    const id = setInterval(() => {
+      // An operation in progress is the user waiting on this tab, not a tab
+      // left alone. A container may ask for minutes of derivation (the §6
+      // ceiling measured at 315 s), and the lock used to fire in the middle:
+      // it cancelled the unlock the user was sitting through and wiped the
+      // password they had just typed. The idle clock starts when it finishes.
+      if (isLoadingRef.current) {
+        lastActivityRef.current = Date.now();
+        setLockSecondsLeft(null);
+        return;
+      }
+      const left = Math.ceil((AUTO_LOCK_MS - (Date.now() - lastActivityRef.current)) / 1000);
+      if (left <= 0) {
+        lockNow();
         return;
       }
       setLockSecondsLeft(left <= LOCK_WARN_SECONDS ? left : null);
     }, 1000);
 
+    // The interval above is the lock's clock, and a hidden tab does not keep
+    // one: browsers throttle background timers to once a minute and freeze a
+    // tab in the back-forward cache outright, so a secret left in a hidden
+    // tab outlived the five minutes by as long as the tab stayed hidden. Two
+    // events close that. `pagehide` is the tab going away (navigation, close,
+    // or into the cache), and nothing it leaves behind can be wanted. On
+    // return from hidden, the wall clock is consulted directly: if the idle
+    // period elapsed while no timer could fire, the lock fires now, before a
+    // single frame of the secret is painted.
+    const onVisibility = () => {
+      if (document.visibilityState !== "visible") return;
+      if (isLoadingRef.current) return;
+      if (Date.now() - lastActivityRef.current >= AUTO_LOCK_MS) lockNow();
+    };
+    const onPageHide = () => {
+      if (isLoadingRef.current) return;
+      lockNow();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("pagehide", onPageHide);
+
     return () => {
       for (const event of events) window.removeEventListener(event, bump);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("pagehide", onPageHide);
       clearInterval(id);
     };
   }, [hasSecretsToLock, clearSensitiveState, toast]);
@@ -3479,6 +3516,7 @@ export function useEncryptorState() {
     handlePasswordChange,
     cancelOperation,
     clearSensitiveState,
+    wipeGeneration,
     resetState,
     wipeNow,
     hasSecretsOnScreen,
