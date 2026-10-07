@@ -63,6 +63,24 @@ jobs:
           node-version: 22
           cache: npm
 
+      # A branch named like a tag passes every check below that reads
+      # `github.ref_name`: the annotated-tag lookup asks the API about the
+      # *tag* of that name, which exists, and the in-job verify accepts
+      # `github.workflow_ref`, which is the branch. So branch content could
+      # publish under a tag's name with a `refs/heads/` identity. The ref
+      # itself has to be a tag.
+      - name: The ref must be a tag, not a branch named like one
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" != tag ]; then
+            echo "::error::$REF is a $REF_TYPE. Releases are cut from tags only."
+            exit 1
+          fi
+          echo "$REF is a tag."
+
       # Runs the same generator `publish` uses, so there is no second copy of
       # the rule to drift: it rejects a ref that is not `v<package.json
       # version>`, and it proves the notes compose at all before anything gets
@@ -194,6 +212,9 @@ jobs:
   # Same run, so no permission beyond the ones below. See deploy.yml.
   sign:
     needs: [build, verify-ci]
+    # Belt to preflight's braces: the token-holding job itself refuses a
+    # branch, so a future edit that loosens preflight cannot sign one.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -231,6 +252,10 @@ jobs:
       # labelled as this release, each on its own runner.
       - name: The manifest being signed is the one independent builds reproduced
         run: node scripts/check-reproduced-manifest.mjs out/SHA256SUMS reproduced
+
+      # Before signing, not only after; see deploy.yml for why.
+      - name: The files match the manifest before it is signed
+        run: node scripts/verify-manifest.mjs --files-only
 
       - name: Sign the build manifest
         run: node scripts/sign-manifest.mjs
@@ -297,6 +322,7 @@ jobs:
 
   publish:
     needs: sign
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write

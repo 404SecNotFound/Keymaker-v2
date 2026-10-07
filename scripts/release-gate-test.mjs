@@ -199,6 +199,24 @@ for (const [verifyJob, file] of Object.entries(SUITES)) {
       ok(`${file} sign compares the reproduced manifests before it signs`);
     else bad(`${file} sign does not download sums-* and run check-reproduced-manifest.mjs before signing`);
 
+    // Files are checked against the manifest *before* the signature exists,
+    // so a tampered artifact is refused before it earns a logged signature.
+    const filesFirst = sign.indexOf("node scripts/verify-manifest.mjs --files-only");
+    if (filesFirst !== -1 && filesFirst < signing)
+      ok(`${file} sign checks the files against the manifest before signing`);
+    else bad(`${file} sign does not run verify-manifest.mjs --files-only before sign-manifest.mjs`);
+
+    // The token-holding jobs refuse any ref but the one their signing
+    // identity names: workflow_dispatch can otherwise run a branch's own copy
+    // of this file with the signing token.
+    const guard = file === "deploy.yml" ? "github.ref == 'refs/heads/main'" : "github.ref_type == 'tag'";
+    for (const job of file === "deploy.yml" ? ["sign", "deploy"] : ["sign", "publish"]) {
+      const block = jobBlock(src, job) ?? "";
+      if (new RegExp(`^\\s*if:\\s*${guard.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m").test(block))
+        ok(`${file} ${job} runs only when ${guard}`);
+      else bad(`${file} ${job} has no \`if: ${guard}\` guard; a dispatched branch could reach it`);
+    }
+
     if (ancestors(src, "sign").has("verify-ci")) ok(`${file} sign runs after verify-ci, whose manifests it reads`);
     else bad(`${file} sign does not wait for verify-ci, so the manifests it compares may not exist yet`);
 
