@@ -14,6 +14,13 @@ updates:
     groups:
       npm-minor-and-patch:
         update-types: ["minor", "patch"]
+        # The KDF, the ciphers and the signer never ride in the weekly batch.
+        # Each arrives as its own PR, so a change to the bytes that derive
+        # keys or sign the build is the whole diff, not two lines among
+        # thirty. hash-wasm is pinned by content as well
+        # (scripts/check-argon2-blob.mjs), so its bump also has to carry a
+        # deliberate hash update to build at all.
+        exclude-patterns: ["hash-wasm", "@noble/*", "sigstore"]
     ignore:
       # TypeScript 7 is the native (tsgo) port and drops the JS compiler API
       # that `next build` requires, so it cannot be adopted while Next.js
