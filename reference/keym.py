@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import errno
 import os
+import stat
 import struct
 import sys
 import unicodedata
@@ -633,17 +634,17 @@ def _open_private(path: str):
 
     O_CREAT's mode is ignored when the file already exists, so an existing 0644
     file would otherwise keep its bits; `fchmod` on the descriptor just opened
-    covers that without the race a path-based `chmod` would have. Where it is
-    unavailable or refused — Windows, a FIFO, a filesystem with no mode bits —
-    the write still goes ahead: failing to narrow permissions is not a reason
-    to refuse someone their own plaintext.
+    covers that without the race a path-based `chmod` would have.
 
-    O_NOFOLLOW where the platform has it, so a symlink planted at `--out` is
-    refused rather than written through. Not O_EXCL: refusing to overwrite
-    would strand the ordinary case of re-running a command after a typo, and
-    this is a recovery tool.
+    Refused, all for a shared machine: a symlink at `--out` (O_NOFOLLOW), a
+    regular file that already exists and belongs to another user (writing into
+    it hands them the plaintext), and a regular file whose mode cannot be
+    narrowed. The file is truncated only after those checks pass. Not O_EXCL:
+    refusing to overwrite would strand the ordinary case of re-running a
+    command after a typo, and this is a recovery tool. Where there are no mode
+    bits — Windows, a FIFO — the write still goes ahead.
     """
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
     try:
         fd = os.open(path, flags, 0o600)
     except OSError as exc:
@@ -652,11 +653,27 @@ def _open_private(path: str):
                 f"refusing to write {path}: it is a symbolic link"
             ) from None
         raise KeymError(f"cannot write {path}: {exc.strerror}") from None
-    if hasattr(os, "fchmod"):
-        try:
-            os.fchmod(fd, 0o600)
-        except OSError:
-            pass
+    try:
+        st = os.fstat(fd)
+        regular = stat.S_ISREG(st.st_mode)
+        if regular and hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            raise KeymError(
+                f"refusing to write {path}: it already exists and belongs to "
+                f"another user. Remove it, or pick another path."
+            )
+        if hasattr(os, "fchmod"):
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError as exc:
+                if regular:
+                    raise KeymError(
+                        f"cannot make {path} readable only by you: {exc.strerror}"
+                    ) from None
+        if regular:
+            os.ftruncate(fd, 0)
+    except BaseException:
+        os.close(fd)
+        raise
     return os.fdopen(fd, "wb")
 
 
