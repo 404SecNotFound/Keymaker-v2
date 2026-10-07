@@ -378,9 +378,10 @@ def decrypt(container: bytes, password: str, key_file: Optional[bytes] = None) -
 def _selftest() -> int:
     """Round-trip this implementation against itself. Not a conformance test."""
     failures = 0
-    fast_argon = Argon2idParams(2, 16384, 2)
-    # At the write floor from FORMAT.md section 3.1, not below it.
-    fast_pbkdf2 = Pbkdf2Params(600_000)
+    # Both at the write floor from FORMAT.md section 3.1, not below it: the
+    # selftest exercises the shipping writer, which enforces that floor.
+    fast_argon = Argon2idParams(MIN_ARGON2_TIME_COST_WRITE, MIN_ARGON2_MEMORY_KIB_WRITE, 2)
+    fast_pbkdf2 = Pbkdf2Params(MIN_PBKDF2_ITERATIONS_WRITE)
 
     for kdf_id, params in ((KDF_PBKDF2, fast_pbkdf2), (KDF_ARGON2ID, fast_argon)):
         for cipher_id in (CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305, CIPHER_CHAINED):
