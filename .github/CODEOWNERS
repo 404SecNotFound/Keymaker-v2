@@ -1,0 +1,12 @@
+# Changes to these paths need the owner's review before they merge.
+
+# Build, sign and deploy pipeline
+/.github/                      @404SecNotFound
+/scripts/                      @404SecNotFound
+
+# Crypto core, format reference and pinned dependencies
+/src/lib/keymaker-crypto.ts    @404SecNotFound
+/src/lib/keym-v2*.ts           @404SecNotFound
+/reference/                    @404SecNotFound
+/package.json                  @404SecNotFound
+/package-lock.json             @404SecNotFound
