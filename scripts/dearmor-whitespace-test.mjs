@@ -74,5 +74,39 @@ rejects(() => m.dearmorKeym2(inject("\u200b")), "a zero-width space inside the b
 rejects(() => m.dearmorKeym2(clean + "\u001f"), "a trailing U+001F is rejected");
 rejects(() => m.dearmorKeym2("\u001c" + clean), "a leading U+001C is rejected");
 
+// 6. The self-extracting page's own dearmor, the third reader, agrees. It once
+//    matched keym2.py's old behaviour (trim at the ends, ASCII whitespace
+//    inside); both of the other readers then moved to §7's set, and a no-break
+//    space or a BOM that a mail client dropped into the page's text opened in
+//    the app and in keym2.py and was refused by the page alone. The function
+//    is lifted out of the page the app really writes, not re-typed here.
+{
+  const seSrc = join(HERE, "..", "src", "lib", "keym-v2-selfextract.ts");
+  const seOut = join(mkdtempSync(join(tmpdir(), "km2se-")), "keym-v2-selfextract.mjs");
+  await esbuild.build({ entryPoints: [seSrc], bundle: true, format: "esm", platform: "node", outfile: seOut });
+  const se = await import(pathToFileURL(seOut).href);
+  // The page accepts only the WebCrypto subset: PBKDF2 and AES-256-GCM.
+  const subset = await m.encryptKeym2(secret, "page dearmor password", null, {
+    kdf: { kdf: 0, params: { iterations: 600_000 } },
+    cipher: 0,
+  });
+  const html = se.buildSelfExtractingPage({ container: subset, createdOn: "today", appVersion: "test" });
+  const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? "";
+  const lifted = script.match(/var IGNORABLE = [^\n]+\n[\s\S]*?function dearmor\(text\) \{[\s\S]*?\n\}/)?.[0];
+  ok(typeof lifted === "string" && lifted.length > 0, "the page's dearmor could be lifted out of the page");
+  const pageDearmor = new Function(`${lifted}\nreturn dearmor;`)();
+  const pageArmor = m.armorKeym2(subset);
+  const pageInject = (ch) => pageArmor.slice(0, 20) + ch + pageArmor.slice(20);
+  const pageDecodes = (text) => {
+    try { return pageDearmor(text); } catch { return new Uint8Array(0); }
+  };
+  ok(eq(pageDecodes(pageArmor), subset), "the page opens its own armor");
+  ok(eq(pageDecodes(pageInject(" ")), subset), "the page ignores a U+00A0 inside the body, as the app does");
+  ok(eq(pageDecodes(pageInject("﻿")), subset), "the page ignores a BOM inside the body, as the app does");
+  ok(eq(pageDecodes(pageInject(" ")), subset), "the page ignores a U+2028 inside the body, as the app does");
+  ok(eq(pageDecodes("﻿" + pageArmor + "\u0085"), subset), "the page removes a BOM and U+0085 at the ends, as the app does");
+  rejects(() => pageDearmor(pageInject("​")), "the page still rejects a zero-width space, as the app does");
+}
+
 console.log(failed === 0 ? "\nAll dearmor-whitespace checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

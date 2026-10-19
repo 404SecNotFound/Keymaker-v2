@@ -105,6 +105,12 @@ export default function RootLayout({
             content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'none'; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'"
           />
         )}
+        {/*
+          Nothing here lives in a URL, so a referrer could carry nothing — but
+          a meta can say so outright, and the outbound links then make the
+          same promise whether or not someone remembers rel="noreferrer".
+        */}
+        <meta name="referrer" content="no-referrer" />
         <link rel="icon" type="image/svg+xml" href={`${BASE}/logo.svg`} />
         <link rel="icon" type="image/x-icon" href={`${BASE}/favicon.ico`} />
         <link rel="manifest" href={`${BASE}/manifest.json`} />
@@ -120,6 +126,17 @@ export default function RootLayout({
         <script
           dangerouslySetInnerHTML={{
             __html: `
+              // A meta CSP cannot carry frame-ancestors and GitHub Pages cannot
+              // send X-Frame-Options, so nothing stopped another site framing
+              // this page invisibly over a decoy and steering a visitor's
+              // clicks through the decrypt and copy flow. The one defence left
+              // to the page is to not render inside another document at all.
+              // Hidden rather than navigated away: a sandboxed frame can refuse
+              // a top-level navigation, but cannot stop a page hiding itself.
+              if (window.top !== window.self) {
+                document.documentElement.style.display = 'none';
+              }
+
               // The new worker waits rather than taking over (see public/sw.js).
               // This side of the handoff spots it waiting, offers the swap, and
               // performs it only when the user accepts — so a version change can

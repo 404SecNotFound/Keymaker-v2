@@ -15,6 +15,8 @@ const MAGIC = Uint8Array.of(0x4b, 0x41, 0x55, 0x44);
 const VERSION = 0x01;
 /** magic(4) + version(1) + lsbDepth(1) + payloadLen(4). */
 const HEADER_BYTES = 10;
+/** The most samples a decoded carrier may hold; see decodeToPcm16. */
+export const MAX_DECODED_SAMPLES = 1 << 27;
 
 /** Thrown for every carrier problem, named so the UI can tell a bad audio file
  *  from a wrong password: a carrier failure is never routed to the AEAD. */
@@ -314,6 +316,16 @@ export async function decodeToPcm16(
 
   const channels = audio.numberOfChannels;
   const frames = audio.length;
+  // The 100 MB cap is on the file, and a compressed carrier decodes to many
+  // times that: 100 MB of low-bitrate Opus is a day of audio, and the array
+  // below would be several gigabytes. Bounded by sample count, before the
+  // allocation, as a refusal the caller can show. 2^27 samples is 23 minutes
+  // of stereo at 48 kHz, and holds a payload far past what this tool embeds.
+  if (frames * channels > MAX_DECODED_SAMPLES) {
+    throw new AudioStegoError(
+      "This audio is too long to use as a carrier. Choose a file under about twenty minutes."
+    );
+  }
   const samples = new Int16Array(frames * channels);
   const chans: Float32Array[] = [];
   for (let c = 0; c < channels; c++) chans.push(audio.getChannelData(c));

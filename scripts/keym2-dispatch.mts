@@ -22,6 +22,7 @@ import {
   detectFormat,
   MAX_CONTAINER_SIZE,
   MAX_PLAINTEXT_SIZE,
+  KEYM2_MAX_PADDED_STREAM,
   oversizeRecoveryHelp,
   encryptData,
   type KdfParams,
@@ -41,6 +42,7 @@ import {
   KEYM2_VERSION_V4,
   keym2SlotCountOffset,
   keym2SlotTableOffset,
+  keym2PaddedLen,
   isKeym2Binary,
   keym2SlotLen,
   keym2UnlockCost,
@@ -583,11 +585,21 @@ check(
       `the ceiling is ${MAX_CONTAINER_SIZE}. A legal backup at the cap is refused as too large.`
   );
   // Covering the worst case by being enormous would pass the line above while
-  // letting an arbitrarily large paste reach the parser.
+  // letting an arbitrarily large paste reach the parser. The allowance is the
+  // v3 overhead plus the one bucket of v4 padding a plaintext at the cap
+  // needs, and nothing more.
+  const padAllowance = KEYM2_MAX_PADDED_STREAM - MAX_PLAINTEXT_SIZE;
   check(
-    MAX_CONTAINER_SIZE - MAX_PLAINTEXT_SIZE <= 64 * 1024,
+    MAX_CONTAINER_SIZE - MAX_PLAINTEXT_SIZE <= 64 * 1024 + padAllowance,
     "the container ceiling is still the plaintext cap plus overhead, not an unbounded allowance",
     `${MAX_CONTAINER_SIZE - MAX_PLAINTEXT_SIZE} bytes over the plaintext cap`
+  );
+  // keymaker-crypto.ts restates the padded ceiling rather than importing the
+  // format module; this holds the restatement to the function that defines it.
+  check(
+    keym2PaddedLen(8 + MAX_PLAINTEXT_SIZE) === KEYM2_MAX_PADDED_STREAM,
+    "the restated padded-stream ceiling is keym2PaddedLen of a plaintext at the cap",
+    `keym2PaddedLen(8 + cap) = ${keym2PaddedLen(8 + MAX_PLAINTEXT_SIZE)}, restated ${KEYM2_MAX_PADDED_STREAM}`
   );
 
   // The worst case, built: v3, chained, a plaintext of exactly MAX_PLAINTEXT_SIZE,
@@ -629,6 +641,41 @@ check(
   check(
     opened !== null && opened.length === plaintext.length && Buffer.compare(opened, plaintext) === 0,
     "decryptData opens the worst-case legal container at the plaintext cap, byte-identical",
+    message || "plaintext differs"
+  );
+}
+
+// v4 at the cap. The ceiling was sized for v3, and Padmé's granularity at
+// 100 MiB is 2 MiB: a "hide size" backup of a file within 8 bytes of the cap
+// was written as 51 × 2 MiB of padded stream, 2 MiB over what the decrypt
+// side admitted, so the app refused the backup it had just made. keym2.py
+// opened it, which is how the data was still recoverable — and how the
+// defect could have gone unnoticed.
+{
+  const plaintext = new Uint8Array(MAX_PLAINTEXT_SIZE);
+  for (let i = 0; i < plaintext.length; i += 4093) plaintext[i] = (i * 17 + 3) & 0xff;
+  const container = await encryptKeym2(plaintext, PASSWORD, null, { kdf: FAST, cipher: CipherId.CHAINED }, KEYM2_VERSION_V4);
+  check(
+    container.length > MAX_PLAINTEXT_SIZE + 64 * 1024,
+    "a padded backup of a plaintext at the cap really does carry a bucket of padding",
+    `${container.length - MAX_PLAINTEXT_SIZE} bytes over the plaintext`
+  );
+  check(
+    container.length <= MAX_CONTAINER_SIZE,
+    "a padded (v4) backup of a plaintext at the cap fits under the container ceiling",
+    `built ${container.length}, ceiling ${MAX_CONTAINER_SIZE}`
+  );
+  let opened: Uint8Array | null = null;
+  let message = "";
+  try {
+    const result = await decryptData(toArrayBuffer(container), PASSWORD, null);
+    opened = new Uint8Array(result.data);
+  } catch (e) {
+    message = e instanceof Error ? e.message.slice(0, 120) : String(e);
+  }
+  check(
+    opened !== null && opened.length === plaintext.length && Buffer.compare(opened, plaintext) === 0,
+    "decryptData opens a padded backup written at the plaintext cap, byte-identical",
     message || "plaintext differs"
   );
 }

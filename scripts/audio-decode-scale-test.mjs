@@ -26,7 +26,7 @@ const src = join(HERE, "..", "src", "lib", "audio-stego.ts");
 const out = join(mkdtempSync(join(tmpdir(), "kaud-scale-")), "audio-stego.mjs");
 await esbuild.build({ entryPoints: [src], bundle: true, format: "esm", platform: "node", outfile: out });
 
-const { decodeToPcm16, isWavBytes, writePcm16Wav, embedContainer, extractContainer } = await import(
+const { decodeToPcm16, isWavBytes, writePcm16Wav, embedContainer, extractContainer, MAX_DECODED_SAMPLES, AudioStegoError } = await import(
   pathToFileURL(out).href
 );
 
@@ -96,6 +96,38 @@ function fakeContext(int16, channels) {
   ok(!isWavBytes(new TextEncoder().encode("fLaC\0\0\0\"...................")), "a FLAC header is not a WAV");
   ok(!isWavBytes(new TextEncoder().encode("RIFF\0\0\0\0AVI LIST")), "a RIFF that is not WAVE is not a WAV");
   ok(!isWavBytes(new Uint8Array(4)), "a short file is not a WAV, and does not throw");
+}
+
+// 4. A carrier that decodes to more samples than the ceiling is refused by
+//    name, before the Int16Array is allocated: the file cap is on the
+//    compressed bytes, and a long low-bitrate file decodes to gigabytes.
+//    getChannelData throws here so that an allocation attempted before the
+//    check is a failure, not a slow pass.
+{
+  const overLong = (samples) => () => ({
+    async decodeAudioData() {
+      return {
+        numberOfChannels: 2,
+        length: samples / 2,
+        sampleRate: 48000,
+        getChannelData: () => {
+          throw new Error("the samples were read before the ceiling was checked");
+        },
+      };
+    },
+    close() {},
+  });
+  let err = null;
+  try {
+    await decodeToPcm16(new ArrayBuffer(8), overLong(MAX_DECODED_SAMPLES + 2));
+  } catch (e) {
+    err = e;
+  }
+  ok(
+    err instanceof AudioStegoError && /too long/.test(err.message),
+    `a decode past the sample ceiling is refused as a carrier problem (${err ? err.message : "no error"})`
+  );
+  ok(MAX_DECODED_SAMPLES >= 20 * 60 * 48000 * 2, "the ceiling still admits twenty minutes of stereo at 48 kHz");
 }
 
 if (failed) {

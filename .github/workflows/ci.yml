@@ -206,6 +206,13 @@ jobs:
       - name: Camera scanner stops when enough is read, and not before
         run: npm run test:camera-progress
 
+      # The worker answers every message, including malformed ones and ops it
+      # does not know: a null message used to vanish into an unhandled
+      # rejection and leave the client's promise pending for ever. Controls
+      # bite: the shape guard removed, or the unknown-op refusal removed.
+      - name: Crypto worker answers every message
+        run: npm run test:worker-protocol
+
       # The build's counterpart of the sealed verdict: apply-csp-hashes.mjs fails
       # the build unless default-src, connect-src AND form-action are all 'none'
       # in every shipped page's CSP. connect-src has been gated since KM-07;

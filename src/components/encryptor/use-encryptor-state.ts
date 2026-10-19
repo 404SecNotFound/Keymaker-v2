@@ -80,6 +80,7 @@ import {
   type KdfParams,
   type DetectedFormat,
   loadKeym2,
+  secureErase,
 } from "@/lib/keymaker-crypto";
 import {
   encryptViaWorker,
@@ -372,6 +373,13 @@ export function useEncryptorState() {
    * display and nothing has to fire a side effect from inside a state updater.
    */
   const [clipboardDeadline, setClipboardDeadline] = useState<number | null>(null);
+  /**
+   * True from a copy until the overwrite it armed has run. A ref rather than
+   * the deadline state because the wipe reads it from a callback with no
+   * dependencies, and what the wipe needs to know is only whether a secret of
+   * ours is still out there.
+   */
+  const clipboardArmedRef = useRef(false);
   const [clipboardSecondsLeft, setClipboardSecondsLeft] = useState<number | null>(null);
   /**
    * The deadline passed but the browser refused the overwrite.
@@ -811,6 +819,7 @@ export function useEncryptorState() {
       if (cancelled) return;
       const left = Math.ceil((clipboardDeadline - Date.now()) / 1000);
       if (left <= 0) {
+        clipboardArmedRef.current = false;
         setClipboardDeadline(null);
         setClipboardSecondsLeft(null);
         // Unconditional. See CLIPBOARD_CLEAR_SECONDS for why the old
@@ -1153,6 +1162,22 @@ export function useEncryptorState() {
     // regardless, burning CPU and battery for a result nobody would receive.
     cancelAllCryptoWork();
     setIsLoading(false);
+
+    // The clipboard is the one holder of a secret outside the page. A copy
+    // arms a 60-second overwrite; a wipe inside that minute used to clear
+    // every holder on the page and leave the clipboard as it was, while the
+    // toast said the secrets were cleared. Overwritten now, with the same
+    // retry-on-return the countdown uses when the browser refuses the write.
+    if (clipboardArmedRef.current) {
+      clipboardArmedRef.current = false;
+      setClipboardDeadline(null);
+      navigator.clipboard
+        .writeText('')
+        .then(() => setClipboardClearPending(false))
+        .catch(() => setClipboardClearPending(true));
+    }
+    // An open scanner holds every strip it has read so far.
+    setCameraOpen(false);
 
     // Credentials and key material.
     setPassword('');
@@ -1869,6 +1894,7 @@ export function useEncryptorState() {
 
   /** Overwrite the clipboard now and stop the countdown. */
   const clearClipboardNow = useCallback(async () => {
+    clipboardArmedRef.current = false;
     setClipboardDeadline(null);
     try {
       await navigator.clipboard.writeText('');
@@ -1906,6 +1932,7 @@ export function useEncryptorState() {
       // otherwise the next keystroke would wipe the secret just copied.
       setClipboardClearPending(false);
       setClipboardDeadline(Date.now() + CLIPBOARD_CLEAR_SECONDS * 1000);
+      clipboardArmedRef.current = true;
     }).catch(() => {
        toast({ title: "Failed to copy", variant: "destructive" });
     });
@@ -2157,8 +2184,21 @@ export function useEncryptorState() {
       usePasskey,
     };
 
+    // The three buffers this operation owns until the worker takes them: the
+    // plaintext (or the container), the key file, and a passkey's PRF output.
+    // Declared out here so the `finally` can reach them. On the way to the
+    // worker call there are stale-returns and awaits that throw — the
+    // passkey prompt being dismissed is the routine one — and each of those
+    // exits used to drop the buffers un-erased: the worker erases what it is
+    // handed, and the fallback erases what it runs, but nothing erased a
+    // buffer the worker never received. A buffer that did reach the worker
+    // was transferred and is detached here, so erasing it again costs nothing.
+    let inputBuffer: ArrayBuffer | null = null;
+    let keyFileBuffer: ArrayBuffer | null = null;
+    let prfOutput: Uint8Array | null = null;
+
     try {
-      const keyFileBuffer = keyFile ? await keyFile.arrayBuffer() : null;
+      keyFileBuffer = keyFile ? await keyFile.arrayBuffer() : null;
 
       let resultBuffer: ArrayBuffer;
 
@@ -2205,7 +2245,7 @@ export function useEncryptorState() {
         }
 
         const encoder = new TextEncoder();
-        const inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
+        inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
         // Stop, a tab switch or the lock can land while a large file is still
         // being read. Every await from here to the worker is a point where the
         // operation may already be disowned, and going on would start a fresh
@@ -2224,7 +2264,7 @@ export function useEncryptorState() {
           const { derivePrfSalt } = await loadKeym2();
           const { enrolPasskey } = await import("@/lib/webauthn-prf");
           const slotSalt = crypto.getRandomValues(new Uint8Array(32));
-          const prfOutput = await enrolPasskey(await derivePrfSalt(slotSalt));
+          prfOutput = await enrolPasskey(await derivePrfSalt(slotSalt));
           passkey = { prfOutput, salt: slotSalt };
         }
 
@@ -2347,7 +2387,6 @@ export function useEncryptorState() {
 
       } else { // Decrypt — the KEYM container is self-describing, and legacy
         // IttyBitz (IBTZ) blobs are auto-detected and handled transparently.
-        let inputBuffer: ArrayBuffer;
         if (inputType === 'file') {
             inputBuffer = await file!.arrayBuffer();
             const fromText = await containerFromTextFile(new Uint8Array(inputBuffer));
@@ -2460,7 +2499,6 @@ export function useEncryptorState() {
         // awaits, and a disowned operation must not ask for a passkey tap or
         // start a derivation.
         if (isStale()) return;
-        let prfOutput: Uint8Array | undefined;
         if (usePasskey) {
           const { passkeySlotSaltsKeym2, derivePrfSalt } = await loadKeym2();
           const { assertPasskeyPrf } = await import("@/lib/webauthn-prf");
@@ -2595,7 +2633,7 @@ export function useEncryptorState() {
             mutablePassword,
             keyFileBuffer,
             suppliedShares.length > 0 ? suppliedShares : undefined,
-            prfOutput
+            prfOutput ?? undefined
           );
           const info = await describeOpened(verified);
           if (isStale()) return;
@@ -2628,7 +2666,7 @@ export function useEncryptorState() {
           mutablePassword,
           keyFileBuffer,
           suppliedShares.length > 0 ? suppliedShares : undefined,
-          prfOutput
+          prfOutput ?? undefined
         );
         resultBuffer = decryptResult.data;
 
@@ -2787,6 +2825,16 @@ export function useEncryptorState() {
           });
         }
     } finally {
+      // Whatever the worker never took, on every exit: a stale return, a
+      // dismissed passkey prompt, a paste that failed to decode, a thrown
+      // size limit. Transferred buffers are detached and the erase is a no-op
+      // on them; the rest is plaintext or key material that was about to sit
+      // in the heap until GC. A stale operation may not touch the UI below,
+      // but these buffers are its own, and erasing them is the one thing it
+      // still owes.
+      secureErase(inputBuffer);
+      secureErase(keyFileBuffer);
+      secureErase(prfOutput);
       // Only the operation that still owns the UI may touch it — a stale one
       // writing here is the data-loss half of B1. The password clear moved to
       // the success path (U13); the spinner has to come down on every outcome,

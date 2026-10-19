@@ -37,6 +37,7 @@
     "test:audio-wav-depths": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/audio-wav-depths-test.mjs",
     "test:sw-precache": "node scripts/sw-precache-test.mjs",
     "test:camera-progress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/camera-progress-test.mjs",
+    "test:worker-protocol": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/worker-protocol-test.mjs",
     "test:printout-check": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/printout-check-test.mjs",
     "test:seal-verdict": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/seal-verdict-test.mjs",
     "test:csp-egress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/csp-egress-gate-test.mjs",
