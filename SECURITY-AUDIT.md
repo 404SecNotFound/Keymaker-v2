@@ -1,4 +1,4 @@
-# Keymaker Security Audit
+# Keymaker Security Review (self-review)
 
 **Scope:** Keymaker v2 — the KEYM v1 container, `src/lib/keymaker-crypto.ts`,
 the encryptor UI, the dice entropy tool, the CSP build pipeline, and CI.
@@ -6,7 +6,12 @@ the encryptor UI, the dice entropy tool, the CSP build pipeline, and CI.
 **Predecessor:** [SECURITY-AUDIT-ITTYBITZ-2026-04.md](SECURITY-AUDIT-ITTYBITZ-2026-04.md),
 which covers only the frozen legacy core and does **not** cover anything below.
 
-External review found no Critical or High severity vulnerabilities. It found
+**Who reviewed.** This is a self-review. The findings come from the project's
+own review passes, including one by four automated review agents on 13 August
+2026. No independent third party has audited Keymaker, so read every finding
+below as recorded and fixed, not as independent assurance.
+
+The self-review found no Critical or High severity vulnerabilities. It found
 three Medium issues, several Low, and a set of informational items. Each is
 listed below with its disposition and, where fixed, the test that holds it
 fixed.
@@ -52,7 +57,7 @@ fixed.
 | KM-27 | Medium | Argon2id on the main thread froze the tab for the whole derivation (22.3 s measured), making Cancel unreachable | **Fixed** |
 | KM-28 | Medium | Deployed artifact was unverifiable — no manifest, no signature, and the build was not reproducible | **Fixed** |
 
-### Third-party audit, 2026-08-13 (four-agent swarm)
+### Self-review pass, 2026-08-13 (four automated review agents)
 
 | ID | Severity | Finding | Status |
 |---|---|---|---|
@@ -95,7 +100,7 @@ That distinction is asserted in both directions in `test:keymaker`.
 
 ## KM-27 — the default KDF froze the tab (Phase 2)
 
-Not in any external review. It surfaced while building a regression test for
+Not in any review pass. It surfaced while building a regression test for
 B1, and it is the more serious of the two.
 
 Argon2id runs through hash-wasm, which is synchronous and CPU-bound. On the
@@ -338,7 +343,7 @@ morphology *because* its provenance is unknown, and here it is known.
 
 ## KM-25 — Service-worker updates could swap versions mid-encryption *(new)*
 
-Not in either external review. Found while closing out the open items above.
+Not in either review pass. Found while closing out the open items above.
 
 The worker called `skipWaiting()` on install and `clients.claim()` on activate,
 so a deployment replaced the running version underneath any open tab, and the
