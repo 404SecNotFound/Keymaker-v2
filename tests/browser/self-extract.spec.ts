@@ -151,6 +151,7 @@ test.describe("§7.2 self-extracting page", () => {
   test("a PBKDF2/AES backup exports a page that opens itself offline", async ({
     page,
     context,
+    browserName,
   }, testInfo) => {
     await encryptWith(page, "pbkdf2");
 
@@ -211,17 +212,22 @@ test.describe("§7.2 self-extracting page", () => {
 
     // Framed by another document, the page hides itself: a meta CSP cannot say
     // frame-ancestors, so this is the page's one defence against being
-    // redressed if an heir ever serves it over http(s).
-    const wrapper = testInfo.outputPath("frame.html");
-    writeFileSync(wrapper, `<!doctype html><iframe id="f" src="file://${saved}" width="900" height="700"></iframe>`);
-    const framed = await context.newPage();
-    await framed.goto(`file://${wrapper}`);
-    const frame = await (await framed.waitForSelector("#f")).contentFrame();
-    expect(frame).not.toBeNull();
-    await expect
-      .poll(() => frame!.evaluate(() => document.documentElement.style.display), { timeout: 30_000 })
-      .toBe("none");
-    await framed.close();
+    // redressed if an heir ever serves it over http(s). Chromium only: WebKit
+    // hands back no frame for a file:// document framed by another, so there
+    // is nothing to read there. The same guard in the app is checked on every
+    // engine by frame-guard.spec.ts.
+    if (browserName === "chromium") {
+      const wrapper = testInfo.outputPath("frame.html");
+      writeFileSync(wrapper, `<!doctype html><iframe id="f" src="file://${saved}" width="900" height="700"></iframe>`);
+      const framed = await context.newPage();
+      await framed.goto(`file://${wrapper}`);
+      const frame = await (await framed.waitForSelector("#f")).contentFrame();
+      expect(frame).not.toBeNull();
+      await expect
+        .poll(() => frame!.evaluate(() => document.documentElement.style.display), { timeout: 30_000 })
+        .toBe("none");
+      await framed.close();
+    }
 
     await offline.close();
   });

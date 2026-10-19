@@ -83,7 +83,12 @@ test.describe("owned buffers are erased on every exit", () => {
     expectErased(await caughtReads(page), "key.bin", KEY_BYTES.length);
   });
 
-  test("a plaintext read for an encrypt whose passkey prompt is dismissed is erased", async ({ page }) => {
+  test("a plaintext read for an encrypt whose passkey prompt is dismissed is erased", async ({ page, browserName }) => {
+    // The passkey control appears only when WebAuthn with PRF is offered, and
+    // the virtual authenticator that offers it is a CDP feature. The exit
+    // under test is the same code on every engine; passkey.spec.ts makes the
+    // same cut for the same reason.
+    test.skip(browserName !== "chromium", "the virtual authenticator needs CDP, which only Chromium has");
     // WebAuthn refuses an IP address as a relying-party id; localhost resolves
     // to the same server. See passkey.spec.ts.
     const ORIGIN = "http://localhost:4321";
