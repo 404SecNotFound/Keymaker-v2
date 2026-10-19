@@ -12,7 +12,7 @@
  * a strip from a different set is named rather than counted.
  */
 
-import { shareTextSetCode } from "./keym-v2-shamir";
+import { shareTextSetCode, SHAMIR_K_MIN, SHAMIR_K_MAX } from "./keym-v2-shamir";
 import { describePaperPart } from "./keym-v2-paper";
 
 export interface CameraProgress {
@@ -106,7 +106,14 @@ function stripHeader(text: string): { index: number; threshold: number; setCode:
   const byteAt = (i: number) => parseInt(bits.slice(i * 8, i * 8 + 8), 2);
   const setCode = v2 ? shareTextSetCode(text) : body.slice(0, 6);
   if (!setCode) return null;
-  return { threshold: byteAt(idLen), index: byteAt(idLen + 1), setCode };
+  const threshold = byteAt(idLen);
+  const index = byteAt(idLen + 1);
+  // The bytes are read without the checksum, so they can say anything. A
+  // threshold the decoder would refuse (0, 1, or above the §4.6 ceiling) used
+  // to be believed here: a strip claiming "1 needed" ended the scan after one
+  // code, and the shares box then refused the strip it had been handed.
+  if (threshold < SHAMIR_K_MIN || threshold > SHAMIR_K_MAX || index < 1) return null;
+  return { threshold, index, setCode };
 }
 
 /** One sentence per started kind, saying what is in and what is still needed. */

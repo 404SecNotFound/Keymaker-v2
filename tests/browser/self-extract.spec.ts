@@ -137,6 +137,15 @@ test.describe("§7.2 self-extracting page", () => {
     expect(csp, "the script is not pinned, so any inline script would run").not.toContain(
       "script-src 'unsafe-inline'"
     );
+
+    // The same hash that protects the page kills it when the file's bytes are
+    // re-encoded on the way to the heir (a CRLF conversion, a mail gateway):
+    // the browser refuses the only script and Decrypt does nothing, silently.
+    // The status line is authored with that explanation, and the script's
+    // first act is to clear it — so the text is on screen exactly when the
+    // script did not run.
+    expect(html, "the page carries no explanation for a refused script").toContain("If Decrypt does nothing");
+    expect(html, "the exported page sends a referrer").toContain('<meta name="referrer" content="no-referrer">');
   });
 
   test("a PBKDF2/AES backup exports a page that opens itself offline", async ({
@@ -165,6 +174,8 @@ test.describe("§7.2 self-extracting page", () => {
     offline.on("pageerror", (e) => pageErrors.push(e.message));
 
     await offline.goto(`file://${saved}`);
+    // The script ran, so the refused-script explanation has been cleared.
+    expect(await offline.textContent("#status")).toBe("");
     await offline.fill("#pw", STRONG_PASSWORD);
     await offline.click("#go");
     await offline.waitForSelector("#result:not([hidden])", { timeout: 90_000 });
@@ -194,7 +205,23 @@ test.describe("§7.2 self-extracting page", () => {
     const armor = ((await inert.textContent("#keym2-container")) ?? "").replace(/\s+/g, "");
     expect(armor.startsWith("keym2:")).toBe(true);
     expect(armor.length).toBeGreaterThan(100);
+    // With the script refused or disabled, the explanation stays on screen.
+    expect(await inert.textContent("#status")).toContain("If Decrypt does nothing");
     await noScript.close();
+
+    // Framed by another document, the page hides itself: a meta CSP cannot say
+    // frame-ancestors, so this is the page's one defence against being
+    // redressed if an heir ever serves it over http(s).
+    const wrapper = testInfo.outputPath("frame.html");
+    writeFileSync(wrapper, `<!doctype html><iframe id="f" src="file://${saved}" width="900" height="700"></iframe>`);
+    const framed = await context.newPage();
+    await framed.goto(`file://${wrapper}`);
+    const frame = await (await framed.waitForSelector("#f")).contentFrame();
+    expect(frame).not.toBeNull();
+    await expect
+      .poll(() => frame!.evaluate(() => document.documentElement.style.display), { timeout: 30_000 })
+      .toBe("none");
+    await framed.close();
 
     await offline.close();
   });
@@ -216,16 +243,21 @@ test.describe("§7.2 self-extracting page", () => {
     await expect(notice).toContainText(/weaker/i);
   });
 
-  test("armor that gained a non-ASCII space is refused, matching keym2.py (§7)", async ({
+  test("armor that gained a non-ASCII space still opens, and a zero-width space is refused, matching keym2.py (§7)", async ({
     page,
     context,
   }, testInfo) => {
-    // §7: the dearmor strips ASCII whitespace only. keym2.py keeps a non-ASCII
-    // space (U+00A0, a stray BOM) inside the body and its strict base64 refuses
-    // the file. The embedded reader must agree — otherwise a backup opens here
-    // and is rejected on the durable Python path, which is the one reader an
-    // heir with no browser is left with. The `\s` this replaced stripped the
-    // character and opened it, so this control bites when that regex comes back.
+    // §7, "Characters a reader ignores": every reader strips the same named
+    // set — Unicode White_Space plus the byte order mark — at the ends and
+    // inside the body, and refuses everything else. keym2.py and the app
+    // moved to that set; this page was left on its older rule (ASCII
+    // whitespace inside, trim at the ends) and became the one reader that
+    // refused a backup the other two opened, which is exactly the divergence
+    // §7 was written to end. Both directions are pinned: a U+00A0 that a
+    // notes app or mail client can insert opens, and a U+200B — not
+    // White_Space — is refused rather than silently stripped. The controls
+    // bite: the old regex fails the first, and a `\s`-based strip (which
+    // removes neither U+0085 nor keeps U+200B out) fails one or the other.
     await encryptWith(page, "pbkdf2");
     const [download] = await Promise.all([
       page.waitForEvent("download"),
@@ -237,24 +269,32 @@ test.describe("§7.2 self-extracting page", () => {
     const offline = await context.newPage();
     await offline.goto(`file://${saved}`);
 
-    // Splice a U+00A0 into the middle of the base64 body, the way a notes app or
-    // mail client re-wrapping the text can. Not at the ends, which are trimmed.
-    const injected = await offline.evaluate(() => {
-      const el = document.getElementById("keym2-container");
-      if (!el) return false;
-      const t = el.textContent || "";
-      const at = t.indexOf("keym2:") + "keym2:".length + 10;
-      if (at < "keym2:".length + 10) return false;
-      el.textContent = t.slice(0, at) + " " + t.slice(at);
-      return true;
-    });
-    expect(injected, "could not find the armor body to corrupt").toBe(true);
+    // Splice a character into the middle of the base64 body, the way a notes
+    // app or mail client re-wrapping the text can. Not at the ends.
+    const splice = (ch: string) =>
+      offline.evaluate((c: string) => {
+        const el = document.getElementById("keym2-container");
+        if (!el) return false;
+        const t = el.textContent || "";
+        const at = t.indexOf("keym2:") + "keym2:".length + 10;
+        if (at < "keym2:".length + 10) return false;
+        el.textContent = t.slice(0, at) + c + t.slice(at);
+        return true;
+      }, ch);
 
+    // A no-break space is in §7's set: ignored, and the backup opens.
+    expect(await splice("\u00a0"), "could not find the armor body to corrupt").toBe(true);
     await offline.fill("#pw", STRONG_PASSWORD);
     await offline.click("#go");
+    await offline.waitForSelector("#result:not([hidden])", { timeout: 90_000 });
+    expect(await offline.inputValue("#out")).toBe(SECRET);
 
-    // The reader keeps the U+00A0, atob rejects it, and the page refuses — it
-    // does not silently strip the character and reveal the secret.
+    // A zero-width space is not: the page refuses rather than stripping it,
+    // exactly as keym2.py and the app do.
+    await offline.reload();
+    expect(await splice("\u200b"), "could not find the armor body to corrupt").toBe(true);
+    await offline.fill("#pw", STRONG_PASSWORD);
+    await offline.click("#go");
     await offline.waitForFunction(
       () => document.querySelector("#status")?.className === "bad",
       null,

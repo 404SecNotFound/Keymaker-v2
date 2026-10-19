@@ -214,7 +214,18 @@ export function extractSelfExtract(text: string): Uint8Array {
   if (!body.startsWith(KEYM2_ARMOR_PREFIX)) {
     throw new Error("The marked region of this file is not a KEYM v2 backup.");
   }
-  return dearmorKeym2(body);
+  // dearmor's refusal is §6's generic "Decryption failed.", which is the
+  // right answer for a container and the wrong one for a page whose text was
+  // mangled in transit: it sends the person to retype a password that was
+  // never wrong. The file-chooser path already says what this says.
+  try {
+    return dearmorKeym2(body);
+  } catch {
+    throw new Error(
+      "The marked region of this file is not intact base64. If this page was saved again, " +
+        "forwarded or converted, go back to the original file."
+    );
+  }
 }
 
 /** §7.2's wrong-box paste, answered without committing to the page being valid. */
@@ -268,7 +279,7 @@ export function looksLikeSelfExtract(text: string): boolean {
  * reason the app does: hashing a stylesheet buys nothing when no untrusted
  * style can reach the document.
  */
-const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-w5DyUTkawgwIa/55Xv/mJyxzZXVehfLAkhGPDPFhJVw=";
+const SELF_EXTRACT_SCRIPT_SHA256 = "sha256-nKRXybcrNBB3Z2s+dtwE+LJkWSpbMStVlPcciMh+4eI=";
 
 const SELF_EXTRACT_CSP = [
   "default-src 'none'",
@@ -284,6 +295,15 @@ const DECRYPTOR_JS = `
 'use strict';
 // KEYM v2, the WebCrypto-only subset (FORMAT-V2-DESIGN.md 7.2).
 // AES-256-GCM + PBKDF2-HMAC-SHA-256 only: no WebAssembly, no network, no deps.
+
+// A meta CSP cannot say frame-ancestors, so if this page is ever served over
+// http(s) another site could frame it invisibly and steer the clicks through
+// the decrypt flow. Hidden rather than navigated: a sandboxed frame can refuse
+// a top navigation but cannot stop a page hiding itself. From file:// no web
+// page can frame this at all, and the check costs nothing there.
+if (window.top !== window.self) {
+  document.documentElement.style.display = 'none';
+}
 
 var CHUNK = 1048576, TAG = 16, SLOT_LEN = 96;
 // v2 puts slot_count at 8 and the table at 9. v3 widens the core header to 24
@@ -312,12 +332,16 @@ function lp(b) {
   return cat([head, b]);
 }
 
+// section 7, "Characters a reader ignores": Unicode White_Space plus the byte
+// order mark, the same set the app and keym2.py strip, at the ends and inside.
+// This used to be trim() at the ends and ASCII whitespace inside, which was
+// once what keym2.py did; both readers then moved to this set, and a no-break
+// space or a BOM that an editor or a mail client had dropped into the text
+// opened in the app and in keym2.py and was refused by this page alone.
+var IGNORABLE = /[\\t\\n\\v\\f\\r \\u0085\\u00a0\\u1680\\u2000-\\u200a\\u2028\\u2029\\u202f\\u205f\\u3000\\ufeff]/g;
+
 function dearmor(text) {
-  // section 7: trim the ends (like the reference's str.strip), then strip ASCII
-  // whitespace inside the body only. A non-ASCII space (U+00A0, a BOM) in the
-  // body is kept, so atob rejects it just as keym2.py does -- rather than being
-  // stripped here and opening a backup the durable Python path refuses.
-  var s = text.trim().replace(/[ \\t\\n\\r\\v\\f]/g, '');
+  var s = text.replace(IGNORABLE, '');
   if (s.indexOf('keym2:') !== 0) throw new Error('This file does not contain a KEYM v2 backup.');
   s = s.slice(6).replace(/-/g, '+').replace(/_/g, '/');
   var bin = atob(s + '='.repeat((4 - (s.length % 4)) % 4));
@@ -472,6 +496,9 @@ async function decrypt(container, password) {
 var formEl = document.getElementById('f');
 var pwEl = document.getElementById('pw');
 var statusEl = document.getElementById('status');
+// The status line is authored with the message for a page whose script never
+// ran; reaching this line is the proof that it did.
+statusEl.textContent = '';
 var resultEl = document.getElementById('result');
 var outEl = document.getElementById('out');
 var tableEl = document.getElementById('table');
@@ -586,6 +613,7 @@ export function buildSelfExtractingPage(options: SelfExtractOptions): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="${SELF_EXTRACT_CSP}">
+<meta name="referrer" content="no-referrer">
 <title>Encrypted backup — Keymaker</title>
 <style>
   :root { color-scheme: light dark; }
@@ -629,7 +657,10 @@ disconnect from the network first if you like, and it will behave identically.</
   <input id="pw" type="password" placeholder="Password" autocomplete="off" autofocus>
   <button id="go" type="submit">Decrypt</button>
 </form>
-<p id="status" aria-live="polite"></p>
+<p id="status" aria-live="polite">If Decrypt does nothing, this browser refused to run the
+page&#39;s script — usually because the file was re-saved or converted on the way here and its
+bytes no longer match the hash it carries. The backup text further down is unaffected: open it
+with Keymaker or with keym2.py, as described below.</p>
 
 <div id="result" hidden>
   <p id="table" class="warn" role="alert" hidden><strong>This backup&#39;s list of unlock

@@ -119,6 +119,17 @@ export function CameraScanDialog({
       stream?.getTracks().forEach((t) => t.stop());
       const video = videoRef.current;
       if (video) video.srcObject = null;
+      // What was read is key material, and the scratch canvas still holds the
+      // last frame of a strip. Both used to live on until the next open reset
+      // them; a dialog closed early, or closed by the wipe, left them in place.
+      codesRef.current = [];
+      setCodes([]);
+      const canvas = canvasRef.current;
+      if (canvas) {
+        canvas.getContext("2d")?.clearRect(0, 0, canvas.width, canvas.height);
+        canvas.width = 0;
+        canvas.height = 0;
+      }
     };
     // onDone and onOpenChange are the parent's; the camera must not restart
     // because a parent re-rendered with a new closure.

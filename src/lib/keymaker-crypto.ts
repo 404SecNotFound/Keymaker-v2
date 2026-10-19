@@ -188,10 +188,22 @@ const KEYM2_PAYLOAD_CHUNK_SIZE = 1024 * 1024;
  * bytes of overhead are well inside this; the chunk count is `max(1, ceil(n /
  * chunk))`, the same rule the writer uses.
  */
+/**
+ * The longest padded stream (v4) a plaintext at the cap can become. V4 §4.2:
+ * the stream is `uint64 length ‖ plaintext ‖ zeros`, rounded up by Padmé, and
+ * at 100 MiB Padmé's granularity is 2 MiB, so the eight plaintext lengths just
+ * under the cap round to 51 × 2 MiB. The ceiling below used to be sized for
+ * v3 alone, and a "hide size" backup of a file within 8 bytes of the cap was
+ * written and then refused by the build that wrote it. Restated here rather
+ * than computed, like the other format constants in this file;
+ * keym2-dispatch.mts holds it to `keym2PaddedLen(8 + MAX_PLAINTEXT_SIZE)`.
+ */
+export const KEYM2_MAX_PADDED_STREAM = 51 * 2 * 1024 * 1024;
 export const MAX_CONTAINER_OVERHEAD =
   KEYM2_MAX_SLOT_TABLE_OFFSET +
   KEYM2_MAX_SLOT_COUNT * KEYM2_MAX_SLOT_LEN +
-  Math.max(1, Math.ceil(MAX_PLAINTEXT_SIZE / KEYM2_PAYLOAD_CHUNK_SIZE)) * KEYM2_MAX_TAG_PER_CHUNK;
+  (KEYM2_MAX_PADDED_STREAM - MAX_PLAINTEXT_SIZE) +
+  Math.max(1, Math.ceil(KEYM2_MAX_PADDED_STREAM / KEYM2_PAYLOAD_CHUNK_SIZE)) * KEYM2_MAX_TAG_PER_CHUNK;
 export const MAX_CONTAINER_SIZE = MAX_PLAINTEXT_SIZE + MAX_CONTAINER_OVERHEAD;
 const MAX_CIPHERTEXT_SIZE = MAX_CONTAINER_SIZE;
 
@@ -453,9 +465,17 @@ export function describeWeakKdf(kdf: KdfParams): string | null {
 
 const textEncoder = new TextEncoder();
 
-/** Best-effort secure erase: zero-fill. Never uses Math.random. */
+/**
+ * Best-effort secure erase: zero-fill. Never uses Math.random.
+ *
+ * A buffer that was transferred to a worker is detached: it reports a length
+ * of zero and constructing a view on it throws. There is nothing left here to
+ * erase in that case, and a caller that owns a buffer until the worker takes
+ * it must be able to erase unconditionally on every exit without first asking
+ * whether the transfer happened.
+ */
 export function secureErase(buffer: ArrayBuffer | Uint8Array | null | undefined): void {
-  if (!buffer) return;
+  if (!buffer || buffer.byteLength === 0) return;
   const view =
     buffer instanceof ArrayBuffer
       ? new Uint8Array(buffer)

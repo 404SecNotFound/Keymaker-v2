@@ -77,6 +77,40 @@ await rejects(() => m.decodePaperPartsV2([parts[0], other[1]]), "different backu
 // A wrong-shaped line is refused, not silently skipped.
 await rejects(() => m.decodePaperPartsV2(["KMPART2:not-a-real-part"]), "Not a v2 paper part", "a wrong-shaped line is refused");
 
+// A body that cannot be base64 is named as that, in words a person can act
+// on: atob's own DOMException ("Invalid character") was what the notice used
+// to show. One character dropped from a part makes its length 1 mod 4.
+{
+  const f = parts[1].split(":");
+  while (f[4].length % 4 !== 1) f[4] += "A";
+  const short = [...parts];
+  short[1] = f.join(":");
+  await rejects(() => m.decodePaperPartsV2(short), "one character short", "a part one character off is named as that, not as an invalid character");
+  // A character outside the alphabet never reaches the decoder: the part
+  // shape is checked first, and that refusal already names the line.
+  const g = parts[1].split(":");
+  g[4] = "!" + g[4].slice(1);
+  const junk = [...parts];
+  junk[1] = g.join(":");
+  await rejects(() => m.decodePaperPartsV2(junk), "Not a v2 paper part", "a part with a character outside the alphabet is refused by shape");
+}
+
+// A self-extracting page whose marked region was mangled is reported as a
+// page problem. dearmor's refusal is §6's "Decryption failed.", which is
+// right for a container and wrong for a file: it sends the person to retype
+// a password that was never wrong.
+{
+  const seSrc = join(HERE, "..", "src", "lib", "keym-v2-selfextract.ts");
+  const seOut = join(mkdtempSync(join(tmpdir(), "envse-")), "keym-v2-selfextract.mjs");
+  await esbuild.build({ entryPoints: [seSrc], bundle: true, format: "esm", platform: "node", outfile: seOut });
+  const se = await import(pathToFileURL(seOut).href);
+  await rejects(
+    () => se.extractSelfExtract(`${se.KEYM2_SELFEXTRACT_BEGIN}keym2:!!!!${se.KEYM2_SELFEXTRACT_END}`),
+    "not intact base64",
+    "a mangled self-extracting page is reported as a page problem, not as a wrong password"
+  );
+}
+
 // looksLikePaperPart / describePaperPart read v2, as the wrong-box report needs.
 ok(m.looksLikePaperPart(parts[0]), "looksLikePaperPart recognises a v2 part");
 const d = m.describePaperPart(parts[2]);

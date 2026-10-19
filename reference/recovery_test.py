@@ -543,6 +543,44 @@ def error_paths(tmp: Path) -> None:
         else:
             print(f"  skip v{version} foreign-owned --out (cannot stage one here)")
 
+        # A named pipe at --out needs no privilege to plant, is not a symlink
+        # and is owned by whoever ran mkfifo — which can be the attacker, so
+        # the owner check is no help either: the plaintext goes straight to
+        # whoever is reading the other end. The reader here stands in for them
+        # and must get nothing.
+        if hasattr(os, "mkfifo"):
+            import threading
+
+            pipe = tmp / f"pipe{version}.txt"
+            os.mkfifo(pipe)
+            got: list[bytes] = []
+
+            def drain(p=pipe) -> None:
+                with open(p, "rb") as fh:
+                    got.append(fh.read())
+
+            reader = threading.Thread(target=drain, daemon=True)
+            reader.start()
+            r = cli(version, ["decrypt", "--in", str(enc), "--out", str(pipe)],
+                    stdin="a strong test password\n")
+            reader.join(timeout=10)
+            check(r.returncode != 0 and "not a regular file" in r.stderr
+                  and "Traceback" not in r.stderr,
+                  f"v{version} refuses a --out that is a pipe", r.stderr.strip()[-160:])
+            check(not reader.is_alive() and got == [b""],
+                  f"v{version} wrote nothing into the pipe", repr(got)[:80])
+        else:
+            print(f"  skip v{version} pipe --out (no mkfifo here)")
+
+        # The reference writer refuses an empty password: a container written
+        # with one opens for anyone who finds it. Enter, Enter at the prompt.
+        empty = tmp / f"empty{version}.keym"
+        r = cli(version, ["encrypt", "--kdf", "pbkdf2", "--iterations", "600000",
+                          "--in", str(src), "--out", str(empty)], stdin="\n\n")
+        check(r.returncode != 0 and "empty password" in r.stderr and not empty.exists()
+              and "Traceback" not in r.stderr,
+              f"v{version} refuses to encrypt with an empty password", r.stderr.strip()[-160:])
+
 
 # ----------------------------------------------------------------------------
 # docs/RECOVERY.md — the version it claims must be the version we write

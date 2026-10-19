@@ -477,13 +477,20 @@ def resolve_password(supplied: str | None, confirm: bool = False) -> str:
             "interactive prompt for real secrets.",
             file=sys.stderr,
         )
-        return supplied
+        pw = supplied
+    else:
+        import getpass
 
-    import getpass
-
-    pw = getpass.getpass("Password: ")
-    if confirm and pw != getpass.getpass("Confirm password: "):
-        raise KeymError("passwords did not match")
+        pw = getpass.getpass("Password: ")
+        if confirm and pw != getpass.getpass("Confirm password: "):
+            raise KeymError("passwords did not match")
+    # `confirm` is the writer's call: a container written with an empty
+    # password opens for anyone who finds it. Reading is left alone.
+    if confirm and not pw:
+        raise KeymError(
+            "refusing to encrypt with an empty password: the container would "
+            "open for anyone who found it"
+        )
     return pw
 
 
@@ -654,13 +661,25 @@ def _open_private(path: str):
 
     Refused, all for a shared machine: a symlink at `--out` (O_NOFOLLOW), a
     regular file that already exists and belongs to another user (writing into
-    it hands them the plaintext), and a regular file whose mode cannot be
-    narrowed. The file is truncated only after those checks pass. Not O_EXCL:
-    refusing to overwrite would strand the ordinary case of re-running a
-    command after a typo, and this is a recovery tool. Where there are no mode
-    bits — Windows, a FIFO — the write still goes ahead.
+    it hands them the plaintext), a regular file whose mode cannot be
+    narrowed, and anything that is not a regular file or a character device
+    (a named pipe is the one thing an unprivileged account can leave at a
+    path that passes the other three checks, and it delivers the plaintext to
+    whoever reads the other end). The file is truncated only after those
+    checks pass. Not O_EXCL: refusing to overwrite would strand the ordinary
+    case of re-running a command after a typo, and this is a recovery tool.
+    Where there are no mode bits — Windows, a device — the write still goes
+    ahead. The open is non-blocking so a FIFO with no reader fails instead of
+    hanging the tool before `fstat` can see it; the flag is cleared after.
     """
-    flags = os.O_WRONLY | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_WRONLY | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
+    not_a_file = (
+        f"refusing to write {path}: it is not a regular file (a pipe, a "
+        f"socket or a directory). Remove it, or pick another path."
+    )
     try:
         fd = os.open(path, flags, 0o600)
     except OSError as exc:
@@ -668,10 +687,18 @@ def _open_private(path: str):
             raise KeymError(
                 f"refusing to write {path}: it is a symbolic link"
             ) from None
+        if exc.errno == errno.ENXIO:
+            raise KeymError(not_a_file) from None
         raise KeymError(f"cannot write {path}: {exc.strerror}") from None
     try:
         st = os.fstat(fd)
         regular = stat.S_ISREG(st.st_mode)
+        if not regular and not stat.S_ISCHR(st.st_mode):
+            raise KeymError(not_a_file)
+        if hasattr(os, "O_NONBLOCK"):
+            import fcntl
+            fcntl.fcntl(fd, fcntl.F_SETFL,
+                        fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
         if regular and hasattr(os, "geteuid") and st.st_uid != os.geteuid():
             raise KeymError(
                 f"refusing to write {path}: it already exists and belongs to "

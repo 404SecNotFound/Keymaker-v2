@@ -2020,7 +2020,9 @@ export async function sharesNeedPasswordKeym2(data: Uint8Array, shares: string[]
   try {
     const { decodeShareAny, shareSetIdV2 } = await loadShamir();
     const core = parseKeym2CoreHeader(data);
-    const slotCount = data[keym2SlotCountOffset(core.version)] as number;
+    // Bounded like every other reader of this byte: the walk below is over
+    // records that exist, not over whatever the count claims.
+    const slotCount = Math.min(data[keym2SlotCountOffset(core.version)] as number, KEYM2_MAX_SLOTS);
     const width = keym2SlotLen(core.cipher);
     const table = keym2SlotTableOffset(core.version);
     const ids: Uint8Array[] = [];
@@ -2405,9 +2407,17 @@ export async function decryptKeym2(
     // right. A discarded candidate's verdict describes a key that does not
     // open this payload, and reporting it would be reporting on the attacker's
     // spliced slot rather than on the owner's table.
-    const slotTableAuthentic = await verifySlotTable(parsed, candidate.master);
-    const keys = await payloadKeys(candidate.master, parsed.core.cipher);
-    secureErase(candidate.master);
+    // The master key is erased whether or not the two derivations below
+    // complete: a WebCrypto failure between them used to leave this
+    // candidate's key in the heap, un-zeroed, on the way out.
+    let slotTableAuthentic: boolean | null;
+    let keys: AeadKeys;
+    try {
+      slotTableAuthentic = await verifySlotTable(parsed, candidate.master);
+      keys = await payloadKeys(candidate.master, parsed.core.cipher);
+    } finally {
+      secureErase(candidate.master);
+    }
 
     const first = await open(parsed.core.cipher, keys, nonceFor(0, last === 0), firstBlob, parsed.coreBytes);
     if (first === null) {

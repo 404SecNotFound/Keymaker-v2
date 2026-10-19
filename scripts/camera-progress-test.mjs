@@ -52,6 +52,25 @@ const B = await m.addShamirSlotKeym2(base, { password: PASSWORD }, 3, 5);
 const parts = await m.encodePaperPartsV2(A.container, 800);
 ok(parts.length >= 3, `the container prints as ${parts.length} parts`);
 const p = (codes) => m.cameraProgress(codes);
+
+// A strip whose header bytes are read without the checksum, so they can say
+// anything: a threshold of 1 (or 0) used to be believed, and the scan ended
+// after one code the shares box then refused. The header is set id (4 bytes
+// for KMSHARE1), threshold, index; ten base32 symbols carry those six bytes.
+const b32 = (bytes) => {
+  const A = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  let bits = "";
+  for (const b of bytes) bits += b.toString(2).padStart(8, "0");
+  let out = "";
+  for (let i = 0; i + 5 <= bits.length; i += 5) out += A[parseInt(bits.slice(i, i + 5), 2)];
+  return out;
+};
+const forgedStrip = (threshold, index) =>
+  "KMSHARE1:" + b32(Uint8Array.from([0xde, 0xad, 0xbe, 0xef, threshold, index, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]));
+ok(!p([forgedStrip(1, 1)]).complete, "a strip claiming a threshold of 1 does not end the scan");
+ok(!p([forgedStrip(0, 1)]).complete, "a strip claiming a threshold of 0 does not end the scan");
+ok(!p([forgedStrip(2, 0)]).complete, "a strip with index 0 is not counted");
+ok(p([forgedStrip(2, 1), forgedStrip(2, 2)]).complete, "two well-formed strips of a 2-of-n set still complete");
 const say = (codes) => m.describeCameraProgress(p(codes)).join(" ");
 
 ok(!p([]).complete, "nothing read is not complete");
