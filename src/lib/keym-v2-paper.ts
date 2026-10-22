@@ -57,8 +57,18 @@ function b64urlEncode(bytes: Uint8Array): string {
 }
 
 function b64urlDecode(text: string): Uint8Array {
+  // A body whose length is 1 mod 4 cannot be base64 at all, and atob says so
+  // with a bare DOMException ("Invalid character") that the notice showed
+  // verbatim. Named here, so a part with a character missing is reported as
+  // that rather than as something the person cannot act on.
+  if (text.length % 4 === 1) throw new Error("A part's data is one character short, or has one too many. Check it against the printout.");
   const padded = text.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (text.length % 4)) % 4);
-  const binary = atob(padded);
+  let binary: string;
+  try {
+    binary = atob(padded);
+  } catch {
+    throw new Error("A part's data contains a character that is not base64. Check it against the printout.");
+  }
   const out = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
   return out;

@@ -315,6 +315,12 @@
 .km-topbar-context { color: var(--color-muted-foreground); font-size: 12px; font-weight: 400; }
 .km-command { display: flex; align-items: center; gap: 10px; padding: 7px 10px; border: 1px solid var(--color-border); border-radius: 6px; color: var(--color-muted-foreground); font-size: 12px; cursor: pointer; }
 .km-command kbd { border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 1px 4px; font-size: 12px; }
+/* The standing disclaimer. Chrome, not content: it sits between the top bar and the shell on every view, in the muted text scale, with the warning colour on its mark only. */
+.km-notice { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; padding: 8px 24px; border-bottom: 1px solid var(--color-border); background: var(--color-card); font-size: 12px; line-height: 1.5; color: var(--color-muted-foreground); }
+.km-notice svg { flex-shrink: 0; color: var(--color-warning); }
+.km-notice span { flex: 1 1 42ch; min-width: 0; }
+.km-notice button { padding: 4px 0; color: var(--color-action); text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; cursor: pointer; white-space: nowrap; }
+.km-notice button:hover { color: var(--color-action-hover); }
 .km-shell { display: grid; grid-template-columns: 204px minmax(0, 1fr); flex: 1; }
 .km-sidebar { display: flex; flex-direction: column; padding: 30px 14px 20px; border-right: 1px solid var(--color-border); }
 .km-nav-label { color: var(--color-subtle-foreground); font-size: 12px; letter-spacing: .06em; margin: 0 12px 14px; }
@@ -464,6 +470,7 @@
 }
 @media (max-width: 760px) {
   .km-topbar { padding: 12px 16px; }
+  .km-notice { padding: 8px 16px; }
   .km-brand-divider, .km-topbar-context, .km-command span, .km-command kbd { display: none; }
   .km-command { padding: 8px; }
   .km-shell { display: flex; flex-direction: column; }

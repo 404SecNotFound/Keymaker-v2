@@ -58,10 +58,28 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
+
+      # A branch named like a tag passes every check below that reads
+      # `github.ref_name`: the annotated-tag lookup asks the API about the
+      # *tag* of that name, which exists, and the in-job verify accepts
+      # `github.workflow_ref`, which is the branch. So branch content could
+      # publish under a tag's name with a `refs/heads/` identity. The ref
+      # itself has to be a tag.
+      - name: The ref must be a tag, not a branch named like one
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [ "$REF_TYPE" != tag ]; then
+            echo "::error::$REF is a $REF_TYPE. Releases are cut from tags only."
+            exit 1
+          fi
+          echo "$REF is a tag."
 
       # Runs the same generator `publish` uses, so there is no second copy of
       # the rule to drift: it rejects a ref that is not `v<package.json
@@ -159,7 +177,7 @@ jobs:
           # install scripts could read it.
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -178,7 +196,7 @@ jobs:
           KEYMAKER_BASE_PATH: /Keymaker-v2
           KEYMAKER_RELEASE_TAG: ${{ github.ref_name }}
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: site
           path: out
@@ -194,6 +212,9 @@ jobs:
   # Same run, so no permission beyond the ones below. See deploy.yml.
   sign:
     needs: [build, verify-ci]
+    # Belt to preflight's braces: the token-holding job itself refuses a
+    # branch, so a future edit that loosens preflight cannot sign one.
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: read
@@ -206,7 +227,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -215,13 +236,13 @@ jobs:
       # is allowed to run code.
       - run: npm ci --ignore-scripts
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: site
           path: out
 
       # Outside out/, so none of it is signed, packaged or attached.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: sums-*
           path: reproduced
@@ -231,6 +252,10 @@ jobs:
       # labelled as this release, each on its own runner.
       - name: The manifest being signed is the one independent builds reproduced
         run: node scripts/check-reproduced-manifest.mjs out/SHA256SUMS reproduced
+
+      # Before signing, not only after; see deploy.yml for why.
+      - name: The files match the manifest before it is signed
+        run: node scripts/verify-manifest.mjs --files-only
 
       - name: Sign the build manifest
         run: node scripts/sign-manifest.mjs
@@ -286,7 +311,7 @@ jobs:
             keymaker-${{ github.ref_name }}.tar.gz
             out/SHA256SUMS
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-assets
           path: |
@@ -297,6 +322,7 @@ jobs:
 
   publish:
     needs: sign
+    if: github.ref_type == 'tag'
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -309,7 +335,7 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
 
@@ -317,7 +343,7 @@ jobs:
       # writes text; it has no dependencies. This job can write to the
       # repository, so it installs nothing.
 
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: assets

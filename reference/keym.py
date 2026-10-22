@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import errno
 import os
+import stat
 import struct
 import sys
 import unicodedata
@@ -80,7 +81,10 @@ MAX_PBKDF2_ITERATIONS = 10_000_000
 MIN_PBKDF2_ITERATIONS_WRITE = 600_000
 MAX_ARGON2_TIME_COST = 10
 MAX_ARGON2_MEMORY_KIB = 262_144
-MIN_ARGON2_MEMORY_KIB_WRITE = 8_192
+# OWASP's Argon2id minimum (19 MiB, two passes) since 7 October 2026; readers
+# stay permissive.
+MIN_ARGON2_MEMORY_KIB_WRITE = 19_456
+MIN_ARGON2_TIME_COST_WRITE = 2
 MAX_ARGON2_PARALLELISM = 8
 
 
@@ -104,7 +108,12 @@ def validate_params(kdf_id: int, params, writing: bool) -> None:
         )
         return
 
-    check("argon2 time_cost", params.time_cost, 1, MAX_ARGON2_TIME_COST)
+    check(
+        "argon2 time_cost",
+        params.time_cost,
+        MIN_ARGON2_TIME_COST_WRITE if writing else 1,
+        MAX_ARGON2_TIME_COST,
+    )
     check(
         "argon2 memory_kib",
         params.memory_kib,
@@ -295,8 +304,15 @@ def encrypt(
     kdf_id: int = KDF_ARGON2ID,
     params=None,
     cipher_id: int = CIPHER_AES_256_GCM,
+    enforce_write_policy: bool = True,
 ) -> bytes:
-    """FORMAT.md sections 6-8."""
+    """
+    FORMAT.md sections 6-8.
+
+    `enforce_write_policy=False` writes below the §3.1 policy floor. It exists
+    for crosstest.py, which has to produce the same below-floor vectors the
+    TypeScript bridge does; nothing an heir runs passes it.
+    """
     if params is None:
         params = (
             Pbkdf2Params(1_000_000)
@@ -304,7 +320,7 @@ def encrypt(
             else Argon2idParams(3, 65536, 4)
         )
 
-    validate_params(kdf_id, params, writing=True)
+    validate_params(kdf_id, params, writing=enforce_write_policy)
 
     salt_len = SALT_LEN_PBKDF2 if kdf_id == KDF_PBKDF2 else SALT_LEN_ARGON2ID
     salt = os.urandom(salt_len)
@@ -362,9 +378,10 @@ def decrypt(container: bytes, password: str, key_file: Optional[bytes] = None) -
 def _selftest() -> int:
     """Round-trip this implementation against itself. Not a conformance test."""
     failures = 0
-    fast_argon = Argon2idParams(2, 16384, 2)
-    # At the write floor from FORMAT.md section 3.1, not below it.
-    fast_pbkdf2 = Pbkdf2Params(600_000)
+    # Both at the write floor from FORMAT.md section 3.1, not below it: the
+    # selftest exercises the shipping writer, which enforces that floor.
+    fast_argon = Argon2idParams(MIN_ARGON2_TIME_COST_WRITE, MIN_ARGON2_MEMORY_KIB_WRITE, 2)
+    fast_pbkdf2 = Pbkdf2Params(MIN_PBKDF2_ITERATIONS_WRITE)
 
     for kdf_id, params in ((KDF_PBKDF2, fast_pbkdf2), (KDF_ARGON2ID, fast_argon)):
         for cipher_id in (CIPHER_AES_256_GCM, CIPHER_CHACHA20_POLY1305, CIPHER_CHAINED):
@@ -460,13 +477,20 @@ def resolve_password(supplied: str | None, confirm: bool = False) -> str:
             "interactive prompt for real secrets.",
             file=sys.stderr,
         )
-        return supplied
+        pw = supplied
+    else:
+        import getpass
 
-    import getpass
-
-    pw = getpass.getpass("Password: ")
-    if confirm and pw != getpass.getpass("Confirm password: "):
-        raise KeymError("passwords did not match")
+        pw = getpass.getpass("Password: ")
+        if confirm and pw != getpass.getpass("Confirm password: "):
+            raise KeymError("passwords did not match")
+    # `confirm` is the writer's call: a container written with an empty
+    # password opens for anyone who finds it. Reading is left alone.
+    if confirm and not pw:
+        raise KeymError(
+            "refusing to encrypt with an empty password: the container would "
+            "open for anyone who found it"
+        )
     return pw
 
 
@@ -633,17 +657,29 @@ def _open_private(path: str):
 
     O_CREAT's mode is ignored when the file already exists, so an existing 0644
     file would otherwise keep its bits; `fchmod` on the descriptor just opened
-    covers that without the race a path-based `chmod` would have. Where it is
-    unavailable or refused — Windows, a FIFO, a filesystem with no mode bits —
-    the write still goes ahead: failing to narrow permissions is not a reason
-    to refuse someone their own plaintext.
+    covers that without the race a path-based `chmod` would have.
 
-    O_NOFOLLOW where the platform has it, so a symlink planted at `--out` is
-    refused rather than written through. Not O_EXCL: refusing to overwrite
-    would strand the ordinary case of re-running a command after a typo, and
-    this is a recovery tool.
+    Refused, all for a shared machine: a symlink at `--out` (O_NOFOLLOW), a
+    regular file that already exists and belongs to another user (writing into
+    it hands them the plaintext), a regular file whose mode cannot be
+    narrowed, and anything that is not a regular file or a character device
+    (a named pipe is the one thing an unprivileged account can leave at a
+    path that passes the other three checks, and it delivers the plaintext to
+    whoever reads the other end). The file is truncated only after those
+    checks pass. Not O_EXCL: refusing to overwrite would strand the ordinary
+    case of re-running a command after a typo, and this is a recovery tool.
+    Where there are no mode bits — Windows, a device — the write still goes
+    ahead. The open is non-blocking so a FIFO with no reader fails instead of
+    hanging the tool before `fstat` can see it; the flag is cleared after.
     """
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_WRONLY | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
+    not_a_file = (
+        f"refusing to write {path}: it is not a regular file (a pipe, a "
+        f"socket or a directory). Remove it, or pick another path."
+    )
     try:
         fd = os.open(path, flags, 0o600)
     except OSError as exc:
@@ -651,12 +687,36 @@ def _open_private(path: str):
             raise KeymError(
                 f"refusing to write {path}: it is a symbolic link"
             ) from None
+        if exc.errno == errno.ENXIO:
+            raise KeymError(not_a_file) from None
         raise KeymError(f"cannot write {path}: {exc.strerror}") from None
-    if hasattr(os, "fchmod"):
-        try:
-            os.fchmod(fd, 0o600)
-        except OSError:
-            pass
+    try:
+        st = os.fstat(fd)
+        regular = stat.S_ISREG(st.st_mode)
+        if not regular and not stat.S_ISCHR(st.st_mode):
+            raise KeymError(not_a_file)
+        if hasattr(os, "O_NONBLOCK"):
+            import fcntl
+            fcntl.fcntl(fd, fcntl.F_SETFL,
+                        fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+        if regular and hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            raise KeymError(
+                f"refusing to write {path}: it already exists and belongs to "
+                f"another user. Remove it, or pick another path."
+            )
+        if hasattr(os, "fchmod"):
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError as exc:
+                if regular:
+                    raise KeymError(
+                        f"cannot make {path} readable only by you: {exc.strerror}"
+                    ) from None
+        if regular:
+            os.ftruncate(fd, 0)
+    except BaseException:
+        os.close(fd)
+        raise
     return os.fdopen(fd, "wb")
 
 

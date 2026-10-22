@@ -1506,11 +1506,21 @@ than an amendment to it.
 | Parameter | Reading (MUST reject outside) | Writing (SHOULD enforce) |
 |---|---|---|
 | PBKDF2 `iterations` | 1 .. 10,000,000 | ≥ 600,000 |
-| Argon2id `time_cost` | 1 .. 10 | 1 .. 10 |
-| Argon2id `memory_kib` | 1 .. 262,144 | ≥ 8,192 |
+| Argon2id `time_cost` | 1 .. 10 | ≥ 2 |
+| Argon2id `memory_kib` | 1 .. 262,144 | ≥ 19,456 |
 | Argon2id `parallelism` | 1 .. 8 | 1 .. 8 |
 
-Carried over unchanged, including the asymmetry: upper bounds are the security
+**Write floor raised, 7 October 2026.** The Argon2id writing column was
+`time_cost` 1 .. 10 and `memory_kib` ≥ 8,192, which is about 1/24 of the
+default's work and below OWASP's Argon2id minimum (19 MiB, two passes). A
+writer SHOULD now refuse `time_cost` below 2 or `memory_kib` below 19,456.
+Readers are unchanged, so every container written at the old floor still
+opens, and a reader that describes a container's KDF as weak measures it
+against this floor. The conformance suites write below the floor on purpose,
+through an explicit opt-out in each implementation, because the published
+vectors and the frozen fixtures do.
+
+Carried over otherwise unchanged, including the asymmetry: upper bounds are the security
 control and apply on read; lower bounds are policy for new containers only, so
 that files written with older or lower settings still open.
 

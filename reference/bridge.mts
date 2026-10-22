@@ -148,9 +148,15 @@ try {
           }
         : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
 
+    // The conformance writers (encrypt, encrypt2, encryptboth, encryptslots)
+    // opt out of the §6 write floor: the published vectors and the frozen
+    // fixtures were written below it, and this bridge has to reproduce them
+    // byte for byte. keym2.py does the same with enforce_write_policy=False.
+    // `encryptapp` is the real writer and keeps the floor.
     const out = await encryptData(inputBuf, password, keyFile, {
       kdf,
       cipher: CIPHERS[flag("cipher") ?? "aes"]!,
+      enforceWritePolicy: false,
     });
     writeFileSync(outFile, Buffer.from(out));
   } else if (cmd === "decrypt") {
@@ -177,7 +183,7 @@ try {
       new Uint8Array(inputBuf),
       password,
       keyFile ? new Uint8Array(keyFile) : null,
-      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
+      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]!, enforceWritePolicy: false },
       Uint8Array.from(Buffer.from(flag("salt")!, "hex")),
       Uint8Array.from(Buffer.from(flag("master-key")!, "hex")),
       // `--version 4` writes v4 (padded); with a container id and no version
@@ -212,7 +218,7 @@ try {
       new Uint8Array(inputBuf),
       password,
       keyFile ? new Uint8Array(keyFile) : null,
-      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
+      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]!, enforceWritePolicy: false },
       Number(flag("threshold")),
       Number(flag("shares")),
       // `--version 4` writes v4 (padded); with a container id and no version
@@ -256,7 +262,7 @@ try {
       new Uint8Array(inputBuf),
       password,
       keyFile ? new Uint8Array(keyFile) : null,
-      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]! },
+      { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]!, enforceWritePolicy: false },
       {
         shamir: flag("threshold") === undefined
           ? undefined
@@ -283,7 +289,7 @@ try {
             kdf: KdfId.ARGON2ID,
             params: {
               timeCost: Number(flag("time") ?? 2),
-              memoryKiB: Number(flag("mem") ?? 16384),
+              memoryKiB: Number(flag("mem") ?? 19 * 1024),
               parallelism: Number(flag("par") ?? 2),
             },
           }

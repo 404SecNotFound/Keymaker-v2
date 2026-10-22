@@ -27,7 +27,7 @@ import { DiceEntropyTool } from "@/components/dice-entropy-tool";
 import { DocsGuide } from "@/components/docs-guide";
 import { AudioStegoTool } from "@/components/audio-stego-tool";
 import { PaperVault } from "@/components/paper-vault";
-import { Search, Lock, Heart, ScrollText, LifeBuoy } from "lucide-react";
+import { Search, Lock, Heart, ScrollText, LifeBuoy, ShieldAlert } from "lucide-react";
 import { KEYM2_VERSION } from "@/lib/keym-v2";
 import { EncryptorContext } from "./encryptor/context";
 import { useEncryptorState } from "./encryptor/use-encryptor-state";
@@ -73,6 +73,28 @@ export function EncryptorTool() {
           <kbd>{isApplePlatform ? "⌘" : "Ctrl"} K</kbd>
         </button>
       </header>
+      {/* The one sentence a user should read before trusting this with
+          anything. On every view and at every width, above the fold, in the
+          chrome rather than a dismissable toast: a disclaimer that can be
+          closed is one that was never seen. The wording states what is true
+          today and nothing it cannot back; the link goes to the chapter that
+          says the rest. */}
+      <div className="km-notice" role="note" data-testid="disclaimer">
+        <ShieldAlert className="h-3.5 w-3.5" aria-hidden="true" />
+        <span>
+          Reviewed by its author, not independently audited. Free software with no warranty. It cannot protect
+          a compromised device, a weak password, or a password you forget. Test that a backup opens before you rely on it.
+        </span>
+        <button
+          type="button"
+          onClick={() => {
+            navigateWorkspace("docs");
+            requestAnimationFrame(() => document.getElementById("docs-limits")?.scrollIntoView({ block: "start" }));
+          }}
+        >
+          What it does not protect against
+        </button>
+      </div>
       <div className="km-shell">
         <aside className="km-sidebar" aria-label="Workspace navigation">
           <p className="km-nav-label">WORKSPACE</p>

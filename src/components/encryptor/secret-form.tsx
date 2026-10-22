@@ -919,8 +919,8 @@ export function SecretForm({ mode }: { mode: Mode }) {
                         <div className="animate-in fade-in-50 space-y-3 rounded-lg border border-border p-3">
                           {(
                             [
-                              { label: "Time cost", value: argonTimeCost, set: setArgonTimeCost, min: 1, max: 10, step: 1, hint: "passes over memory" },
-                              { label: "Memory", value: argonMemoryMiB, set: setArgonMemoryMiB, min: 8, max: 256, step: 8, hint: "MiB" },
+                              { label: "Time cost", value: argonTimeCost, set: setArgonTimeCost, min: 2, max: 10, step: 1, hint: "passes over memory" },
+                              { label: "Memory", value: argonMemoryMiB, set: setArgonMemoryMiB, min: 19, max: 256, step: 1, hint: "MiB" },
                               { label: "Parallelism", value: argonParallelism, set: setArgonParallelism, min: 1, max: 8, step: 1, hint: "threads" },
                             ] as const
                           ).map(({ label, value, set, min, max, step, hint }) => (

@@ -12,12 +12,13 @@
  * an air-gapped device, and record the results yourself.
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Dices, Info, TriangleAlert, CheckCircle2, ShieldAlert, ChevronDown } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
+import { useEncryptorContext } from "@/components/encryptor/context";
 
 const FLOOR_BITS = 128;
 const TARGET_BITS = 256;
@@ -51,6 +52,33 @@ export function DiceEntropyTool() {
   const [manualRolls, setManualRolls] = useState("");
   // The roll-log validator is opt-in; see the note by its markup.
   const [showValidator, setShowValidator] = useState(false);
+
+  // The roll log is a wallet's entropy in the clear, and this panel is
+  // force-mounted, so none of the app's wipes could reach it: Wipe now, the
+  // idle lock and a tab change all left the faces sitting in a hidden
+  // textarea until the page closed. It now clears on the same three
+  // occasions the main form does. `wipeGeneration` is the app's count of
+  // clears, so every wipe and lock lands here; hidden and pagehide match the
+  // audio tool, since a tab that is not being looked at has no use for them.
+  const { wipeGeneration } = useEncryptorContext();
+  const clearRolls = useCallback(() => {
+    setRollLog("");
+    setManualRolls("");
+  }, []);
+  useEffect(() => {
+    if (wipeGeneration > 0) clearRolls();
+  }, [wipeGeneration, clearRolls]);
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") clearRolls();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", clearRolls);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", clearRolls);
+    };
+  }, [clearRolls]);
 
   const calc = useMemo(() => {
     // Whether the die size is usable at all, kept as a value rather than

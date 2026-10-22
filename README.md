@@ -626,6 +626,7 @@ npm run test:audio-decode-scale   # a carrier decoded through Web Audio comes ba
 npm run test:audio-wav-depths     # a WAV carrier at any common depth, at its own sample rate
 npm run test:sw-precache          # the service worker precaches a fresh shell and the whole kit
 npm run test:camera-progress      # the camera scanner's rule for when enough has been read
+npm run test:worker-protocol      # the crypto worker answers every message, malformed ones included
 npm run test:printout-check       # "Check this printout" says whether each code is from this backup
 npm run test:seal-verdict         # "sealed" needs the whole egress directive set, not connect-src
 npm run test:csp-egress           # the build refuses a page whose CSP leaves an egress path open

@@ -129,7 +129,7 @@ const same = (a, b) => Buffer.from(a).equals(Buffer.from(b));
 const ab = (u) => u.slice().buffer;
 
 const PBKDF2 = { kdf: m.KdfId.PBKDF2, params: { iterations: 600_000 } };
-const ARGON2 = { kdf: m.KdfId.ARGON2ID, params: { timeCost: 1, memoryKiB: 8 * 1024, parallelism: 1 } };
+const ARGON2 = { kdf: m.KdfId.ARGON2ID, params: { timeCost: 2, memoryKiB: 19 * 1024, parallelism: 1 } };
 
 // ---------------------------------------------------------------------------
 // 1. One derivation, through the worker, for every creation the form can ask for.

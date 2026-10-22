@@ -230,6 +230,23 @@ async function calibrate(parallelism: number): Promise<{ low: Argon2Sample; high
 ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
   const req = event.data;
 
+  // Only the page can post here, but a message it did not mean to send still
+  // has to be answered, or the client's pending promise waits for ever. A
+  // null message used to throw inside this async listener — a rejected
+  // promise nobody held, no `error` event, no response — and an op this
+  // worker does not know fell through to the decrypt branch with undefined
+  // arguments. Both now get a response that names the problem.
+  if (
+    typeof req !== "object" ||
+    req === null ||
+    typeof (req as { id?: unknown }).id !== "number" ||
+    typeof (req as { op?: unknown }).op !== "string"
+  ) {
+    const id = typeof (req as { id?: unknown } | null)?.id === "number" ? (req as { id: number }).id : -1;
+    ctx.postMessage({ id, ok: false, code: null, message: "Malformed request." } satisfies CryptoResponse);
+    return;
+  }
+
   try {
     if (req.op === "ping") {
       ctx.postMessage({ id: req.id, ok: true, op: "ping" } satisfies CryptoResponse);
@@ -309,6 +326,10 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       return;
     }
 
+    if (req.op !== "decrypt") {
+      throw new KeymakerError("invalid-input", `Unknown operation: ${String((req as { op: string }).op).slice(0, 32)}`);
+    }
+
     const result = await decryptData(req.data, req.password, req.keyFile, req.shares, req.prfOutput);
     const response: CryptoResponse = {
       id: req.id,
@@ -326,16 +347,16 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       id: req.id,
       ok: false,
       code: isUserFacingError(error) ? error.code : null,
-      // A verify sends only messages the core has typed as safe to show. The
-      // page already shows nothing else, but this op promises that nothing
-      // secret crosses the boundary, and an untyped message is text nobody
-      // here wrote.
-      message:
-        req.op === "verify" && !isUserFacingError(error)
-          ? "Decryption failed."
-          : error instanceof Error
-            ? error.message
-            : "Processing failed. Please try again.",
+      // Only messages the core has typed as safe to show cross the boundary.
+      // The page already shows nothing else, but an untyped message is text
+      // nobody here wrote — a library's, a browser's — and this worker holds
+      // the key material. Verify made this promise first; it costs nothing
+      // to keep it for every op.
+      message: isUserFacingError(error)
+        ? error.message
+        : req.op === "encrypt"
+          ? "Processing failed. Please try again."
+          : "Decryption failed.",
     };
     ctx.postMessage(response);
   } finally {

@@ -98,7 +98,7 @@ export interface Calibration {
  * authority — `kdf-calibration-test.mts` pushes every result through it rather
  * than trusting that these two lists agree.
  */
-export const CALIBRATION_MEMORY_FLOOR_KIB = 8 * 1024; // §6 write policy minimum
+export const CALIBRATION_MEMORY_FLOOR_KIB = 19 * 1024; // §6 write policy minimum (OWASP)
 export const FORMAT_MEMORY_MAX_KIB = 256 * 1024; // §6 read maximum
 
 /**

@@ -185,6 +185,7 @@ import hmac
 import math
 import os
 import re
+import stat
 import struct
 import sys
 import unicodedata
@@ -458,7 +459,10 @@ PBKDF2_ITER_MIN, PBKDF2_ITER_MAX = 1, 10_000_000
 PBKDF2_ITER_POLICY_MIN = 600_000
 ARGON2_TIME_MIN, ARGON2_TIME_MAX = 1, 10
 ARGON2_MEM_MIN, ARGON2_MEM_MAX = 1, 262_144
-ARGON2_MEM_POLICY_MIN = 8_192
+# §6 writing floor, OWASP's Argon2id minimum since 7 October 2026. Readers
+# stay permissive; `enforce_write_policy=False` is the conformance opt-out.
+ARGON2_MEM_POLICY_MIN = 19_456
+ARGON2_TIME_POLICY_MIN = 2
 ARGON2_PAR_MIN, ARGON2_PAR_MAX = 1, 8
 
 
@@ -860,6 +864,11 @@ def check_write_policy(slot: Slot) -> None:
         raise UsageError(
             f"refusing to write Argon2id with memory_kib={slot.memory_kib}; "
             f"policy minimum is {ARGON2_MEM_POLICY_MIN}"
+        )
+    if slot.kdf_id == KDF_ARGON2ID and slot.time_cost < ARGON2_TIME_POLICY_MIN:
+        raise UsageError(
+            f"refusing to write Argon2id with time_cost={slot.time_cost}; "
+            f"policy minimum is {ARGON2_TIME_POLICY_MIN}"
         )
 
 
@@ -4924,6 +4933,84 @@ def _selftest() -> int:
         check("an existing world-readable --out file is narrowed, not left alone",
               _stat.S_IMODE(os.stat(_existing).st_mode) & 0o077 == 0)
 
+        # A pre-existing file that belongs to another user is theirs, and
+        # O_NOFOLLOW says nothing about it. Only root can stage one, so this
+        # runs where it can and says so where it cannot.
+        _foreign = os.path.join(_d, "foreign.txt")
+        open(_foreign, "wb").write(b"theirs")
+        _staged = False
+        if hasattr(os, "chown") and hasattr(os, "geteuid"):
+            try:
+                os.chown(_foreign, 65534, 65534)
+                _staged = os.stat(_foreign).st_uid != os.geteuid()
+            except OSError:
+                _staged = False
+        if _staged:
+            _refused = False
+            try:
+                with open_private(_foreign) as _fh:
+                    _fh.write(b"mine")
+            except UsageError as _e:
+                _refused = "another user" in str(_e)
+            check("a --out file owned by another user is refused", _refused)
+            check("and is left exactly as it was",
+                  open(_foreign, "rb").read() == b"theirs")
+        else:
+            print("  skip a --out file owned by another user (cannot stage one here)")
+
+        # A named pipe needs no privilege to plant and is neither a symlink
+        # nor a file another user owns, so it passed every check above and
+        # delivered the plaintext to whoever was reading it. Two shapes: with
+        # nobody reading, the open must fail rather than block the tool for
+        # ever; with a reader waiting, the open succeeds and fstat has to be
+        # the thing that refuses, before any byte reaches the pipe.
+        if hasattr(os, "mkfifo"):
+            import threading as _threading
+
+            _pipe = os.path.join(_d, "pipe.txt")
+            os.mkfifo(_pipe)
+            _refused = False
+            try:
+                with open_private(_pipe) as _fh:
+                    _fh.write(b"seed phrase")
+            except UsageError as _e:
+                _refused = "not a regular file" in str(_e)
+            check("a --out that is a pipe with no reader is refused, not waited on",
+                  _refused)
+
+            _got: list[bytes] = []
+
+            def _drain() -> None:
+                with open(_pipe, "rb") as _r:
+                    _got.append(_r.read())
+
+            _reader = _threading.Thread(target=_drain, daemon=True)
+            _reader.start()
+            _refused = False
+            try:
+                with open_private(_pipe) as _fh:
+                    _fh.write(b"seed phrase")
+            except UsageError as _e:
+                _refused = "not a regular file" in str(_e)
+            _reader.join(timeout=5)
+            check("a --out that is a pipe someone is reading is refused", _refused)
+            check("and the reader received nothing",
+                  not _reader.is_alive() and _got == [b""])
+        else:
+            print("  skip a --out that is a pipe (no mkfifo here)")
+
+        # /dev/null is a character device: not a regular file, but only root
+        # can create one, so it must stay usable as a throwaway --out.
+        if os.path.exists(os.devnull) and os.name == "posix":
+            _ok = False
+            try:
+                with open_private(os.devnull) as _fh:
+                    _fh.write(b"discard")
+                _ok = True
+            except UsageError:
+                _ok = False
+            check("--out /dev/null still works", _ok)
+
     # Key material passed as an argument is in the shell history and was in the
     # process list. --password has said so since keym.py; a share and a PRF
     # output open the container just as directly and said nothing.
@@ -4947,6 +5034,38 @@ def _selftest() -> int:
     # No secret, no warning — otherwise the warning is noise and gets ignored
     # on the run where it matters.
     check("no warning when neither was passed", _warns_for() == "")
+    # The conformance-only inputs are the key material itself.
+    check("--master-key on the command line warns",
+          "--master-key" in _warns_for(master_key="00"))
+    check("--share-secret on the command line warns",
+          "--share-secret" in _warns_for(share_secret="00"))
+    check("--share-coefficients on the command line warns",
+          "--share-coefficients" in _warns_for(share_coefficients="00"))
+
+    # The writer refuses an empty password; the reader does not, because a
+    # container written with one elsewhere still has to open.
+    _refused = False
+    try:
+        with _contextlib.redirect_stderr(_io.StringIO()):
+            resolve_password("", confirm=True)
+    except UsageError as _e:
+        _refused = "empty password" in str(_e)
+    check("encrypt refuses an empty password", _refused)
+    with _contextlib.redirect_stderr(_io.StringIO()):
+        check("decrypt still accepts an empty password",
+              resolve_password("", confirm=False) == "")
+
+    # A mistyped hex argument is a usage error with the flag's name in it,
+    # not the "internal error" message reserved for this file's own bugs.
+    check("hex_arg decodes a hex argument", hex_arg("--salt", "00ff") == b"\x00\xff")
+    check("hex_arg treats an absent argument as None",
+          hex_arg("--salt", None) is None and hex_arg("--salt", "") is None)
+    _refused = False
+    try:
+        hex_arg("--salt", "zz")
+    except UsageError as _e:
+        _refused = "--salt" in str(_e)
+    check("a mistyped hex argument names its flag as a usage error", _refused)
 
     # --- the CLI's own loader: what every command that reads a container
     # does with the file it is handed. Driven through main() rather than the
@@ -4976,6 +5095,17 @@ def _selftest() -> int:
         _code, _out, _err = _cli(["inspect", "--in", _page])
         check("inspect reads a self-extracting page",
               _code == 0 and _out.startswith("KEYM v") and "slots       1" in _out)
+        # A shares file saved in a legacy encoding — Notepad, an accented name
+        # in a "#" comment — used to escape as a UnicodeDecodeError and print
+        # the message reserved for bugs. The shares are wrong for this
+        # container, so the answer is an ordinary refusal, not a crash.
+        _latin = os.path.join(_d, "shares.txt")
+        open(_latin, "wb").write("# for Ren\xe9\nKMSHARE1:x\n".encode("latin-1"))
+        _code, _out, _err = _cli(
+            ["decrypt", "--in", _page, "--shares-from", _latin, "--password", "x"])
+        check("a shares file in a legacy encoding is an ordinary refusal, not a crash",
+              _code == 1 and "internal error" not in _err
+              and "UnicodeDecodeError" not in str(_code))
         _code, _out, _err = _cli(["split", "--in", _page])
         check("split reads the container out of a page, not the page itself",
               _code == 0 and decode_parts_any(
@@ -5669,45 +5799,93 @@ def open_private(path: str):
     where a conditional is the thing someone forgets. Widening afterwards is
     one `chmod`, and it is the user's call to make.
 
-    O_CREAT's mode is ignored when the file already exists, so an existing 0644
-    `seed.txt` would otherwise keep its bits. `fchmod` on the descriptor just
-    opened covers that without the race a path-based `chmod` would have. Where
-    it is unavailable or refused — Windows, a FIFO, a filesystem with no mode
-    bits — the write still goes ahead: failing to narrow permissions is not a
-    reason to refuse someone their own plaintext.
+    Four things are refused, all for the shared machine this function exists
+    for. A symlink at `--out`: writing through it puts the plaintext wherever
+    whoever planted it chose. A regular file that already exists and belongs to
+    another user: `O_NOFOLLOW` does nothing for that, the file is theirs, and
+    writing into it hands them the plaintext. A regular file whose mode cannot
+    be narrowed to 0600: the write would be readable by other accounts, which
+    is the one outcome this helper exists to prevent. And anything that is not
+    a regular file, a character device aside: a named pipe is the one thing an
+    unprivileged account can leave at a path that is not a symlink and not a
+    file it owns, and writing into it hands the plaintext straight to whoever
+    is reading the other end. `/dev/null` and a terminal are character devices,
+    which only root can create, so they stay allowed. The file is only
+    truncated after those checks pass, so a refused path is left as it was.
+
+    O_EXCL is deliberately not used. Refusing to overwrite would strand the
+    ordinary case of re-running a command after a typo, and this is a recovery
+    tool: an heir who cannot re-run `decrypt --out seed.txt` because the first
+    attempt left an empty file is worse off than one whose file gets rewritten.
+    Where there are no mode bits to narrow — Windows, a device — the write
+    still goes ahead, because there is nothing to narrow.
+
+    The open is non-blocking so that the pipe check can happen at all: opening
+    a FIFO for writing with no reader blocks until one arrives, which would
+    hang the tool before `fstat` ever ran. With no reader the open fails
+    instead, and with one waiting it succeeds and `fstat` names the pipe. The
+    flag is cleared again before the descriptor is handed back.
     """
-    # O_NOFOLLOW where the platform has it. Without it a symlink planted at
-    # `--out` is followed, and the fchmod below then narrows the *target's*
-    # mode to 0600 — which limits who can read the plaintext to whoever planted
-    # the link, and writes it wherever they chose. The shared machine this
-    # function exists for is the machine where that is worth doing.
-    #
-    # O_EXCL is deliberately not added with it. Refusing to overwrite would
-    # strand the ordinary case of re-running a command after a typo, and this
-    # is a recovery tool: an heir who cannot re-run `decrypt --out seed.txt`
-    # because the first attempt left an empty file is worse off than one whose
-    # file gets rewritten.
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_WRONLY | os.O_CREAT
+        | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    )
+    not_a_file = (
+        f"refusing to write {path}: it is not a regular file (a pipe, a "
+        f"socket or a directory). On a shared machine that is something "
+        f"someone else put there, and writing into it would hand them the "
+        f"output. Remove it, or pick another path."
+    )
     try:
         fd = os.open(path, flags, 0o600)
     except OSError as e:
         # ELOOP here means O_NOFOLLOW did its job, and the generic strerror for
         # it ("Too many levels of symbolic links") describes a completely
-        # different problem. Everything else — a missing directory, no write
-        # permission, a read-only filesystem — is an ordinary mistake that was
-        # answering with a traceback.
+        # different problem. ENXIO is a FIFO with nobody reading it, or a
+        # socket: "No such device or address" says nothing an heir can act on.
+        # Everything else — a missing directory, no write permission, a
+        # read-only filesystem — is an ordinary mistake that was answering
+        # with a traceback.
         if e.errno == errno.ELOOP:
             raise UsageError(
                 f"refusing to write {path}: it is a symbolic link. Writing "
                 f"through it would put the output somewhere chosen by whoever "
                 f"created the link. Remove it, or pick another path."
             ) from None
+        if e.errno == errno.ENXIO:
+            raise UsageError(not_a_file) from None
         raise UsageError(f"cannot write {path}: {e.strerror}") from None
-    if hasattr(os, "fchmod"):
-        try:
-            os.fchmod(fd, 0o600)
-        except OSError:
-            pass
+    try:
+        st = os.fstat(fd)
+        regular = stat.S_ISREG(st.st_mode)
+        if not regular and not stat.S_ISCHR(st.st_mode):
+            raise UsageError(not_a_file)
+        if hasattr(os, "O_NONBLOCK"):
+            import fcntl
+            fcntl.fcntl(fd, fcntl.F_SETFL,
+                        fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
+        if regular and hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            raise UsageError(
+                f"refusing to write {path}: it already exists and belongs to "
+                f"another user. On a shared machine that is a file someone else "
+                f"put there, and writing into it would hand them the output. "
+                f"Remove it, or pick another path."
+            )
+        if hasattr(os, "fchmod"):
+            try:
+                os.fchmod(fd, 0o600)
+            except OSError as e:
+                if regular:
+                    raise UsageError(
+                        f"cannot make {path} readable only by you: {e.strerror}. "
+                        f"The output would be readable by other accounts, so "
+                        f"nothing was written. Pick another path."
+                    ) from None
+        if regular:
+            os.ftruncate(fd, 0)
+    except BaseException:
+        os.close(fd)
+        raise
     return os.fdopen(fd, "wb")
 
 
@@ -5741,6 +5919,21 @@ def warn_argv_secrets(args: argparse.Namespace) -> None:
             "unwraps a passkey slot on its own.",
             file=sys.stderr,
         )
+    # The conformance-only inputs are the key material itself, or reconstruct
+    # it, and were the one kind of secret this never mentioned.
+    for flag, attr in (
+        ("--master-key", "master_key"),
+        ("--share-secret", "share_secret"),
+        ("--share-coefficients", "share_coefficients"),
+    ):
+        if getattr(args, attr, None):
+            print(
+                f"warning: {flag} was read from the command line, so it is now "
+                f"in your shell history and was visible in the process list. "
+                f"It is the key material itself; it exists for conformance "
+                f"testing, not for real backups.",
+                file=sys.stderr,
+            )
 
 
 def resolve_password(supplied: Optional[str], confirm: bool = False) -> str:
@@ -5760,14 +5953,40 @@ def resolve_password(supplied: Optional[str], confirm: bool = False) -> str:
             "interactive prompt for real secrets.",
             file=sys.stderr,
         )
-        return supplied
+        pw = supplied
+    else:
+        import getpass
 
-    import getpass
-
-    pw = getpass.getpass("Password: ")
-    if confirm and pw != getpass.getpass("Confirm password: "):
-        raise UsageError("passwords did not match")
+        pw = getpass.getpass("Password: ")
+        if confirm and pw != getpass.getpass("Confirm password: "):
+            raise UsageError("passwords did not match")
+    # `confirm` is the writer's call. A container written with an empty
+    # password opens for anyone who finds it, and this script is the
+    # reference writer; the app refuses the same thing at its password
+    # policy. Reading is left alone: a container that was written with one
+    # elsewhere still has to open.
+    if confirm and not pw:
+        raise UsageError(
+            "refusing to encrypt with an empty password: the container would "
+            "open for anyone who found it"
+        )
     return pw
+
+
+def hex_arg(flag: str, value: Optional[str]) -> Optional[bytes]:
+    """
+    A conformance-only hex argument, or None when it was not given.
+
+    `bytes.fromhex` raises ValueError, which the command handlers do not
+    catch, so a mistyped `--salt` was answered with the "internal error"
+    message this file reserves for its own bugs.
+    """
+    if not value:
+        return None
+    try:
+        return bytes.fromhex(value)
+    except ValueError:
+        raise UsageError(f"{flag} must be hexadecimal") from None
 
 
 # The subcommands whose input *is* a container, in any of the encodings §7
@@ -6189,11 +6408,9 @@ def main(argv: Optional[list[str]] = None) -> int:
             container, texts = add_shamir_slot(
                 data, resolve_password(args.password), args.threshold, args.shares,
                 unlock_keyfile=keyfile,
-                salt=bytes.fromhex(args.salt) if args.salt else None,
-                share_secret=(bytes.fromhex(args.share_secret)
-                              if args.share_secret else None),
-                coefficients=(bytes.fromhex(args.share_coefficients)
-                              if args.share_coefficients else None),
+                salt=hex_arg("--salt", args.salt),
+                share_secret=hex_arg("--share-secret", args.share_secret),
+                coefficients=hex_arg("--share-coefficients", args.share_coefficients),
             )
         except (KeymError, UsageError) as e:
             print(f"error: {e}", file=sys.stderr)
@@ -6217,7 +6434,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 data, resolve_password(args.password),
                 bytes.fromhex(args.prf_output),
                 unlock_keyfile=keyfile,
-                salt=bytes.fromhex(args.salt) if args.salt else None,
+                salt=hex_arg("--salt", args.salt),
             )
         except ValueError:
             print("error: --prf-output must be hex", file=sys.stderr)
@@ -6239,7 +6456,12 @@ def main(argv: Optional[list[str]] = None) -> int:
         shares = list(args.shares or [])
         if args.shares_from:
             try:
-                with open(args.shares_from, encoding="utf-8") as fh:
+                # errors="replace": a file saved in a legacy encoding, with
+                # an accented name in a "#" comment, used to escape as a
+                # UnicodeDecodeError and print the message reserved for bugs.
+                # The share decoder drops anything outside its alphabet, so a
+                # replacement character in a comment or a share is harmless.
+                with open(args.shares_from, encoding="utf-8", errors="replace") as fh:
                     # §7's IGNORABLE, so a file saved with a byte order mark
                     # (Windows Notepad) does not turn its first line, often a
                     # "# shares" comment, into a share that fails the set.
@@ -6301,12 +6523,11 @@ def main(argv: Optional[list[str]] = None) -> int:
                 time_cost=args.time_cost,
                 memory_kib=args.memory_kib,
                 parallelism=args.parallelism,
-                salt=bytes.fromhex(args.salt) if args.salt else None,
-                master_key=bytes.fromhex(args.master_key) if args.master_key else None,
+                salt=hex_arg("--salt", args.salt),
+                master_key=hex_arg("--master-key", args.master_key),
                 version=(VERSION_V2 if args.v2
                          else VERSION_V4 if args.pad else VERSION),
-                container_id=(bytes.fromhex(args.container_id)
-                              if args.container_id else None),
+                container_id=hex_arg("--container-id", args.container_id),
             )
 
             if args.armor:
