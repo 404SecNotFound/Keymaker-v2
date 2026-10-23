@@ -1729,13 +1729,15 @@ to ASCII letters only: a non-ASCII character is never folded into the alphabet,
 so `ı` (U+0131) is not `I` and `ſ` (U+017F) is not `S`.
 
 Where a text holds one item per line (paper parts, or shares pasted or saved
-together), a reader splits it at U+000A and nowhere else. Each line is then
+together), a reader ends a line at U+000A, at U+000D U+000A, and at a U+000D on
+its own, and nowhere else. Those three are what a browser's text box hands over
+as a line break, so a reader of a file has to agree with it. Each line is then
 stripped of IGNORABLE characters at both ends, and a line left empty, or
 beginning with `#`, is skipped. The other characters an editor may treat as a
-line end (U+000B, U+000C, U+000D, U+0085, U+2028, U+2029) are IGNORABLE, so
-inside a line they are ignored like any other. A reader that also split at
-those broke a part in two wherever an editor had left one, and a line holding
-only U+0085 was a blank line to one reader and a failed share to the other.
+line end (U+000B, U+000C, U+0085, U+2028, U+2029) are IGNORABLE, so inside a
+line they are ignored like any other. A reader that also split at those broke a
+part in two wherever an editor had left one, and a line holding only U+0085 was
+a blank line to one reader and a failed share to the other.
 
 This was written down after the two implementations were found to disagree on
 it, each by inheriting its language's idea of whitespace: JavaScript's `trim`

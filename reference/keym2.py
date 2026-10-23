@@ -430,17 +430,19 @@ def _drop_ignorable(text: str) -> str:
 
 def text_lines(text: str) -> list[str]:
     """
-    §7, one item per line (paper parts, a list of shares). Split at U+000A only,
-    strip IGNORABLE from both ends of each line, and skip a line left empty or
-    beginning with "#". The TypeScript's textLines is the same function.
+    §7, one item per line (paper parts, a list of shares). A line ends at LF,
+    CRLF or a lone CR, which is what a browser's text box hands over for all
+    three. Each line is stripped of IGNORABLE at both ends, and one left empty
+    or beginning with "#" is skipped. The TypeScript's textLines is the same
+    function.
 
-    `join` used str.splitlines(), which also breaks at U+000B, U+000C, U+000D,
+    `join` used str.splitlines(), which also breaks at U+000B, U+000C,
     U+001C..U+001E, U+0085, U+2028 and U+2029. A part holding one of those,
     which §7 says is ignored inside a part, came out as two broken lines here
     and reassembled in the app.
     """
     out = []
-    for line in text.split("\n"):
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = _strip_ignorable(line)
         if line and not line.startswith("#"):
             out.append(line)
@@ -5042,6 +5044,19 @@ def _selftest() -> int:
     # its set id, is a different share at index 1, and both checksums are valid,
     # so only the comparison of all four fields refuses it.
     first35 = decode_share(texts35[0])
+    # ...and one that differs only in its index is a different share at an index
+    # nobody supplied, so three distinct points are interpolated. Dropping it
+    # as a repeat would leave two and refuse a set the format accepts.
+    _moved = encode_share(Share(set_id=set_id, threshold=3, index=4, value=first35.value))
+    def _combined(texts: list[str]) -> Optional[bytes]:
+        try:
+            return combine_shares(texts)
+        except KeymError:
+            return None
+    check("a copy of share 1 with only its index changed is a different share",
+          _combined([texts35[0], _moved, texts35[1]])
+          == shamir_combine([(1, first35.value), (2, decode_share(texts35[1]).value),
+                             (4, first35.value)]))
     for what, sid, k in (("k", set_id, 4), ("set id", bytes(4), 3)):
         body = sid + bytes([k, 1]) + first35.value
         near = encode_share(parse_share(body + _share_checksum(body)))
@@ -5064,8 +5079,10 @@ def _selftest() -> int:
     # §7, one item per line: U+000A only, ends stripped, blank and "#" skipped.
     check("text_lines splits at U+000A and strips each line",
           text_lines("a\r\n \ufeffb\u0085\n\n# c\n\u0085\n  #d\ne") == ["a", "b", "e"])
-    check("text_lines keeps a line holding U+2028, U+0085 or a lone U+000D whole",
-          text_lines("a\u2028b\nc\u0085d\ne\rf") == ["a\u2028b", "c\u0085d", "e\rf"])
+    check("text_lines keeps a line holding U+2028, U+0085, U+000B or U+000C whole",
+          text_lines("a\u2028b\nc\u0085d\ne\vf\x0cg") == ["a\u2028b", "c\u0085d", "e\vf\x0cg"])
+    check("text_lines ends a line at a lone U+000D, as a browser's text box does",
+          text_lines("# c\ra\rb\r\rc") == ["a", "b", "c"])
 
     other_salt = bytes(32)
     other_texts = [encode_share(Share(set_id=share_set_id(other_salt), threshold=3,
@@ -5798,6 +5815,37 @@ def _selftest() -> int:
               and max(len(ln) for ln in _lines) <= PAPER_QR_MAX_BYTES)
         _code, _out, _err = _cli(["split", "--in", _blob, "--v2"])
         check("split --v2 is still accepted", _code == 0 and PART2_PREFIX in _out)
+
+        # §7's line rule at the two entry points an heir uses, not only in
+        # text_lines: CR-only and CRLF files with a "#" first line, holding
+        # characters §7 ignores inside a line (U+2028, U+0085).
+        _enr, _strips = add_shamir_slot(
+            encrypt(b"one line rule", pw, kdf_id=KDF_PBKDF2, **fast), pw, 2, 3)
+        _cont = os.path.join(_d, "lines.keym")
+        open(_cont, "wb").write(_enr)
+        _sh = [_strips[0][:20] + "\u2028" + _strips[0][20:],
+               _strips[1][:30] + "\u0085" + _strips[1][30:]]
+        _parts = encode_parts_v2(_enr, 64)
+        _parts[0] = _parts[0][:20] + "\u2028" + _parts[0][20:]
+        _parts[-1] = _parts[-1][:15] + "\u0085" + _parts[-1][15:]
+        for _eol, _name in (("\r", "CR-only"), ("\r\n", "CRLF")):
+            _sf = os.path.join(_d, f"shares-{len(_eol)}.txt")
+            with open(_sf, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(_eol.join(["# strips 1 and 2", *_sh, ""]))
+            _back = os.path.join(_d, f"lines-{len(_eol)}.out")
+            _code, _out, _err = _cli(["decrypt", "--in", _cont, "--shares-from", _sf,
+                                      "--out", _back])
+            check(f"--shares-from reads a {_name} file whose shares hold U+2028 and U+0085",
+                  _code == 0 and os.path.exists(_back)
+                  and open(_back, "rb").read() == b"one line rule")
+            _pf = os.path.join(_d, f"parts-{len(_eol)}.txt")
+            with open(_pf, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(_eol.join(["# parts", *_parts, ""]))
+            _joined = os.path.join(_d, f"joined-{len(_eol)}.keym")
+            _code, _out, _err = _cli(["join", "--in", _pf, "--out", _joined])
+            check(f"join reads a {_name} file whose parts hold U+2028 and U+0085",
+                  _code == 0 and os.path.exists(_joined)
+                  and open(_joined, "rb").read() == _enr)
 
         # The marker an editor is likeliest to eat: the END one sits after the
         # armor, where a "trailing garbage" clean-up lands.
@@ -7172,8 +7220,7 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # UnicodeDecodeError and print the message reserved for bugs.
                 # The share decoder drops anything outside its alphabet, so a
                 # replacement character in a comment or a share is harmless.
-                # newline="": §7 splits at U+000A only, and the default
-                # would also end a line at a lone U+000D.
+                # newline="": text_lines applies §7's line ends itself.
                 with open(args.shares_from, encoding="utf-8", errors="replace",
                           newline="") as fh:
                     # §7's IGNORABLE, so a file saved with a byte order mark

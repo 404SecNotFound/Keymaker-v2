@@ -36,16 +36,18 @@ export function dropIgnorable(text: string): string {
 }
 
 /**
- * §7, one item per line (paper parts, a list of shares). Split at U+000A only,
- * strip IGNORABLE from both ends of each line, and skip a line left empty or
- * beginning with `#`. `reference/keym2.py`'s `text_lines` is the same function.
+ * §7, one item per line (paper parts, a list of shares). A line ends at LF,
+ * CRLF or a lone CR, which is what a text box hands over for all three, so a
+ * file read directly agrees with the same text pasted. Each line is stripped of
+ * IGNORABLE at both ends, and one left empty or beginning with `#` is skipped.
+ * `reference/keym2.py`'s `text_lines` is the same function.
  *
  * The share box used `trim()`, which keeps U+0085, so a line holding only that
  * character was a failed share here and a blank line in `keym2.py`.
  */
 export function textLines(text: string): string[] {
   return text
-    .split("\n")
+    .split(/\r\n|\r|\n/)
     .map((line) => stripIgnorable(line))
     .filter((line) => line !== "" && !line.startsWith("#"));
 }

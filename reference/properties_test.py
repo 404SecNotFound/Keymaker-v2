@@ -13,12 +13,14 @@ a seed and hands every case to both readers in one batch, through the same
   2. a share re-spelt the ways §4.6 allows (case, I/L/O look-alikes, hyphens,
      ignorable characters) decodes to the record it was written from, and one
      with an ignorable character inside its prefix, one character changed, a
-     character from outside the alphabet, or a spare padding bit set does not;
+     character from outside the alphabet swapped in or inserted, a non-ASCII
+     letter that case-folds into it, or a spare padding bit set does not;
   3. any k or more distinct shares of a set, in any order, with repeats in any
      spelling and blank, comment and ignorable-only lines between them, combine
      to the secret; fewer than k distinct never do; a consistent extra share
-     above the k lowest is never used; and a different share at a supplied
-     index, or a copy differing only in k or set id, is refused;
+     above the k lowest is never used; a different share at a supplied index,
+     a copy differing only in k or set id, or a damaged copy is refused; and a
+     copy differing only in its index is a different share;
   4. paper parts in any order, with ignorable characters inside their bodies
      and comment lines between them, reassemble the container, and a set
      missing one part, or holding one twice, is refused;
@@ -32,13 +34,18 @@ rather than drawn is enumerated (each ignorable character, each look-alike,
 each spare padding bit, each part dropped in turn), so a negative control bites
 on every seed, not only on a lucky one.
 
+Multi-line cases are joined with each of §7's line ends (LF, CRLF, a lone CR) in
+turn.
+
 The seed is printed first. KEYMAKER_PROPERTY_SEED=<seed> replays a run exactly,
-which the run checks by building its cases twice. KEYMAKER_PROPERTY_CASES sets
-how many cases each property draws.
+which the run checks by building its cases again in two child processes with
+different hash seeds. KEYMAKER_PROPERTY_CASES sets how many cases each property
+draws.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import random
@@ -57,10 +64,15 @@ import keym2  # noqa: E402
 BRIDGE = HERE / "bridge.mjs"
 CASES = int(os.environ.get("KEYMAKER_PROPERTY_CASES") or 200)
 
-# §7's set, minus the line break. A line break inside a share or a part is a
-# second line to every reader of a paste, which is a different input and not
-# the property under test.
-INLINE_IGNORABLE = keym2.IGNORABLE.replace("\n", "")
+# §7's set, minus the line ends. LF, CRLF and a lone CR inside a share or a
+# part start a second line for every reader of a paste (and in a browser's text
+# box), which is a different input and not the property under test. A single
+# share, which is never split into lines, takes a lone CR as ignorable.
+INLINE_IGNORABLE = keym2.IGNORABLE.replace("\n", "").replace("\r", "")
+SHARE_IGNORABLE = keym2.IGNORABLE.replace("\n", "")
+
+# §7, the three line ends. Every multi-line case is joined with one of them.
+LINE_ENDS = ["\n", "\r\n", "\r"]
 
 # §4.6: each canonical character and the spellings a reader folds onto it.
 LOOKALIKES = {"1": "1IiLl", "0": "0Oo"}
@@ -72,7 +84,11 @@ NOT_IN_ALPHABET = "Uu!_=+./~\uff21\u0399\u0430"
 # §7, folding is ASCII-only. Each of these upper-cases, in both languages, onto
 # the character it is paired with, so one put in that character's place makes
 # a valid share to a reader that folds with the language's own upper().
-FOLD_TRAPS = {"\u0131": "1", "\u017f": "S"}   # dotless i (to I, then 1), long s
+FOLD_TRAPS = {
+    "\u0131": "1",   # dotless i: upper() gives I, which folds to 1
+    "\u017f": "S",   # long s: upper() gives S
+    "\u212a": "K",   # Kelvin sign: lower() gives k
+}
 
 # Lines a reader of a paste skips (§7, one item per line). U+0085 alone was a
 # blank line to keym2.py and a failed share to the app's share box.
@@ -177,9 +193,20 @@ def spare_bit_spellings(text: str) -> list[str]:
     return [flat[:-1] + keym2.B32_ALPHABET[at ^ x] for x in range(1, 1 << pad)]
 
 
+def damaged_copies(share: keym2.Share, text: str) -> list[tuple[str, str]]:
+    """A copy of one share that fails its own checks (§6, checked before a repeat is dropped)."""
+    v2 = text.upper().startswith(keym2.SHARE2_PREFIX)
+    record = bytearray(keym2._pack_share_v2(share) if v2 else share.pack())
+    record[-1] ^= 1
+    prefix = keym2.SHARE2_PREFIX if v2 else keym2.SHARE_PREFIX
+    return [("a wrong checksum", prefix + keym2._b32_encode(bytes(record))),
+            ("a spare padding bit", spare_bit_spellings(text)[0])]
+
+
 def build(rng: random.Random) -> Cases:
     cases = Cases()
     n_inline = len(INLINE_IGNORABLE)
+    n_share = len(SHARE_IGNORABLE)
 
     # 1. Armor. Random bytes, because a reader of armor does not parse the
     # container, and lengths that cover every residue of base64's padding.
@@ -203,9 +230,9 @@ def build(rng: random.Random) -> Cases:
                   lambda v, blob=blob: not v["ok"] or blob.hex().startswith(v["hex"]))
 
     # 2. One share, spelt every way §4.6 allows, then spelt every way it does not.
-    for i in range(max(CASES, n_inline)):
+    for i in range(max(CASES, n_share)):
         share, text = random_share(rng)
-        ch = INLINE_IGNORABLE[i % n_inline]
+        ch = SHARE_IGNORABLE[i % n_share]
         record = {"ok": True, "hex": share_hex(share)}
         colon = text.index(":")
         cases.add("share: every allowed spelling decodes to its record",
@@ -227,11 +254,17 @@ def build(rng: random.Random) -> Cases:
         cases.add("share: a character from outside the alphabet is refused",
                   f"#{i} U+{ord(bad):04X} at {j}", "share", text[:j] + bad + text[j + 1:],
                   {"ok": False})
+        # Inserted as well as swapped in: a reader that skipped the character,
+        # as it skips a hyphen, is left one short by a swap and refuses for the
+        # wrong reason, but reads an insertion as the share.
+        cases.add("share: a character from outside the alphabet, inserted, is refused",
+                  f"#{i} U+{ord(bad):04X} at {j}", "share", text[:j] + bad + text[j:],
+                  {"ok": False})
         for trap, target in FOLD_TRAPS.items():
             at = [j for j in body_at if text[j] == target]
             if at:
                 j = rng.choice(at)
-                cases.add("share: a non-ASCII letter that upper-cases into the alphabet is refused",
+                cases.add("share: a non-ASCII letter that case-folds into the alphabet is refused",
                           f"#{i} U+{ord(trap):04X} for {target}", "share",
                           text[:j] + trap + text[j + 1:], {"ok": False})
         for spelling in spare_bit_spellings(text):
@@ -252,7 +285,7 @@ def build(rng: random.Random) -> Cases:
         opens = {"ok": True, "hex": secret.hex()}
 
         def pasted(chosen: list[str], extra: list[str] = ()) -> str:
-            """Repeats in any spelling, any order, and lines a reader skips."""
+            """Repeats in any spelling, any order, lines a reader skips, any line end."""
             picked = list(chosen) + list(extra)
             for _ in range(rng.randint(1 if i % 2 else 0, 3)):
                 picked.append(respell(rng, rng.choice(chosen), ch))
@@ -260,7 +293,7 @@ def build(rng: random.Random) -> Cases:
             for _ in range(rng.randint(0, 2)):
                 picked.insert(rng.randint(0, len(picked)),
                               SKIPPED_LINES[(i + len(picked)) % len(SKIPPED_LINES)])
-            return "\n".join(picked)
+            return LINE_ENDS[i % len(LINE_ENDS)].join(picked)
 
         enough = rng.sample(texts, rng.randint(k, n))
         cases.add("combine: k or more distinct shares open, in any order, with repeats",
@@ -290,22 +323,39 @@ def build(rng: random.Random) -> Cases:
 
         # §6, two different shares at one index, and a copy differing in one
         # field only (valid checksum), before and after the genuine share.
-        target = keym2.decode_share_any(enough[i % len(enough)])
+        target_text = enough[i % len(enough)]
+        target = keym2.decode_share_any(target_text)
         other_k = rng.choice([x for x in range(2, 17) if x != k])
-        other_sid = rng.randbytes(len(sid))
-        variants = [("value", keym2.Share(set_id=sid, threshold=k, index=target.index,
-                                          value=rng.randbytes(32))),
-                    ("k", keym2.Share(set_id=sid, threshold=other_k, index=target.index,
-                                      value=target.value)),
-                    ("set id", keym2.Share(set_id=other_sid, threshold=k, index=target.index,
-                                           value=target.value))]
-        what, near = variants[i % 3]
-        near_text = enc(near)
+        # Differs in one byte, past the first four, so a comparison of the v1
+        # width alone would miss it.
+        flip = rng.randrange(len(sid) - 4, len(sid)) if len(sid) > 4 else rng.randrange(4)
+        other_sid = sid[:flip] + bytes([sid[flip] ^ (1 << rng.randrange(8))]) + sid[flip + 1:]
+        variants = [("value", enc(keym2.Share(set_id=sid, threshold=k, index=target.index,
+                                              value=rng.randbytes(32)))),
+                    ("k", enc(keym2.Share(set_id=sid, threshold=other_k, index=target.index,
+                                          value=target.value))),
+                    ("set id", enc(keym2.Share(set_id=other_sid, threshold=k,
+                                               index=target.index, value=target.value)))]
+        variants += damaged_copies(target, target_text)
+        what, near_text = variants[i % len(variants)]
         first = i % 2 == 0
         lines = ([near_text] + enough) if first else (enough + [near_text])
         cases.add("combine: a different share at a supplied index is refused, in either order",
                   f"k={k} {what} differs, {'first' if first else 'last'}", "combine",
                   "\n".join(lines), {"ok": False})
+
+        # Only its index changed: a different share at an index nobody supplied,
+        # so it is interpolated with the rest, never dropped as a repeat.
+        others = rng.sample(split, k - 1)
+        used = {x for x, _ in others}
+        fresh = rng.choice([x for x in range(1, 256) if x not in used])
+        copied = rng.choice(others)
+        moved = enc(keym2.Share(set_id=sid, threshold=k, index=fresh, value=copied[1]))
+        points = sorted(others + [(fresh, copied[1])])
+        cases.add("combine: a copy with only its index changed is a different share",
+                  f"k={k} share {copied[0]} copied to {fresh}", "combine",
+                  "\n".join([texts[x - 1] for x, _ in others] + [moved]),
+                  {"ok": True, "hex": keym2.shamir_combine(points).hex()})
 
     # 4. Paper parts, both versions, in any order, each part then dropped once.
     for i in range(max(CASES // 4, n_inline)):
@@ -322,7 +372,7 @@ def build(rng: random.Random) -> Cases:
                 spaced.append(f"# part {j + 1} of {len(parts)}")
             at = rng.randint(p.index(":") + 1, len(p))
             spaced.append(p[:at] + ch + p[at:])
-        eol = rng.choice(["\n", "\r\n"])
+        eol = LINE_ENDS[i % len(LINE_ENDS)]
         cases.add("parts: any order, ignorable characters in bodies, reassemble the container",
                   f"{len(parts)} parts of {len(blob)} B, U+{ord(ch):04X}", "parts",
                   eol.join(spaced), {"ok": True, "hex": blob.hex()})
@@ -360,6 +410,11 @@ def build(rng: random.Random) -> Cases:
     return cases
 
 
+def digest(items: list) -> str:
+    """What a replay must reproduce: every case's property, label, kind and text."""
+    return hashlib.sha256(json.dumps([list(c[:4]) for c in items]).encode()).hexdigest()
+
+
 def run_bridge(tmp: Path, items: list[dict]) -> list[dict]:
     src, out = tmp / "property-cases.json", tmp / "property-verdicts.json"
     src.write_text(json.dumps(items))
@@ -384,13 +439,25 @@ def main() -> int:
     counts: dict[str, int] = {}
 
     # The promise the printed seed makes. Anything drawn from outside the
-    # seeded generator (os.urandom, a set's iteration order) breaks it.
+    # seeded generator (os.urandom, a set's iteration order) breaks it. Built
+    # again in two child processes with different hash seeds, because a set's
+    # order is fixed for the life of one process and a second build in this one
+    # would match it.
     prop = "the seed replays the run exactly"
-    again = build(random.Random(seed)).items
     counts[prop] = len(cases.items)
-    by_prop[prop] = [] if [c[:4] for c in again] == [c[:4] for c in cases.items] else [
-        f"two builds from seed {seed} differ, first at case "
-        f"{next((j for j, (a, b) in enumerate(zip(again, cases.items)) if a[:4] != b[:4]), min(len(again), len(cases.items)))}"]
+    mine = digest(cases.items)
+    by_prop[prop] = []
+    for hash_seed in ("1", "2"):
+        child = subprocess.run(
+            [sys.executable, str(Path(__file__).resolve()), "--digest"],
+            env={**os.environ, "KEYMAKER_PROPERTY_SEED": str(seed),
+                 "PYTHONHASHSEED": hash_seed},
+            capture_output=True, text=True)
+        theirs = child.stdout.strip()
+        if theirs != mine:
+            by_prop[prop].append(f"seed {seed} built again with PYTHONHASHSEED={hash_seed} "
+                                 f"gave {theirs[:16] or child.stderr.strip()[-120:]}, "
+                                 f"this run {mine[:16]}")
 
     tmp = Path(tempfile.mkdtemp(prefix="keym2-props-"))
     try:
@@ -444,4 +511,7 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    if sys.argv[1:] == ["--digest"]:
+        print(digest(build(random.Random(int(os.environ["KEYMAKER_PROPERTY_SEED"]))).items))
+        sys.exit(0)
     sys.exit(main())
