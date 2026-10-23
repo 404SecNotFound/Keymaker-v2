@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import os
+import struct
 import shutil
 import subprocess
 import sys
@@ -214,6 +215,16 @@ def main() -> int:
             # it takes exactly the same checks as every other frozen vector.
             if f.get("selfextract"):
                 blob = keym2.extract_selfextract(blob)
+            # FORMAT-AUDIO-STEGO.md, the same argument: a carrier is a container
+            # wearing a WAV, and once unwrapped it takes every check below.
+            if f.get("audio"):
+                # Guarded: a reader regression must fail this vector by name,
+                # not end the run with a traceback that reports nothing.
+                try:
+                    blob = keym2.extract_audio(blob)
+                except Exception as e:  # noqa: BLE001
+                    check(f["name"], False, f"carrier: {e}")
+                    continue
             try:
                 # decrypt_report rather than decrypt, because for a v3 vector the
                 # verdict is half of what the fixture promises. §5.2 makes the
@@ -313,17 +324,21 @@ def main() -> int:
         # Counted rather than assumed, because the corpus is append-only and a
         # fixture that silently stopped being listed would otherwise just stop
         # being tested. Update deliberately when the corpus grows.
-        check("v2+v3+v4 corpus has all thirty-nine vectors: nine share sets, nine "
+        audio_carriers = [f for f in modern if f.get("audio")]
+        check("v2+v3+v4 corpus has all forty vectors: nine share sets, nine "
               "passkeys (three of each in the one-write vectors that carry both), "
-              "three password-and-shares, one page, one stripped table, seven padded",
-              len(v2_fixtures) == 13 and len(v3_fixtures) == 19 and len(v4_fixtures) == 7
+              "three password-and-shares, one page, one audio carrier, one stripped "
+              "table, seven padded",
+              len(v2_fixtures) == 13 and len(v3_fixtures) == 20 and len(v4_fixtures) == 7
               and len(shamir_fixtures) == 9 and len(passkey_fixtures) == 9
               and len(both_fixtures) == 3
               and len([f for f in v2_fixtures if f.get("selfextract")]) == 1
+              and len(audio_carriers) == 1
               and len(stripped_fixtures) == 1,
               f"found {len(v2_fixtures)} v2, {len(v3_fixtures)} v3, {len(v4_fixtures)} v4, "
               f"{len(shamir_fixtures)} shamir, {len(passkey_fixtures)} passkey, "
-              f"{len(both_fixtures)} both, {len(stripped_fixtures)} stripped")
+              f"{len(both_fixtures)} both, {len(audio_carriers)} audio, "
+              f"{len(stripped_fixtures)} stripped")
 
         # ---------------------------------------------------------------
         # 1. Byte equality — the check that catches a writer disagreement
@@ -1384,6 +1399,241 @@ def main() -> int:
                       got.decode() == f["plaintext"])
             except (keym2.KeymError, ValueError) as e:
                 check(f"{f['name']}: the frozen page still opens", False, str(e))
+
+        # ---------------------------------------------------------------
+        # 9a. The KAUD1 audio carrier agrees (docs/FORMAT-AUDIO-STEGO.md)
+        # ---------------------------------------------------------------
+        #
+        # The carrier is a transport for a container, and the claim is the one
+        # §7.2 makes: what the app writes, keym2.py opens. Bytes first, because
+        # two readers that each read their own writer's carrier say nothing
+        # about whether they read each other's. Then the reader cases a
+        # round-trip cannot reach: a carrier re-saved at another depth, the
+        # rounding rule that decides its low bit, and the refusals.
+        print("\nAudio carrier (FORMAT-AUDIO-STEGO.md):")
+
+        def carrier_signal(n: int) -> list[int]:
+            # The bridge's audioembed computes the same: (37 i mod 65536) - 32768.
+            return [((i * 37) % 65536) - 32768 for i in range(n)]
+
+        def js_extract(wav: bytes, tag: str) -> bytes | None:
+            src, out = tmp / f"carrier-{tag}.wav", tmp / f"carrier-{tag}.keym"
+            src.write_bytes(wav)
+            out.unlink(missing_ok=True)
+            try:
+                bridge("audioextract", "--in", str(src), "--out", str(out))
+            except BridgeError:
+                return None
+            return out.read_bytes()
+
+        def js_refuses(wav: bytes, tag: str) -> bool:
+            src = tmp / f"carrier-{tag}.wav"
+            src.write_bytes(wav)
+            proc = subprocess.run(["node", str(BRIDGE), "audioextract", "--in", str(src),
+                                   "--out", str(tmp / "carrier-refused.keym")],
+                                  capture_output=True, cwd=ROOT)
+            return proc.returncode == 3
+
+        def py_extract(wav: bytes) -> bytes | None:
+            # Guarded: a reader that disagrees must fail the check naming it.
+            try:
+                return keym2.extract_audio(wav)
+            except Exception:  # noqa: BLE001
+                return None
+
+        # 16,000 samples hold 1,990 bytes, room for the ~1 KiB §7.2 container.
+        js_wav_path = tmp / "js-carrier.wav"
+        try:
+            bridge("audioembed", "--in", str(se_container), "--out", str(js_wav_path),
+                   "--samples", "16000", "--channels", "2", "--rate", "8000")
+            js_wav = js_wav_path.read_bytes()
+        except BridgeError as e:
+            js_wav = b""
+            check("js writes a carrier", False, str(e))
+        py_wav = keym2.pcm16_wav(keym2.embed_audio(carrier_signal(16000), se_bytes), 8000, 2)
+        check("the two writers emit the same carrier, byte for byte", py_wav == js_wav,
+              f"py {len(py_wav)} bytes, js {len(js_wav)} bytes")
+        check("python reads the app's carrier", py_extract(js_wav) == se_bytes)
+        try:
+            check("and the container inside it opens",
+                  keym2.decrypt(keym2.unwrap_container(js_wav, "js-carrier.wav"), PASSWORD)
+                  == se_src.read_bytes())
+        except Exception as e:  # noqa: BLE001
+            check("and the container inside it opens", False, str(e))
+        mono = keym2.pcm16_wav(keym2.embed_audio(carrier_signal(18000), se_bytes), 44100, 1)
+        check("the app reads python's carrier (mono, 44.1 kHz)",
+              js_extract(mono, "py-mono") == se_bytes)
+
+        # Re-saved at another depth. The integer cases sit every sample half a
+        # 16-bit step low, which only the document's R(x) reads back exactly.
+        stego = keym2.embed_audio(carrier_signal(16000), se_bytes)
+
+        def wav_of(code: int, bits: int, payload: bytes, channels: int = 2,
+                   extensible: bool = False, extra: bytes = b"",
+                   guid_suffix: bytes = bytes.fromhex("000000001000800000aa00389b71"),
+                   valid_bits: int | None = None) -> bytes:
+            width = bits // 8
+            head = struct.pack("<HHIIHH", 0xFFFE if extensible else code, channels, 8000,
+                               8000 * channels * width, channels * width, bits)
+            if extensible:
+                head += (struct.pack("<HHI", 22, bits if valid_bits is None else valid_bits, 3)
+                         + struct.pack("<H", code) + guid_suffix)
+            body = (b"WAVE" + b"fmt " + struct.pack("<I", len(head)) + head + extra
+                    + b"data" + struct.pack("<I", len(payload)) + payload)
+            return b"RIFF" + struct.pack("<I", len(body)) + body
+
+        def tie(s: int, step: int) -> int:
+            return s * step - (step // 2 if s > -32768 else 0)
+
+        def i24(v: int) -> bytes:
+            return (v & 0xFFFFFF).to_bytes(3, "little")
+
+        pcm16 = struct.pack(f"<{len(stego)}h", *stego)
+        variants = {
+            "24-bit, half a step low": wav_of(1, 24, b"".join(i24(tie(s, 256)) for s in stego)),
+            "32-bit, half a step low": wav_of(1, 32, b"".join(struct.pack("<i", tie(s, 65536))
+                                                              for s in stego)),
+            "32-bit float": wav_of(3, 32, b"".join(struct.pack("<f", s / 32768) for s in stego)),
+            "64-bit float": wav_of(3, 64, b"".join(struct.pack("<d", s / 32768) for s in stego)),
+            "24-bit WAVE_FORMAT_EXTENSIBLE": wav_of(1, 24, b"".join(i24(tie(s, 256)) for s in stego),
+                                                    extensible=True),
+            "an odd-sized chunk before the data": wav_of(1, 16, pcm16,
+                                                         extra=b"LIST" + struct.pack("<I", 3) + b"abc\x00"),
+            "a decoy data chunk before the real one": wav_of(1, 16, pcm16,
+                                                             extra=b"data" + struct.pack("<I", 160) + bytes(160)),
+            "32-bit float EXTENSIBLE": wav_of(3, 32, b"".join(struct.pack("<f", s / 32768) for s in stego),
+                                              extensible=True),
+            "64-bit float EXTENSIBLE": wav_of(3, 64, b"".join(struct.pack("<d", s / 32768) for s in stego),
+                                              extensible=True),
+            "32-bit EXTENSIBLE declaring 24 valid bits": wav_of(
+                1, 32, b"".join(struct.pack("<i", tie(s, 65536)) for s in stego),
+                extensible=True, valid_bits=24),
+            "32-bit float, half a step low": wav_of(3, 32, b"".join(
+                struct.pack("<f", ((s - 0.5) if s > -32768 else s) / 32768) for s in stego)),
+            "64-bit float, half a step low": wav_of(3, 64, b"".join(
+                struct.pack("<d", ((s - 0.5) if s > -32768 else s) / 32768) for s in stego)),
+        }
+        # The chunk walk, through both readers rather than each against itself:
+        # every rule "Read the samples" states about chunk order, repetition and
+        # sizes, and the float clamp and non-finite paths carrying real bits.
+        def riff(*chunks: tuple[bytes, bytes, int | None]) -> bytes:
+            body = b"WAVE" + b"".join(
+                cid + struct.pack("<I", len(data) if size is None else size) + data
+                + (b"\x00" if len(data) % 2 and size is None else b"")
+                for cid, data, size in chunks)
+            return b"RIFF" + struct.pack("<I", len(body)) + body
+
+        def fmt_body(code: int, bits: int, channels: int = 2) -> bytes:
+            width = bits // 8
+            return struct.pack("<HHIIHH", code, channels, 8000, 8000 * channels * width,
+                               channels * width, bits)
+
+        variants["the fmt chunk after the data"] = riff((b"data", pcm16, None),
+                                                        (b"fmt ", fmt_body(1, 16), None))
+        variants["two fmt chunks, float then PCM (the later wins)"] = riff(
+            (b"fmt ", fmt_body(3, 32), None), (b"fmt ", fmt_body(1, 16), None), (b"data", pcm16, None))
+        variants["a data size of 0xFFFFFFFF, cut to the file"] = riff(
+            (b"fmt ", fmt_body(1, 16), None), (b"data", pcm16, 0xFFFFFFFF))
+        variants["a last fmt chunk declaring more than the file holds"] = riff(
+            (b"data", pcm16, None), (b"fmt ", fmt_body(1, 16), 100))
+        unsized = bytearray(keym2.pcm16_wav(stego, 8000, 2))
+        unsized[4:8] = unsized[40:44] = b"\xff\xff\xff\xff"
+        variants["RIFF and data sizes left at 0xFFFFFFFF by a writer that cannot seek"] = bytes(unsized)
+        # Exactly full: the app's writer accepts the boundary and both readers read it.
+        exact = 8 * (len(se_bytes) + keym2.KAUD_HEADER_BYTES)
+        variants["a carrier filled exactly to capacity"] = keym2.pcm16_wav(
+            keym2.embed_audio(carrier_signal(exact), se_bytes), 8000, 1)
+        try:
+            bridge("audioembed", "--in", str(se_container), "--out", str(tmp / "full.wav"),
+                   "--samples", str(exact), "--channels", "1", "--rate", "8000")
+            check("the app's writer fills a carrier exactly to capacity, the same bytes",
+                  (tmp / "full.wav").read_bytes() == variants["a carrier filled exactly to capacity"])
+        except BridgeError as e:
+            check("the app's writer fills a carrier exactly to capacity, the same bytes", False, str(e))
+        # A non-finite sample reads as 0, so it can only carry a 0 bit. A finite
+        # one whose product overflows (1e308 x 32768) clamps to 32767 and
+        # carries a 1, as does 1.0, which lands one past the int16 range.
+        odd_vals = (1e308, 1.0)
+        even_vals = (float("nan"), float("inf"), float("-inf"))
+        variants["64-bit float with infinities, NaN and overflowing values carrying the bits"] = wav_of(
+            3, 64, b"".join(struct.pack("<d", odd_vals[j % 2] if s & 1 else even_vals[j % 3])
+                            for j, s in enumerate(stego)))
+
+        # The trap floor(x + 0.5) falls into: over a silent carrier every sample
+        # is 0 or 1, and a 0 written as the largest double below a half must
+        # still read as 0. JavaScript's Math.round gets this right.
+        quiet = keym2.embed_audio([0] * 16000, se_bytes)
+        variants["64-bit float, zeros as the largest double below a half"] = wav_of(
+            3, 64, b"".join(struct.pack("<d", (0.49999999999999994 if s == 0 else s) / 32768)
+                            for s in quiet))
+        for i, (name, wav) in enumerate(variants.items()):
+            got_py, got_js = py_extract(wav), js_extract(wav, f"variant-{i}")
+            check(f"both readers give the container back from {name}",
+                  got_py == se_bytes and got_js == se_bytes,
+                  f"python {'ok' if got_py == se_bytes else 'differs'}, "
+                  f"js {'ok' if got_js == se_bytes else 'differs'}")
+
+        # The refusals, on both sides. A refusal the app makes and keym2.py does
+        # not is a carrier that opens in one reader and not the other.
+        def pcm16_head(n: int) -> bytes:
+            return keym2.pcm16_wav(carrier_signal(100), 8000, 1)[:n]
+
+        def header_wav(header: bytes) -> bytes:
+            bits = [(b >> s) & 1 for b in header for s in range(7, -1, -1)]
+            out = carrier_signal(8000)
+            for j, bit in enumerate(bits):
+                out[j] = (out[j] & ~1) | bit
+            return keym2.pcm16_wav(out, 8000, 2)
+
+        refusals = {
+            "a WAV with nothing hidden in it": keym2.pcm16_wav(carrier_signal(8000), 8000, 2),
+            "a KAUD version 2 header": header_wav(b"KAUD\x02\x01" + struct.pack(">I", 8)),
+            "two bits per sample": header_wav(b"KAUD\x01\x02" + struct.pack(">I", 8)),
+            "an empty payload": header_wav(b"KAUD\x01\x01" + struct.pack(">I", 0)),
+            "a length past the last sample": header_wav(b"KAUD\x01\x01" + struct.pack(">I", 0xFFFFFFFF)),
+            "ADPCM": wav_of(2, 4, bytes(400)),
+            "an EXTENSIBLE chunk with a foreign GUID": wav_of(1, 16, pcm16, extensible=True,
+                                                              guid_suffix=bytes(14)),
+            "two fmt chunks, PCM then float (the later wins, and holds nothing)":
+                riff((b"fmt ", fmt_body(1, 16), None), (b"fmt ", fmt_body(3, 32), None),
+                     (b"data", pcm16, None)),
+            "a format chunk of 15 bytes": riff((b"fmt ", fmt_body(1, 16)[:15], None), (b"data", pcm16, None)),
+            "a malformed fmt chunk before a valid one": riff((b"fmt ", fmt_body(1, 16)[:15], None),
+                                                             (b"fmt ", fmt_body(1, 16), None),
+                                                             (b"data", pcm16, None)),
+            "no data chunk": riff((b"fmt ", fmt_body(1, 16), None), (b"LIST", bytes(8), None)),
+            "zero channels": riff((b"fmt ", fmt_body(1, 16, channels=0), None), (b"data", pcm16, None)),
+            "79 samples": riff((b"fmt ", fmt_body(1, 16, channels=1), None), (b"data", pcm16[:158], None)),
+            "a 43-byte file": pcm16_head(43),
+            "8-bit mu-law": wav_of(7, 8, bytes(4000)),
+            "8-bit A-law": wav_of(6, 8, bytes(4000)),
+            "a carrier cut off inside its payload": keym2.pcm16_wav(stego, 8000, 2)[:44 + 2 * (80 + 8 * 20)],
+            "an MP3 copy": b"ID3\x04\x00\x00\x00\x00\x00\x00\xff\xfb\x90\x00" + bytes(4000),
+        }
+        for i, (name, wav) in enumerate(refusals.items()):
+            py_refused = False
+            try:
+                keym2.extract_audio(wav)
+            except keym2.CarrierError:
+                py_refused = True
+            except Exception:  # noqa: BLE001
+                pass
+            check(f"both readers refuse {name}", py_refused and js_refuses(wav, f"refusal-{i}"))
+
+        # The frozen carrier from the corpus: a WAV written on a particular day
+        # still gives its container up to the reader an heir will have.
+        audio_fixtures = [f for f in v2_fixtures + v3_fixtures + v4_fixtures if f.get("audio")]
+        check("the corpus carries a frozen audio carrier", len(audio_fixtures) == 1)
+        for f in audio_fixtures:
+            frozen = (corpus / f["file"]).read_bytes()
+            try:
+                got = keym2.decrypt(keym2.unwrap_container(frozen, f["file"]), fx_pw)
+                check(f"{f['name']}: the frozen carrier still opens", got.decode() == f["plaintext"])
+            except Exception as e:  # noqa: BLE001
+                check(f"{f['name']}: the frozen carrier still opens", False, str(e))
+            frozen_py = py_extract(frozen)
+            check(f"{f['name']}: and the app's reader agrees",
+                  frozen_py is not None and js_extract(frozen, "frozen") == frozen_py)
 
         # ---------------------------------------------------------------
         # KEYM v3 (docs/FORMAT-V3-DESIGN.md)

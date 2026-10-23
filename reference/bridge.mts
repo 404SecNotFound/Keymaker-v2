@@ -19,6 +19,8 @@
  *   bridge addpasskey --prf-output HEX --salt HEX     (§4.7)
  *   bridge decrypt2 --prf-output HEX                  (§4.7, no password)
  *   bridge prfsalt --slot-salt HEX                    (§4.7, prints hex)
+ *   bridge audioembed --in CONTAINER --out WAV --samples N --channels C --rate R
+ *   bridge audioextract --in WAV --out CONTAINER       (FORMAT-AUDIO-STEGO.md)
  *
  * `encryptapp` goes through `encryptContainer` — the function the worker and
  * the UI actually call, with real random secrets. `recovery_test.py` uses it,
@@ -89,6 +91,13 @@ import {
   extractSelfExtract,
   webcryptoProfileViolations,
 } from "../src/lib/keym-v2-selfextract.ts";
+import {
+  AudioStegoError,
+  embedContainer,
+  extractContainer,
+  parseWavToPcm16,
+  writePcm16Wav,
+} from "../src/lib/audio-stego.ts";
 
 if (!globalThis.crypto) {
   (globalThis as { crypto?: Crypto }).crypto = webcrypto as unknown as Crypto;
@@ -488,6 +497,26 @@ try {
       );
     }
     writeFileSync(outFile, JSON.stringify(codes));
+  } else if (cmd === "audioembed") {
+    // FORMAT-AUDIO-STEGO.md. A carrier the app's own writer makes, over a
+    // carrier signal both sides can compute (s_i = (37 i mod 65536) - 32768),
+    // so crosstest2.py can compare the emitted WAV bytes and not only whether
+    // each side reads the other's.
+    const n = Number(flag("samples"));
+    const samples = new Int16Array(n);
+    for (let i = 0; i < n; i++) samples[i] = ((i * 37) % 65536) - 32768;
+    const pcm = { sampleRate: Number(flag("rate")), channels: Number(flag("channels")), samples };
+    writeFileSync(outFile, writePcm16Wav(embedContainer(pcm, new Uint8Array(inputBuf))));
+  } else if (cmd === "audioextract") {
+    // The app's reader, end to end: parseWavToPcm16 then extractContainer.
+    // Exit 3 marks a carrier refusal so the suite can tell it from a crash.
+    try {
+      writeFileSync(outFile, extractContainer(parseWavToPcm16(new Uint8Array(inputBuf))));
+    } catch (e) {
+      if (!(e instanceof AudioStegoError)) throw e;
+      console.error(`carrier refused: ${e.message}`);
+      process.exit(3);
+    }
   } else {
     throw new Error(`unknown command: ${cmd}`);
   }

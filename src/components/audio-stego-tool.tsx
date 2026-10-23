@@ -323,7 +323,8 @@ export function AudioStegoTool() {
       setPassword("");
       toast({
         title: "Secret packed into audio",
-        description: "Downloaded as a WAV. It plays normally; open it here on the Reveal side with the password.",
+        description:
+          "Downloaded as a WAV. It plays normally. Open it here with Unpack from audio, or without this site with keym2.py from the recovery kit.",
       });
     } catch (e) {
       const description =
@@ -428,7 +429,8 @@ export function AudioStegoTool() {
           This is a carrier, not a hiding place: the payload sits in a known place in the samples
           and is easy to detect, so do not rely on it to conceal that a secret exists. What protects
           the secret is the password: the same Argon2id and AES-256-GCM the Encrypt tab uses. Output
-          is a lossless WAV, because an MP3 cannot hold the data.
+          is a lossless WAV, because an MP3 cannot hold the data. Without this site,{" "}
+          <code className="font-mono">keym2.py</code> from the recovery kit opens the WAV too.
         </p>
       </div>
 

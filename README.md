@@ -294,6 +294,10 @@ not a new cipher. Full layout in
   and download a WAV that carries the sealed container in the least-significant
   bit of its samples.
 - **Unpack:** open that WAV here with the password to recover the secret.
+- **Without this site:** `python3 keym2.py decrypt --in keymaker-audio.wav`
+  opens the same WAV, and `unpack-audio` writes the container out on its own.
+  [docs/RECOVERY.md](docs/RECOVERY.md) has the procedure, and the conformance
+  suite holds both readers to the same bytes.
 
 Two things it states plainly, because a security tool should not oversell hiding:
 
