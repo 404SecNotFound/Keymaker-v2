@@ -18,6 +18,7 @@ import {
 import { loadShamir } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
+import { textLines } from "@/lib/keym-text";
 import { EFF_LARGE_WORDLIST_SIZE } from "@/lib/eff-wordlist";
 import {
   Sprout,
@@ -114,10 +115,7 @@ export const IS_RELEASE_BUILD = process.env.KEYMAKER_RELEASE_CHANNEL === "releas
  * person recovering a container under stress.
  */
 export function parseShareLines(text: string): string[] {
-  return text
-    .split("\n")
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0 && !line.startsWith("#"));
+  return textLines(text);
 }
 
 /**
@@ -203,7 +201,7 @@ export function isShareText(text: string): boolean {
  * Scanning the same strip twice is the ordinary mistake with a stack of
  * photos. `combineShares` counts a share supplied twice once (§6), so a repeat
  * no longer fails the set; skipping it here keeps the box free of repeats and
- * lets the toast say how many photos were. Case-insensitive because the
+ * lets the toast say how many photos were repeats. Case-insensitive because the
  * share alphabet is, and a phone's QR reader may hand back either.
  */
 export function mergeScannedShares(

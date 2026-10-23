@@ -1551,16 +1551,22 @@ the writer only; everything else here is normative on read:
 
 - a writer MUST reject `n` outside `k`..16;
 - reject `k` outside 2..16;
-- treat a share whose decoded record (`share_set_id`, `k`, index and value) is
+- check every supplied share on its own first, against each rule here that
+  concerns one share (its checksum, its padding bits, its `k`, its index). Then
+  treat a share whose decoded record (`share_set_id`, `k`, index and value) is
   identical to one already supplied as that same share supplied twice, and drop
-  it before the rules below. Pasting a strip twice, or scanning one twice, adds
-  no information, and a reader that refused it told the person a correct set was
-  wrong with nothing to say which line repeated. The comparison is of decoded
-  records, so two spellings of one strip (case, spaces, hyphens) are the same
-  share;
+  it before the rules that concern the set (two different shares at one index,
+  members that disagree about `k`, fewer than `k` shares). Pasting a strip
+  twice, or scanning one twice, adds no information, and a reader that refused
+  it told the person a correct set was wrong with nothing to say which line
+  repeated. The comparison is of decoded records, so two spellings of one strip
+  (case, spaces, hyphens) are the same share. A damaged copy is refused as
+  damaged, never dropped as a repeat, and a record that differs from another in
+  any one of its four fields is a different share;
 - reject a share index outside `1..255`, and reject a supplied share set
   containing two *different* shares with the same index. Both bounds are on the
-  *field element*, not on whatever number type the host language happens to be holding:
+  *field element*, not on whatever number type the host language happens to be
+  holding:
   the interpolation reduces every index modulo 256, so a check that admits a
   value the arithmetic then reduces to an already-present index — or to 0 — has
   not enforced the rule it appears to. An implementation MUST reject before
@@ -1721,6 +1727,15 @@ armor, share and part bodies. Any other character outside an encoding's
 alphabet is rejected. Case-folding, where an encoding allows it (§4.6), applies
 to ASCII letters only: a non-ASCII character is never folded into the alphabet,
 so `ı` (U+0131) is not `I` and `ſ` (U+017F) is not `S`.
+
+Where a text holds one item per line (paper parts, or shares pasted or saved
+together), a reader splits it at U+000A and nowhere else. Each line is then
+stripped of IGNORABLE characters at both ends, and a line left empty, or
+beginning with `#`, is skipped. The other characters an editor may treat as a
+line end (U+000B, U+000C, U+000D, U+0085, U+2028, U+2029) are IGNORABLE, so
+inside a line they are ignored like any other. A reader that also split at
+those broke a part in two wherever an editor had left one, and a line holding
+only U+0085 was a blank line to one reader and a failed share to the other.
 
 This was written down after the two implementations were found to disagree on
 it, each by inheriting its language's idea of whitespace: JavaScript's `trim`

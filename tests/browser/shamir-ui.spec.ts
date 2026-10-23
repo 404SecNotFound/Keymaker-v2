@@ -502,7 +502,8 @@ test.describe("scanning the printed strips", () => {
     await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
 
     // The box keeps one copy, so the toast can say a photo repeated. The reader
-    // would count the repeat once anyway (§6); the next test holds that.
+    // would count the repeat once anyway (§6), which "a share typed twice
+    // counts once" in the inheritance-path tests holds.
     await page.locator("#share-qr-scan-input").setInputFiles([
       png("strip-1.png", backup.stripPngs[0] as Buffer),
       png("strip-1-again.png", backup.stripPngs[0] as Buffer),

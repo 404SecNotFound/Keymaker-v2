@@ -43,7 +43,10 @@ import {
   combineShares,
   decodeShare,
   encodeShare,
+  packShare,
+  b32Encode,
   shareSetId,
+  SHARE_PREFIX,
   SHARE_LEN,
   SHARE_VALUE_LEN,
 } from "../src/lib/keym-v2-shamir.ts";
@@ -215,6 +218,32 @@ async function main(): Promise<void> {
   check(await refused([d1, d1, d2]), "a repeated share stood in for a missing one");
   const otherAtOne = await encodeShare({ setId: dupSetId, threshold: 3, index: 1, value: new Uint8Array(32) });
   check(await refused([d1, otherAtOne, d2, d3]), "two different shares at one index were accepted");
+  check(await refused([d2, d3, d1, otherAtOne]), "two different shares at one index were accepted, the other first");
+
+  // A repeat is an identical record. A copy of share 1 that differs only in k,
+  // or only in its set id, carries a valid checksum and the same value, so only
+  // the comparison of all four fields refuses it. In both orders, because a
+  // reader that kept whichever came first would pass one of them by luck.
+  const s1 = await decodeShare(d1);
+  const nearK = await encodeShare({ ...s1, threshold: 4 });
+  const nearSet = await encodeShare({ ...s1, setId: new Uint8Array(4).fill(0x55) });
+  for (const [what, near] of [["k", nearK], ["set id", nearSet]] as const) {
+    check(await refused([d1, near, d2, d3]), `a copy of share 1 with only its ${what} changed, after it, was accepted`);
+    check(await refused([near, d1, d2, d3]), `a copy of share 1 with only its ${what} changed, before it, was accepted`);
+  }
+
+  // §6 as amended: each share is checked on its own before a repeat is dropped,
+  // so a damaged copy is refused as damaged and never dropped as a repeat.
+  const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  const d1Flat = d1.replace(/-/g, "");
+  const padded = d1Flat.slice(0, -1) + B32[B32.indexOf(d1Flat.slice(-1)) | 1];
+  const record = await packShare(s1);
+  record[record.length - 1] ^= 1;
+  const badChecksum = SHARE_PREFIX + b32Encode(record);
+  for (const [what, damaged] of [["non-zero padding bits", padded], ["a wrong checksum", badChecksum]] as const) {
+    check(await refused([d1, damaged, d2, d3]), `a copy of share 1 with ${what}, after it, was accepted`);
+    check(await refused([damaged, d1, d2, d3]), `a copy of share 1 with ${what}, before it, was accepted`);
+  }
 
   // ---- 3. What share_set_id is actually worth against accident ----
   // Four bytes, so honest sets collide on a birthday schedule. Searched rather
