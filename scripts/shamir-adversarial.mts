@@ -175,6 +175,47 @@ async function main(): Promise<void> {
     "and reconstruct something that is not the real share secret, leaving the slot AEAD to refuse it"
   );
 
+  // ---- 2b. The same share supplied twice counts once (§6 as amended) ----
+  // A strip pasted or scanned twice used to fail a set that held k genuine
+  // shares. The repeat is dropped as a decoded record, so two spellings of one
+  // strip are one share; a different record at a repeated index is still a
+  // refusal, and a repeat never stands in for a missing share.
+  console.log("\nThe same share supplied twice counts once:");
+  const dupSalt = new Uint8Array(32).fill(0x44);
+  const dupSetId = await shareSetId(dupSalt);
+  const dupTexts = await Promise.all(
+    shamirSplit(SECRET, 3, 5).map(({ index, value }) =>
+      encodeShare({ setId: dupSetId, threshold: 3, index, value })
+    )
+  );
+  const opensWith = async (texts: string[]): Promise<boolean> => {
+    try {
+      return Buffer.from(await combineShares(texts, dupSetId)).equals(Buffer.from(SECRET));
+    } catch {
+      return false;
+    }
+  };
+  const [d1, d2, d3] = dupTexts as [string, string, string];
+  check(await opensWith([d1, d1, d2, d3]), "k genuine shares with one repeated did not open");
+  check(
+    await opensWith([d1, d1.toLowerCase().replace(/-/g, " "), d2, d3]),
+    "one share in two spellings was counted as two"
+  );
+  // Refused, not merely wrong: interpolating fewer than k points returns a
+  // value without complaint, so "did not open" alone would pass a reader that
+  // counted the repeat toward k and handed back garbage.
+  const refused = async (texts: string[]): Promise<boolean> => {
+    try {
+      await combineShares(texts, dupSetId);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  check(await refused([d1, d1, d2]), "a repeated share stood in for a missing one");
+  const otherAtOne = await encodeShare({ setId: dupSetId, threshold: 3, index: 1, value: new Uint8Array(32) });
+  check(await refused([d1, otherAtOne, d2, d3]), "two different shares at one index were accepted");
+
   // ---- 3. What share_set_id is actually worth against accident ----
   // Four bytes, so honest sets collide on a birthday schedule. Searched rather
   // than asserted from theory: the number is the point.

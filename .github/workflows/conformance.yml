@@ -82,6 +82,13 @@ jobs:
       - name: Bidirectional conformance
         run: npm run test:conformance
 
+      # The cases nobody wrote by hand: armor, shares, share sets, paper parts
+      # and Padmé lengths drawn from a seed and judged by both readers. The seed
+      # is printed first, so a failing run replays exactly with
+      # KEYMAKER_PROPERTY_SEED set to it.
+      - name: Property tests (both readers, generated inputs)
+        run: npm run test:properties
+
       # docs/RECOVERY.md tells someone holding a years-old backup that this
       # script and two libraries will get their data back. That promise has to
       # be executable, or it decays silently into a page of stale instructions.

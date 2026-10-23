@@ -908,6 +908,30 @@ def main() -> int:
         check("python opens with a different k of the n",
               py_opens_with_shares(js_container, py_shares[2:5]))
 
+        # §6 as amended: a share supplied twice counts once. Both readers must
+        # open k genuine shares with one repeated (in either spelling), and both
+        # must refuse a repeat standing in for a missing share and a different
+        # share at a repeated index. One reader deduplicating and the other not
+        # is exactly a set that opens in the app and fails in the recovery kit.
+        dup_twice = [py_shares[0], py_shares[0], *py_shares[1:K]]
+        dup_spelt = [py_shares[0], py_shares[0].lower().replace("-", " "), *py_shares[1:K]]
+        dup_short = [py_shares[0], py_shares[0], *py_shares[1:K - 1]]
+        _first = keym2.decode_share_any(py_shares[0])
+        _encode = (keym2.encode_share_v2 if py_shares[0].upper().startswith("KMSHARE2:")
+                   else keym2.encode_share)
+        dup_other = [_encode(keym2.Share(set_id=_first.set_id, threshold=K,
+                                         index=_first.index, value=bytes(32))),
+                     *py_shares[:K]]
+        for label, texts, want in [
+                ("one share supplied twice", dup_twice, True),
+                ("one share in two spellings", dup_spelt, True),
+                ("a repeat in place of a missing share", dup_short, False),
+                ("a different share at a repeated index", dup_other, False)]:
+            js_ok = js_opens_with_shares(py_container, texts)
+            py_ok = py_opens_with_shares(py_container, texts)
+            check(f"{label}: both {'open' if want else 'refuse'}",
+                  js_ok == want and py_ok == want, f"js={js_ok} py={py_ok}")
+
         check("neither opens on k-1 shares",
               not js_opens_with_shares(py_container, py_shares[:2])
               and not py_opens_with_shares(py_container, py_shares[:2]))

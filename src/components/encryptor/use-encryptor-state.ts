@@ -3192,8 +3192,8 @@ export function useEncryptorState() {
         strips
       );
       if (isStale()) return;
-      const used = strips
-        .map((s) => issuedShares.shares.indexOf(s) + 1)
+      // A strip pasted twice counts once (§6), so it is listed once.
+      const used = [...new Set(strips.map((s) => issuedShares.shares.indexOf(s) + 1))]
         .filter((i) => i > 0)
         .sort((a, b) => a - b);
       setRehearsal({

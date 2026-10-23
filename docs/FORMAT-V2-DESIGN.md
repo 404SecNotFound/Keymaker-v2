@@ -1551,9 +1551,16 @@ the writer only; everything else here is normative on read:
 
 - a writer MUST reject `n` outside `k`..16;
 - reject `k` outside 2..16;
+- treat a share whose decoded record (`share_set_id`, `k`, index and value) is
+  identical to one already supplied as that same share supplied twice, and drop
+  it before the rules below. Pasting a strip twice, or scanning one twice, adds
+  no information, and a reader that refused it told the person a correct set was
+  wrong with nothing to say which line repeated. The comparison is of decoded
+  records, so two spellings of one strip (case, spaces, hyphens) are the same
+  share;
 - reject a share index outside `1..255`, and reject a supplied share set
-  containing two shares with the same index. Both bounds are on the *field
-  element*, not on whatever number type the host language happens to be holding:
+  containing two *different* shares with the same index. Both bounds are on the
+  *field element*, not on whatever number type the host language happens to be holding:
   the interpolation reduces every index modulo 256, so a check that admits a
   value the arithmetic then reduces to an already-present index — or to 0 — has
   not enforced the rule it appears to. An implementation MUST reject before
@@ -1563,7 +1570,8 @@ the writer only; everything else here is normative on read:
   not match the one derived from the slot's `slot_salt`;
 - reject a share text whose final base32 character carries non-zero padding bits;
 - reject a share set whose members disagree about `k`;
-- reconstruct from exactly the `k` lowest-indexed distinct shares.
+- reconstruct from exactly the `k` lowest-indexed distinct shares, counting a
+  share supplied twice once.
 
 Additionally, a reader MUST:
 

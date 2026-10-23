@@ -242,6 +242,23 @@ test.describe("the inheritance path", () => {
     await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
   });
 
+  test("a share typed twice counts once", async ({ page }) => {
+    const { armored, shares } = await encryptWithShares(page, 2, 3);
+
+    await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to decrypt")).fill(armored);
+    await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
+
+    // §6: the same share pasted twice, the second time in lower case, beside
+    // one other. Two distinct shares of a 2-of-3 set, so it opens. A reader
+    // that counted the repeat as a second share at index 1 refused this.
+    const again = (shares[0] as string).toLowerCase();
+    await visible(page.locator("#share-input")).fill(`${shares[0]}\n${again}\n${shares[2]}\n`);
+    await visible(page.getByRole("button", { name: /^Decrypt Text$/i })).click();
+    await expect(visible(page.locator("#output-text"))).toHaveValue(SECRET, { timeout: 90_000 });
+  });
+
   test("k-1 shares do not", async ({ page }) => {
     const { armored, shares } = await encryptWithShares(page, 3, 5);
 
@@ -484,8 +501,8 @@ test.describe("scanning the printed strips", () => {
     await visible(page.getByPlaceholder("Enter text to decrypt")).fill(backup.armored);
     await visible(page.getByRole("button", { name: /^Use recovery shares$/ })).click();
 
-    // §4.6 refuses a repeated index, so a duplicate left in the box would fail
-    // an otherwise sufficient set with nothing to say which photo repeated.
+    // The box keeps one copy, so the toast can say a photo repeated. The reader
+    // would count the repeat once anyway (§6); the next test holds that.
     await page.locator("#share-qr-scan-input").setInputFiles([
       png("strip-1.png", backup.stripPngs[0] as Buffer),
       png("strip-1-again.png", backup.stripPngs[0] as Buffer),

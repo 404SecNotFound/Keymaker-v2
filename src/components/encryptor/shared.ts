@@ -201,9 +201,9 @@ export function isShareText(text: string): boolean {
  * that are already there.
  *
  * Scanning the same strip twice is the ordinary mistake with a stack of
- * photos, and a duplicate is not harmless: `combineShares` refuses a repeated
- * index outright (§4.6), so k-1 strips plus one scanned twice would fail with
- * nothing to say which photo was the repeat. Case-insensitive because the
+ * photos. `combineShares` counts a share supplied twice once (§6), so a repeat
+ * no longer fails the set; skipping it here keeps the box free of repeats and
+ * lets the toast say how many photos were. Case-insensitive because the
  * share alphabet is, and a phone's QR reader may hand back either.
  */
 export function mergeScannedShares(

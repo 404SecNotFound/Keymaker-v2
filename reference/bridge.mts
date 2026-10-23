@@ -68,6 +68,7 @@ import {
   encryptKeym2WithSlots,
   derivePrfSalt,
   dearmorKeym2,
+  keym2PaddedLen,
 } from "../src/lib/keym-v2.ts";
 import {
   encodePaperParts,
@@ -81,6 +82,7 @@ import {
   encodeShareV2,
   shareSetIdV2,
   decodeShareAny,
+  combineShares,
   isKeym2Share,
   shareSetCode,
   shareTextSetCode,
@@ -475,6 +477,13 @@ try {
           verdicts.push({ ok: true, hex: hex(await decodePaperPartsAny(splitPaperParts(c.text))) });
         } else if (c.kind === "isshare") {
           verdicts.push({ ok: isKeym2Share(c.text) });
+        } else if (c.kind === "combine") {
+          // §6, one share per line, as the shares box and --share-file take them.
+          const lines = c.text.split("\n").map((l) => l.trim()).filter(Boolean);
+          verdicts.push({ ok: true, hex: hex(await combineShares(lines)) });
+        } else if (c.kind === "padlen") {
+          // v4 §4.2, the decimal stream length for a decimal n.
+          verdicts.push({ ok: true, hex: String(keym2PaddedLen(Number(c.text))) });
         } else {
           throw new Error(`unknown case kind ${c.kind}`);
         }

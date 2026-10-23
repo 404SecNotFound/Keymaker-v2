@@ -1576,7 +1576,20 @@ def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) ->
     """
     if not texts:
         raise _reject()
-    shares = [decode_share_any(t) for t in texts]
+    decoded = [decode_share_any(t) for t in texts]
+
+    # §6 as amended: a record identical to one already supplied is that share
+    # supplied twice, and counts once. A strip pasted or scanned twice used to
+    # fail a set that held k genuine shares, with the generic message telling
+    # the person to check strips that were all correct. Compared as decoded
+    # records, so two spellings of one strip are one share, and in constant
+    # time because a share value is key material.
+    shares: list[Share] = []
+    for s in decoded:
+        if not any(s.index == u.index and s.threshold == u.threshold
+                   and hmac.compare_digest(s.set_id, u.set_id)
+                   and hmac.compare_digest(s.value, u.value) for u in shares):
+            shares.append(s)
 
     thresholds = {s.threshold for s in shares}
     if len(thresholds) != 1:
@@ -4986,8 +4999,26 @@ def _selftest() -> int:
                           (2, decode_share(texts35[1]).value),
                           (3, decode_share(texts35[2]).value),
                           (5, decode_share(corrupt5).value)]) != known_secret)
-    rejects("the same share supplied twice",
+    # §6 as amended: the same share twice counts once, so k genuine shares with
+    # one repeated still open, and a repeat does not stand in for a missing share.
+    # Guarded: a reader that refused the repeat would otherwise end the self-test
+    # with a traceback instead of naming the check it failed.
+    def _opens35(texts: list[str]) -> bool:
+        try:
+            return combine_shares(texts) == known_secret
+        except Exception:
+            return False
+    check("the same share supplied twice counts once",
+          _opens35([texts35[0], texts35[0], texts35[1], texts35[2]]))
+    check("the same share in two spellings counts once",
+          _opens35([texts35[0], texts35[0].lower().replace("-", " "),
+                    texts35[1], texts35[2]]))
+    rejects("a share supplied twice does not count as two of k",
             lambda: combine_shares([texts35[0], texts35[0], texts35[1]]))
+    dup_body = set_id + bytes([3, 1]) + bytes(32)
+    other1 = encode_share(parse_share(dup_body + _share_checksum(dup_body)))
+    rejects("two different shares with the same index",
+            lambda: combine_shares([texts35[0], other1, texts35[1], texts35[2]]))
 
     other_salt = bytes(32)
     other_texts = [encode_share(Share(set_id=share_set_id(other_salt), threshold=3,
