@@ -1687,6 +1687,12 @@ encoding — every reader strips ASCII whitespace, v2's `dearmor` explicitly and
 v1's via `atob`'s forgiving-base64 decode — so this is presentation only, needs
 no version bump, and does not change any existing container.
 
+What is wrapped is the base64url body, every 64 characters, with LF between
+lines and none after the last. The `keym2:` prefix goes in front of the first
+line, so that line is 70 characters. A writer that wraps differently writes a
+valid armor that reads the same, but not the bytes `docs/vectors/text.json`
+pins.
+
 It is not cosmetic, though. One unbroken line is measurably hostile: a
 `<textarea>` laying out a single 1 MiB line blocks the main thread for
 ~12 400 ms, against ~407 ms for the same megabyte wrapped. Since armor is

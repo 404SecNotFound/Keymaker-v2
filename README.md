@@ -609,6 +609,7 @@ npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference
 npm run test:conformance2 # ...and the same for v2/v3, byte for byte
 npm run test:properties   # both readers on generated inputs, from a printed seed
+npm run test:vectors      # both readers against the published vector pack in docs/vectors
 npm run test:keym2        # the Python reference against itself
 npm run test:recovery     # the documented recovery procedure, end to end
 

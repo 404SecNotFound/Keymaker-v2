@@ -1,0 +1,119 @@
+{
+  "family": "text",
+  "format": 1,
+  "vectors": [
+    {
+      "id": "ignorable",
+      "note": "\u00a77, Characters a reader ignores. A reader's own table must equal this exactly.",
+      "ignorable": [
+        9,
+        10,
+        11,
+        12,
+        13,
+        32,
+        133,
+        160,
+        5760,
+        8192,
+        8193,
+        8194,
+        8195,
+        8196,
+        8197,
+        8198,
+        8199,
+        8200,
+        8201,
+        8202,
+        8232,
+        8233,
+        8239,
+        8287,
+        12288,
+        65279
+      ]
+    },
+    {
+      "id": "armor-v3-s8",
+      "note": "\u00a77 of v3 \u00a78's container, wrapped at 64 columns and on one line. Line breaks are presentation only.",
+      "container": "4b45594d030000000123456789abcdef0123456789abcdef015ff0c0fb11b44058abe6be48b590178d0752bc88f0f3954de69c98a68007c418000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea58ebba4ecc919f86d5c86811a5e72ed5e5b7f66708362672c51f8cb0a5cf3cd813330ece0b1f8961f08f3750ad2414b298413cc7e6e30ae646ca833cfd9c4d76d55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e",
+      "wrapped": "keym2:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAV_wwPsRtEBYq-a-SLWQF40HUryI8POV\nTeacmKaAB8QYAAEAAAAAAAAAESIzRFVmd4iZqrvM3e7_ABEiM0RVZneImaq7zN3u\n_wADAAEAAAQAjnueABJQ9EnTCIL1jl2TyFu4qOZFnqWOu6TsyRn4bVyGgRpecu1e\nW39mcINiZyxR-MsKXPPNgTMw7OCx-JYfCPN1CtJBSymEE8x-bjCuZGyoM8_ZxNdt\nVRgPuDWo10OrKQC0VDmJ8xGJJWnH9ix1XwPCPg",
+      "compact": "keym2:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAV_wwPsRtEBYq-a-SLWQF40HUryI8POVTeacmKaAB8QYAAEAAAAAAAAAESIzRFVmd4iZqrvM3e7_ABEiM0RVZneImaq7zN3u_wADAAEAAAQAjnueABJQ9EnTCIL1jl2TyFu4qOZFnqWOu6TsyRn4bVyGgRpecu1eW39mcINiZyxR-MsKXPPNgTMw7OCx-JYfCPN1CtJBSymEE8x-bjCuZGyoM8_ZxNdtVRgPuDWo10OrKQC0VDmJ8xGJJWnH9ix1XwPCPg"
+    },
+    {
+      "id": "padded-len",
+      "note": "v4 \u00a74.2, on each side of the floor and of several powers of two.",
+      "padded_len": [
+        [
+          8,
+          256
+        ],
+        [
+          9,
+          256
+        ],
+        [
+          255,
+          256
+        ],
+        [
+          256,
+          256
+        ],
+        [
+          257,
+          272
+        ],
+        [
+          300,
+          304
+        ],
+        [
+          1000,
+          1024
+        ],
+        [
+          1024,
+          1024
+        ],
+        [
+          1025,
+          1088
+        ],
+        [
+          4096,
+          4096
+        ],
+        [
+          65535,
+          65536
+        ],
+        [
+          65536,
+          65536
+        ],
+        [
+          65537,
+          67584
+        ],
+        [
+          1048576,
+          1048576
+        ],
+        [
+          1048584,
+          1081344
+        ],
+        [
+          1000000007,
+          1006632960
+        ],
+        [
+          1099511627777,
+          1116691496960
+        ]
+      ]
+    }
+  ]
+}

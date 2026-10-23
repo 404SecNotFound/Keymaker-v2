@@ -89,6 +89,13 @@ jobs:
       - name: Property tests (both readers, generated inputs)
         run: npm run test:properties
 
+      # docs/vectors/: the language-neutral pack a third reader is checked
+      # against. keym2.py must regenerate it byte for byte (and the hex printed
+      # in v3 §8 and v4 §8 must match it), and the app must reproduce every
+      # vector. Append-only, like the fixtures.
+      - name: Vector pack (both readers, docs/vectors)
+        run: npm run test:vectors
+
       # docs/RECOVERY.md tells someone holding a years-old backup that this
       # script and two libraries will get their data back. That promise has to
       # be executable, or it decays silently into a page of stale instructions.

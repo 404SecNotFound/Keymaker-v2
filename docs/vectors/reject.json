@@ -1,0 +1,412 @@
+{
+  "family": "reject",
+  "format": 1,
+  "vectors": [
+    {
+      "id": "reject-container-core-flags",
+      "rule": "v2 \u00a73.3",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030001000123456789abcdef0123456789abcdef01f051a7366742c358d8b68ea46722cd88acb1847eb8cca70652d00fa4efd88c5f000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd1e6201b695b2d2727708758274a1f0551c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e706c329eb3e4db2af911180ec6ecf67e3f",
+      "note": "The flags byte is entirely reserved."
+    },
+    {
+      "id": "reject-container-core-reserved",
+      "rule": "v2 \u00a73",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000010123456789abcdef0123456789abcdef013b2345e61e9ff87b12401a32a19c59f43459627715b9617b601d68fcd0e55c5b000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd1a1ada1278cdd92add414c4dd601ce00cc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70e4f4bc7f9fc693de1e358d0bf94441e1",
+      "note": "The reserved header byte is non-zero."
+    },
+    {
+      "id": "reject-container-slot-count-nine",
+      "rule": "v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef0915fdcd246ac645a0406fded7a5961fffd420e2e5fbc6671a9778bd7d55abb9c7000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "Nine well-formed slots, the first of which opens. slot_count is outside 1..8."
+    },
+    {
+      "id": "reject-container-slot-type-unknown",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01e126a8e3324d9928878c5d2f7e295ead255c84bb15f5f0d50c9da90a75cdc8a4070000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd14c1db7640f3dd8c53a6cd78b5b5d0e49c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "A slot type the reader does not implement is skipped, never guessed at. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-slot-flags-reserved",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef019fea55889f19cb1530a688e8235d7b954b3dfdf9dcc85281805a47e4ccf23fea000002000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd18c5999d49b59547ddf6ff2bbb7dc2ca8c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "slot_flags bits 1 to 7 are reserved. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-slot-reserved",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01e97dc685331fa0f437d73ee58a57b3631d30b129ef67b0e2faf80c28b1701585000000010000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd1a40b5c401d4ed300a26ec72d0c7f1e90c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "Slot bytes 3 to 7 are reserved. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-kdf-pairing",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01802a590bb40a26cc664927bfb2e748c88d3fd8497d0c0e4157168bf3189c15d4000200000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0000000000000000f112387da5910e60d1d57b20e5e0591d80d4c802b4f996389691262a3ac7c90f4a564d89b934d9cbbb48bf28b532b6dcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "A passphrase slot never declares HKDF, which would be a password with no stretching. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-pbkdf2-param-reserved",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef013ae9faf26d6918571cafcce18d278ceb6aa393a5724ca35a8910417ab67b18c5000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e801000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd19f2f3d22ca6d2442094a6e900cc73e48c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "The last four PBKDF2 parameter bytes are reserved (v2 \u00a73.2). The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-pbkdf2-iterations-over",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01722453c32193d575070f541023b3cb5d902d71eb0a79826c281b68d62a62afe9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0098968100000000f2b2e9229983923bec4596c63b6fbe2a60d50729dd69ddd90f879c726d6e40104f854cc2d606a3de605cd3145f482033c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "PBKDF2 iterations above 10,000,000, refused before any derivation. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-argon2id-time-over",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01a3b12bf0dcb8cf36a37910920b0ea61380f629d9640dfaf70af121f7743b3df0000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000b000000080100be3ca329a7bc57804392dc34e51c499e48f0644a2e7d0cbb456ebe69984663dc42e008be64b4eb13b00b681ff3e7a647c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "Argon2id time_cost above 10. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-argon2id-memory-over",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01ff56720b7eabe58227c8dd5db9cc3742451e8359c7c231830e852e2715d4cf02000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00010004000101003467056c0488592b085cf9163d40074719f1c46a0fcb232b06d778899a87c6448d2c9de61f6ef8e194b071728dca456ac1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "Argon2id memory_kib above 262,144, refused before allocating it. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-argon2id-parallelism-over",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01160294c5f05bf49f40fa30e35162dad7a21ca2bd6bb1dcc8925249d4f9dd7185000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0001000000480900a69ccb3dbd6993cf7c069c52163d330e88eaa434a359351405195e1219c73b3380cb83dae90fcc867c3f58ea7b77b664c1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "Argon2id parallelism above 8. The only slot is disqualified, so the table is exhausted. accept.json holds the same slot beside a good one."
+    },
+    {
+      "id": "reject-container-final-flag",
+      "rule": "v2 \u00a75.2",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fc28515a1df71cfcc1abe4f6d44cdd102958f120ffe4739134dac7b5dd815e7766a05bd8ec7bfa2435fa9198b28407bc5ed5c193f2d97a93a86649eaf66df0158183b6e18336bacb752c",
+      "note": "The only chunk is sealed with final_flag 0, so the stream has no end."
+    },
+    {
+      "id": "reject-container-v4-too-short",
+      "rule": "v4 \u00a74.4 step 1",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d040000000123456789abcdef0123456789abcdef0158d40bff995fca1d92f722a3f0c0e6568350eb44a227c60484b3ba00a70b2a0d000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd198e94fa04d7ebeceeb69fc728f4ba9d8b3ae733192a6e46c8405866e2c6c1caf71adab7c7fd6bf",
+      "note": "A v4 stream shorter than its 8-byte length prefix."
+    },
+    {
+      "id": "reject-container-v4-length-overrun",
+      "rule": "v4 \u00a74.4 step 3",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d040000000123456789abcdef0123456789abcdef0158d40bff995fca1d92f722a3f0c0e6568350eb44a227c60484b3ba00a70b2a0d000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd198e94fa04d7ebeceeb69fc728f4ba9d8b3ae733192a6e7a962efe3acef974307a03744be773216cb128c7e2062aa366ea63e9590cf9927551a02aa76fd8755f22143ad80283dc68f31eab91c28c8c1fcf2f2868f64b1f9e31146e75116808c42530044fa45aa06db4459dda1d22ef646d4790d3769ba8126b022115b28841829f1f40096ebc4acf10b9dad99fada24566f1b6ba06043365d5a508c80572e3c1486888e3f4cafcbe3a225b1bafe3fd211dcecfd635f2b32c5de3ffe575d3c696e8cb27777cb148bdf285d75e8464065939853297de066e2dbe384123dda057182fb2656f5c735cbc975e8fd07b1d019807174fc25b084fd3ad0326314c796dde9346618e2ec7e29768b432206d2a99d21ee7258a456aad29717f4b40a8f78de94",
+      "note": "The length prefix claims more bytes than the stream holds."
+    },
+    {
+      "id": "reject-container-v4-wrong-bucket",
+      "rule": "v4 \u00a74.4 step 4",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d040000000123456789abcdef0123456789abcdef0158d40bff995fca1d92f722a3f0c0e6568350eb44a227c60484b3ba00a70b2a0d000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd198e94fa04d7ebeceeb69fc728f4ba9d8b3ae733192a6e47862efe3acef974307a03744be773216cb128c7e2062aa366ea63e9590cf9927551a02aa76fd8755f22143ad80283dc68f31eab91c28c8c1fcf2f2868f64b1f9e31146e75116808c42530044fa45aa06db4459dda1d22ef646d4790d3769ba8126b022115b28841829f1f40096ebc4acf10b9dad99fada24566f1b6ba06043365d5a508c80572e3c1486888e3f4cafcbe3a225b1bafe3fd211dcecfd635f2b32c5de3ffe575d3c696e8cb27777cb148bdf285d75e8464065939853297de066e2dbe384123dda057182fb2656f5c735cbc975e8fd07b1d019807174fc25b084fd3ad0326314c796dde9346618e2ec7e29768b432206d2a99d210ee1e4723459f62f527830f1a13d9bd0b762954303b5338fce7d25c7c725f9008a4aa5edd64b284c956edc3148c6df6bd1dfa093ec23579f075862282c17798780d0e884a771ede05526acf9ba905354e332183a302de940d5b3a2cdf17f77797e6ad1d092a59b27102972f19733ec3e1f8755b11e63e9bd473f2a78c0ba23692cb45812dadb393c2b4d4c1b7aadf5b589762d471cdb89156167641a33654c2c3893be6f48ba29eb9ccf047dd0cd64f2d3451c0d63a6c1255fd7539a00421c0b23482a15ab64b28891e61d2520c12a22e1de7b9abf0de7bffe5854933caed3b7b917a72a6b10c453df731105b60a0e52ba3efcf2db28e59f1d6983df5e62dd56d7b6e1ccf08b5988edaf5f4bb23dcbc2",
+      "note": "The stream is 512 bytes, but padded_len(8 + L) is 256."
+    },
+    {
+      "id": "reject-container-v4-padding-nonzero",
+      "rule": "v4 \u00a74.4 step 5",
+      "kind": "container",
+      "authentic": true,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d040000000123456789abcdef0123456789abcdef0158d40bff995fca1d92f722a3f0c0e6568350eb44a227c60484b3ba00a70b2a0d000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd198e94fa04d7ebeceeb69fc728f4ba9d8b3ae733192a6e47862efe3acef974307a03744be773216cb128c7e2062aa366ea63e9590cf9927551a02aa76fd8755f22143ad80283dc68f31eab91c28c8c1fcf2f2868f64b1f9e31146e75116808c42530044fa45aa06db4459dda1d22ef646d4790d3769ba8126b022115b28841829f1f40096ebc4acf10b9dad99fada24566f1b6ba06043365d5a508c80572e3c1486888e3f4cafcbe3a225b1bafe3fd211dcecfd635f2b32c5de3ffe575d3c696e8cb27777cb148bdf285d75e8464065939853297de066e2dbe384123dda057182fb2656f5c735cbc975e8fd07b1d019807174fc25b084fd3ad0326314c796dde9346618e2ec7e29768b432206d2a99d205cba10e73b815e0b6b40f17efea3c147",
+      "note": "The last padding byte is 0x01."
+    },
+    {
+      "id": "reject-container-magic",
+      "rule": "v2 \u00a73",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "5845594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "The magic is KEYM."
+    },
+    {
+      "id": "reject-container-version-unknown",
+      "rule": "v2 \u00a73, v3 \u00a73",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d050000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "No version 5 exists."
+    },
+    {
+      "id": "reject-container-cipher-unknown",
+      "rule": "v2 \u00a73",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030300000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "cipher_id 0x03 is not defined."
+    },
+    {
+      "id": "reject-container-slot-count-zero",
+      "rule": "v2 \u00a76",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef00c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "slot_count outside 1..8. With no slot to try, exhaustion refuses it too."
+    },
+    {
+      "id": "reject-container-cut-in-header",
+      "rule": "v2 \u00a76",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef01234567",
+      "note": "Shorter than payload_offset."
+    },
+    {
+      "id": "reject-container-cut-before-tag",
+      "rule": "v2 \u00a76",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f",
+      "note": "Shorter than payload_offset plus one chunk's tag."
+    },
+    {
+      "id": "reject-container-pbkdf2-iterations-zero",
+      "rule": "v2 \u00a76",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff0000000000000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "PBKDF2 iterations below 1. No library derives with zero, so a reader that skips the bound must still refuse it, not crash."
+    },
+    {
+      "id": "reject-container-wrapped-key",
+      "rule": "v2 \u00a74.3, v2 \u00a76",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e800d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "The wrapped master key fails its tag, which exhausts the table."
+    },
+    {
+      "id": "reject-container-payload-byte",
+      "rule": "v2 \u00a75.4",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc0cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "A payload byte fails chunk 0's tag."
+    },
+    {
+      "id": "reject-container-payload-cut",
+      "rule": "v2 \u00a75.2, v2 \u00a75.4",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e1",
+      "note": "The final chunk is one byte short, so its tag fails."
+    },
+    {
+      "id": "reject-container-wrong-password",
+      "rule": "v2 \u00a76",
+      "kind": "container",
+      "authentic": false,
+      "password": "the reject base \u2014 test only!",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef01c6639f94ab73dc89fa7dc47649829d97d21873d3c1dda39ddf9ece60dd2191f9000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "note": "The right container with the wrong password, so no slot opens."
+    },
+    {
+      "id": "reject-armor-uppercase-prefix",
+      "rule": "v2 \u00a77",
+      "kind": "armor",
+      "input": "KEYM2:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAcZjn5Src9yJ-n3EdkmCnZfSGHPTwd2jnd-ezmDdIZH5AAAAAAAAAAAAESIzRFVmd4iZqrvM3e7_ABEiM0RVZneImaq7zN3u_wAAA-gAAAAA6QDQNCupeo0tiZkuR7uhSoikZfp1JPtXvk5RpWJljdFwoSAc-X_ASrndnhtcCvX8wcsZVPHSyitj5efu_8MfAqQrCvh2d0TBBJw2YX-hcyukNZzex5JiARZKv3DzkVXlIQ2tiSggg55wlU_BIAwuZpJ1UcTB_lbhfg",
+      "note": "The prefix is case-sensitive."
+    },
+    {
+      "id": "reject-armor-outside-alphabet",
+      "rule": "v2 \u00a77",
+      "kind": "armor",
+      "input": "keym2:S0VZTQMAAAABI0!niavN7wEjRWeJq83vAcZjn5Src9yJ-n3EdkmCnZfSGHPTwd2jnd-ezmDdIZH5AAAAAAAAAAAAESIzRFVmd4iZqrvM3e7_ABEiM0RVZneImaq7zN3u_wAAA-gAAAAA6QDQNCupeo0tiZkuR7uhSoikZfp1JPtXvk5RpWJljdFwoSAc-X_ASrndnhtcCvX8wcsZVPHSyitj5efu_8MfAqQrCvh2d0TBBJw2YX-hcyukNZzex5JiARZKv3DzkVXlIQ2tiSggg55wlU_BIAwuZpJ1UcTB_lbhfg",
+      "note": "A character outside base64url."
+    },
+    {
+      "id": "reject-armor-control",
+      "rule": "v2 \u00a77",
+      "kind": "armor",
+      "input": "keym2:S0VZTQMAAAABI0\u001cVniavN7wEjRWeJq83vAcZjn5Src9yJ-n3EdkmCnZfSGHPTwd2jnd-ezmDdIZH5AAAAAAAAAAAAESIzRFVmd4iZqrvM3e7_ABEiM0RVZneImaq7zN3u_wAAA-gAAAAA6QDQNCupeo0tiZkuR7uhSoikZfp1JPtXvk5RpWJljdFwoSAc-X_ASrndnhtcCvX8wcsZVPHSyitj5efu_8MfAqQrCvh2d0TBBJw2YX-hcyukNZzex5JiARZKv3DzkVXlIQ2tiSggg55wlU_BIAwuZpJ1UcTB_lbhfg",
+      "note": "U+001C is a control character, not IGNORABLE."
+    },
+    {
+      "id": "reject-share-k-one",
+      "rule": "v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE1:47S0JZG10524AHJ7914MMJTC9N74YM2HA99N8NAPAXC5JPJVBHENWQX0M6HA7D4WBN10",
+      "note": "k outside 2..16, with a valid checksum."
+    },
+    {
+      "id": "reject-share-k-seventeen",
+      "rule": "v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE1:47S0JZGH0524AHJ7914MMJTC9N74YM2HA99N8NAPAXC5JPJVBHENWQX0M6HA6YDVB8BG",
+      "note": "k outside 2..16, with a valid checksum."
+    },
+    {
+      "id": "reject-share-index-zero",
+      "rule": "v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE1:47S0JZG30124AHJ7914MMJTC9N74YM2HA99N8NAPAXC5JPJVBHENWQX0M6HA77QMT05G",
+      "note": "Index 0 is the secret's own point."
+    },
+    {
+      "id": "reject-share-checksum",
+      "rule": "v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE1:47S0JZG30524AHJ7914MMJTC9N74YM2HA99N8NAPAXC5JPJVBHENWQX0M6HA7G12HA9G",
+      "note": "The checksum does not match the record."
+    },
+    {
+      "id": "reject-share-padding-bits",
+      "rule": "v2 \u00a74.6, v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE1:47S0JZG30524AHJ7914MMJTC9N74YM2HA99N8NAPAXC5JPJVBHENWQX0M6HA7G12HA91",
+      "note": "The final character carries a non-zero padding bit."
+    },
+    {
+      "id": "reject-share-dotless-i",
+      "rule": "v2 \u00a77",
+      "kind": "share",
+      "input": "KMSHARE1:47S0JZG30524AHJ79\u01314MMJTC9N74YM2HA99N8NAPAXC5JPJVBHENWQX0M6HA7G12HA90",
+      "note": "Folding is ASCII-only, so U+0131 is not I."
+    },
+    {
+      "id": "reject-combine-too-few",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90\nKMSHARE1:47S0-JZG3-0BJE-7TQD-Y3VZ-XYEW-VF9D-BP6Z-TV8S-94WT-KP08-F3M9-NJNT-59A8-9X34-21MR-MQKG",
+      "note": "Two shares of a 3-of-5 set."
+    },
+    {
+      "id": "reject-combine-repeat-for-missing",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90\nKMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90\nKMSHARE1:47S0-JZG3-0BJE-7TQD-Y3VZ-XYEW-VF9D-BP6Z-TV8S-94WT-KP08-F3M9-NJNT-59A8-9X34-21MR-MQKG",
+      "note": "A share supplied twice counts once, so this is two of three."
+    },
+    {
+      "id": "reject-combine-same-index",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90\nKMSHARE1:47S0JZG3040000000000000000000000000000000000000000000000000018YBNM3G\nKMSHARE1:47S0-JZG3-0BJE-7TQD-Y3VZ-XYEW-VF9D-BP6Z-TV8S-94WT-KP08-F3M9-NJNT-59A8-9X34-21MR-MQKG\nKMSHARE1:47S0-JZG3-0F2C-7JPD-T3BX-XPFW-ZFSF-BY7Z-YVRV-9CXT-QPGA-FBN9-HJ5R-51B8-DXK6-27M2-ZSRG",
+      "note": "Two different shares at index 1."
+    },
+    {
+      "id": "reject-combine-k-disagrees",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90\nKMSHARE1:47S0-JZG3-0BJE-7TQD-Y3VZ-XYEW-VF9D-BP6Z-TV8S-94WT-KP08-F3M9-NJNT-59A8-9X34-21MR-MQKG\nKMSHARE1:47S0JZG40C0000000000000000000000000000000000000000000000000010VAQB20",
+      "note": "The members disagree about k."
+    },
+    {
+      "id": "reject-share2-k-one",
+      "rule": "v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE2:47S0JZGX243VVXY1AWS6D7BMER0G2H258S3MGJAA9D64TKJFA18N4MTMANB5EP2SB9DNRQAYBYGA38N3KQ01JSX1C9V4RWC7KH4WAK2MX0",
+      "note": "k outside 2..16, with a valid checksum."
+    },
+    {
+      "id": "reject-share2-index-zero",
+      "rule": "v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE2:47S0JZGX243VVXY1AWS6D7BMER1G0H258S3MGJAA9D64TKJFA18N4MTMANB5EP2SB9DNRQAYBYGA38N3TY4NY14KSHGX5AWKZXC10VPWKG",
+      "note": "Index 0 is the secret's own point."
+    },
+    {
+      "id": "reject-share2-checksum",
+      "rule": "v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE2:47S0JZGX243VVXY1AWS6D7BMER1G2H258S3MGJAA9D64TKJFA18N4MTMANB5EP2SB9DNRQAYBYGA38N3F0FSKDDDY4V6CA7XGTMW0C05ZG",
+      "note": "The 16-byte checksum does not match the record."
+    },
+    {
+      "id": "reject-share2-padding-bits",
+      "rule": "v2 \u00a74.6, v2 \u00a76",
+      "kind": "share",
+      "input": "KMSHARE2:47S0JZGX243VVXY1AWS6D7BMER1G2H258S3MGJAA9D64TKJFA18N4MTMANB5EP2SB9DNRQAYBYGA38N3F0FSKDDDY4V6CA7XGTMW0C05ZN",
+      "note": "The final character carries a non-zero padding bit."
+    },
+    {
+      "id": "reject-combine-two-sets",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-2H25-8S3M-GJAA-9D64-TKJF-A18N-4MTM-ANB5-EP2S-B9DN-RQAY-BYGA-38N3-F0FS-KDDD-Y4V6-CA7X-GTMW-0C05-ZM\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-5S73-XBPZ-1XZY-Z7ED-QMPN-V3FX-DMCM-JED9-V047-HT4T-SAX2-MN44-YHJ1-CCMS-5345-8E5F-780S-MHXA-EHVP-SR\nKMSHARE2:47S0JZGX243VVXY1AWS6D7BMEW1G6000000000000000000000000000000000000000000000000000ZQ3EB054GKYZW26SPK8SRAF1Z4",
+      "note": "Two shares of one set and one of a set whose id differs only in its last byte, so a reader that compares the first four bytes takes them for one set."
+    },
+    {
+      "id": "reject-combine-v1-with-v2",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-5S73-XBPZ-1XZY-Z7ED-QMPN-V3FX-DMCM-JED9-V047-HT4T-SAX2-MN44-YHJ1-CCMS-5345-8E5F-780S-MHXA-EHVP-SR\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-7H63-SB6X-1NYY-V7YF-QWQN-Z3ZZ-DWDM-PEXB-V857-NTMR-S2W2-GNM6-YSK1-ER46-JC8V-YFKR-KX2W-6NMH-KWG1-9W",
+      "note": "KMSHARE1 and KMSHARE2 strips of the same split. Their set ids differ in length, so they are not one set."
+    },
+    {
+      "id": "reject-parts-missing",
+      "rule": "v2 \u00a77.3",
+      "kind": "parts",
+      "input": "KMPART2:1/4:80iNkzPiTGIVpCAM68C4zw:220:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAV_wwPsRtEBYq-a-SLWQF40HUryI8POVTeacmKaAB8QYAAEAAAAAAA:-eVFIw\nKMPART2:2/4:80iNkzPiTGIVpCAM68C4zw:220:AAARIjNEVWZ3iJmqu8zd7v8AESIzRFVmd4iZqrvM3e7_AAMAAQAABACOe54AElD0SdMIgvWOXZPIW7io5kWepQ:L2iSpQ\nKMPART2:3/4:80iNkzPiTGIVpCAM68C4zw:220:jruk7MkZ-G1choEaXnLtXlt_ZnCDYmcsUfjLClzzzYEzMOzgsfiWHwjzdQrSQUsphBPMfm4wrmRsqDPP2cTXbQ:sxY47g",
+      "note": "Every part is needed."
+    },
+    {
+      "id": "reject-parts-twice",
+      "rule": "v2 \u00a77.3",
+      "kind": "parts",
+      "input": "KMPART2:1/4:80iNkzPiTGIVpCAM68C4zw:220:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAV_wwPsRtEBYq-a-SLWQF40HUryI8POVTeacmKaAB8QYAAEAAAAAAA:-eVFIw\nKMPART2:2/4:80iNkzPiTGIVpCAM68C4zw:220:AAARIjNEVWZ3iJmqu8zd7v8AESIzRFVmd4iZqrvM3e7_AAMAAQAABACOe54AElD0SdMIgvWOXZPIW7io5kWepQ:L2iSpQ\nKMPART2:3/4:80iNkzPiTGIVpCAM68C4zw:220:jruk7MkZ-G1choEaXnLtXlt_ZnCDYmcsUfjLClzzzYEzMOzgsfiWHwjzdQrSQUsphBPMfm4wrmRsqDPP2cTXbQ:sxY47g\nKMPART2:4/4:80iNkzPiTGIVpCAM68C4zw:220:VRgPuDWo10OrKQC0VDmJ8xGJJWnH9ix1XwPCPg:w49FZw\nKMPART2:1/4:80iNkzPiTGIVpCAM68C4zw:220:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAV_wwPsRtEBYq-a-SLWQF40HUryI8POVTeacmKaAB8QYAAEAAAAAAA:-eVFIw",
+      "note": "A part supplied twice."
+    },
+    {
+      "id": "reject-parts-checksum",
+      "rule": "v2 \u00a77.3",
+      "kind": "parts",
+      "input": "KMPART2:1/4:80iNkzPiTGIVpCAM68C4zw:220:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAV_wwPsRtEBYq-a-SLWQF40HUryI8POVTeacmKaAB8QYAAEAAAAAAA:-eVFIA\nKMPART2:2/4:80iNkzPiTGIVpCAM68C4zw:220:AAARIjNEVWZ3iJmqu8zd7v8AESIzRFVmd4iZqrvM3e7_AAMAAQAABACOe54AElD0SdMIgvWOXZPIW7io5kWepQ:L2iSpQ\nKMPART2:3/4:80iNkzPiTGIVpCAM68C4zw:220:jruk7MkZ-G1choEaXnLtXlt_ZnCDYmcsUfjLClzzzYEzMOzgsfiWHwjzdQrSQUsphBPMfm4wrmRsqDPP2cTXbQ:sxY47g\nKMPART2:4/4:80iNkzPiTGIVpCAM68C4zw:220:VRgPuDWo10OrKQC0VDmJ8xGJJWnH9ix1XwPCPg:w49FZw",
+      "note": "A part's checksum does not match."
+    }
+  ]
+}

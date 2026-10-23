@@ -1,0 +1,133 @@
+{
+  "family": "primitives",
+  "format": 1,
+  "vectors": [
+    {
+      "id": "hkdf-sha256-rfc5869-a1",
+      "primitive": "hkdf-sha256",
+      "source": "RFC 5869 Appendix A.1, via pyca cryptography_vectors 50.0.2, KDF/rfc-5869-HKDF-SHA256.txt",
+      "note": "The slot keys, the slot-table key and chained mode's subkeys are HKDF-SHA-256.",
+      "ikm": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "salt": "000102030405060708090a0b0c",
+      "info": "f0f1f2f3f4f5f6f7f8f9",
+      "length": 42,
+      "prk": "077709362c2e32df0ddc3f0dc47bba6390b6c73bb50f9c3122ec844ad7c2b3e5",
+      "okm": "3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf34007208d5b887185865"
+    },
+    {
+      "id": "hkdf-sha256-rfc5869-a2",
+      "primitive": "hkdf-sha256",
+      "source": "RFC 5869 Appendix A.2, via pyca cryptography_vectors 50.0.2, KDF/rfc-5869-HKDF-SHA256.txt",
+      "note": "The slot keys, the slot-table key and chained mode's subkeys are HKDF-SHA-256.",
+      "ikm": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f",
+      "salt": "606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeaf",
+      "info": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+      "length": 82,
+      "prk": "06a6b88c5853361a06104c9ceb35b45cef760014904671014a193f40c15fc244",
+      "okm": "b11e398dc80327a1c8e7f78c596a49344f012eda2d4efad8a050cc4c19afa97c59045a99cac7827271cb41c65e590e09da3275600c2f09b8367793a9aca3db71cc30c58179ec3e87c14c01d5c1f3434f1d87"
+    },
+    {
+      "id": "hkdf-sha256-rfc5869-a3",
+      "primitive": "hkdf-sha256",
+      "source": "RFC 5869 Appendix A.3, via pyca cryptography_vectors 50.0.2, KDF/rfc-5869-HKDF-SHA256.txt",
+      "note": "The slot keys, the slot-table key and chained mode's subkeys are HKDF-SHA-256.",
+      "ikm": "0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b",
+      "salt": "",
+      "info": "",
+      "length": 42,
+      "prk": "19ef24a32c717b167f33a91d6f648bdf96596776afdb6377ac434c1c293ccb04",
+      "okm": "8da4e775a563c18f715f802a063c5a31b8a11f5c5ee1879ec3454e5f3c738d2d9d201395faa4b61a96c8"
+    },
+    {
+      "id": "chacha20poly1305-rfc8439",
+      "primitive": "chacha20-poly1305",
+      "source": "RFC 7539 and RFC 8439 \u00a72.8.2, via pyca cryptography_vectors 50.0.2, ciphers/ChaCha20Poly1305/boringssl.txt COUNT 1",
+      "note": "cipher_id 0x01, and the outer layer of 0x02.",
+      "key": "808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f",
+      "nonce": "070000004041424344454647",
+      "aad": "50515253c0c1c2c3c4c5c6c7",
+      "plaintext": "4c616469657320616e642047656e746c656d656e206f662074686520636c617373206f66202739393a204966204920636f756c64206f6666657220796f75206f6e6c79206f6e652074697020666f7220746865206675747572652c2073756e73637265656e20776f756c642062652069742e",
+      "ciphertext": "d31a8d34648e60db7b86afbc53ef7ec2a4aded51296e08fea9e2b5a736ee62d63dbea45e8ca9671282fafb69da92728b1a71de0a9e060b2905d6a5b67ecd3b3692ddbd7f2d778b8c9803aee328091b58fab324e4fad675945585808b4831d7bc3ff4def08e4b7a9de576d26586cec64b6116",
+      "tag": "1ae10b594f09e26a7e902ecbd0600691"
+    },
+    {
+      "id": "chacha20poly1305-rfc8439-a5",
+      "primitive": "chacha20-poly1305",
+      "source": "RFC 7539 and RFC 8439 Appendix A.5, as carried in OpenSSL's test/evpciph.txt, via pyca cryptography_vectors 50.0.2, ciphers/ChaCha20Poly1305/openssl.txt COUNT 1",
+      "note": "A 265-byte message, so the final Poly1305 block is partial.",
+      "key": "1c9240a5eb55d38af333888604f6b5f0473917c1402b80099dca5cbc207075c0",
+      "nonce": "000000000102030405060708",
+      "aad": "f33388860000000000004e91",
+      "plaintext": "496e7465726e65742d4472616674732061726520647261667420646f63756d656e74732076616c696420666f722061206d6178696d756d206f6620736978206d6f6e74687320616e64206d617920626520757064617465642c207265706c616365642c206f72206f62736f6c65746564206279206f7468657220646f63756d656e747320617420616e792074696d652e20497420697320696e617070726f70726961746520746f2075736520496e7465726e65742d447261667473206173207265666572656e6365206d6174657269616c206f7220746f2063697465207468656d206f74686572207468616e206173202fe2809c776f726b20696e2070726f67726573732e2fe2809d",
+      "ciphertext": "64a0861575861af460f062c79be643bd5e805cfd345cf389f108670ac76c8cb24c6cfc18755d43eea09ee94e382d26b0bdb7b73c321b0100d4f03b7f355894cf332f830e710b97ce98c8a84abd0b948114ad176e008d33bd60f982b1ff37c8559797a06ef4f0ef61c186324e2b3506383606907b6a7c02b0f9f6157b53c867e4b9166c767b804d46a59b5216cde7a4e99040c5a40433225ee282a1b0a06c523eaf4534d7f83fa1155b0047718cbc546a0d072b04b3564eea1b422273f548271a0bb2316053fa76991955ebd63159434ecebb4e466dae5a1073a6727627097a1049e617d91d361094fa68f0ff77987130305beaba2eda04df997b714d6c6f2c29a6ad5cb4022b02709b",
+      "tag": "eead9d67890cbb22392336fea1851f38"
+    },
+    {
+      "id": "aes256gcm-nist-cavp",
+      "primitive": "aes-256-gcm",
+      "source": "NIST CAVP gcmEncryptExtIV256.rsp, [Keylen = 256] [IVlen = 96] [PTlen = 408] [AADlen = 160] [Taglen = 128] Count = 0, via pyca cryptography_vectors 50.0.2, ciphers/AES/GCM/gcmEncryptExtIV256.rsp",
+      "note": "cipher_id 0x00, and the inner layer of 0x02. A 96-bit IV and a 128-bit tag, the only shape the format uses.",
+      "key": "24501ad384e473963d476edcfe08205237acfd49b5b8f33857f8114e863fec7f",
+      "nonce": "9ff18563b978ec281b3f2794",
+      "aad": "adb5ec720ccf9898500028bf34afccbcaca126ef",
+      "plaintext": "27f348f9cdc0c5bd5e66b1ccb63ad920ff2219d14e8d631b3872265cf117ee86757accb158bd9abb3868fdc0d0b074b5f01b2c",
+      "ciphertext": "eb7cb754c824e8d96f7c6d9b76c7d26fb874ffbf1d65c6f64a698d839b0b06145dae82057ad55994cf59ad7f67c0fa5e85fab8",
+      "tag": "bc95c532fecc594c36d1550286a7a3f0"
+    },
+    {
+      "id": "argon2id-rfc9106-5-3",
+      "primitive": "argon2id",
+      "source": "RFC 9106 \u00a75.3, via pyca cryptography_vectors 50.0.2, KDF/argon2id.txt COUNT 0",
+      "typescript": false,
+      "note": "Sets the optional secret and associated data. The format never uses either. keym2.py's library checks it through its low-level interface, and the TypeScript's library takes no associated data, so that suite skips it.",
+      "password": "0101010101010101010101010101010101010101010101010101010101010101",
+      "salt": "02020202020202020202020202020202",
+      "time_cost": 3,
+      "memory_kib": 32,
+      "parallelism": 4,
+      "length": 32,
+      "output": "0d640df58d78766c08c037a34a8b53c9d01ef0452d75b65eb52520e96b01e659",
+      "secret": "0303030303030303",
+      "ad": "040404040404040404040404"
+    },
+    {
+      "id": "argon2id-openssl-2",
+      "primitive": "argon2id",
+      "source": "OpenSSL evpkdf_argon2.txt, via pyca cryptography_vectors 50.0.2, KDF/argon2id.txt COUNT 2",
+      "note": "RFC 9106 \u00a75.3's inputs without the secret and associated data.",
+      "password": "0101010101010101010101010101010101010101010101010101010101010101",
+      "salt": "02020202020202020202020202020202",
+      "time_cost": 3,
+      "memory_kib": 32,
+      "parallelism": 4,
+      "length": 32,
+      "output": "03aab965c12001c9d7d0d2de33192c0494b684bb148196d73c1df1acaf6d0c2e"
+    },
+    {
+      "id": "argon2id-cli-4",
+      "primitive": "argon2id",
+      "source": "the argon2 command-line tool, via pyca cryptography_vectors 50.0.2, KDF/argon2id.txt COUNT 4",
+      "note": "memory_kib not a multiple of 4 x parallelism, so the lane length rounds down.",
+      "password": "70617373776f7264",
+      "salt": "7079636173616c74",
+      "time_cost": 4,
+      "memory_kib": 50,
+      "parallelism": 4,
+      "length": 8,
+      "output": "e469b777841e543f"
+    },
+    {
+      "id": "argon2id-cli-5",
+      "primitive": "argon2id",
+      "source": "the argon2 command-line tool, via pyca cryptography_vectors 50.0.2, KDF/argon2id.txt COUNT 5",
+      "note": "One pass over 8 KiB in one lane, with a 4-byte output. The format itself always derives 32 bytes.",
+      "password": "70617373776f7264",
+      "salt": "7079636173616c74",
+      "time_cost": 1,
+      "memory_kib": 8,
+      "parallelism": 1,
+      "length": 4,
+      "output": "009c7809"
+    }
+  ]
+}
