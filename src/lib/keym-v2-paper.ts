@@ -16,7 +16,7 @@
  */
 
 // §7, "Characters a reader ignores": the same set as keym2.py, not `\s`.
-import { dropIgnorable, stripIgnorable } from "./keym-text";
+import { dropIgnorable, textLines } from "./keym-text";
 
 /** §7.1. `KMS` is a share, `KMP` is a paper part; the family splits at byte 2. */
 export const KEYM2_PART_PREFIX = "KMPART1:";
@@ -240,10 +240,7 @@ export function decodePaperParts(parts: readonly string[]): Uint8Array {
  * produces. One definition, used by all of them, is what stops that recurring.
  */
 export function splitPaperParts(text: string): string[] {
-  return text
-    .split(/\r?\n/)
-    .map((line) => stripIgnorable(line))
-    .filter((line) => line !== "" && !line.startsWith("#"));
+  return textLines(text);
 }
 
 /**

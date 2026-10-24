@@ -428,6 +428,27 @@ def _drop_ignorable(text: str) -> str:
     return "".join(ch for ch in text if ch not in IGNORABLE)
 
 
+def text_lines(text: str) -> list[str]:
+    """
+    §7, one item per line (paper parts, a list of shares). A line ends at LF,
+    CRLF or a lone CR, which is what a browser's text box hands over for all
+    three. Each line is stripped of IGNORABLE at both ends, and one left empty
+    or beginning with "#" is skipped. The TypeScript's textLines is the same
+    function.
+
+    `join` used str.splitlines(), which also breaks at U+000B, U+000C,
+    U+001C..U+001E, U+0085, U+2028 and U+2029. A part holding one of those,
+    which §7 says is ignored inside a part, came out as two broken lines here
+    and reassembled in the app.
+    """
+    out = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = _strip_ignorable(line)
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
 def _lstrip_ignorable_bytes(data: bytes) -> bytes:
     """§7 on raw bytes: skip leading IGNORABLE characters in their UTF-8 form."""
     i = 0
@@ -1576,7 +1597,20 @@ def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) ->
     """
     if not texts:
         raise _reject()
-    shares = [decode_share_any(t) for t in texts]
+    decoded = [decode_share_any(t) for t in texts]
+
+    # §6 as amended: a record identical to one already supplied is that share
+    # supplied twice, and counts once. A strip pasted or scanned twice used to
+    # fail a set that held k genuine shares, with the generic message telling
+    # the person to check strips that were all correct. Compared as decoded
+    # records, so two spellings of one strip are one share, and in constant
+    # time because a share value is key material.
+    shares: list[Share] = []
+    for s in decoded:
+        if not any(s.index == u.index and s.threshold == u.threshold
+                   and hmac.compare_digest(s.set_id, u.set_id)
+                   and hmac.compare_digest(s.value, u.value) for u in shares):
+            shares.append(s)
 
     thresholds = {s.threshold for s in shares}
     if len(thresholds) != 1:
@@ -4986,8 +5020,69 @@ def _selftest() -> int:
                           (2, decode_share(texts35[1]).value),
                           (3, decode_share(texts35[2]).value),
                           (5, decode_share(corrupt5).value)]) != known_secret)
-    rejects("the same share supplied twice",
+    # §6 as amended: the same share twice counts once, so k genuine shares with
+    # one repeated still open, and a repeat does not stand in for a missing share.
+    # Guarded: a reader that refused the repeat would otherwise end the self-test
+    # with a traceback instead of naming the check it failed.
+    def _opens35(texts: list[str]) -> bool:
+        try:
+            return combine_shares(texts) == known_secret
+        except Exception:
+            return False
+    check("the same share supplied twice counts once",
+          _opens35([texts35[0], texts35[0], texts35[1], texts35[2]]))
+    check("the same share in two spellings counts once",
+          _opens35([texts35[0], texts35[0].lower().replace("-", " "),
+                    texts35[1], texts35[2]]))
+    rejects("a share supplied twice does not count as two of k",
             lambda: combine_shares([texts35[0], texts35[0], texts35[1]]))
+    dup_body = set_id + bytes([3, 1]) + bytes(32)
+    other1 = encode_share(parse_share(dup_body + _share_checksum(dup_body)))
+    rejects("two different shares with the same index",
+            lambda: combine_shares([texts35[0], other1, texts35[1], texts35[2]]))
+    # A repeat is an identical record. One that differs only in k, or only in
+    # its set id, is a different share at index 1, and both checksums are valid,
+    # so only the comparison of all four fields refuses it.
+    first35 = decode_share(texts35[0])
+    # ...and one that differs only in its index is a different share at an index
+    # nobody supplied, so three distinct points are interpolated. Dropping it
+    # as a repeat would leave two and refuse a set the format accepts.
+    _moved = encode_share(Share(set_id=set_id, threshold=3, index=4, value=first35.value))
+    def _combined(texts: list[str]) -> Optional[bytes]:
+        try:
+            return combine_shares(texts)
+        except KeymError:
+            return None
+    check("a copy of share 1 with only its index changed is a different share",
+          _combined([texts35[0], _moved, texts35[1]])
+          == shamir_combine([(1, first35.value), (2, decode_share(texts35[1]).value),
+                             (4, first35.value)]))
+    for what, sid, k in (("k", set_id, 4), ("set id", bytes(4), 3)):
+        body = sid + bytes([k, 1]) + first35.value
+        near = encode_share(parse_share(body + _share_checksum(body)))
+        for order, texts in (("after", [texts35[0], near, texts35[1], texts35[2]]),
+                             ("before", [near, texts35[0], texts35[1], texts35[2]])):
+            rejects(f"a copy of share 1 with only its {what} changed, {order} it",
+                    lambda texts=texts: combine_shares(texts))
+    # §6 as amended: each share is checked on its own before a repeat is
+    # dropped, so a damaged copy is refused as damaged, in either order.
+    padded = texts35[0][:-1] + B32_ALPHABET[B32_ALPHABET.index(texts35[0][-1]) | 1]
+    bad_ck = bytearray(first35.pack())
+    bad_ck[-1] ^= 1
+    for what, damaged in (("non-zero padding bits", padded),
+                          ("a wrong checksum", SHARE_PREFIX + _b32_encode(bytes(bad_ck)))):
+        for order, texts in (("after", [texts35[0], damaged, texts35[1], texts35[2]]),
+                             ("before", [damaged, texts35[0], texts35[1], texts35[2]])):
+            rejects(f"a copy of share 1 with {what}, {order} it",
+                    lambda texts=texts: combine_shares(texts))
+
+    # §7, one item per line: U+000A only, ends stripped, blank and "#" skipped.
+    check("text_lines splits at U+000A and strips each line",
+          text_lines("a\r\n \ufeffb\u0085\n\n# c\n\u0085\n  #d\ne") == ["a", "b", "e"])
+    check("text_lines keeps a line holding U+2028, U+0085, U+000B or U+000C whole",
+          text_lines("a\u2028b\nc\u0085d\ne\vf\x0cg") == ["a\u2028b", "c\u0085d", "e\vf\x0cg"])
+    check("text_lines ends a line at a lone U+000D, as a browser's text box does",
+          text_lines("# c\ra\rb\r\rc") == ["a", "b", "c"])
 
     other_salt = bytes(32)
     other_texts = [encode_share(Share(set_id=share_set_id(other_salt), threshold=3,
@@ -5720,6 +5815,37 @@ def _selftest() -> int:
               and max(len(ln) for ln in _lines) <= PAPER_QR_MAX_BYTES)
         _code, _out, _err = _cli(["split", "--in", _blob, "--v2"])
         check("split --v2 is still accepted", _code == 0 and PART2_PREFIX in _out)
+
+        # §7's line rule at the two entry points an heir uses, not only in
+        # text_lines: CR-only and CRLF files with a "#" first line, holding
+        # characters §7 ignores inside a line (U+2028, U+0085).
+        _enr, _strips = add_shamir_slot(
+            encrypt(b"one line rule", pw, kdf_id=KDF_PBKDF2, **fast), pw, 2, 3)
+        _cont = os.path.join(_d, "lines.keym")
+        open(_cont, "wb").write(_enr)
+        _sh = [_strips[0][:20] + "\u2028" + _strips[0][20:],
+               _strips[1][:30] + "\u0085" + _strips[1][30:]]
+        _parts = encode_parts_v2(_enr, 64)
+        _parts[0] = _parts[0][:20] + "\u2028" + _parts[0][20:]
+        _parts[-1] = _parts[-1][:15] + "\u0085" + _parts[-1][15:]
+        for _eol, _name in (("\r", "CR-only"), ("\r\n", "CRLF")):
+            _sf = os.path.join(_d, f"shares-{len(_eol)}.txt")
+            with open(_sf, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(_eol.join(["# strips 1 and 2", *_sh, ""]))
+            _back = os.path.join(_d, f"lines-{len(_eol)}.out")
+            _code, _out, _err = _cli(["decrypt", "--in", _cont, "--shares-from", _sf,
+                                      "--out", _back])
+            check(f"--shares-from reads a {_name} file whose shares hold U+2028 and U+0085",
+                  _code == 0 and os.path.exists(_back)
+                  and open(_back, "rb").read() == b"one line rule")
+            _pf = os.path.join(_d, f"parts-{len(_eol)}.txt")
+            with open(_pf, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(_eol.join(["# parts", *_parts, ""]))
+            _joined = os.path.join(_d, f"joined-{len(_eol)}.keym")
+            _code, _out, _err = _cli(["join", "--in", _pf, "--out", _joined])
+            check(f"join reads a {_name} file whose parts hold U+2028 and U+0085",
+                  _code == 0 and os.path.exists(_joined)
+                  and open(_joined, "rb").read() == _enr)
 
         # The marker an editor is likeliest to eat: the END one sits after the
         # armor, where a "trailing garbage" clean-up lands.
@@ -6947,8 +7073,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.cmd == "join":
         supplied = list(args.parts or [])
         if args.infile or not supplied:
-            supplied += [ln for ln in data.decode("utf-8", "replace").splitlines()
-                         if ln.strip() and not ln.lstrip().startswith("#")]
+            supplied += text_lines(data.decode("utf-8", "replace"))
         try:
             # Dispatch on the version digit so a set printed by either the v1
             # (§7.1) or the v2 (§7.3) writer reassembles here.
@@ -7095,13 +7220,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # UnicodeDecodeError and print the message reserved for bugs.
                 # The share decoder drops anything outside its alphabet, so a
                 # replacement character in a comment or a share is harmless.
-                with open(args.shares_from, encoding="utf-8", errors="replace") as fh:
+                # newline="": text_lines applies §7's line ends itself.
+                with open(args.shares_from, encoding="utf-8", errors="replace",
+                          newline="") as fh:
                     # §7's IGNORABLE, so a file saved with a byte order mark
                     # (Windows Notepad) does not turn its first line, often a
                     # "# shares" comment, into a share that fails the set.
-                    shares += [_strip_ignorable(ln) for ln in fh
-                               if _strip_ignorable(ln)
-                               and not _strip_ignorable(ln).startswith("#")]
+                    shares += text_lines(fh.read())
             except OSError as e:
                 print(f"error: cannot read {args.shares_from}: {e.strerror}",
                       file=sys.stderr)

@@ -908,6 +908,94 @@ def main() -> int:
         check("python opens with a different k of the n",
               py_opens_with_shares(js_container, py_shares[2:5]))
 
+        # §6 as amended: a share supplied twice counts once. Both readers must
+        # open k genuine shares with one repeated (in either spelling), and both
+        # must refuse a repeat standing in for a missing share and a different
+        # share at a repeated index. One reader deduplicating and the other not
+        # is exactly a set that opens in the app and fails in the recovery kit.
+        dup_twice = [py_shares[0], py_shares[0], *py_shares[1:K]]
+        dup_spelt = [py_shares[0], py_shares[0].lower().replace("-", " "), *py_shares[1:K]]
+        dup_short = [py_shares[0], py_shares[0], *py_shares[1:K - 1]]
+        for label, texts, want in [
+                ("one share supplied twice", dup_twice, True),
+                ("one share in two spellings", dup_spelt, True),
+                ("a repeat in place of a missing share", dup_short, False)]:
+            js_ok = js_opens_with_shares(py_container, texts)
+            py_ok = py_opens_with_shares(py_container, texts)
+            check(f"{label}: both {'open' if want else 'fail to open'} the container",
+                  js_ok == want and py_ok == want, f"js={js_ok} py={py_ok}")
+
+        # Refusal, not merely failing to open. A reader that interpolated
+        # garbage also fails the slot, so the container checks above cannot
+        # tell a refusal from a wrong answer. Each case goes to both
+        # combiners, in both orders where order could decide which copy a
+        # reader keeps. A near copy differs from share 1 in one field only and
+        # carries a valid checksum; a damaged copy fails its own checks.
+        # The pinned secret, so the reference under test is not its own oracle.
+        _secret_hex = SH_SECRET.hex()
+        combine_cases = [("one share supplied twice", dup_twice, _secret_hex),
+                         ("one share in two spellings", dup_spelt, _secret_hex),
+                         ("a repeat in place of a missing share", dup_short, None)]
+        try:
+            _first = keym2.decode_share_any(py_shares[0])
+            _v2 = py_shares[0].upper().startswith(keym2.SHARE2_PREFIX)
+            _encode = keym2.encode_share_v2 if _v2 else keym2.encode_share
+            # Differs only in its last byte: past the four a v1-width
+            # comparison would look at.
+            _other_sid = _first.set_id[:-1] + bytes([_first.set_id[-1] ^ 1])
+            near = {
+                "a different value": _encode(keym2.Share(set_id=_first.set_id, threshold=K,
+                                                         index=_first.index, value=bytes(32))),
+                "only its k changed": _encode(keym2.Share(set_id=_first.set_id, threshold=K + 1,
+                                                          index=_first.index,
+                                                          value=_first.value)),
+                "only its set id changed": _encode(keym2.Share(set_id=_other_sid, threshold=K,
+                                                               index=_first.index,
+                                                               value=_first.value)),
+            }
+            _flat = py_shares[0].replace("-", "")
+            _alpha = keym2.B32_ALPHABET
+            near["non-zero padding bits"] = _flat[:-1] + _alpha[_alpha.index(_flat[-1]) | 1]
+            _rec = bytearray(keym2._pack_share_v2(_first) if _v2 else _first.pack())
+            _rec[-1] ^= 1
+            near["a wrong checksum"] = ((keym2.SHARE2_PREFIX if _v2 else keym2.SHARE_PREFIX)
+                                        + keym2._b32_encode(bytes(_rec)))
+            for what, copy in near.items():
+                combine_cases.append((f"a copy of share 1 with {what}, after it",
+                                      [py_shares[0], copy, *py_shares[1:K]], None))
+                combine_cases.append((f"a copy of share 1 with {what}, before it",
+                                      [copy, *py_shares[:K]], None))
+            # Only its index changed: a different share at an index nobody
+            # supplied, so three distinct points are interpolated, not refused.
+            _second = keym2.decode_share_any(py_shares[1])
+            _moved = _encode(keym2.Share(set_id=_first.set_id, threshold=K, index=7,
+                                         value=_first.value))
+            combine_cases.append((
+                "a copy of share 1 with only its index changed, beside share 2",
+                [py_shares[0], _moved, py_shares[1]],
+                keym2.shamir_combine([(1, _first.value), (2, _second.value),
+                                      (7, _first.value)]).hex()))
+        except Exception as e:  # noqa: BLE001
+            check("the duplicate-share cases could be built", False, repr(e))
+        dup_in, dup_out = tmp / "dup-cases.json", tmp / "dup-verdicts.json"
+        dup_in.write_text(json.dumps([{"kind": "combine", "text": "\n".join(t)}
+                                      for _, t, _ in combine_cases]))
+        try:
+            bridge("textverdicts", "--in", str(dup_in), "--out", str(dup_out))
+            dup_js = json.loads(dup_out.read_text())
+        except BridgeError as e:
+            dup_js = [{"bridge": str(e)}] * len(combine_cases)
+        for (label, texts, want_hex), js in zip(combine_cases, dup_js):
+            try:
+                py = {"ok": True, "hex": keym2.combine_shares(texts).hex()}
+            except keym2.KeymError:
+                py = {"ok": False}
+            except Exception as e:  # noqa: BLE001
+                py = {"ok": False, "crash": repr(e)}
+            want = {"ok": True, "hex": want_hex} if want_hex else {"ok": False}
+            check(f"{label}: both combiners {'open' if want_hex else 'refuse'}",
+                  py == js == want, f"py={py} js={js}")
+
         check("neither opens on k-1 shares",
               not js_opens_with_shares(py_container, py_shares[:2])
               and not py_opens_with_shares(py_container, py_shares[:2]))
@@ -954,8 +1042,8 @@ def main() -> int:
               f"first mismatch: {next((f'{a} != {b}' for a, b in zip(py_v2_shares, js_v2_shares) if a != b), 'none')}")
         check("a v2 set id is 16 bytes and extends the v1 id",
               len(v2_sid) == 16 and v2_sid[:keym2.SHARE_SET_ID_LEN] == keym2.share_set_id(SH_SALT))
-        check("a v2 share set combines back to the secret",
-              keym2.combine_shares(py_v2_shares[:K]) == SH_SECRET)
+        check_call("a v2 share set combines back to the secret",
+                   lambda: keym2.combine_shares(py_v2_shares[:K]), SH_SECRET)
         # The envelope is cosmetic to the crypto: v2 shares of the same secret
         # open a container whose slot was enrolled with v1 shares.
         check("v2 shares of the same secret open the v1-enrolled container (js)",
@@ -2088,9 +2176,8 @@ def main() -> int:
                     return {"ok": True,
                             "hex": f"{x.set_id.hex()}:{x.threshold}:{x.index}:{x.value.hex()}"}
                 if kind == "parts":
-                    lines = [keym2._strip_ignorable(ln) for ln in text.split("\n")]
-                    lines = [ln for ln in lines if ln and not ln.startswith("#")]
-                    return {"ok": True, "hex": keym2.decode_parts_any(lines).hex()}
+                    return {"ok": True,
+                            "hex": keym2.decode_parts_any(keym2.text_lines(text)).hex()}
                 if kind == "isshare":
                     return {"ok": keym2.is_share_text(text)}
             except (keym2.KeymError, ValueError, UnicodeError):
