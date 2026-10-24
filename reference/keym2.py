@@ -428,6 +428,27 @@ def _drop_ignorable(text: str) -> str:
     return "".join(ch for ch in text if ch not in IGNORABLE)
 
 
+def text_lines(text: str) -> list[str]:
+    """
+    §7, one item per line (paper parts, a list of shares). A line ends at LF,
+    CRLF or a lone CR, which is what a browser's text box hands over for all
+    three. Each line is stripped of IGNORABLE at both ends, and one left empty
+    or beginning with "#" is skipped. The TypeScript's textLines is the same
+    function.
+
+    `join` used str.splitlines(), which also breaks at U+000B, U+000C,
+    U+001C..U+001E, U+0085, U+2028 and U+2029. A part holding one of those,
+    which §7 says is ignored inside a part, came out as two broken lines here
+    and reassembled in the app.
+    """
+    out = []
+    for line in text.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        line = _strip_ignorable(line)
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
 def _lstrip_ignorable_bytes(data: bytes) -> bytes:
     """§7 on raw bytes: skip leading IGNORABLE characters in their UTF-8 form."""
     i = 0
@@ -1576,7 +1597,20 @@ def combine_shares(texts: list[str], expected_set_id: Optional[bytes] = None) ->
     """
     if not texts:
         raise _reject()
-    shares = [decode_share_any(t) for t in texts]
+    decoded = [decode_share_any(t) for t in texts]
+
+    # §6 as amended: a record identical to one already supplied is that share
+    # supplied twice, and counts once. A strip pasted or scanned twice used to
+    # fail a set that held k genuine shares, with the generic message telling
+    # the person to check strips that were all correct. Compared as decoded
+    # records, so two spellings of one strip are one share, and in constant
+    # time because a share value is key material.
+    shares: list[Share] = []
+    for s in decoded:
+        if not any(s.index == u.index and s.threshold == u.threshold
+                   and hmac.compare_digest(s.set_id, u.set_id)
+                   and hmac.compare_digest(s.value, u.value) for u in shares):
+            shares.append(s)
 
     thresholds = {s.threshold for s in shares}
     if len(thresholds) != 1:
@@ -3311,6 +3345,300 @@ def extract_selfextract(data: bytes | str) -> bytes:
     return dearmor(body)
 
 
+# -----------------------------------------------------------------------------
+# The KAUD1 audio carrier, docs/FORMAT-AUDIO-STEGO.md
+# -----------------------------------------------------------------------------
+#
+# A transport for a container, like a paper part (§7.1) or a page (§7.2), and
+# here for the reason `join` and `extract` are: a backup only the app can
+# unpack is not a backup. The app's Audio tab writes these, and until this
+# reader existed the kit had nothing that opened one. `keym2.py decrypt` on a
+# carrier said "decryption failed", which an heir reads as a wrong password.
+#
+# Written from the document's "Reading a carrier without the app" alone. The
+# writer below exists for the self-test and the conformance suite, which
+# compare its bytes with the app's; the CLI does not expose it.
+
+KAUD_MAGIC = b"KAUD"
+KAUD_VERSION = 0x01
+KAUD_LSB_DEPTH = 0x01
+KAUD_HEADER_BYTES = 10
+_WAVE_FORMAT_PCM = 0x0001
+_WAVE_FORMAT_IEEE_FLOAT = 0x0003
+_WAVE_FORMAT_EXTENSIBLE = 0xFFFE
+# The 14 bytes after the format code in a KSDATAFORMAT_SUBTYPE_* GUID.
+_KSDATAFORMAT_SUFFIX = bytes.fromhex("000000001000800000aa00389b71")
+
+
+class CarrierError(ValueError):
+    """
+    A carrier problem, never a crypto one.
+
+    A ValueError, like every other structural failure in this file, so that
+    nothing upstream can mistake it for a KeymError and print the one fixed
+    message §6 reserves for secrets. A carrier with no KAUD header is the
+    normal case of an ordinary music file, and "decryption failed" is the one
+    answer it must never get.
+    """
+
+
+def looks_like_wav(data: bytes) -> bool:
+    """"Recognise the file": RIFF at byte 0 and WAVE at byte 8, by bytes alone."""
+    return len(data) >= 12 and data[0:4] == b"RIFF" and data[8:12] == b"WAVE"
+
+
+def compressed_audio_name(data: bytes) -> Optional[str]:
+    """
+    "Audio that is not a WAV": what a converted copy of a carrier is, by its
+    leading bytes, or None.
+
+    The likeliest damaged copy of a carrier is one a messenger re-encoded or
+    someone saved as MP3. Treated as a container, it got a password prompt and
+    then "decryption failed", which an heir reads as a wrong password for a file
+    that never held a backup this reader could find.
+    """
+    if data[:3] == b"ID3" or (len(data) >= 2 and data[0] == 0xFF
+                              and data[1] in (0xE2, 0xE3, 0xF2, 0xF3, 0xFA, 0xFB)):
+        return "MP3"
+    if len(data) >= 2 and data[0] == 0xFF and data[1] in (0xF1, 0xF9):
+        return "AAC"
+    if data[:4] == b"OggS":
+        return "Ogg"
+    if data[:4] == b"fLaC":
+        return "FLAC"
+    if data[4:8] == b"ftyp":
+        return "MP4 or M4A"
+    if data[:4] == b"FORM" and data[8:12] in (b"AIFF", b"AIFC"):
+        return "AIFF"
+    if data[:4] in (b"RF64", b"RIFX") and data[8:12] == b"WAVE":
+        return data[:4].decode("ascii") + " WAV"
+    if data[:4] == b"\x1aE\xdf\xa3":
+        return "WebM or Matroska"
+    if data[:5] == b"#!AMR":
+        return "AMR"
+    return None
+
+
+def _converted_copy(name: str) -> str:
+    return (f"this is {name} audio, not the WAV the Audio tab writes. A lossy copy "
+            "(MP3, AAC, Ogg, Opus, WebM, AMR) has lost the hidden data for good. A "
+            "lossless one (FLAC, AIFF, Apple Lossless) still holds it once converted "
+            "back to 16-bit WAV at its own sample rate, without resampling. The "
+            "original keymaker-audio.wav is the file to look for")
+
+
+def _round_half_up(x: float) -> int:
+    """
+    The document's R(x): the nearest integer, a half going to the larger one.
+
+    JavaScript's Math.round, which the app uses. Python's round() goes to the
+    even neighbour instead, and for a 24-bit sample that ends in exactly half
+    a 16-bit step that is the opposite answer and a flipped payload bit.
+    floor(x + 0.5) looks equivalent and is not: for the largest double below
+    one half the addition rounds up to 1. The int16 clamp comes first so an
+    infinite x never reaches math.floor, and the document shows the order
+    makes no difference to the result.
+    """
+    if not math.isfinite(x):
+        return 32767 if x > 0 else -32768
+    x = min(max(x, -32768.0), 32767.0)
+    r = math.floor(x)
+    return r + 1 if x - r >= 0.5 else r
+
+
+@dataclass(frozen=True)
+class _WavLayout:
+    """What "Read the samples" learns from the chunks, before any sample is read."""
+
+    encoding: int
+    bits: int
+    channels: int
+    sample_rate: int
+    data_offset: int
+    data_length: int
+
+    @property
+    def sample_count(self) -> int:
+        return self.data_length // (self.bits // 8)
+
+
+def _wav_layout(data: bytes) -> _WavLayout:
+    """
+    "Read the samples", the chunk walk. Every refusal is a CarrierError that
+    says what is wrong with the file; none of them is a crypto failure.
+    """
+    if len(data) < 44 or not looks_like_wav(data):
+        name = compressed_audio_name(data)
+        raise CarrierError(_converted_copy(name) if name else "this is not a WAV file")
+    encoding = channels = rate = bits = 0
+    data_offset, data_length = -1, 0
+    p = 12
+    while p + 8 <= len(data):
+        chunk_id = data[p:p + 4]
+        size = struct.unpack_from("<I", data, p + 4)[0]
+        body = p + 8
+        if chunk_id == b"fmt ":
+            if size < 16 or body + 16 > len(data):
+                raise CarrierError("the WAV's format chunk is malformed or truncated")
+            encoding, channels, rate = struct.unpack_from("<HHI", data, body)
+            bits = struct.unpack_from("<H", data, body + 14)[0]
+            if encoding == _WAVE_FORMAT_EXTENSIBLE:
+                if size < 40 or body + 40 > len(data):
+                    raise CarrierError("the WAV's format chunk is malformed or truncated")
+                encoding = (struct.unpack_from("<H", data, body + 24)[0]
+                            if data[body + 26:body + 40] == _KSDATAFORMAT_SUFFIX else 0)
+        elif chunk_id == b"data":
+            data_offset = body
+            data_length = min(size, len(data) - body)
+        # Chunks are word-aligned: an odd size is followed by one pad byte.
+        p = body + size + (size & 1)
+
+    if data_offset < 0:
+        raise CarrierError("the WAV has no audio data")
+    integer = encoding == _WAVE_FORMAT_PCM and bits in (8, 16, 24, 32)
+    floating = encoding == _WAVE_FORMAT_IEEE_FLOAT and bits in (32, 64)
+    if not (integer or floating):
+        raise CarrierError(
+            "the WAV's encoding cannot be read; a carrier is PCM (8, 16, 24 or "
+            "32-bit) or float WAV, and a compressed or re-encoded copy has lost "
+            "the hidden data")
+    if channels < 1:
+        raise CarrierError("the WAV declares no channels")
+    return _WavLayout(encoding, bits, channels, rate, data_offset, data_length)
+
+
+def _wav_samples16(data: bytes, layout: _WavLayout, start: int, count: int) -> list[int]:
+    """Samples ``start`` to ``start + count`` as signed 16-bit values, by the document's table."""
+    width = layout.bits // 8
+    off = layout.data_offset + start * width
+    if layout.encoding == _WAVE_FORMAT_PCM and width == 2:
+        return list(struct.unpack_from(f"<{count}h", data, off))
+    out = []
+    for i in range(count):
+        at = off + i * width
+        if layout.encoding == _WAVE_FORMAT_IEEE_FLOAT:
+            f = struct.unpack_from("<f" if width == 4 else "<d", data, at)[0]
+            v = _round_half_up(f * 32768) if math.isfinite(f) else 0
+        elif width == 1:
+            v = (data[at] - 128) * 256  # 8-bit WAV is unsigned
+        elif width == 3:
+            u = data[at] | (data[at + 1] << 8) | (data[at + 2] << 16)
+            v = _round_half_up((u - 0x1000000 if u & 0x800000 else u) / 256)
+        else:
+            v = _round_half_up(struct.unpack_from("<i", data, at)[0] / 65536)
+        out.append(max(-32768, min(32767, v)))
+    return out
+
+
+def _lsb_bytes(samples: list[int]) -> bytes:
+    """Each sample's low bit, most-significant first within each byte."""
+    out = bytearray(len(samples) // 8)
+    for i in range(len(out)):
+        byte = 0
+        for s in samples[8 * i:8 * i + 8]:
+            byte = (byte << 1) | (s & 1)
+        out[i] = byte
+    return bytes(out)
+
+
+# For 16-bit PCM the payload bit of a sample is bit 0 of its low byte, the first
+# of its two little-endian bytes, so a byte slice with step 2 holds every bit and
+# this table turns each into an ASCII digit for int(..., 2). No int object per
+# sample: a carrier of n samples costs about n bytes to read, not 24n.
+_LSB_ASCII = bytes(0x30 + (b & 1) for b in range(256))
+# Payload bytes per block, so the working set stays bounded on any carrier: a
+# block reads 16 bytes of 16-bit samples per payload byte and holds two 8-byte
+# copies of them, about 128 KiB at this size whatever the carrier's length.
+_CARRIER_BLOCK = 1 << 13
+
+
+def _carrier_bytes(data: bytes, layout: _WavLayout, first: int, nbytes: int) -> bytes:
+    """``nbytes`` bytes from the low bits of the samples from ``first`` on."""
+    out = bytearray()
+    pcm16 = layout.encoding == _WAVE_FORMAT_PCM and layout.bits == 16
+    for done in range(0, nbytes, _CARRIER_BLOCK):
+        n = min(_CARRIER_BLOCK, nbytes - done)
+        start = first + 8 * done
+        if pcm16:
+            at = layout.data_offset + 2 * start
+            low = data[at:at + 16 * n:2]
+            out += int(low.translate(_LSB_ASCII), 2).to_bytes(n, "big")
+        else:
+            out += _lsb_bytes(_wav_samples16(data, layout, start, 8 * n))
+    return bytes(out)
+
+
+def extract_audio(data: bytes) -> bytes:
+    """
+    The container a KAUD1 carrier holds: "Read the header and the payload".
+
+    Only the samples the payload occupies are read, a block at a time, so a
+    three-minute carrier holding a few hundred bytes costs a few thousand
+    samples and a large one costs about its own size. The length is checked
+    against the samples before anything is allocated for the payload, because
+    payloadLen is a uint32 whoever made the file chose.
+    """
+    layout = _wav_layout(data)
+    total = layout.sample_count
+    header_bits = KAUD_HEADER_BYTES * 8
+    if total < header_bits:
+        raise CarrierError(
+            "the hidden data runs past the end of this audio; the file is "
+            "truncated or is not a Keymaker carrier")
+    header = _carrier_bytes(data, layout, 0, KAUD_HEADER_BYTES)
+    if header[:4] != KAUD_MAGIC:
+        raise CarrierError(
+            "no hidden Keymaker data was found in this audio. A lossy copy "
+            "(MP3, AAC, Ogg) loses it; use the original WAV")
+    if header[4] != KAUD_VERSION:
+        raise CarrierError(f"this carrier is KAUD version {header[4]}, which this "
+                           "reader cannot read")
+    if header[5] != KAUD_LSB_DEPTH:
+        raise CarrierError(f"this carrier uses {header[5]} bits per sample, which "
+                           "this reader cannot read")
+    length = struct.unpack_from(">I", header, 6)[0]
+    if length == 0:
+        raise CarrierError("the carrier's header claims an empty payload")
+    if header_bits + 8 * length > total:
+        raise CarrierError(
+            "the hidden data runs past the end of this audio; the file is "
+            "truncated or is not a Keymaker carrier")
+    return _carrier_bytes(data, layout, header_bits, length)
+
+
+def embed_audio(samples: list[int], container: bytes) -> list[int]:
+    """
+    The writer, for the self-test and the conformance suite only: the samples
+    with the KAUD1 header and ``container`` in their low bits. The input list
+    is not modified.
+    """
+    if not container:
+        raise ValueError("refusing to hide an empty container")
+    capacity = max(0, len(samples) // 8 - KAUD_HEADER_BYTES)
+    if len(container) > capacity:
+        raise ValueError(f"the container needs {len(container)} bytes and the "
+                         f"carrier holds {capacity}")
+    stream = (KAUD_MAGIC + bytes((KAUD_VERSION, KAUD_LSB_DEPTH))
+              + struct.pack(">I", len(container)) + container)
+    out = list(samples)
+    i = 0
+    for byte in stream:
+        for shift in range(7, -1, -1):
+            out[i] = (out[i] & ~1) | ((byte >> shift) & 1)
+            i += 1
+    return out
+
+
+def pcm16_wav(samples: list[int], sample_rate: int, channels: int) -> bytes:
+    """Interleaved 16-bit samples as a canonical 44-byte-header PCM WAV."""
+    body = struct.pack(f"<{len(samples)}h", *samples)
+    return (b"RIFF" + struct.pack("<I", 36 + len(body)) + b"WAVE"
+            + b"fmt " + struct.pack("<IHHIIHH", 16, _WAVE_FORMAT_PCM, channels,
+                                    sample_rate, sample_rate * channels * 2,
+                                    channels * 2, 16)
+            + b"data" + struct.pack("<I", len(body)) + body)
+
+
 def looks_like_selfextract(data: bytes | str) -> bool:
     """§7.2's wrong-box paste, answered without committing to the page being valid."""
     text = data.decode("utf-8", errors="replace") if isinstance(data, bytes) else data
@@ -3340,6 +3668,10 @@ def detect(data: bytes) -> str:
 
     §7.2's self-extracting page is the exception to "prefix", and the comment at
     that branch explains why the exception costs nothing.
+
+    FORMAT-AUDIO-STEGO.md adds a carrier WAV and audio that is not a WAV. Both
+    are binary and recognised by leading bytes, and both are tested before the
+    §7.2 substring search; the comment at those branches explains why.
 
     The text encodings are sniffed after leading IGNORABLE characters (§7,
     "Characters a reader ignores": whitespace and a byte order mark). A backup
@@ -3377,6 +3709,16 @@ def detect(data: bytes) -> str:
     # outside Crockford base32, and outside all four prefixes above, so no input
     # can match both this and one of them. _selftest checks that rather than
     # trusting the paragraph.
+    # FORMAT-AUDIO-STEGO.md, "Recognise the file". Binary, so the raw bytes,
+    # and none of these shares its first two bytes with a case above. They do
+    # have to come before the page, which is found by a substring search: a WAV
+    # can hold the sentinel in a metadata chunk or by chance in its samples, and
+    # was then refused as a damaged page. A page is HTML and cannot begin with
+    # any of these, so this order costs it nothing. _selftest checks both.
+    if looks_like_wav(data):
+        return "kaud-wav"
+    if compressed_audio_name(data):
+        return "audio-not-wav"
     if looks_like_selfextract(data):
         return "keym2-selfextract"
     return "unknown"
@@ -4221,6 +4563,289 @@ def _selftest() -> int:
     check("extraction survives an unwrapped one-line armor",
           extract_selfextract(page(embed_selfextract(subset, columns=0))) == subset)
 
+    # --- FORMAT-AUDIO-STEGO.md: the KAUD1 carrier, read without the app ---
+    # The carrier signal is the conformance suite's (37 i mod 65536, offset),
+    # so a failure here and one there point at the same samples.
+    carrier_pcm = [((i * 37) % 65536) - 32768 for i in range(4000)]
+    wav = pcm16_wav(embed_audio(carrier_pcm, subset), 8000, 2)
+
+    def _extracts_early(data: bytes) -> Optional[bytes]:
+        try:
+            return extract_audio(data)
+        except Exception:  # noqa: BLE001
+            return None
+
+    check("a carrier is detected as a carrier", detect(wav) == "kaud-wav")
+    check("a carrier gives back its container", _extracts_early(wav) == subset)
+    # Guarded, like every carrier check below: a reader that breaks must fail
+    # the check that names it, not crash the run and hide the rest.
+    try:
+        check("a carrier opens wherever a container does",
+              decrypt(unwrap_container(wav, "carrier.wav"), pw) == b"read this when I am gone")
+    except Exception:  # noqa: BLE001
+        check("a carrier opens wherever a container does", False)
+
+    def _carrier_refused(name: str, data: bytes, words: str) -> None:
+        """A CarrierError saying ``words``, and nothing a reader takes for a
+        wrong password: unwrap_container must turn it into a UsageError."""
+        try:
+            extract_audio(data)
+            check(f"carrier refused: {name}", False)
+        except CarrierError as e:
+            check(f"carrier refused: {name}", words in str(e))
+        except Exception:  # noqa: BLE001
+            check(f"carrier refused: {name}", False)
+        try:
+            usage = _raises_usage(lambda: unwrap_container(data, "x.wav"))
+        except Exception:  # noqa: BLE001
+            usage = False
+        check(f"carrier refusal is a usage error, not a crypto one: {name}", usage)
+
+    def _wav(fmt_body: bytes, payload: bytes, extra: bytes = b"") -> bytes:
+        body = (b"WAVE" + b"fmt " + struct.pack("<I", len(fmt_body)) + fmt_body
+                + extra + b"data" + struct.pack("<I", len(payload)) + payload)
+        return b"RIFF" + struct.pack("<I", len(body)) + body
+
+    def _fmt(code: int, bits: int, channels: int = 2) -> bytes:
+        width = bits // 8
+        return struct.pack("<HHIIHH", code, channels, 8000,
+                           8000 * channels * width, channels * width, bits)
+
+    def _extensible(sub_code: int, bits: int, suffix: bytes = _KSDATAFORMAT_SUFFIX,
+                    valid_bits: Optional[int] = None) -> bytes:
+        return (_fmt(_WAVE_FORMAT_EXTENSIBLE, bits)
+                + struct.pack("<HHI", 22, bits if valid_bits is None else valid_bits, 3)
+                + struct.pack("<H", sub_code) + suffix)
+
+    # "Read the samples": a 16-bit carrier re-saved at a greater depth without
+    # loss gives back its exact samples. The integer cases sit each sample
+    # exactly half a step low, so they open only under R(x) as the document
+    # defines it. Python's round() sends half of them to the even neighbour.
+    stego = embed_audio(carrier_pcm, subset)
+
+    def _i24(v: int) -> bytes:
+        return (v & 0xFFFFFF).to_bytes(3, "little")
+
+    def _tie(s: int, step: int) -> int:
+        """s widened by ``step``, then half a 16-bit step lower where that fits."""
+        return s * step - (step // 2 if s > -32768 else 0)
+
+    wide = {
+        "24-bit": _wav(_fmt(_WAVE_FORMAT_PCM, 24),
+                       b"".join(_i24(_tie(s, 256)) for s in stego)),
+        "32-bit": _wav(_fmt(_WAVE_FORMAT_PCM, 32),
+                       b"".join(struct.pack("<i", _tie(s, 65536)) for s in stego)),
+        "32-bit float": _wav(_fmt(_WAVE_FORMAT_IEEE_FLOAT, 32),
+                             b"".join(struct.pack("<f", s / 32768) for s in stego)),
+        "64-bit float": _wav(_fmt(_WAVE_FORMAT_IEEE_FLOAT, 64),
+                             b"".join(struct.pack("<d", s / 32768) for s in stego)),
+        "24-bit EXTENSIBLE": _wav(_extensible(_WAVE_FORMAT_PCM, 24),
+                                  b"".join(_i24(_tie(s, 256)) for s in stego)),
+        # The sub-format code decides the encoding, and wValidBitsPerSample does
+        # not: a float re-save above 16 bits is usually written this way.
+        "32-bit float EXTENSIBLE": _wav(_extensible(_WAVE_FORMAT_IEEE_FLOAT, 32),
+                                        b"".join(struct.pack("<f", s / 32768) for s in stego)),
+        "64-bit float EXTENSIBLE": _wav(_extensible(_WAVE_FORMAT_IEEE_FLOAT, 64),
+                                        b"".join(struct.pack("<d", s / 32768) for s in stego)),
+        "32-bit EXTENSIBLE declaring 24 valid bits": _wav(
+            _extensible(_WAVE_FORMAT_PCM, 32, valid_bits=24),
+            b"".join(struct.pack("<i", _tie(s, 65536)) for s in stego)),
+        # Float samples half a step low, so a float branch that truncates or
+        # rounds half to even reads them back wrong, as the integer ties do.
+        "32-bit float, half a step low": _wav(_fmt(_WAVE_FORMAT_IEEE_FLOAT, 32), b"".join(
+            struct.pack("<f", ((s - 0.5) if s > -32768 else s) / 32768) for s in stego)),
+        "64-bit float, half a step low": _wav(_fmt(_WAVE_FORMAT_IEEE_FLOAT, 64), b"".join(
+            struct.pack("<d", ((s - 0.5) if s > -32768 else s) / 32768) for s in stego)),
+    }
+    for name, data in wide.items():
+        try:
+            check(f"a carrier re-saved as {name} gives back its container",
+                  extract_audio(data) == subset)
+        except Exception:  # noqa: BLE001
+            check(f"a carrier re-saved as {name} gives back its container", False)
+
+    # R(x) itself, at the points that separate it from its look-alikes.
+    def _r(x: float) -> Optional[int]:
+        try:
+            return _round_half_up(x)
+        except Exception:  # noqa: BLE001
+            return None
+
+    check("R rounds a half up, not to even",
+          [_r(x) for x in (0.5, 1.5, 2.5, -0.5, -1.5, -2.5)] == [1, 2, 3, 0, -1, -2])
+    check("R is not floor(x + 0.5), and the largest double below a half is 0",
+          _r(0.49999999999999994) == 0)
+    check("R clamps before it floors, so infinity is not an OverflowError",
+          _r(float("inf")) == 32767 and _r(float("-inf")) == -32768)
+    check("R clamps a finite value past the int16 range", _r(1e20) == 32767 and _r(-1e20) == -32768)
+    def _first_samples(data: bytes, n: int) -> Optional[list[int]]:
+        try:
+            return _wav_samples16(data, _wav_layout(data), 0, n)
+        except Exception:  # noqa: BLE001
+            return None
+
+    check("float samples clamp, and a non-finite one reads as 0",
+          _first_samples(_wav(_fmt(_WAVE_FORMAT_IEEE_FLOAT, 64, 1),
+                              struct.pack("<4d", 1.0, -1.0, 1e308, float("nan"))), 4)
+          == [32767, -32768, 32767, 0])
+    check("8-bit samples are unsigned and widen by 256",
+          _first_samples(_wav(_fmt(_WAVE_FORMAT_PCM, 8, 1), bytes((0, 128, 255, 1))), 4)
+          == [-32768, 0, 32512, -32512])
+
+    # Chunks: a pad byte after an odd-sized chunk, and the later of two data chunks.
+    odd = b"LIST" + struct.pack("<I", 3) + b"abc" + b"\x00"
+    def _extracts(data: bytes) -> Optional[bytes]:
+        try:
+            return extract_audio(data)
+        except Exception:  # noqa: BLE001
+            return None
+
+    check("an odd-sized chunk's pad byte is skipped",
+          _extracts(_wav(_fmt(_WAVE_FORMAT_PCM, 16), struct.pack(f"<{len(stego)}h", *stego),
+                             extra=odd)) == subset)
+    decoy = b"data" + struct.pack("<I", 160) + bytes(160)
+    check("when two chunks share an id the later one is used",
+          _extracts(_wav(_fmt(_WAVE_FORMAT_PCM, 16), struct.pack(f"<{len(stego)}h", *stego),
+                             extra=decoy)) == subset)
+
+    # "Read the header and the payload", every refusal by name.
+    _carrier_refused("a WAV with nothing hidden in it", pcm16_wav(carrier_pcm, 8000, 2),
+                     "no hidden Keymaker data")
+
+    def _with_header(header: bytes) -> bytes:
+        bits = [(b >> s) & 1 for b in header for s in range(7, -1, -1)]
+        out = list(carrier_pcm)
+        for i, bit in enumerate(bits):
+            out[i] = (out[i] & ~1) | bit
+        return pcm16_wav(out, 8000, 2)
+
+    _carrier_refused("a KAUD version 2 carrier",
+                     _with_header(b"KAUD\x02\x01" + struct.pack(">I", 8)), "version 2")
+    _carrier_refused("two bits per sample",
+                     _with_header(b"KAUD\x01\x02" + struct.pack(">I", 8)), "2 bits per sample")
+    _carrier_refused("an empty payload",
+                     _with_header(b"KAUD\x01\x01" + struct.pack(">I", 0)), "empty payload")
+    _carrier_refused("a length past the last sample",
+                     _with_header(b"KAUD\x01\x01" + struct.pack(">I", 0xFFFFFFFF)),
+                     "runs past the end")
+    _carrier_refused("fewer than 80 samples", pcm16_wav(carrier_pcm[:79], 8000, 1),
+                     "runs past the end")
+    _carrier_refused("a file shorter than 44 bytes", b"RIFF" + bytes(4) + b"WAVE" + bytes(20),
+                     "not a WAV file")
+    _carrier_refused("a format chunk of 15 bytes",
+                     _wav(_fmt(_WAVE_FORMAT_PCM, 16)[:15], bytes(200)), "malformed")
+    _carrier_refused("an EXTENSIBLE chunk too short for its GUID",
+                     _wav(_extensible(_WAVE_FORMAT_PCM, 16)[:39], bytes(200)), "malformed")
+    _carrier_refused("an EXTENSIBLE chunk with a foreign GUID",
+                     _wav(_extensible(_WAVE_FORMAT_PCM, 16, bytes(14)), bytes(200)),
+                     "cannot be read")
+    _carrier_refused("ADPCM", _wav(_fmt(0x0002, 4), bytes(200)), "cannot be read")
+    # At a depth the reader can read, so only the format-code check refuses them.
+    _carrier_refused("8-bit mu-law", _wav(_fmt(0x0007, 8), bytes(200)), "cannot be read")
+    _carrier_refused("8-bit A-law", _wav(_fmt(0x0006, 8), bytes(200)), "cannot be read")
+    # The fmt body's first 16 bytes past the end of the file, which in the app's
+    # reader once threw a raw RangeError (scripts/audio-wav-bounds-test.mjs).
+    _carrier_refused("a fmt chunk the file does not hold",
+                     b"RIFF" + struct.pack("<I", 44) + b"WAVE" + b"JUNK" + struct.pack("<I", 20)
+                     + bytes(20) + b"fmt " + struct.pack("<I", 16) + bytes(8), "malformed")
+    # A carrier cut off inside its payload, its declared sizes left as they were.
+    cut = pcm16_wav(stego, 8000, 2)
+    _carrier_refused("a carrier cut off inside its payload", cut[:44 + 2 * (80 + 8 * 20)],
+                     "runs past the end")
+    full_samples = carrier_pcm[:8 * (len(subset) + KAUD_HEADER_BYTES)]
+    check("a carrier filled exactly to capacity gives back its container",
+          _extracts(pcm16_wav(embed_audio(full_samples, subset), 8000, 1)) == subset)
+    unsized = bytearray(pcm16_wav(stego, 8000, 2))
+    unsized[4:8] = b"\xff\xff\xff\xff"
+    unsized[40:44] = b"\xff\xff\xff\xff"
+    check("RIFF and data sizes left at 0xFFFFFFFF (a writer that cannot seek) are cut to the file",
+          _extracts(bytes(unsized)) == subset)
+    _carrier_refused("12-bit PCM", _wav(_fmt(_WAVE_FORMAT_PCM, 12), bytes(200)),
+                     "cannot be read")
+    _carrier_refused("a WAV with no data chunk",
+                     b"RIFF" + struct.pack("<I", 40) + b"WAVE" + b"fmt "
+                     + struct.pack("<I", 16) + _fmt(_WAVE_FORMAT_PCM, 16)
+                     + b"LIST" + struct.pack("<I", 8) + bytes(8),
+                     "no audio data")
+    _carrier_refused("a WAV declaring no channels",
+                     _wav(_fmt(_WAVE_FORMAT_PCM, 16, channels=0), bytes(200)), "no channels")
+
+    # "Recognise the file": disjoint from every encoding §7 defines, in both
+    # directions, so detect() still does not depend on the order of its cases.
+    check("RIFF/WAVE is none of the prefixed encodings",
+          not any(wav.startswith(x) for x in (ARMOR_PREFIX, b"KEYM1:", MAGIC, b"IBTZ",
+                                              SHARE_PREFIX.encode(), SHARE2_PREFIX.encode(),
+                                              PART_PREFIX.encode(), PART2_PREFIX.encode()))
+          and not looks_like_selfextract(wav))
+    check("no other encoding looks like a WAV",
+          not any(looks_like_wav(x) for x in (subset, armor(subset).encode(), embedded,
+                                              b"KEYM1:AAAA", b"IBTZ" + bytes(12))))
+
+    # The §7.2 search is for a substring, so a WAV holding the sentinel in a
+    # metadata chunk matched it and was refused as a damaged page. A WAV is
+    # recognised first now, and the page loses nothing by that order.
+    sentinel_chunk = b"LIST" + struct.pack("<I", 26) + b"INFO" + SELFEXTRACT_BEGIN.encode()[:22]
+    noted = wav[:4] + struct.pack("<I", len(wav) - 8 + len(sentinel_chunk)) + wav[8:] + sentinel_chunk
+    check("a carrier holding the page sentinel is still a carrier",
+          looks_like_selfextract(noted) and detect(noted) == "kaud-wav")
+    try:
+        check("and it opens", decrypt(unwrap_container(noted, "noted.wav"), pw)
+              == b"read this when I am gone")
+    except Exception:  # noqa: BLE001
+        check("and it opens", False)
+
+    # "Audio that is not a WAV": a converted copy is named before any password
+    # is asked for, never handed to the AEAD as a container.
+    converted = {
+        "MP3": [b"ID3\x04\x00\x00\x00\x00\x00\x00", b"\xff\xfb\x90\x00", b"\xff\xf3\x48\xc4"],
+        "AAC": [b"\xff\xf1\x50\x80"],
+        "Ogg": [b"OggS\x00\x02"],
+        "FLAC": [b"fLaC\x00\x00\x00\x22"],
+        "MP4 or M4A": [b"\x00\x00\x00\x20ftypM4A "],
+        "AIFF": [b"FORM\x00\x00\x10\x00AIFF"],
+        "RF64 WAV": [b"RF64\xff\xff\xff\xffWAVE"],
+        "WebM or Matroska": [b"\x1aE\xdf\xa3\x01"],
+        "AMR": [b"#!AMR\n"],
+    }
+    for name, heads in converted.items():
+        for head in heads:
+            copy = head + bytes(400)
+            check(f"the {name} copy is recognised as {name}",
+                  compressed_audio_name(copy) == name and detect(copy) == "audio-not-wav")
+            try:
+                unwrap_container(copy, "copy")
+                check(f"the {name} copy is refused before any password", False)
+            except UsageError as e:
+                check(f"the {name} copy is refused before any password",
+                      name in str(e) and "lossy" in str(e))
+            except Exception:  # noqa: BLE001
+                check(f"the {name} copy is refused before any password", False)
+    check("no KEYM encoding is taken for compressed audio",
+          not any(compressed_audio_name(x) for x in (
+              subset, armor(subset).encode(), embedded, wav, b"KEYM1:AAAA", b"IBTZ" + bytes(12),
+              MAGIC + bytes((2,)) + bytes(40), MAGIC + bytes((3,)) + bytes(40),
+              MAGIC + bytes((4,)) + bytes(40))))
+
+    # Memory. The reader once built a Python int for every payload sample and
+    # copied the list again, about 24 bytes for every byte of carrier, so a large
+    # carrier the app can write ran a small machine out of memory. Measured on a
+    # carrier whose payload crosses a block boundary, against the file's size.
+    import tracemalloc
+    big_payload = bytes((i * 131 + 7) & 0xFF for i in range(3 * _CARRIER_BLOCK + 1000))
+    big = pcm16_wav(embed_audio([0] * (8 * (len(big_payload) + KAUD_HEADER_BYTES)), big_payload),
+                    8000, 1)
+    tracemalloc.start()
+    try:
+        got = extract_audio(big)
+        peak = tracemalloc.get_traced_memory()[1]
+    except Exception:  # noqa: BLE001
+        got, peak = None, -1
+    finally:
+        tracemalloc.stop()
+    check("a large carrier gives back its payload across a block boundary", got == big_payload)
+    check("and reading it costs less than half the file's own size",
+          0 <= peak < len(big) // 2)
+
     # --- wrong credentials ---
     with_kf = encrypt(b"x", pw, kdf_id=KDF_PBKDF2, cipher_id=CIPHER_AES,
                       keyfile_bytes=kf, **fast)
@@ -4395,8 +5020,69 @@ def _selftest() -> int:
                           (2, decode_share(texts35[1]).value),
                           (3, decode_share(texts35[2]).value),
                           (5, decode_share(corrupt5).value)]) != known_secret)
-    rejects("the same share supplied twice",
+    # §6 as amended: the same share twice counts once, so k genuine shares with
+    # one repeated still open, and a repeat does not stand in for a missing share.
+    # Guarded: a reader that refused the repeat would otherwise end the self-test
+    # with a traceback instead of naming the check it failed.
+    def _opens35(texts: list[str]) -> bool:
+        try:
+            return combine_shares(texts) == known_secret
+        except Exception:
+            return False
+    check("the same share supplied twice counts once",
+          _opens35([texts35[0], texts35[0], texts35[1], texts35[2]]))
+    check("the same share in two spellings counts once",
+          _opens35([texts35[0], texts35[0].lower().replace("-", " "),
+                    texts35[1], texts35[2]]))
+    rejects("a share supplied twice does not count as two of k",
             lambda: combine_shares([texts35[0], texts35[0], texts35[1]]))
+    dup_body = set_id + bytes([3, 1]) + bytes(32)
+    other1 = encode_share(parse_share(dup_body + _share_checksum(dup_body)))
+    rejects("two different shares with the same index",
+            lambda: combine_shares([texts35[0], other1, texts35[1], texts35[2]]))
+    # A repeat is an identical record. One that differs only in k, or only in
+    # its set id, is a different share at index 1, and both checksums are valid,
+    # so only the comparison of all four fields refuses it.
+    first35 = decode_share(texts35[0])
+    # ...and one that differs only in its index is a different share at an index
+    # nobody supplied, so three distinct points are interpolated. Dropping it
+    # as a repeat would leave two and refuse a set the format accepts.
+    _moved = encode_share(Share(set_id=set_id, threshold=3, index=4, value=first35.value))
+    def _combined(texts: list[str]) -> Optional[bytes]:
+        try:
+            return combine_shares(texts)
+        except KeymError:
+            return None
+    check("a copy of share 1 with only its index changed is a different share",
+          _combined([texts35[0], _moved, texts35[1]])
+          == shamir_combine([(1, first35.value), (2, decode_share(texts35[1]).value),
+                             (4, first35.value)]))
+    for what, sid, k in (("k", set_id, 4), ("set id", bytes(4), 3)):
+        body = sid + bytes([k, 1]) + first35.value
+        near = encode_share(parse_share(body + _share_checksum(body)))
+        for order, texts in (("after", [texts35[0], near, texts35[1], texts35[2]]),
+                             ("before", [near, texts35[0], texts35[1], texts35[2]])):
+            rejects(f"a copy of share 1 with only its {what} changed, {order} it",
+                    lambda texts=texts: combine_shares(texts))
+    # §6 as amended: each share is checked on its own before a repeat is
+    # dropped, so a damaged copy is refused as damaged, in either order.
+    padded = texts35[0][:-1] + B32_ALPHABET[B32_ALPHABET.index(texts35[0][-1]) | 1]
+    bad_ck = bytearray(first35.pack())
+    bad_ck[-1] ^= 1
+    for what, damaged in (("non-zero padding bits", padded),
+                          ("a wrong checksum", SHARE_PREFIX + _b32_encode(bytes(bad_ck)))):
+        for order, texts in (("after", [texts35[0], damaged, texts35[1], texts35[2]]),
+                             ("before", [damaged, texts35[0], texts35[1], texts35[2]])):
+            rejects(f"a copy of share 1 with {what}, {order} it",
+                    lambda texts=texts: combine_shares(texts))
+
+    # §7, one item per line: U+000A only, ends stripped, blank and "#" skipped.
+    check("text_lines splits at U+000A and strips each line",
+          text_lines("a\r\n \ufeffb\u0085\n\n# c\n\u0085\n  #d\ne") == ["a", "b", "e"])
+    check("text_lines keeps a line holding U+2028, U+0085, U+000B or U+000C whole",
+          text_lines("a\u2028b\nc\u0085d\ne\vf\x0cg") == ["a\u2028b", "c\u0085d", "e\vf\x0cg"])
+    check("text_lines ends a line at a lone U+000D, as a browser's text box does",
+          text_lines("# c\ra\rb\r\rc") == ["a", "b", "c"])
 
     other_salt = bytes(32)
     other_texts = [encode_share(Share(set_id=share_set_id(other_salt), threshold=3,
@@ -5129,6 +5815,37 @@ def _selftest() -> int:
               and max(len(ln) for ln in _lines) <= PAPER_QR_MAX_BYTES)
         _code, _out, _err = _cli(["split", "--in", _blob, "--v2"])
         check("split --v2 is still accepted", _code == 0 and PART2_PREFIX in _out)
+
+        # §7's line rule at the two entry points an heir uses, not only in
+        # text_lines: CR-only and CRLF files with a "#" first line, holding
+        # characters §7 ignores inside a line (U+2028, U+0085).
+        _enr, _strips = add_shamir_slot(
+            encrypt(b"one line rule", pw, kdf_id=KDF_PBKDF2, **fast), pw, 2, 3)
+        _cont = os.path.join(_d, "lines.keym")
+        open(_cont, "wb").write(_enr)
+        _sh = [_strips[0][:20] + "\u2028" + _strips[0][20:],
+               _strips[1][:30] + "\u0085" + _strips[1][30:]]
+        _parts = encode_parts_v2(_enr, 64)
+        _parts[0] = _parts[0][:20] + "\u2028" + _parts[0][20:]
+        _parts[-1] = _parts[-1][:15] + "\u0085" + _parts[-1][15:]
+        for _eol, _name in (("\r", "CR-only"), ("\r\n", "CRLF")):
+            _sf = os.path.join(_d, f"shares-{len(_eol)}.txt")
+            with open(_sf, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(_eol.join(["# strips 1 and 2", *_sh, ""]))
+            _back = os.path.join(_d, f"lines-{len(_eol)}.out")
+            _code, _out, _err = _cli(["decrypt", "--in", _cont, "--shares-from", _sf,
+                                      "--out", _back])
+            check(f"--shares-from reads a {_name} file whose shares hold U+2028 and U+0085",
+                  _code == 0 and os.path.exists(_back)
+                  and open(_back, "rb").read() == b"one line rule")
+            _pf = os.path.join(_d, f"parts-{len(_eol)}.txt")
+            with open(_pf, "w", encoding="utf-8", newline="") as _fh:
+                _fh.write(_eol.join(["# parts", *_parts, ""]))
+            _joined = os.path.join(_d, f"joined-{len(_eol)}.keym")
+            _code, _out, _err = _cli(["join", "--in", _pf, "--out", _joined])
+            check(f"join reads a {_name} file whose parts hold U+2028 and U+0085",
+                  _code == 0 and os.path.exists(_joined)
+                  and open(_joined, "rb").read() == _enr)
 
         # The marker an editor is likeliest to eat: the END one sits after the
         # armor, where a "trailing garbage" clean-up lands.
@@ -6037,6 +6754,17 @@ def unwrap_container(data: bytes, source: str, armor_expected: bool = False) -> 
     the command never asked for.
     """
     kind = detect(data)
+    # FORMAT-AUDIO-STEGO.md, "Hand over the container". Unwrapped here for the
+    # reason a page is: RECOVERY.md sends an heir to `inspect` and `decrypt`,
+    # and both have to work on the file they were left. Every failure names the
+    # file and the problem, and none of them is "decryption failed".
+    if kind == "kaud-wav":
+        try:
+            return extract_audio(data)
+        except CarrierError as e:
+            raise UsageError(f"{source} is a WAV file, and {e}") from None
+    if kind == "audio-not-wav":
+        raise UsageError(f"{source}: {_converted_copy(compressed_audio_name(data))}")
     if kind == "keym2-selfextract":
         try:
             return extract_selfextract(data)
@@ -6200,6 +6928,17 @@ def main(argv: Optional[list[str]] = None) -> int:
     ext.add_argument("--armor", action="store_true",
                      help="write keym2: text instead of a binary container")
 
+    # FORMAT-AUDIO-STEGO.md. `inspect` and `decrypt` already read a carrier;
+    # this writes the container out on its own, to keep beside the WAV or hand
+    # to another tool, as `extract` does for a page.
+    aud = sub.add_parser(
+        "unpack-audio",
+        help="recover the container from an Audio-tab carrier WAV")
+    aud.add_argument("--in", dest="infile", help="the .wav carrier (default: stdin)")
+    aud.add_argument("--out", dest="outfile", help="output path (default: stdout)")
+    aud.add_argument("--armor", action="store_true",
+                     help="write keym2: text instead of a binary container")
+
     emb = sub.add_parser(
         "embed",
         help="emit the §7.2 sentinel block for a container, checking the subset")
@@ -6334,8 +7073,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     if args.cmd == "join":
         supplied = list(args.parts or [])
         if args.infile or not supplied:
-            supplied += [ln for ln in data.decode("utf-8", "replace").splitlines()
-                         if ln.strip() and not ln.lstrip().startswith("#")]
+            supplied += text_lines(data.decode("utf-8", "replace"))
         try:
             # Dispatch on the version digit so a set printed by either the v1
             # (§7.1) or the v2 (§7.3) writer reassembles here.
@@ -6363,6 +7101,27 @@ def main(argv: Optional[list[str]] = None) -> int:
             container = extract_selfextract(data)
         except (ValueError, KeymError) as e:
             print(f"error: {e}", file=sys.stderr)
+            return 1
+        if args.armor:
+            out_text = armor(container) + "\n"
+            if args.outfile:
+                with open_private(args.outfile) as fh:
+                    fh.write(out_text.encode("utf-8"))
+            else:
+                sys.stdout.write(out_text)
+        elif args.outfile:
+            with open_private(args.outfile) as fh:
+                fh.write(container)
+        else:
+            sys.stdout.buffer.write(container)
+        return 0
+
+    # FORMAT-AUDIO-STEGO.md, and beside extract for the same reason: no credential.
+    if args.cmd == "unpack-audio":
+        try:
+            container = extract_audio(data)
+        except CarrierError as e:
+            print(f"error: {args.infile or 'stdin'}: {e}", file=sys.stderr)
             return 1
         if args.armor:
             out_text = armor(container) + "\n"
@@ -6461,13 +7220,13 @@ def main(argv: Optional[list[str]] = None) -> int:
                 # UnicodeDecodeError and print the message reserved for bugs.
                 # The share decoder drops anything outside its alphabet, so a
                 # replacement character in a comment or a share is harmless.
-                with open(args.shares_from, encoding="utf-8", errors="replace") as fh:
+                # newline="": text_lines applies §7's line ends itself.
+                with open(args.shares_from, encoding="utf-8", errors="replace",
+                          newline="") as fh:
                     # §7's IGNORABLE, so a file saved with a byte order mark
                     # (Windows Notepad) does not turn its first line, often a
                     # "# shares" comment, into a share that fails the set.
-                    shares += [_strip_ignorable(ln) for ln in fh
-                               if _strip_ignorable(ln)
-                               and not _strip_ignorable(ln).startswith("#")]
+                    shares += text_lines(fh.read())
             except OSError as e:
                 print(f"error: cannot read {args.shares_from}: {e.strerror}",
                       file=sys.stderr)

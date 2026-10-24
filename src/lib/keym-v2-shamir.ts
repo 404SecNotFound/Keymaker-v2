@@ -471,12 +471,30 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
     const failed = settled.find((r): r is PromiseRejectedResult => r.status === "rejected");
     if (failed) throw failed.reason;
 
-    const thresholds = new Set(shares.map((s) => s.threshold));
-    if (thresholds.size !== 1) reject();
-    const k = shares[0]?.threshold as number;
+    // §6 as amended: a record identical to one already supplied is that share
+    // supplied twice, and counts once. A strip pasted twice used to fail a set
+    // holding k genuine shares, with the generic message pointing at strips
+    // that were all correct. Compared as decoded records, in constant time.
+    // `distinct` only selects; every decoded value is still in `shares`, so the
+    // `finally` below erases the dropped repeats too.
+    const distinct: Share[] = [];
+    for (const s of shares) {
+      const seen = distinct.some(
+        (u) =>
+          u.index === s.index &&
+          u.threshold === s.threshold &&
+          bytesEqual(u.setId, s.setId) &&
+          bytesEqual(u.value, s.value)
+      );
+      if (!seen) distinct.push(s);
+    }
 
-    const first = shares[0] as Share;
-    if (shares.some((s) => !bytesEqual(s.setId, first.setId))) reject();
+    const thresholds = new Set(distinct.map((s) => s.threshold));
+    if (thresholds.size !== 1) reject();
+    const k = distinct[0]?.threshold as number;
+
+    const first = distinct[0] as Share;
+    if (distinct.some((s) => !bytesEqual(s.setId, first.setId))) reject();
     // §6: the share's whole set id must match the one derived from the slot.
     // The caller passes the widest id (shareSetIdV2), of which the v1 id is the
     // first four bytes, and each share is compared over its own full length:
@@ -486,11 +504,11 @@ export async function combineShares(texts: string[], expectedSetId?: Uint8Array)
         && (expectedSetId.length < first.setId.length
             || !bytesEqual(expectedSetId.slice(0, first.setId.length), first.setId))) reject();
 
-    const indices = shares.map((s) => s.index);
+    const indices = distinct.map((s) => s.index);
     if (new Set(indices).size !== indices.length) reject();
-    if (shares.length < k) reject();
+    if (distinct.length < k) reject();
 
-    const chosen = [...shares].sort((a, b) => a.index - b.index).slice(0, k);
+    const chosen = [...distinct].sort((a, b) => a.index - b.index).slice(0, k);
     return shamirCombine(chosen.map((s) => ({ index: s.index, value: s.value })));
   } finally {
     for (const share of shares) secureErase(share.value);

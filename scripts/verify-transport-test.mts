@@ -29,6 +29,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { extractContainer, parseWavToPcm16 } from "../src/lib/audio-stego.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CORPUS = join(HERE, "fixtures", "keymaker");
@@ -125,7 +126,11 @@ const KEY_FILE = hex(META.keyFileHex);
 
 for (const fx of META.fixtures) {
   if (fx.selfextract) continue; // an HTML page, not a container; its decryptor is tested in the browser
-  const container = new Uint8Array(readFileSync(join(CORPUS, fx.file)));
+  // A carrier WAV holds an ordinary container; unwrap it with the app's reader
+  // and it takes the same verify-only path as every other vector.
+  const container = fx.audio
+    ? extractContainer(parseWavToPcm16(new Uint8Array(readFileSync(join(CORPUS, fx.file)))))
+    : new Uint8Array(readFileSync(join(CORPUS, fx.file)));
   const version = fx.version ?? 1;
   const format = `keym-v${version}`;
   const slotTable =

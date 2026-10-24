@@ -19,6 +19,8 @@
  *   bridge addpasskey --prf-output HEX --salt HEX     (§4.7)
  *   bridge decrypt2 --prf-output HEX                  (§4.7, no password)
  *   bridge prfsalt --slot-salt HEX                    (§4.7, prints hex)
+ *   bridge audioembed --in CONTAINER --out WAV --samples N --channels C --rate R
+ *   bridge audioextract --in WAV --out CONTAINER       (FORMAT-AUDIO-STEGO.md)
  *
  * `encryptapp` goes through `encryptContainer` — the function the worker and
  * the UI actually call, with real random secrets. `recovery_test.py` uses it,
@@ -66,6 +68,7 @@ import {
   encryptKeym2WithSlots,
   derivePrfSalt,
   dearmorKeym2,
+  keym2PaddedLen,
 } from "../src/lib/keym-v2.ts";
 import {
   encodePaperParts,
@@ -79,6 +82,7 @@ import {
   encodeShareV2,
   shareSetIdV2,
   decodeShareAny,
+  combineShares,
   isKeym2Share,
   shareSetCode,
   shareTextSetCode,
@@ -89,6 +93,14 @@ import {
   extractSelfExtract,
   webcryptoProfileViolations,
 } from "../src/lib/keym-v2-selfextract.ts";
+import {
+  AudioStegoError,
+  embedContainer,
+  extractContainer,
+  parseWavToPcm16,
+  writePcm16Wav,
+} from "../src/lib/audio-stego.ts";
+import { parseShareLines } from "../src/components/encryptor/shared.ts";
 
 if (!globalThis.crypto) {
   (globalThis as { crypto?: Crypto }).crypto = webcrypto as unknown as Crypto;
@@ -451,7 +463,7 @@ try {
     // decoded and not only on whether they decoded something.
     const cases = JSON.parse(readFileSync(inFile, "utf8")) as { kind: string; text: string }[];
     const hex = (b: Uint8Array) => Buffer.from(b).toString("hex");
-    const verdicts: { ok: boolean; hex?: string }[] = [];
+    const verdicts: { ok: boolean; hex?: string; crash?: string }[] = [];
     for (const c of cases) {
       try {
         if (c.kind === "armor") {
@@ -466,11 +478,25 @@ try {
           verdicts.push({ ok: true, hex: hex(await decodePaperPartsAny(splitPaperParts(c.text))) });
         } else if (c.kind === "isshare") {
           verdicts.push({ ok: isKeym2Share(c.text) });
+        } else if (c.kind === "combine") {
+          // §6 through §7's one-item-per-line rule, read by the shares box's
+          // own parser, so the box is what the property suite holds.
+          verdicts.push({ ok: true, hex: hex(await combineShares(parseShareLines(c.text))) });
+        } else if (c.kind === "padlen") {
+          // v4 §4.2, the decimal stream length for a decimal n.
+          verdicts.push({ ok: true, hex: String(keym2PaddedLen(Number(c.text))) });
         } else {
-          throw new Error(`unknown case kind ${c.kind}`);
+          verdicts.push({ ok: false, crash: `unknown case kind ${c.kind}` });
+          continue;
         }
-      } catch {
-        verdicts.push({ ok: false });
+      } catch (e) {
+        // A crash is not a refusal. A TypeError or RangeError on a case both
+        // readers should refuse used to come back as { ok: false } and match
+        // the reference's refusal, so a reader that crashed instead of
+        // refusing passed. Recorded so it can never match.
+        const crashed = e instanceof TypeError || e instanceof RangeError
+          || e instanceof ReferenceError || e instanceof SyntaxError;
+        verdicts.push(crashed ? { ok: false, crash: String(e) } : { ok: false });
       }
     }
     writeFileSync(outFile, JSON.stringify(verdicts));
@@ -488,6 +514,26 @@ try {
       );
     }
     writeFileSync(outFile, JSON.stringify(codes));
+  } else if (cmd === "audioembed") {
+    // FORMAT-AUDIO-STEGO.md. A carrier the app's own writer makes, over a
+    // carrier signal both sides can compute (s_i = (37 i mod 65536) - 32768),
+    // so crosstest2.py can compare the emitted WAV bytes and not only whether
+    // each side reads the other's.
+    const n = Number(flag("samples"));
+    const samples = new Int16Array(n);
+    for (let i = 0; i < n; i++) samples[i] = ((i * 37) % 65536) - 32768;
+    const pcm = { sampleRate: Number(flag("rate")), channels: Number(flag("channels")), samples };
+    writeFileSync(outFile, writePcm16Wav(embedContainer(pcm, new Uint8Array(inputBuf))));
+  } else if (cmd === "audioextract") {
+    // The app's reader, end to end: parseWavToPcm16 then extractContainer.
+    // Exit 3 marks a carrier refusal so the suite can tell it from a crash.
+    try {
+      writeFileSync(outFile, extractContainer(parseWavToPcm16(new Uint8Array(inputBuf))));
+    } catch (e) {
+      if (!(e instanceof AudioStegoError)) throw e;
+      console.error(`carrier refused: ${e.message}`);
+      process.exit(3);
+    }
   } else {
     throw new Error(`unknown command: ${cmd}`);
   }

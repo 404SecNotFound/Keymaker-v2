@@ -44,6 +44,17 @@ async function gotoAudio(page: Page): Promise<void> {
 }
 
 test.describe("hide a secret in audio", () => {
+  // docs/FORMAT-AUDIO-STEGO.md, "Reading a carrier without the app". The tab
+  // used to say nothing about a WAV outliving the site, because nothing outside
+  // the app could open one. keym2.py now reads it (conformance and the executed
+  // RECOVERY.md prove that with Python), and the tab has to say so where the
+  // person deciding whether to trust a carrier will read it.
+  test("the tab says the WAV opens without this site, and with what", async ({ page }) => {
+    await gotoAudio(page);
+    await expect(page.getByText("from the recovery kit opens the WAV too")).toBeVisible();
+    await expect(page.locator("code", { hasText: "keym2.py" }).first()).toBeVisible();
+  });
+
   test("round trip: hide text in a WAV, then reveal it with the password", async ({ page }) => {
     await gotoAudio(page);
 
