@@ -5651,8 +5651,6 @@ def _selftest() -> int:
         # ever; with a reader waiting, the open succeeds and fstat has to be
         # the thing that refuses, before any byte reaches the pipe.
         if hasattr(os, "mkfifo"):
-            import threading as _threading
-
             _pipe = os.path.join(_d, "pipe.txt")
             os.mkfifo(_pipe)
             _refused = False
@@ -5664,24 +5662,27 @@ def _selftest() -> int:
             check("a --out that is a pipe with no reader is refused, not waited on",
                   _refused)
 
-            _got: list[bytes] = []
-
-            def _drain() -> None:
-                with open(_pipe, "rb") as _r:
-                    _got.append(_r.read())
-
-            _reader = _threading.Thread(target=_drain, daemon=True)
-            _reader.start()
+            # The read end is opened here, non-blocking, before open_private
+            # runs. A reader thread raced it: when open_private won, it saw no
+            # reader and refused, and the thread then waited for a writer that
+            # never came. Opened first, the reader is certain to be there.
+            _rfd = os.open(_pipe, os.O_RDONLY | os.O_NONBLOCK)
             _refused = False
             try:
                 with open_private(_pipe) as _fh:
                     _fh.write(b"seed phrase")
             except UsageError as _e:
                 _refused = "not a regular file" in str(_e)
-            _reader.join(timeout=5)
+            # With the writer closed, an empty read is end of file. A byte here
+            # is a leak, and EAGAIN means the refused descriptor stayed open.
+            try:
+                _got = os.read(_rfd, 64)
+            except BlockingIOError:
+                _got = None
+            finally:
+                os.close(_rfd)
             check("a --out that is a pipe someone is reading is refused", _refused)
-            check("and the reader received nothing",
-                  not _reader.is_alive() and _got == [b""])
+            check("and the reader received nothing", _got == b"")
         else:
             print("  skip a --out that is a pipe (no mkfifo here)")
 
