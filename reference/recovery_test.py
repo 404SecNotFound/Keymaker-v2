@@ -42,6 +42,7 @@ import re
 import os
 import shlex
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -743,6 +744,9 @@ def recovery_examples() -> None:
 # The names the page uses. The runner supplies each one, the way the reader
 # already has them: their backup, their key file, the codes off their strips.
 PLACEHOLDERS = ("backup.keym", "mykey.bin", "shares.txt", "recovered.txt")
+# A carrier from the Audio tab (docs/FORMAT-AUDIO-STEGO.md), under the name the
+# app saves it as.
+CARRIER = "keymaker-audio.wav"
 
 
 def claimed_versions(command: str) -> set[int]:
@@ -787,11 +791,15 @@ def recovery_commands() -> None:
         if line.strip() and not line.strip().startswith("#")
     ]
 
-    identify, decrypt, shares, joins, unknown = [], [], [], [], []
+    identify, decrypt, shares, joins, audio, unknown = [], [], [], [], [], []
     for c in commands:
         argv = shlex.split(c, comments=True)
         if argv[:1] == ["pip"]:
             print(f"  skip {c}  (needs a package index; the libraries are a prerequisite, not a step)")
+        # First, because an audio line is also an `inspect` or a `decrypt`, and
+        # it is for a carrier rather than for a version.
+        elif argv[:1] == ["python3"] and CARRIER in argv:
+            audio.append(c)
         elif argv[:1] == ["python3"] and "decrypt" in argv and "--shares-from" in argv:
             shares.append(c)
         elif argv[:1] == ["python3"] and "join" in argv:
@@ -815,6 +823,9 @@ def recovery_commands() -> None:
                   f"exactly one {name} line on the page is for v{version}",
                   f"{len(owners)} lines claim it: {owners}")
     check(len(shares) >= 1, "the page carries a shares command")
+    for verb in ("inspect", "decrypt", "unpack-audio"):
+        check(any(verb in shlex.split(c, comments=True) for c in audio),
+              f"the page carries a sound-file `{verb}` line")
     check(len(joins) >= 1, "the page carries a join command for strips that carry the backup")
 
     # "Add `--key-file mykey.bin` if step 3 reported one was required."
@@ -863,6 +874,77 @@ def recovery_commands() -> None:
                         # writes nothing a reader could mistake for a result.
                         check(r.returncode != 0 and not recovered.exists(),
                               f"{tag} refuses it", r.stderr.strip()[:160])
+
+        # Step 4, a sound file: the Audio tab's carrier, made by the app's own
+        # writer around a container the app's own encryptor wrote, and opened
+        # with the page's lines. Recovered bytes are asserted, not exit codes.
+        carrier = tmp / CARRIER
+        held = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp, tag="-carrier")
+        r = subprocess.run(["node", str(BRIDGE), "audioembed", "--in", str(held),
+                            "--out", str(carrier), "--samples", "8000", "--channels", "2",
+                            "--rate", "44100"], capture_output=True, text=True, cwd=ROOT)
+        check(r.returncode == 0, "the app wrote a carrier for the sound-file lines",
+              r.stderr.strip()[:160])
+        for c in audio:
+            argv = shlex.split(c, comments=True)
+            recovered.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
+            if "inspect" in argv:
+                r = run_doc_command(c, tmp, stdin="")
+                check(r.returncode == 0 and "KEYM v3" in r.stdout, f"`{c}` describes the backup inside",
+                      (r.stderr or r.stdout).strip()[:160])
+            elif "decrypt" in argv:
+                r = run_doc_command(c, tmp, stdin=PASSWORD + "\n")
+                got = recovered.read_bytes() if recovered.exists() else b""
+                check(r.returncode == 0 and got == SECRET, f"`{c}` recovers the bytes",
+                      r.stderr.strip()[:160])
+            elif "unpack-audio" in argv:
+                r = run_doc_command(c, tmp, stdin="")
+                got = backup.read_bytes() if backup.exists() else b""
+                check(r.returncode == 0 and got == held.read_bytes(),
+                      f"`{c}` writes out the container the app packed", r.stderr.strip()[:160])
+            else:
+                check(False, f"RECOVERY.md sound-file command is executed by this runner: `{c}`")
+
+        # "It has to be the original WAV": an ordinary sound file, which is
+        # what a re-encoded copy decodes to, is refused by every line in words
+        # about the file, never "decryption failed", and nothing is written.
+        silence = bytes(16000)
+        carrier.write_bytes(b"RIFF" + (36 + len(silence)).to_bytes(4, "little") + b"WAVE"
+                            + b"fmt " + (16).to_bytes(4, "little")
+                            + struct.pack("<HHIIHH", 1, 2, 44100, 44100 * 4, 4, 16)
+                            + b"data" + len(silence).to_bytes(4, "little") + silence)
+        # Nothing on stdin, so a line that prompted would show the prompt.
+        for c in audio:
+            recovered.unlink(missing_ok=True)
+            backup.unlink(missing_ok=True)
+            r = run_doc_command(c, tmp, stdin="")
+            check(r.returncode != 0 and "no hidden Keymaker data" in r.stderr
+                  and "Password" not in r.stderr and "decryption failed" not in r.stderr
+                  and not recovered.exists() and not backup.exists(),
+                  f"`{c}` on a WAV with nothing in it says so, asks for no password, writes nothing",
+                  r.stderr.strip()[-160:])
+        check("no hidden Keymaker data" in doc, "the page quotes the words keym2.py uses for such a file")
+
+        # "A copy saved as MP3, AAC or Ogg": a real converted copy is not a WAV
+        # at all, which the silent WAV above never tested. It used to reach the
+        # password prompt and end in "decryption failed". Each line must name
+        # the format, ask for nothing, and write nothing.
+        for fmt, head in (("MP3", b"ID3\x04\x00\x00\x00\x00\x00\x00\xff\xfb\x90\x00"),
+                          ("Ogg", b"OggS\x00\x02" + bytes(20)),
+                          ("MP4 or M4A", b"\x00\x00\x00\x20ftypM4A \x00\x00\x00\x00")):
+            carrier.write_bytes(head + bytes(4000))
+            for c in audio:
+                recovered.unlink(missing_ok=True)
+                backup.unlink(missing_ok=True)
+                r = run_doc_command(c, tmp, stdin="")
+                check(r.returncode != 0 and fmt in r.stderr and "Password" not in r.stderr
+                      and "decryption failed" not in r.stderr
+                      and not recovered.exists() and not backup.exists(),
+                      f"`{c}` on an {fmt} copy names the format, asks for no password, writes nothing",
+                      r.stderr.strip()[-160:])
+        check("says which kind of file it is" in doc,
+              "the page says a converted copy is named rather than asked for a password")
 
         # Step 4 with shares: two of three strips, one of them copied by hand.
         base = js_encrypt(3, SECRET, "pbkdf2", "aes", None, tmp, tag="-docshares")

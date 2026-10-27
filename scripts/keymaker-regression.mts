@@ -333,6 +333,13 @@ async function main() {
         const { extractSelfExtract } = await import("../src/lib/keym-v2-selfextract.ts");
         blob = Buffer.from(extractSelfExtract(blob.toString("utf8")));
       }
+      // docs/FORMAT-AUDIO-STEGO.md, the same argument: a carrier is a container
+      // wearing a WAV, read here by the app's own reader so the frozen carrier
+      // takes every check the other vectors take.
+      if (fx.audio) {
+        const { extractContainer, parseWavToPcm16 } = await import("../src/lib/audio-stego.ts");
+        blob = Buffer.from(extractContainer(parseWavToPcm16(new Uint8Array(blob))));
+      }
       const ab = blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength) as ArrayBuffer;
       const keyFile = fx.keyFile ? KEYFILE.slice(0).buffer as ArrayBuffer : null;
       // A fixture with no `version` field predates v2 joining the corpus. The
@@ -473,14 +480,16 @@ async function main() {
     const pageCount = meta.fixtures.filter((f: any) => f.selfextract).length;
     const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
     const bothCount = meta.fixtures.filter((f: any) => f.both).length;
+    const audioCount = meta.fixtures.filter((f: any) => f.audio).length;
     check(
-      fixtureCount === 45 && v1Count === 6 && v2Count === 13 && v3Count === 19 && v4Count === 7 &&
+      fixtureCount === 46 && v1Count === 6 && v2Count === 13 && v3Count === 20 && v4Count === 7 &&
         shamirCount === 9 && passkeyCount === 9 && pageCount === 1 && strippedCount === 1 &&
-        bothCount === 3,
+        bothCount === 3 && audioCount === 1,
       `corpus covers all four versions and all three ciphers per slot type ` +
         `(${v1Count} v1 + ${v2Count} v2 + ${v3Count} v3 + ${v4Count} v4, of which ${shamirCount} share ` +
         `sets, ${passkeyCount} passkey slots, ${bothCount} password-and-shares slots, ` +
-        `${pageCount} self-extracting page and ${strippedCount} stripped slot table = ${fixtureCount}/45)`
+        `${pageCount} self-extracting page, ${audioCount} audio carrier and ${strippedCount} stripped ` +
+        `slot table = ${fixtureCount}/46)`
     );
   } catch (err) {
     check(false, `fixture load — threw: ${(err as Error).message}`);

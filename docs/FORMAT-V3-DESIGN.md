@@ -342,6 +342,10 @@ ff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea5
 55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e
 ```
 
+These bytes are also `v3-s8-argon2id-aes` in `docs/vectors/containers.json`,
+the language-neutral pack a third implementation is checked against.
+`reference/vectors.py` fails if the hex printed here and the pack ever differ.
+
 Both implementations are held to these bytes by `reference/crosstest2.py`, and
 the frozen corpus under `scripts/fixtures/keymaker/` carries thirteen v3 vectors
 alongside v2's — including one whose slot table was stripped, which §5.2 requires

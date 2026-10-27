@@ -26,7 +26,7 @@ card: shorter, printable, and assuming the worst.
 
 | | |
 |---|---|
-| The encrypted file | `something.keym`, or the text form starting `keym2:` or `KEYM1:` |
+| The encrypted file | `something.keym`, the text form starting `keym2:` or `KEYM1:`, or a `.wav` from the Audio tab |
 | The password | Exactly as typed, including spaces and accents |
 | The key file | **Only if one was used** — the container will tell you |
 | Python | 3.10 or newer |
@@ -117,6 +117,9 @@ python3 keym.py  inspect --in backup.keym     # v1
 
 The right one prints a description. The wrong one refuses. That is the whole
 test — you do not need a hex editor.
+
+A `.wav` from the Audio tab is a file too. Give it to `keym2.py` the same way,
+and see *If the backup is a sound file* under Step 4.
 
 ## Step 3 — Read what the container says about itself
 
@@ -218,6 +221,31 @@ than the backup needs, or one of them was mistyped. `--share KMSHARE2:…`,
 repeated once per strip, also works, but like `--password` it leaves the codes
 in your shell history.
 
+### If the backup is a sound file
+
+The app's Audio tab can pack a backup into a `.wav` file. `keym2.py` reads that
+file directly, so the commands are the ones above with the sound file in place
+of `backup.keym`:
+
+```bash
+python3 keym2.py inspect --in keymaker-audio.wav                       # a WAV from the Audio tab
+python3 keym2.py decrypt --in keymaker-audio.wav --out recovered.txt   # a WAV from the Audio tab
+```
+
+To keep the backup itself beside the sound file, or to hand it to another
+tool, write it out on its own. No password is needed for this:
+
+```bash
+python3 keym2.py unpack-audio --in keymaker-audio.wav --out backup.keym
+```
+
+It has to be the original WAV. A copy saved as MP3, AAC or Ogg, or sent
+through an app that re-encodes sound, has lost the backup for good, and
+`keym2.py` says which kind of file it is instead of asking for a password. A
+FLAC or AIFF copy still holds it, once converted back to a 16-bit WAV at its own
+sample rate. A WAV that never held a backup gets `no hidden Keymaker data was
+found`. None of these messages is about what you typed.
+
 ---
 
 ## If the web app said the backup was too large
@@ -254,11 +282,16 @@ Work through these in order:
    works across platforms. A password typed on a different keyboard layout may
    still differ in ways that look identical on screen.
 5. **Is the file intact?** Compare its size against the copy you originally
-   made. A truncated or re-encoded file — one that passed through a text
-   editor, or a chat app that "helpfully" fixed its encoding — will fail
+   made. A truncated or re-encoded container file, one that passed through a
+   text editor or a chat app that "helpfully" fixed its encoding, will fail
    authentication even with the correct password.
 6. **Text form pasted correctly?** The prefix and every character after it must
    be present. Line breaks are fine; missing characters are not.
+7. **Is the backup a sound file?** A problem with a WAV is reported in words
+   about the file, never as `decryption failed`, and an `.mp3`, `.ogg` or `.m4a`
+   copy is named as such. See *If the backup is a sound file*. Only damage
+   inside the hidden backup itself reaches `decryption failed`, as it would in
+   any other damaged file.
 
 If `inspect` fails under *both* scripts, the file is not a KEYM container —
 check you have the right one, and that it was not renamed from something else.

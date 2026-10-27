@@ -402,6 +402,10 @@ dbe384123dda057182fb2656f5c735cbc975e8fd07b1d019807174fc25b084fd
 420bacf2a03e69291d
 ```
 
+These bytes are also `v4-s8-argon2id-aes` in `docs/vectors/containers.json`,
+the language-neutral pack a third implementation is checked against.
+`reference/vectors.py` fails if the hex printed here and the pack ever differ.
+
 Both implementations are held to these bytes by `reference/crosstest2.py`, and
 the frozen corpus under `scripts/fixtures/keymaker/` carries v4 vectors beside
 v2's and v3's. `scripts/keymaker-generate-fixtures.mts` writes them and skips
