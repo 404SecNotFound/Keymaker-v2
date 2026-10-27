@@ -25,7 +25,11 @@ async function scan(page: Page) {
       .filter(animation => animation.effect?.getTiming().iterations !== Infinity)
       .map(animation => animation.finished.catch(() => {})));
   });
+  // label-content-name-mismatch (WCAG 2.5.3) ships as experimental in some
+  // axe releases, so the tags alone may skip it. Turned on by name, a button
+  // whose aria-label hides its visible text fails here on every version.
   return new AxeBuilder({ page })
+    .options({ rules: { "label-content-name-mismatch": { enabled: true } } })
     .withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa"])
     .analyze();
 }
