@@ -34,6 +34,7 @@ import {
   settingsChanges,
   workflowReducer,
   workflowSteps,
+  type CoverageFinding,
   type CreationSettings,
   type StepInputs,
   type StepState,
@@ -187,7 +188,7 @@ check("an AND way in keeps its own wording",
   const states = (i: StepInputs) => workflowSteps(i).map((s) => s.state);
   const stateOf = (i: StepInputs, id: string): StepState | undefined =>
     workflowSteps(i).find((s) => s.id === id)?.state;
-  const eq = (a: unknown[], b: unknown[]) => JSON.stringify(a) === JSON.stringify(b);
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
   check("there are six steps, in the order the roadmap names",
     eq(workflowSteps(base).map((s) => s.id), ["content", "access", "review", "create", "saved-copy", "recovery"]));
@@ -253,9 +254,9 @@ check("an AND way in keeps its own wording",
   check("a symbol that cannot be matched does not count",
     mergePrintoutCoverage(null, [part(1, 3, "unknown")]) === null);
   check("a recovery strip is not the saved copy",
-    mergePrintoutCoverage(null, [{ kind: "strip", index: 1, threshold: 2, setCode: null, belongs: "yes" }]) === null);
+    mergePrintoutCoverage(null, [{ kind: "strip", index: 1, threshold: 2, setCode: null, belongs: "yes" } as CoverageFinding]) === null);
   check("a damaged symbol does not count",
-    mergePrintoutCoverage(null, [{ kind: "part-damaged", index: 1, total: 3 }]) === null);
+    mergePrintoutCoverage(null, [{ kind: "part-damaged", index: 1, total: 3 } as CoverageFinding]) === null);
   const one = mergePrintoutCoverage(null, [part(1, 3, "yes")]);
   const two = mergePrintoutCoverage(one, [part(3, 3, "yes"), part(3, 3, "yes")]);
   check("checks accumulate, and a symbol seen twice counts once", eq(two?.checked ?? [], [1, 3]), JSON.stringify(two));
@@ -323,7 +324,7 @@ check("an AND way in keeps its own wording",
     inputType: "text", file: null, text: "keym2:AAAA", keyFile: null, useShares: false, usePasskey: false,
   };
   const inFile: VerifiedInput<object> = { ...text, inputType: "file", file: fileA, text: "" };
-  const eq = (a: unknown[], b: unknown[]) => JSON.stringify(a) === JSON.stringify(b);
+  const eq = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
   check("the same input, nothing typed since: the result applies", verifyChanges(text, { ...text }, false).length === 0);
   check("another pasted container is another backup",

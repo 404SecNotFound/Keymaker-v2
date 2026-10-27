@@ -1,0 +1,205 @@
+{
+  "family": "accept",
+  "format": 1,
+  "vectors": [
+    {
+      "id": "accept-skip-slot-type-unknown",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02e263af50fbb643da88ca33a95488bdda5bd0abce39bb6268048106c17e2db4c9070000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef8a45e73fb29662262d88f036c8a28fb5000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (A slot type the reader does not implement is skipped, never guessed at), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-slot-flags-reserved",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02632595fcb57bb14a138423131fe69c13c34d821991a4cd00f0aa194f553e9227000002000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef5fcddcf4d4c594d4e185922709df886a000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (slot_flags bits 1 to 7 are reserved), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-slot-reserved",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02bc51bb05d1cb8501057fe4709bde1f4f00205cb486660fe760847705fb335537000000010000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef3e7dea31e412581b5bdc20303010733d000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (Slot bytes 3 to 7 are reserved), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-kdf-pairing",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef026120b561294357d382f8b046d98f26f86d48d66524edf1db8419405a4e0b330c000200000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00000000000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeffc2822c6ada6ab58e0750357bcb75a8d000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (A passphrase slot never declares HKDF, which would be a password with no stretching), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-pbkdf2-param-reserved",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef0289266fde7f186c62803a82b7221fec41adaa694a994d70e11cdee709912f4086000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8010000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef85b88d1fb328b25746c9b858f965ac72000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (The last four PBKDF2 parameter bytes are reserved (v2 \u00a73.2)), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-pbkdf2-iterations-over",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef028c7e36be9b0159c4f647b7e243cad5b7e8923fc3cda02dc29e63b4c305f5c471000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00989681000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef69d63b71ef695ae728918cb4020f16c5000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (PBKDF2 iterations above 10,000,000, refused before any derivation), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-argon2id-time-over",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02daf69ad3761ab80ecb3738889b301d96b009e41bfe4d7233d3b7c45b8d10d8f2000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000b0000000801001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef5d2e9faf56e031ac60c8d6b9bbc4d5c0000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (Argon2id time_cost above 10), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-argon2id-memory-over",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02f85c737836b0124f2437154a70eed4e2c7796a6cdf2d8b28e0a4726b85cf0fff000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00010004000101001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef8dce9d4af7aa95f863d32c4535834b22000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (Argon2id memory_kib above 262,144, refused before allocating it), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-argon2id-parallelism-over",
+      "rule": "v2 \u00a74.4",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02a27eccc2ebcddd4c476041103c5bcf64812bcec9f890dc73bf10de62b1929407000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00010000004809001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef166834c6e2f2d62f84a8f8163605cad8000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is disqualified (Argon2id parallelism above 8), and slot 1 opens. Refusing the container here loses data a good slot protects."
+    },
+    {
+      "id": "accept-skip-argon2id-memory-below-lanes",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02c590a0ffeab16e70d78409a8563ef7ce36cd0e61b1c355975106b94a35dcb4d1000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00010000000108001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eef1864dfd32e86c8644f19047cd2ebca52000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 declares memory_kib 1 and parallelism 8. \u00a76 admits both, but Argon2id needs memory_kib of at least 8 x parallelism, so no library can derive it. The slot is skipped, and slot 1 opens."
+    },
+    {
+      "id": "accept-skip-wrong-wrap",
+      "rule": "v2 \u00a74.4, v2 \u00a76",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef02482ccfdf65537e81db0d5f0b2b8f34aa07094c334010faeed52cbde779f9707b000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "Slot 0 is well formed but wrapped under another key, so the password does not open it. The walk goes on, and slot 1 opens."
+    },
+    {
+      "id": "accept-eight-slots",
+      "rule": "v2 \u00a76",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef08a21fb1740fec011fd8594bcc67ee2baaafad3f53051fb15024e62779e9aa393b000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e8000000001940ee695302b57c4b8f9b4ce7315e9587ed04bca60a19d94d36a310ec6c4eeff253254d38e448f54b09664a0697d712000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "authentic",
+      "note": "slot_count 8, the most \u00a76 admits. Only the last slot opens."
+    },
+    {
+      "id": "accept-stripped-table",
+      "rule": "v3 \u00a75.2",
+      "kind": "container",
+      "password": "the reject base \u2014 test only",
+      "input": "4b45594d030000000123456789abcdef0123456789abcdef0134d4cdb114443d81b010e60d4ff07a36cb023ee7e6ce1172d9cfbb6baeb811e5000000000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff000003e800000000e900d0342ba97a8d2d89992e47bba14a88a465fa7524fb57be4e51a562658dd170a1201cf97fc04ab9dd9e1b5c0af5fcc1cb1954f1d2ca2b63e5e7eeffc31f02a42b0af8767744c1049c36617fa1732ba4359cdec7926201164abf70f39155e5210dad892820839e70954fc1200c2e66927551c4c1fe56e17e",
+      "expect": "72656a6563742e6a736f6e277320726f7773206172652065616368206f6e65206368616e676520746f207468697320636f6e7461696e65722e",
+      "slot_table": "changed",
+      "note": "A slot was removed after the MAC was computed, so slot_table_mac does not verify. v3 \u00a75.2 says open it and report that the table changed, never refuse."
+    },
+    {
+      "id": "accept-armor-every-ignorable",
+      "rule": "v2 \u00a77",
+      "kind": "armor",
+      "input": "\ufeff keym2:\tS0VZTQMAAA\nABI0VniavN\u000b7wEjRWeJq8\f3vAV_wwPsR\rtEBYq-a-SL WQF40HUryI\u00858POVTeacmK\u00a0aAB8QYAAEA\u1680AAAAAAAAES\u2000IzRFVmd4iZ\u2001qrvM3e7_AB\u2002EiM0RVZneI\u2003maq7zN3u_w\u2004ADAAEAAAQA\u2005jnueABJQ9E\u2006nTCIL1jl2T\u2007yFu4qOZFnq\u2008WOu6TsyRn4\u2009bVyGgRpecu\u200a1eW39mcINi\u2028ZyxR-MsKXP\u2029PNgTMw7OCx\u202f-JYfCPN1Ct\u205fJBSymEE8x-\u3000bjCuZGyoM8\ufeff_ZxNdtVRgPuDWo10OrKQC0VDmJ8xGJJWnH9ix1XwPCPg\u3000\n",
+      "expect": "4b45594d030000000123456789abcdef0123456789abcdef015ff0c0fb11b44058abe6be48b590178d0752bc88f0f3954de69c98a68007c418000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea58ebba4ecc919f86d5c86811a5e72ed5e5b7f66708362672c51f8cb0a5cf3cd813330ece0b1f8961f08f3750ad2414b298413cc7e6e30ae646ca833cfd9c4d76d55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e",
+      "note": "v3 \u00a78's armor with each IGNORABLE character once inside its body and some at either end."
+    },
+    {
+      "id": "accept-share-respelt",
+      "rule": "v2 \u00a74.6",
+      "kind": "share",
+      "input": "\tKmShArE2:47so jzgx 243v vxyl aws6 d7bm erlg 7h63 sb6x lnyy v7yf qwqn z3zz dwdm pexb v857 ntmr s2w2 gnm6 yskl er46 jc8v yfkr kx2w 6nmh kwgl 9w\u00a0",
+      "expect": {
+        "set_id": "21f2097e1d1107bdf7c15732669d7476",
+        "k": 3,
+        "index": 3,
+        "value": "c4c3cacdd0d7ded9fcfbf2f5f8fff6f1b4b3babda0a7aea98c8b8285686f6661"
+      },
+      "note": "Share 3 in lower case, with spaces for hyphens, l for 1 and o for 0, and ignorable characters at both ends."
+    },
+    {
+      "id": "accept-combine-v1-any-order",
+      "rule": "v2 \u00a74.6",
+      "kind": "combine",
+      "input": "KMSHARE1:47S0-JZG3-0NS6-EP2D-5RXG-84ET-SZRE-B5M3-QJMK-JB0K-0SJQ-0KTT-J62B-QBHX-50BG-5XT1-5DXG\nKMSHARE1:47S0-JZG3-0F2C-7JPD-T3BX-XPFW-ZFSF-BY7Z-YVRV-9CXT-QPGA-FBN9-HJ5R-51B8-DXK6-27M2-ZSRG\nKMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90",
+      "expect": "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283",
+      "note": "Shares 5, 3 and 1, out of order. A reader interpolates at each share's own index, never at its position in the list."
+    },
+    {
+      "id": "accept-combine-v2-any-order",
+      "rule": "v2 \u00a74.6",
+      "kind": "combine",
+      "input": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-8MJ7-F1PG-W6S4-67XE-ZM65-PTHS-S28S-1GSJ-CHAG-DXXB-394V-HREG-GDS2-2DF3-69Q3-C437-Y16A-KD43-CCWZ-7W\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-5S73-XBPZ-1XZY-Z7ED-QMPN-V3FX-DMCM-JED9-V047-HT4T-SAX2-MN44-YHJ1-CCMS-5345-8E5F-780S-MHXA-EHVP-SR\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-AWK7-B16J-WER4-27DC-ZW75-JT1V-SA9S-5G9G-CSBG-9XD9-315V-NRYJ-G5R2-P0ZH-7FME-TCDA-5WC1-HS6T-PRY4-50",
+      "expect": "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283",
+      "note": "Shares 4, 2 and 5, out of order."
+    },
+    {
+      "id": "accept-combine-k-lowest",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE2:47S0JZGX243VVXY1AWS6D7BMER1GJ001081G81860W40J2GB1G6GW3RG2491650N2RBHG68T3CE1T7GZR7GTKPY55W6CXYXKC0NAWCWQ6M\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-5S73-XBPZ-1XZY-Z7ED-QMPN-V3FX-DMCM-JED9-V047-HT4T-SAX2-MN44-YHJ1-CCMS-5345-8E5F-780S-MHXA-EHVP-SR\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-7H63-SB6X-1NYY-V7YF-QWQN-Z3ZZ-DWDM-PEXB-V857-NTMR-S2W2-GNM6-YSK1-ER46-JC8V-YFKR-KX2W-6NMH-KWG1-9W\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-2H25-8S3M-GJAA-9D64-TKJF-A18N-4MTM-ANB5-EP2S-B9DN-RQAY-BYGA-38N3-F0FS-KDDD-Y4V6-CA7X-GTMW-0C05-ZM",
+      "expect": "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283",
+      "note": "A share at index 9 from the same set with a valid checksum but the wrong value, listed first, then shares 2, 3 and 1. \u00a76 reconstructs from the k lowest indices, so index 9 is never used."
+    },
+    {
+      "id": "accept-combine-repeat",
+      "rule": "v2 \u00a76",
+      "kind": "combine",
+      "input": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-2H25-8S3M-GJAA-9D64-TKJF-A18N-4MTM-ANB5-EP2S-B9DN-RQAY-BYGA-38N3-F0FS-KDDD-Y4V6-CA7X-GTMW-0C05-ZM\nkmshare2:47s0-jzgx-243v-vxy1-aws6-d7bm-er1g-2h25-8s3m-gjaa-9d64-tkjf-a18n-4mtm-anb5-ep2s-b9dn-rqay-byga-38n3-f0fs-kddd-y4v6-ca7x-gtmw-0c05-zm\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-5S73-XBPZ-1XZY-Z7ED-QMPN-V3FX-DMCM-JED9-V047-HT4T-SAX2-MN44-YHJ1-CCMS-5345-8E5F-780S-MHXA-EHVP-SR\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-7H63-SB6X-1NYY-V7YF-QWQN-Z3ZZ-DWDM-PEXB-V857-NTMR-S2W2-GNM6-YSK1-ER46-JC8V-YFKR-KX2W-6NMH-KWG1-9W",
+      "expect": "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283",
+      "note": "Share 1 twice, in two spellings, with shares 2 and 3. A share supplied twice counts once."
+    },
+    {
+      "id": "accept-combine-lines",
+      "rule": "v2 \u00a77",
+      "kind": "combine",
+      "input": "# shares 1, 2 and 4\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-2H25-8S3M-GJAA-9D64-TKJF-A18N-4MTM-ANB5-EP2S-B9DN-RQAY-BYGA-38N3-F0FS-KDDD-Y4V6-CA7X-GTMW-0C05-ZM\n\n\u0085\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-5S73-XBPZ-1XZY-Z7ED-QMPN-V3FX-DMCM-JED9-V047-HT4T-SAX2-MN44-YHJ1-CCMS-5345-8E5F-780S-MHXA-EHVP-SR\r\nKMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-8MJ7-F1PG-W6S4-67XE-ZM65-PTHS-S28S-1GSJ-CHAG-DXXB-394V-HREG-GDS2-2DF3-69Q3-C437-Y16A-KD43-CCWZ-7W",
+      "expect": "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283",
+      "note": "A comment, a blank line and a line of only U+0085 are skipped, and a line ending in CR is one line (\u00a77, one item per line)."
+    },
+    {
+      "id": "accept-parts-any-order",
+      "rule": "v2 \u00a77.3, v2 \u00a77",
+      "kind": "parts",
+      "input": "# part 4 of 4\r\nKMPART2:4/4:80iNkzPiTGIVpCAM68\u2028C4zw:220:VRgPuDWo10OrKQC0VDmJ8xGJJWnH9ix1XwPCPg:w49FZw\r\n# part 3 of 4\r\nKMPART2:3/4:80iNkzPiTGIVpCAM68\u2028C4zw:220:jruk7MkZ-G1choEaXnLtXlt_ZnCDYmcsUfjLClzzzYEzMOzgsfiWHwjzdQrSQUsphBPMfm4wrmRsqDPP2cTXbQ:sxY47g\r\n# part 2 of 4\r\nKMPART2:2/4:80iNkzPiTGIVpCAM68\u2028C4zw:220:AAARIjNEVWZ3iJmqu8zd7v8AESIzRFVmd4iZqrvM3e7_AAMAAQAABACOe54AElD0SdMIgvWOXZPIW7io5kWepQ:L2iSpQ\r\n# part 1 of 4\r\nKMPART2:1/4:80iNkzPiTGIVpCAM68\u2028C4zw:220:S0VZTQMAAAABI0VniavN7wEjRWeJq83vAV_wwPsRtEBYq-a-SLWQF40HUryI8POVTeacmKaAB8QYAAEAAAAAAA:-eVFIw",
+      "expect": "4b45594d030000000123456789abcdef0123456789abcdef015ff0c0fb11b44058abe6be48b590178d0752bc88f0f3954de69c98a68007c418000100000000000000112233445566778899aabbccddeeff00112233445566778899aabbccddeeff00030001000004008e7b9e001250f449d30882f58e5d93c85bb8a8e6459ea58ebba4ecc919f86d5c86811a5e72ed5e5b7f66708362672c51f8cb0a5cf3cd813330ece0b1f8961f08f3750ad2414b298413cc7e6e30ae646ca833cfd9c4d76d55180fb835a8d743ab2900b4543989f311892569c7f62c755f03c23e",
+      "note": "KMPART2 parts in reverse order, each with a comment line before it, U+2028 inside it and CRLF line ends."
+    }
+  ]
+}

@@ -64,7 +64,6 @@ export function EncryptorTool() {
         <button
           type="button"
           onClick={() => setIsCommandBarOpen(true)}
-          aria-label="Open the command menu"
           data-testid="command-bar-hint"
           className="km-command"
         >

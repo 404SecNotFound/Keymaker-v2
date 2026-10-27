@@ -35,6 +35,7 @@ scripts/.access-policy.build.mjs
 scripts/.verify-transport.build.mjs
 scripts/.backup-workflow.build.mjs
 scripts/.shamir.build.mjs
+scripts/.vectors.build.mjs
 *.tsbuildinfo
 
 # playwright

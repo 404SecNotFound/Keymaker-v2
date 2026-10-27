@@ -1627,6 +1627,15 @@ export async function encryptKeym2(
  * key reuses every (key, nonce) pair in the container, which for an AEAD means
  * recoverable plaintext and forgeable tags. `encryptKeym2` is the API.
  */
+/**
+ * The intermediates `docs/vectors/containers.json` prints, for
+ * `scripts/vectors-test.mts`. The app never calls these through this object.
+ * A third implementation is checked one stage at a time against the pack, and
+ * these are the stages: a container that differs only after them has a wrap or
+ * payload bug, and one that differs in them says which derivation is wrong.
+ */
+export const keym2VectorIntermediates = { buildKdfInput, deriveSlotKey, slotTableKey } as const;
+
 export async function encryptKeym2WithExplicitSecrets(
   plaintext: Uint8Array,
   password: string,
