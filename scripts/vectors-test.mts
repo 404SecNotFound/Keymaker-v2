@@ -61,7 +61,7 @@ function check(ok: boolean, message: string): void {
 }
 
 const hex = (b: Uint8Array): string => Buffer.from(b).toString("hex");
-const bytes = (h: string): Uint8Array => Uint8Array.from(Buffer.from(h, "hex"));
+const bytes = (h: string): Uint8Array<ArrayBuffer> => Uint8Array.from(Buffer.from(h, "hex"));
 const same = (a: unknown, b: unknown): boolean => JSON.stringify(a) === JSON.stringify(b);
 
 /**
@@ -204,7 +204,7 @@ for (const v of pack.shares ?? []) {
     check(split.length === v.shares.length, `shares/${v.id}: a different number of shares`);
     for (const [i, s] of (v.shares as Vector[]).entries()) {
       const part = split[i];
-      check(part?.index === s.index && hex(part.value) === s.value, `shares/${v.id}: share ${s.index}'s value differs`);
+      check(part !== undefined && part.index === s.index && hex(part.value) === s.value, `shares/${v.id}: share ${s.index}'s value differs`);
       const share = { setId: sid1, threshold: v.k, index: s.index, value: bytes(s.value) };
       check((await encodeShare(share)) === s.kmshare1, `shares/${v.id}: share ${s.index}'s KMSHARE1 text differs`);
       check((await encodeShareV2({ ...share, setId: sid2 })) === s.kmshare2, `shares/${v.id}: share ${s.index}'s KMSHARE2 text differs`);

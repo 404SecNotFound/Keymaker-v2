@@ -16,7 +16,7 @@
  * intercept and slope, so the expected answer can be computed independently
  * and a solver that quietly dropped the intercept would not match it.
  */
-import { KdfId, validateKdfParams } from "../src/lib/keymaker-crypto.ts";
+import { KdfId, validateKdfParams, type KdfParams } from "../src/lib/keymaker-crypto.ts";
 import {
   calibrateArgon2,
   describeCalibration,
@@ -55,8 +55,8 @@ function device(interceptMs: number, slopeMsPerKiB: number, timeCost = 1) {
   return { low: at(LOW_KIB), high: at(HIGH_KIB), interceptMs, slopeMsPerKiB };
 }
 
-function memoryOf(params: { kdf: KdfId; params: Record<string, number> }): number {
-  return params.kdf === KdfId.ARGON2ID ? (params.params.memoryKiB as number) : -1;
+function memoryOf(params: KdfParams): number {
+  return params.kdf === KdfId.ARGON2ID ? params.params.memoryKiB : -1;
 }
 
 console.log("\nArgon2id calibration solver\n");

@@ -243,7 +243,7 @@ async function main(): Promise<void> {
   const d1Flat = d1.replace(/-/g, "");
   const padded = d1Flat.slice(0, -1) + B32[B32.indexOf(d1Flat.slice(-1)) | 1];
   const record = await packShare(s1);
-  record[record.length - 1] ^= 1;
+  record[record.length - 1]! ^= 1;
   const badChecksum = SHARE_PREFIX + b32Encode(record);
   for (const [what, damaged] of [["non-zero padding bits", padded], ["a wrong checksum", badChecksum]] as const) {
     check(await refused([d1, damaged, d2, d3]), `a copy of share 1 with ${what}, after it, was accepted`);
@@ -283,10 +283,10 @@ async function main(): Promise<void> {
   const [e1, e2, e3] = v2Texts as [string, string, string];
   const e1Share = { setId: v2Id, threshold: 3, index: 1, value: (await decodeShareAny(e1)).value };
   const lateId = v2Id.slice();
-  lateId[15] ^= 1;
+  lateId[15]! ^= 1;
   const v2Near = await encodeShareV2({ ...e1Share, setId: lateId });
   const v2Record = await packShareV2(e1Share);
-  v2Record[v2Record.length - 1] ^= 1;
+  v2Record[v2Record.length - 1]! ^= 1;
   const v2BadChecksum = SHARE2_PREFIX + b32Encode(v2Record);
   const refusedV2 = async (texts: string[]): Promise<boolean> => {
     try {

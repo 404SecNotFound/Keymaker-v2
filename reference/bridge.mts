@@ -106,6 +106,18 @@ if (!globalThis.crypto) {
   (globalThis as { crypto?: Crypto }).crypto = webcrypto as unknown as Crypto;
 }
 
+/**
+ * The explicit inputs with every unset flag left out. Under
+ * exactOptionalPropertyTypes an optional field takes a value or no key at all,
+ * never `undefined`; the writers read each one with `??`, so the two mean the
+ * same at run time.
+ */
+function present<T extends object>(fields: T): { [K in keyof T]?: Exclude<T[K], undefined> } {
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined)) as {
+    [K in keyof T]?: Exclude<T[K], undefined>;
+  };
+}
+
 function flag(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);
   return i === -1 ? undefined : process.argv[i + 1];
@@ -236,13 +248,13 @@ try {
       // `--version 4` writes v4 (padded); with a container id and no version
       // flag it is v3, and without either it is v2, as it always was.
       containerId === undefined ? KEYM2_VERSION_V2 : flag("version") === "4" ? KEYM2_VERSION_V4 : KEYM2_VERSION_V3,
-      {
+      present({
         salt: hex("salt"),
         masterKey: hex("master-key"),
         containerId,
         shareSecret: hex("share-secret"),
         coefficients: hex("share-coefficients"),
-      }
+      })
     );
     writeFileSync(outFile, Buffer.from(container));
     writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");
@@ -282,14 +294,14 @@ try {
         passkey: prf === undefined ? undefined : { prfOutput: prf, salt: hex("passkey-salt")! },
       },
       containerId === undefined ? KEYM2_VERSION_V2 : flag("version") === "4" ? KEYM2_VERSION_V4 : KEYM2_VERSION_V3,
-      {
+      present({
         salt: hex("salt"),
         masterKey: hex("master-key"),
         containerId,
         shareSalt: hex("share-salt"),
         shareSecret: hex("share-secret"),
         coefficients: hex("share-coefficients"),
-      }
+      })
     );
     writeFileSync(outFile, Buffer.from(container));
     if (shares) writeFileSync(flag("shares-out")!, shares.join("\n") + "\n");

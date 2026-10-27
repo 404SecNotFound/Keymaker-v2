@@ -595,7 +595,7 @@ imposes, not a preference, and it is the version CI runs.
 npm ci                    # reproducible install from the lockfile
 npm run dev               # development server on :9002
 npm run build             # static export to out/, with CSP hash post-processing
-npm run typecheck
+npm run typecheck         # the app, then the test suites and the conformance bridge
 
 npm run test:crypto       # frozen IBTZ core — the legacy decryption contract
 npm run test:keymaker     # container suite — round-trips, tamper rejection, fixtures
