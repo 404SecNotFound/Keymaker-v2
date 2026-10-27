@@ -165,7 +165,7 @@ last time a browser ran it.
 ## Test commands
 
 ```bash
-npm run typecheck          # tsc --noEmit
+npm run typecheck          # tsc on the app, then on scripts/*.mts and reference/bridge.mts
 npm run test:crypto        # v1 crypto regression
 npm run test:keymaker      # KEYM regression + the frozen corpus
 npm run test:conformance   # v1 Python ↔ TypeScript parity

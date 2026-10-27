@@ -37,7 +37,10 @@ function secureErase(buffer: ArrayBuffer | Uint8Array | null | undefined): void 
   // Multiple overwrite passes with random data (best-effort; JS GC may retain copies)
   for (let pass = 0; pass < 3; pass++) {
     try {
-      crypto.getRandomValues(view);
+      // Typed as ArrayBuffer-backed for Node's stricter WebCrypto types. A view
+      // over a SharedArrayBuffer is refused at run time, and the catch below
+      // zero-fills it instead.
+      crypto.getRandomValues(view as Uint8Array<ArrayBuffer>);
     } catch {
       // If CSPRNG is unavailable, zero-fill only — never use Math.random() for security ops
       view.fill(0);

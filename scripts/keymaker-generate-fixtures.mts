@@ -170,7 +170,7 @@ async function main() {
             keyFile ? keyFile.slice(0) : null,
             { kdf: c.kdf, cipher: c.cipher }
           );
-    writeFileSync(join(DIR, file), Buffer.from(ct));
+    writeFileSync(join(DIR, file), ct instanceof Uint8Array ? ct : new Uint8Array(ct));
     fixtures.push({
       name: c.name,
       file,

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "node scripts/build-crypto-worker.mjs && next dev -p 9002",
     "build": "node scripts/build-crypto-worker.mjs && node scripts/build-recovery-kit.mjs && next build && node scripts/check-argon2-blob.mjs && node scripts/apply-csp-hashes.mjs && node scripts/apply-build-id.mjs && node scripts/build-manifest.mjs",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.scripts.json",
     "test:crypto": "node scripts/crypto-regression.mts",
     "test:keymaker": "node scripts/keymaker-test.mjs",
     "test:keym2-dispatch": "node scripts/keymaker-test.mjs keym2-dispatch",
