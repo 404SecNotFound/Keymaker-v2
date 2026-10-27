@@ -168,12 +168,12 @@ async function main() {
   );
   await rejects("tampered ciphertext rejected (AES-GCM authentication)", () => {
     const tampered = new Uint8Array(ct.slice(0));
-    tampered[tampered.length - 1] ^= 0xff;
+    tampered[tampered.length - 1]! ^= 0xff;
     return decryptFile(tampered.buffer as ArrayBuffer, FIXTURES.password, null);
   });
   await rejects("tampered salt rejected", () => {
     const tampered = new Uint8Array(ct.slice(0));
-    tampered[6] ^= 0xff; // inside the salt
+    tampered[6]! ^= 0xff; // inside the salt
     return decryptFile(tampered.buffer as ArrayBuffer, FIXTURES.password, null);
   });
   await rejects("truncated input rejected", () =>

@@ -294,6 +294,10 @@ not a new cipher. Full layout in
   and download a WAV that carries the sealed container in the least-significant
   bit of its samples.
 - **Unpack:** open that WAV here with the password to recover the secret.
+- **Without this site:** `python3 keym2.py decrypt --in keymaker-audio.wav`
+  opens the same WAV, and `unpack-audio` writes the container out on its own.
+  [docs/RECOVERY.md](docs/RECOVERY.md) has the procedure, and the conformance
+  suite holds both readers to the same bytes.
 
 Two things it states plainly, because a security tool should not oversell hiding:
 
@@ -591,7 +595,7 @@ imposes, not a preference, and it is the version CI runs.
 npm ci                    # reproducible install from the lockfile
 npm run dev               # development server on :9002
 npm run build             # static export to out/, with CSP hash post-processing
-npm run typecheck
+npm run typecheck         # the app, then the test suites and the conformance bridge
 
 npm run test:crypto       # frozen IBTZ core — the legacy decryption contract
 npm run test:keymaker     # container suite — round-trips, tamper rejection, fixtures
@@ -604,6 +608,8 @@ npm run test:shamir       # the Shamir core under a hostile caller, not a typo
 npm run test:browser      # the built export, in a real browser (needs build)
 npm run test:conformance  # cross-test vs the independent Python reference
 npm run test:conformance2 # ...and the same for v2/v3, byte for byte
+npm run test:properties   # both readers on generated inputs, from a printed seed
+npm run test:vectors      # both readers against the published vector pack in docs/vectors
 npm run test:keym2        # the Python reference against itself
 npm run test:recovery     # the documented recovery procedure, end to end
 

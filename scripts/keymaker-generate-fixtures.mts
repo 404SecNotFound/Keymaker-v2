@@ -47,6 +47,7 @@ import {
   KEYM2_VERSION_V4,
 } from "../src/lib/keym-v2.ts";
 import { buildSelfExtractingPage } from "../src/lib/keym-v2-selfextract.ts";
+import { embedContainer, writePcm16Wav } from "../src/lib/audio-stego.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const DIR = join(HERE, "fixtures", "keymaker");
@@ -169,7 +170,7 @@ async function main() {
             keyFile ? keyFile.slice(0) : null,
             { kdf: c.kdf, cipher: c.cipher }
           );
-    writeFileSync(join(DIR, file), Buffer.from(ct));
+    writeFileSync(join(DIR, file), ct instanceof Uint8Array ? ct : new Uint8Array(ct));
     fixtures.push({
       name: c.name,
       file,
@@ -615,6 +616,54 @@ async function main() {
     console.log(`wrote ${file} (${container.byteLength} bytes, password, 5 shares and a passkey in one write)`);
   }
 
+  // docs/FORMAT-AUDIO-STEGO.md. A v3 container in the low bits of a WAV, as the
+  // Audio tab writes it. Frozen for the reason the page is: the carrier around
+  // the container is the part an heir holds, and "it still gives its container
+  // up" is a promise only a file written on a particular day can keep anyone
+  // to. Half a second of a 440 Hz tone, mono, so the file stays small and is
+  // recognisably audio rather than noise. Appended last, so every entry before
+  // it keeps its place in fixtures.json.
+  {
+    const name = "v3-audio-carrier";
+    const file = `${name}.wav`;
+    const prior = byName.get(name);
+    if (prior && existsSync(join(DIR, file))) {
+      fixtures.push(prior);
+      kept++;
+    } else {
+      const plaintext = "Keymaker fixture - v3 audio carrier / aes-256-gcm";
+      const container = await encryptKeym2(
+        new TextEncoder().encode(plaintext),
+        PASSWORD,
+        null,
+        { kdf: PBKDF2_V2_PARAMS, cipher: CipherId.AES_256_GCM },
+        KEYM2_VERSION_V3
+      );
+      const rate = 8000;
+      const samples = new Int16Array(rate / 2);
+      for (let i = 0; i < samples.length; i++) {
+        samples[i] = Math.round(8000 * Math.sin((2 * Math.PI * 440 * i) / rate));
+      }
+      const wav = writePcm16Wav(
+        embedContainer({ sampleRate: rate, channels: 1, samples }, new Uint8Array(container))
+      );
+      writeFileSync(join(DIR, file), Buffer.from(wav));
+      fixtures.push({
+        name,
+        file,
+        version: 3,
+        kdf: "pbkdf2",
+        cipher: "aes-256-gcm",
+        keyFile: false,
+        plaintext,
+        audio: true,
+        slotTableAuthentic: true,
+      });
+      wrote++;
+      console.log(`wrote ${file} (${wav.byteLength} bytes, a ${container.byteLength}-byte container inside)`);
+    }
+  }
+
   writeFileSync(
     metaPath,
     JSON.stringify(
@@ -631,7 +680,9 @@ async function main() {
           "ones carrying a slot_table_mac: true where the table is intact, " +
           "false for the one vector whose slot was stripped (v3 §5.2 — it must " +
           "still open, and the reader must still report the table has changed). " +
-          "A `both` vector (§4.8) opens only with the password and its shares together.",
+          "A `both` vector (§4.8) opens only with the password and its shares together. " +
+          "An `audio` vector is a KAUD1 carrier WAV (docs/FORMAT-AUDIO-STEGO.md) with the " +
+          "container in its sample low bits.",
         fixtures,
       },
       null,

@@ -1,0 +1,16 @@
+// The test suites and the conformance bridge, held to the app's own compiler
+// settings. They run through esbuild, which strips types without checking
+// them, so before this file a call that no longer matched its signature still
+// ran (scripts/keym2-dispatch.mts passed encryptData three of its four
+// arguments). `npm run typecheck` checks both projects.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    // The suites import the TypeScript sources by their .ts paths.
+    "allowImportingTsExtensions": true,
+    "incremental": false,
+    "types": ["node"]
+  },
+  "include": ["scripts/*.mts", "reference/*.mts"],
+  "exclude": ["node_modules", "out", ".next"]
+}

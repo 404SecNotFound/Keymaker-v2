@@ -53,14 +53,14 @@ test("a Go to button inside the docs switches the workspace", async ({ page }) =
 
 test("the command menu reaches the docs, and does not offer them while they are open", async ({ page }) => {
   // Already on Docs: the entry is absent, like "Go to" entries for the current mode.
-  await page.getByRole("button", { name: "Open the command menu" }).click();
+  await page.getByRole("button", { name: "Search commands" }).click();
   const menu = page.getByRole("dialog", { name: "Command menu" });
   await expect(menu).toBeVisible();
   await expect(menu.getByRole("option", { name: /Read the docs/ })).toHaveCount(0);
   await page.keyboard.press("Escape");
 
   await visible(page.getByRole("tab", { name: "Encrypt", exact: true })).click();
-  await page.getByRole("button", { name: "Open the command menu" }).click();
+  await page.getByRole("button", { name: "Search commands" }).click();
   await menu.getByRole("option", { name: /Read the docs/ }).click();
   await expect(page.getByRole("tab", { name: "Docs", exact: true })).toHaveAttribute("aria-selected", "true");
 });

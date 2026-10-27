@@ -218,7 +218,7 @@ await expectReject("a v2 container with no payload is refused", () =>
   const messages = new Set<string>();
   for (const bad of [
     { blob: v2, pw: "wrong" },
-    { blob: (() => { const m = Uint8Array.from(v2); m[m.length - 1] ^= 1; return m; })(), pw: PASSWORD },
+    { blob: (() => { const m = Uint8Array.from(v2); m[m.length - 1]! ^= 1; return m; })(), pw: PASSWORD },
   ]) {
     try {
       await decryptData(toArrayBuffer(bad.blob), bad.pw, null);
@@ -469,7 +469,10 @@ check(
   const oversized = new Uint8Array(MAX_CONTAINER_SIZE + 1);
   let message = "";
   try {
-    await encryptData(oversized.buffer as ArrayBuffer, PASSWORD, null);
+    await encryptData(oversized.buffer as ArrayBuffer, PASSWORD, null, {
+      kdf: FAST,
+      cipher: CipherId.AES_256_GCM,
+    });
     message = "(no error thrown)";
   } catch (e) {
     message = e instanceof Error ? e.message : String(e);

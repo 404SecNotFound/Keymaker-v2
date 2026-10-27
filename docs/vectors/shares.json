@@ -1,0 +1,50 @@
+{
+  "family": "shares",
+  "format": 1,
+  "vectors": [
+    {
+      "id": "shamir-3-of-5",
+      "note": "v2 \u00a74.6. Any three of the five shares reconstruct secret; the k lowest-indexed are the ones a reader uses.",
+      "secret": "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283",
+      "k": 3,
+      "n": 5,
+      "coefficients": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f",
+      "slot_salt": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+      "set_id_v1": "21f2097e",
+      "set_id_v2": "21f2097e1d1107bdf7c15732669d7476",
+      "set_code": "47S0-JZGX",
+      "shares": [
+        {
+          "index": 1,
+          "value": "4445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5fa0a1a2a3",
+          "kmshare1": "KMSHARE1:47S0-JZG3-0524-AHJ7-914M-MJTC-9N74-YM2H-A99N-8NAP-AXC5-JPJV-BHEN-WQX0-M6HA-7G12-HA90",
+          "kmshare2": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-2H25-8S3M-GJAA-9D64-TKJF-A18N-4MTM-ANB5-EP2S-B9DN-RQAY-BYGA-38N3-F0FS-KDDD-Y4V6-CA7X-GTMW-0C05-ZM"
+        },
+        {
+          "index": 2,
+          "value": "e4e3eaedf0f7fef9dcdbd2d5d8dfd6d194939a9d80878e89acaba2a5484f4641",
+          "kmshare1": "KMSHARE1:47S0-JZG3-0BJE-7TQD-Y3VZ-XYEW-VF9D-BP6Z-TV8S-94WT-KP08-F3M9-NJNT-59A8-9X34-21MR-MQKG",
+          "kmshare2": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-5S73-XBPZ-1XZY-Z7ED-QMPN-V3FX-DMCM-JED9-V047-HT4T-SAX2-MN44-YHJ1-CCMS-5345-8E5F-780S-MHXA-EHVP-SR"
+        },
+        {
+          "index": 3,
+          "value": "c4c3cacdd0d7ded9fcfbf2f5f8fff6f1b4b3babda0a7aea98c8b8285686f6661",
+          "kmshare1": "KMSHARE1:47S0-JZG3-0F2C-7JPD-T3BX-XPFW-ZFSF-BY7Z-YVRV-9CXT-QPGA-FBN9-HJ5R-51B8-DXK6-27M2-ZSRG",
+          "kmshare2": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-7H63-SB6X-1NYY-V7YF-QWQN-Z3ZZ-DWDM-PEXB-V857-NTMR-S2W2-GNM6-YSK1-ER46-JC8V-YFKR-KX2W-6NMH-KWG1-9W"
+        },
+        {
+          "index": 4,
+          "value": "5247786d0e1b2431faefd0c5b6a39c89190c332645506f7ab1a49b8e1d083722",
+          "kmshare1": "KMSHARE1:47S0-JZG3-0H94-EY3D-1RDJ-8CFT-XZ8C-BDN3-KJ4H-J31K-4S2N-0VVT-P6J9-Q3GX-10VJ-475M-3ER0",
+          "kmshare2": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-8MJ7-F1PG-W6S4-67XE-ZM65-PTHS-S28S-1GSJ-CHAG-DXXB-394V-HREG-GDS2-2DF3-69Q3-C437-Y16A-KD43-CCWZ-7W"
+        },
+        {
+          "index": 5,
+          "value": "7267584d2e3b0411dacff0e59683bca9392c130665704f5a9184bbae3d281702",
+          "kmshare1": "KMSHARE1:47S0-JZG3-0NS6-EP2D-5RXG-84ET-SZRE-B5M3-QJMK-JB0K-0SJQ-0KTT-J62B-QBHX-50BG-5XT1-5DXG",
+          "kmshare2": "KMSHARE2:47S0-JZGX-243V-VXY1-AWS6-D7BM-ER1G-AWK7-B16J-WER4-27DC-ZW75-JT1V-SA9S-5G9G-CSBG-9XD9-315V-NRYJ-G5R2-P0ZH-7FME-TCDA-5WC1-HS6T-PRY4-50"
+        }
+      ]
+    }
+  ]
+}

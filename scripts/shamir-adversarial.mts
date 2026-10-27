@@ -43,7 +43,15 @@ import {
   combineShares,
   decodeShare,
   encodeShare,
+  packShare,
+  packShareV2,
+  encodeShareV2,
+  decodeShareAny,
+  b32Encode,
   shareSetId,
+  shareSetIdV2,
+  SHARE_PREFIX,
+  SHARE2_PREFIX,
   SHARE_LEN,
   SHARE_VALUE_LEN,
 } from "../src/lib/keym-v2-shamir.ts";
@@ -174,6 +182,125 @@ async function main(): Promise<void> {
     combined !== null && !Buffer.from(combined).equals(Buffer.from(SECRET)),
     "and reconstruct something that is not the real share secret, leaving the slot AEAD to refuse it"
   );
+
+  // ---- 2b. The same share supplied twice counts once (§6 as amended) ----
+  // A strip pasted or scanned twice used to fail a set that held k genuine
+  // shares. The repeat is dropped as a decoded record, so two spellings of one
+  // strip are one share; a different record at a repeated index is still a
+  // refusal, and a repeat never stands in for a missing share.
+  console.log("\nThe same share supplied twice counts once:");
+  const dupSalt = new Uint8Array(32).fill(0x44);
+  const dupSetId = await shareSetId(dupSalt);
+  const dupTexts = await Promise.all(
+    shamirSplit(SECRET, 3, 5).map(({ index, value }) =>
+      encodeShare({ setId: dupSetId, threshold: 3, index, value })
+    )
+  );
+  const opensWith = async (texts: string[]): Promise<boolean> => {
+    try {
+      return Buffer.from(await combineShares(texts, dupSetId)).equals(Buffer.from(SECRET));
+    } catch {
+      return false;
+    }
+  };
+  const [d1, d2, d3] = dupTexts as [string, string, string];
+  check(await opensWith([d1, d1, d2, d3]), "k genuine shares with one repeated did not open");
+  check(
+    await opensWith([d1, d1.toLowerCase().replace(/-/g, " "), d2, d3]),
+    "one share in two spellings was counted as two"
+  );
+  // Refused, not merely wrong: interpolating fewer than k points returns a
+  // value without complaint, so "did not open" alone would pass a reader that
+  // counted the repeat toward k and handed back garbage.
+  const refused = async (texts: string[]): Promise<boolean> => {
+    try {
+      await combineShares(texts, dupSetId);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  check(await refused([d1, d1, d2]), "a repeated share stood in for a missing one");
+  const otherAtOne = await encodeShare({ setId: dupSetId, threshold: 3, index: 1, value: new Uint8Array(32) });
+  check(await refused([d1, otherAtOne, d2, d3]), "two different shares at one index were accepted");
+  check(await refused([d2, d3, d1, otherAtOne]), "two different shares at one index were accepted, the other first");
+
+  // A repeat is an identical record. A copy of share 1 that differs only in k,
+  // or only in its set id, carries a valid checksum and the same value, so only
+  // the comparison of all four fields refuses it. In both orders, because a
+  // reader that kept whichever came first would pass one of them by luck.
+  const s1 = await decodeShare(d1);
+  const nearK = await encodeShare({ ...s1, threshold: 4 });
+  const nearSet = await encodeShare({ ...s1, setId: new Uint8Array(4).fill(0x55) });
+  for (const [what, near] of [["k", nearK], ["set id", nearSet]] as const) {
+    check(await refused([d1, near, d2, d3]), `a copy of share 1 with only its ${what} changed, after it, was accepted`);
+    check(await refused([near, d1, d2, d3]), `a copy of share 1 with only its ${what} changed, before it, was accepted`);
+  }
+
+  // §6 as amended: each share is checked on its own before a repeat is dropped,
+  // so a damaged copy is refused as damaged and never dropped as a repeat.
+  const B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+  const d1Flat = d1.replace(/-/g, "");
+  const padded = d1Flat.slice(0, -1) + B32[B32.indexOf(d1Flat.slice(-1)) | 1];
+  const record = await packShare(s1);
+  record[record.length - 1]! ^= 1;
+  const badChecksum = SHARE_PREFIX + b32Encode(record);
+  for (const [what, damaged] of [["non-zero padding bits", padded], ["a wrong checksum", badChecksum]] as const) {
+    check(await refused([d1, damaged, d2, d3]), `a copy of share 1 with ${what}, after it, was accepted`);
+    check(await refused([damaged, d1, d2, d3]), `a copy of share 1 with ${what}, before it, was accepted`);
+  }
+
+  // A copy that differs only in its index is a different share at an index
+  // nobody supplied: three distinct points, interpolated. Dropping it as a
+  // repeat would leave two and refuse a set the format accepts.
+  const moved = await encodeShare({ ...s1, index: 4 });
+  const s2 = await decodeShare(d2);
+  let movedResult: Uint8Array | null = null;
+  try {
+    movedResult = await combineShares([d1, moved, d2], dupSetId);
+  } catch {
+    movedResult = null;
+  }
+  const movedWant = shamirCombine([
+    { index: 1, value: s1.value },
+    { index: 2, value: s2.value },
+    { index: 4, value: s1.value },
+  ]);
+  check(
+    movedResult !== null && Buffer.from(movedResult).equals(Buffer.from(movedWant)),
+    "a copy of share 1 with only its index changed was not treated as a different share"
+  );
+
+  // The same for KMSHARE2, whose set id is sixteen bytes. A comparison of the
+  // first four (the v1 width) would take a copy differing past them for a
+  // repeat, and a v2 copy with a bad checksum must be refused like a v1 one.
+  const v2Id = await shareSetIdV2(dupSalt);
+  const v2Texts = await Promise.all(
+    shamirSplit(SECRET, 3, 5).map(({ index, value }) =>
+      encodeShareV2({ setId: v2Id, threshold: 3, index, value })
+    )
+  );
+  const [e1, e2, e3] = v2Texts as [string, string, string];
+  const e1Share = { setId: v2Id, threshold: 3, index: 1, value: (await decodeShareAny(e1)).value };
+  const lateId = v2Id.slice();
+  lateId[15]! ^= 1;
+  const v2Near = await encodeShareV2({ ...e1Share, setId: lateId });
+  const v2Record = await packShareV2(e1Share);
+  v2Record[v2Record.length - 1]! ^= 1;
+  const v2BadChecksum = SHARE2_PREFIX + b32Encode(v2Record);
+  const refusedV2 = async (texts: string[]): Promise<boolean> => {
+    try {
+      await combineShares(texts, v2Id);
+      return false;
+    } catch {
+      return true;
+    }
+  };
+  check(!(await refusedV2([e1, e1, e2, e3])), "a KMSHARE2 share supplied twice was refused");
+  for (const [what, copy] of [["its set id changed past byte 4", v2Near], ["a wrong checksum", v2BadChecksum]] as const) {
+    check(await refusedV2([e1, copy, e2, e3]), `a KMSHARE2 copy of share 1 with ${what}, after it, was accepted`);
+    check(await refusedV2([copy, e1, e2, e3]), `a KMSHARE2 copy of share 1 with ${what}, before it, was accepted`);
+  }
 
   // ---- 3. What share_set_id is actually worth against accident ----
   // Four bytes, so honest sets collide on a birthday schedule. Searched rather
