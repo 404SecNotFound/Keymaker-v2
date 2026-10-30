@@ -72,6 +72,14 @@ updates:
     directory: /reference
     schedule:
       interval: weekly
+    ignore:
+      # pycparser 3.12 declares Requires-Python >=3.11, and RECOVERY.md promises
+      # the recovery kit runs on Python 3.10 (the floor the conformance
+      # workflow's 3.10 job enforces). pip on 3.10 cannot install it, so PR
+      # #279 could never pass. pycparser is pulled in by cffi; 3.11 stays.
+      # Remove this when the documented floor moves to 3.11.
+      - dependency-name: pycparser
+        versions: [">=3.12"]
 
   # Keep the SHA-pinned GitHub Actions current. Dependabot updates both the
   # pinned commit SHA and the trailing version comment.
