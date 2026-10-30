@@ -61,3 +61,4 @@ public/recovery/
 # artifacts, not project content.
 re-fresh-*.md
 probe-*.mjs
+graphify-out/cache/
