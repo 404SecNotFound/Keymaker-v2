@@ -61,3 +61,7 @@ public/recovery/
 # artifacts, not project content.
 re-fresh-*.md
 probe-*.mjs
+# graphify: its cache, and the two files that hold this machine's paths
+graphify-out/cache/
+graphify-out/.graphify_root
+graphify-out/.graphify_python
