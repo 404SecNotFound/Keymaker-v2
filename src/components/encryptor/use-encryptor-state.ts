@@ -358,6 +358,11 @@ export function useEncryptorState() {
         // while this page has focus the palette wins, which is the trade
         // every ⌘K app makes.
         e.preventDefault();
+        // The one-time shares dialog refuses Escape and outside clicks because
+        // closing it destroys the only copy. The palette's mode commands reset
+        // the form, which drops the shares the same way, so it stays shut
+        // while they are on screen.
+        if (issuedSharesRef.current !== null) return;
         setIsCommandBarOpen((open) => !open);
       }
     };

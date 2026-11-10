@@ -292,6 +292,24 @@ test.describe("issued shares survive what they must", () => {
     ).toBeVisible();
   });
 
+  /**
+   * The dialog refuses Escape and outside clicks, since closing it destroys
+   * the only copy of the shares. Ctrl+K was a way round both: the palette
+   * opened over the dialog and "Go to Decrypt" reset the form, shares
+   * included, with no confirmation.
+   */
+  test("Ctrl+K does not open the command palette over issued shares", async ({ page }) => {
+    await issueShares(page);
+    const strips = page.getByText(/Save these 3 shares now/);
+
+    await page.keyboard.press("Control+k");
+    await expect(
+      page.getByPlaceholder("Type a command…"),
+      "the palette opened over the one-time shares dialog"
+    ).toHaveCount(0);
+    await expect(strips, "the shares did not survive the shortcut").toBeVisible();
+  });
+
   test("Wipe now still destroys them, because that is a person deciding", async ({ page }) => {
     // The control on the test above. Sparing them from the timer must not
     // spare them from the panic button, or the button stops meaning anything.
