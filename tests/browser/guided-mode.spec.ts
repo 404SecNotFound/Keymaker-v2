@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { visible, useTextMode } from "./helpers";
+import { visible, useTextMode, STRONG_PASSWORD } from "./helpers";
 
 /**
  * Guided mode: the Encrypt form, one step at a time.
@@ -107,5 +107,84 @@ test.describe("guided mode", () => {
     await next.click();
     await expect(page.getByTestId("guide-heading")).toContainText("Check it, then encrypt");
     await expect(visible(page.getByRole("button", { name: /^Encrypt Text$/ }))).toBeVisible();
+  });
+
+  /**
+   * A sealed file is downloaded as it is written and nothing of it stays in
+   * the tab. The Save step used to tell that person to download it or print
+   * the paper vault, on a screen with neither button.
+   */
+  test("after a file is sealed, the Save step says it was downloaded", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByTestId("guide-heading")).toBeVisible();
+    await page.locator("#encrypt-file").setInputFiles({
+      name: "note.txt",
+      mimeType: "text/plain",
+      buffer: Buffer.from("a file to protect"),
+    });
+    await visible(page.getByRole("button", { name: /^Next$/ })).click();
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Next$/ })).click();
+    await expect(page.getByTestId("guide-review")).toContainText("note.txt");
+    const download = page.waitForEvent("download");
+    await visible(page.getByRole("button", { name: /^Encrypt File$/ })).click();
+    await download;
+
+    const heading = page.getByTestId("guide-heading");
+    await expect(heading).toContainText("Save your backup", { timeout: 90_000 });
+    await expect(
+      heading,
+      "the Save step asked for a download that had already happened"
+    ).toContainText("was downloaded as it was sealed");
+    await expect(heading).not.toContainText("print the paper vault");
+    await expect(visible(page.getByRole("button", { name: /^Next$/ }))).toBeEnabled();
+  });
+
+  test("a seed phrase is named on the review step, and Back from a made backup is not a dead end", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByTestId("guide-heading")).toBeVisible();
+    await visible(page.getByRole("button", { name: "Seed phrase", exact: true })).click();
+    const words = "legal winner thank year wave sausage worth useful legal winner thank yellow".split(" ");
+    for (const [i, word] of words.entries()) {
+      await visible(page.getByRole("combobox", { name: `Word ${i + 1}`, exact: true })).fill(word);
+    }
+    await visible(page.getByRole("button", { name: /^Next$/ })).click();
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Next$/ })).click();
+    await expect(
+      page.getByTestId("guide-review"),
+      "the review step called a seed phrase text"
+    ).toContainText("A 12-word seed phrase");
+
+    await visible(page.getByRole("button", { name: /^Encrypt Text$/ })).click();
+    const heading = page.getByTestId("guide-heading");
+    await expect(heading).toContainText("Save your backup", { timeout: 90_000 });
+
+    // Back shows the review step again, with a backup already made. The only
+    // way on used to be sealing a second time.
+    await visible(page.getByRole("button", { name: /^Back$/ })).click();
+    await expect(heading).toContainText("Check it, then encrypt");
+    const next = visible(page.getByRole("button", { name: /^Next$/ }));
+    await expect(next, "Back from a made backup left no way forward").toBeVisible();
+    await next.click();
+    await expect(heading).toContainText("Save your backup");
+  });
+
+  test("emptying the form on a later step starts the guide again", async ({ page }) => {
+    await page.goto("/");
+    await expect(page.getByTestId("guide-heading")).toBeVisible();
+    await useTextMode(page);
+    await visible(page.getByPlaceholder("Enter text to encrypt")).fill("a private note");
+    await visible(page.getByRole("button", { name: /^Next$/ })).click();
+    await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+    await visible(page.getByRole("button", { name: /^Next$/ })).click();
+    await expect(page.getByTestId("guide-heading")).toContainText("Check it, then encrypt");
+
+    // The shortcut above the form switches to File and clears the note.
+    await page.getByTestId("door-file").click();
+    await expect(
+      page.getByTestId("guide-heading"),
+      "the guide stayed on the review step with nothing to protect"
+    ).toContainText("Choose what to protect");
   });
 });

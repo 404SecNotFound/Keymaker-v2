@@ -14,13 +14,14 @@ Continuing work in the `404SecNotFound/Keymaker-v2` repository, on branch `claud
 - **Owner decisions made this session.**
   - Keep the current visual design. Three redesign attempts were rejected, including the app font swap and a serif look. Do not restyle.
   - Add a guided workflow, on by default for new visitors, with an on/off switch, covering how to use the whole app.
-- **CI.** Green on `5fb7d22`. On `20d42eb` it was still running when this note was written. Not confirmed.
+- **CI.** The `ci` job failed on `20d42eb` and `26d0208` at the palette audit, which opened the app as a new visitor and met the guide. Fixed in the next commit. The palette and icon audits now scan the guide, then switch it off.
+- **Guide walked by hand** with a file, a seed phrase and recovery shares. Four gaps found and fixed, each with a test and a control. The Save step after a file, the seed phrase named on review, Next after Back from a made backup, and the guide starting again when the form is emptied.
 - **Nothing is merged.** The owner merges. Never force-push.
 
 ## Next steps
 
-1. Check CI on the head of #291. Fix anything this branch caused. The Playwright config now runs the suite as a visitor with the guide off, for both `127.0.0.1:4321` and `localhost:4321`. A spec that serves the app on another port is a new visitor there and may need the same flag.
-2. Exercise the guide by hand with File and Seed phrase input, and with recovery shares. Only a text note with a generated passphrase was walked through.
+1. Done. See CI above. Confirm the head is green.
+2. Done. See above. Not walked by hand: the passkey path, the paper vault print, and the Decrypt guide with shares pasted.
 3. Ask the owner to read the four how-to boxes in `guide.tsx` for accuracy, Tools and Audio first. The text was written from the page descriptions and code.
 4. Update the description of #291 to cover the guide, or split the guide into its own pull request if the owner says so. Splitting needs permission to push a second branch.
 5. Decide with the owner whether the generated-password rule should also apply with the guide off. With the guide off, "Random" then "Encrypt" still seals behind an unseen password (review finding 2.1).

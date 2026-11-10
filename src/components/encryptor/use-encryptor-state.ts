@@ -3188,14 +3188,24 @@ export function useEncryptorState() {
   // Guided mode follows the backup: sealing moves on to saving, and a form
   // that no longer holds a backup cannot be on a screen about one.
   const backupExists = workflow.phase === "created";
+  // The same test the Content step uses. A shortcut above the form, a wipe or
+  // the idle lock can empty the form while a later screen is showing.
+  const guideHasContent = (inputType === 'file' ? !!file : !!textSecret) && !seedIncomplete;
   useEffect(() => {
     if (!guided || mode !== "encrypt") return;
     setGuideScreen((screen) => {
       if (backupExists && screen === "review") return "saved-copy";
       if (!backupExists && (screen === "saved-copy" || screen === "recovery")) return "content";
+      // Nothing to protect and no backup: the password and review screens
+      // have nothing to be about, so the guide starts again. Not while a
+      // seal is running, which clears the content just before the backup
+      // exists.
+      if (!backupExists && !guideHasContent && !isLoading && (screen === "access" || screen === "review")) {
+        return "content";
+      }
       return screen;
     });
-  }, [guided, backupExists, mode]);
+  }, [guided, backupExists, mode, guideHasContent, isLoading]);
   // Each page's guide starts at its first step.
   useEffect(() => {
     setGuideScreen("content");
@@ -3555,7 +3565,7 @@ export function useEncryptorState() {
     password, setPassword,
     generated, setGenerated,
     showPassword, setShowPassword,
-    guided, setGuided, guideScreen, setGuideScreen, generatedSeen,
+    guided, setGuided, guideScreen, setGuideScreen, generatedSeen, backupExists,
     showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
     formatDetail, setFormatDetail,

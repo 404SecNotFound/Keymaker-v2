@@ -37,6 +37,10 @@ const HELP: Record<GuideScreen, string> = {
   recovery: "A backup is only useful if it opens. Check the copy you saved before you rely on it.",
 };
 
+/** The Save step after a file was sealed: it has already been downloaded. */
+const HELP_SAVED_FILE =
+  "The encrypted file was downloaded as it was sealed. Find it in your downloads and keep it somewhere safe. Nothing of it is kept in this tab.";
+
 const TITLE_DECRYPT: Partial<Record<GuideScreen, string>> = {
   content: "Load the backup",
   access: "Say how it opens",
@@ -113,11 +117,16 @@ export function GuidePageIntro({ page }: { page: string }) {
 
 /** The heading above the current screen's part of the form. */
 export function GuideHeading() {
-  const { guideScreen, mode } = useEncryptorContext();
+  const { guideScreen, mode, receipt } = useEncryptorContext();
   const screens = screensFor(mode);
   const position = screens.indexOf(guideScreen) + 1;
   const title = (mode === "decrypt" && TITLE_DECRYPT[guideScreen]) || TITLE[guideScreen];
-  const help = (mode === "decrypt" && HELP_DECRYPT[guideScreen]) || HELP[guideScreen];
+  // A sealed file is downloaded as it is written and none of it is kept in
+  // the tab, so there is nothing left here to download or print.
+  const downloadedAlready = mode === "encrypt" && guideScreen === "saved-copy" && receipt !== null && !receipt.onScreen;
+  const help = downloadedAlready
+    ? HELP_SAVED_FILE
+    : (mode === "decrypt" && HELP_DECRYPT[guideScreen]) || HELP[guideScreen];
   // A new screen starts at its heading. The step before may have left the
   // page scrolled down to a button, and the next task would open off screen.
   // Focus moves with it, so a screen reader announces the new step.
@@ -144,15 +153,17 @@ export function GuideHeading() {
 
 /** What the review screen shows above the Encrypt button. */
 export function GuideReview() {
-  const { inputType, file, textSecret } = useEncryptorContext();
+  const { inputType, file, textSecret, seedMode, seedWords } = useEncryptorContext();
   const what =
     inputType === "file"
       ? file
         ? file.name
         : "No file chosen yet"
-      : textSecret
-        ? "The text you entered"
-        : "Nothing entered yet";
+      : !textSecret
+        ? "Nothing entered yet"
+        : seedMode
+          ? `A ${seedWords.length}-word seed phrase`
+          : "The text you entered";
   return (
     <p data-testid="guide-review" className="rounded-xl border border-border px-4 py-3 text-[12.5px] leading-snug text-muted-foreground">
       Protecting: <span className="text-foreground">{what}</span>
@@ -185,7 +196,7 @@ export function GuideRecovery() {
 
 /** Back and Next, and the reason when Next is not available yet. */
 export function GuideNav() {
-  const { guideScreen, setGuideScreen, steps, generated, generatedSeen, isLoading, mode, inputType, file, textSecret } =
+  const { guideScreen, setGuideScreen, steps, generated, generatedSeen, isLoading, mode, inputType, file, textSecret, backupExists } =
     useEncryptorContext();
   const screens = screensFor(mode);
   const index = screens.indexOf(guideScreen);
@@ -209,8 +220,10 @@ export function GuideNav() {
   }
 
   // Encrypt is the way forward from the review screen, and the last screen
-  // has nowhere further to go.
-  const hasNext = guideScreen !== "review" && index < screens.length - 1;
+  // has nowhere further to go. Someone who came Back to review from a backup
+  // that is already made needs a way forward that is not sealing it again.
+  const encryptIsNext = guideScreen === "review" && !(mode === "encrypt" && backupExists);
+  const hasNext = !encryptIsNext && index < screens.length - 1;
 
   return (
     <div className="km-guide-nav" data-testid="guide-nav">
