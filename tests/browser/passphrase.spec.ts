@@ -86,12 +86,37 @@ test("a generated passphrase can encrypt and decrypt", async ({ page }) => {
   await useTextMode(page);
 
   const phrase = await generatePassphrase(page);
+  // Encrypt is held until a generated password has been shown.
+  await visible(page.locator('button:has-text("Show")')).click();
   const secret = "seed phrase behind a generated passphrase";
 
   const container = await encryptText(page, secret, phrase);
   expect(container.startsWith("keym2:")).toBe(true);
 
   expect(await decryptText(page, container, phrase)).toBe(secret);
+});
+
+/**
+ * Review of 10 November, 2.1. A generated password lands in a masked field
+ * and is cleared once the backup is sealed. Encrypt used to be available
+ * straight away, so a person who never pressed Show sealed a backup behind a
+ * password nobody had seen.
+ */
+test("Encrypt is held until a generated password has been shown", async ({ page }) => {
+  await page.goto("/");
+  await useTextMode(page);
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill("a private note");
+  for (const kind of ["Random", "Passphrase"]) {
+    await visible(page.getByRole("button", { name: kind, exact: true })).click();
+    const encrypt = visible(page.getByRole("button", { name: /^Encrypt Text$/ }));
+    await expect(encrypt, `Encrypt was available with an unseen ${kind} password`).toBeDisabled();
+    await expect(visible(page.getByTestId("generated-unseen"))).toContainText("Press Show");
+
+    await visible(page.locator('button:has-text("Show")')).click();
+    await expect(encrypt).toBeEnabled();
+    await expect(page.getByTestId("generated-unseen")).toHaveCount(0);
+    await visible(page.locator('button:has-text("Hide")')).click();
+  }
 });
 
 test("editing a generated passphrase withdraws the entropy claim", async ({ page }) => {

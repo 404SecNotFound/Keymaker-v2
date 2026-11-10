@@ -57,6 +57,8 @@ try {
     mimeType: "text/plain",
     buffer: Buffer.from("Public demonstration content for the workspace preview.\n"),
   });
+  // A generated password has to be shown before Encrypt is available.
+  await page.getByRole("button", { name: "Show password", exact: true }).click();
   await expect(page.getByRole("button", { name: "Encrypt File", exact: true })).toBeEnabled();
   await capture("keymaker-graphite-ready.png");
   await page.getByRole("button", { name: /^Advanced/ }).click();
