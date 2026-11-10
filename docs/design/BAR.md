@@ -10,6 +10,9 @@ layout. Reference: [Linear on Refero](https://styles.refero.design/style/90ce588
   have distinct destinations. Workspace offers task entry points, not analytics.
 - One controlled form, divided into Content and Protection. No duplicate secret
   fields at responsive breakpoints, no unnecessary Next-button wizard.
+  Amended 2026-11-10 at the owner's request. The one form stays the default,
+  and an optional guided mode shows that same form one step at a time with
+  Back and Next. It adds no second set of fields.
 - Container preview remains alongside the form on desktop and below on mobile.
   Its blue/ember diagram describes actual header dimensions, not random bytes.
 - Neutral Graphite grounds and the approved Spline Sans / JetBrains Mono

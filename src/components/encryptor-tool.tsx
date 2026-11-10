@@ -27,7 +27,7 @@ import { DiceEntropyTool } from "@/components/dice-entropy-tool";
 import { DocsGuide } from "@/components/docs-guide";
 import { AudioStegoTool } from "@/components/audio-stego-tool";
 import { PaperVault } from "@/components/paper-vault";
-import { Search, Lock, Heart, ScrollText, LifeBuoy, ShieldAlert } from "lucide-react";
+import { Search, Lock, Heart, ScrollText, LifeBuoy, ShieldAlert, Compass } from "lucide-react";
 import { KEYM2_VERSION } from "@/lib/keym-v2";
 import { EncryptorContext } from "./encryptor/context";
 import { useEncryptorState } from "./encryptor/use-encryptor-state";
@@ -48,7 +48,7 @@ export function EncryptorTool() {
     pageCopy, activePage, navigateWorkspace, currentDoor, openDoor,
     openInheritance, inspectorPlan, sealedPeek, decryptPeek, formatDetail, setFormatDetail,
     commandBarCommands, paperVault, cameraOpen, setCameraOpen,
-    handleQrImageFiles, setIsRecoveryOpen, steps,
+    handleQrImageFiles, setIsRecoveryOpen, steps, guided, setGuided,
   } = state;
 
   return (
@@ -136,6 +136,21 @@ export function EncryptorTool() {
                     <Icon className="h-4 w-4" aria-hidden="true" />{title}
                   </button>
                 ))}
+                {/* Guided mode. Beside the doors because it answers the same
+                    question, how to start, for someone who would rather be
+                    walked through the form than read all of it at once. */}
+                {mode === "encrypt" && (
+                  <button
+                    type="button"
+                    onClick={() => setGuided(!guided)}
+                    aria-pressed={guided}
+                    data-testid="guide-toggle"
+                    className="km-guide-toggle"
+                  >
+                    <Compass className="h-4 w-4" aria-hidden="true" />
+                    Guide me step by step
+                  </button>
+                )}
               </div>
             )}
             <div

@@ -144,6 +144,10 @@ import {
  * return value is provided to the tab modules through `EncryptorContext`;
  * see `context.tsx`.
  */
+/** The screens of guided mode, in order. */
+export type GuideScreen = "content" | "access" | "review" | "saved-copy" | "recovery";
+export const GUIDE_SCREENS: GuideScreen[] = ["content", "access", "review", "saved-copy", "recovery"];
+
 export function useEncryptorState() {
   const [mode, setMode] = useState<Mode>("encrypt");
   /** The last mode that owns a form (anything but Tools), so a return from a
@@ -187,6 +191,25 @@ export function useEncryptorState() {
   // Gates the entropy figure, which is meaningless for a typed password.
   const [generated, setGenerated] = useState<GeneratedSecret | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  /**
+   * Guided mode. The same form, shown one step at a time with Back and Next.
+   * Off by default, so the single-page form stays what a visitor gets unless
+   * they ask to be walked through it. `guideScreen` is which part of the form
+   * is on screen; Review and Create share a screen, since pressing Encrypt is
+   * the whole of Create.
+   */
+  const [guided, setGuided] = useState(false);
+  const [guideScreen, setGuideScreen] = useState<GuideScreen>("content");
+  /**
+   * Whether a generated password has been shown since it was made. Guided
+   * mode does not let the owner past the password step until it has, because
+   * the field is masked and the password is cleared once the backup is sealed.
+   */
+  const [generatedSeen, setGeneratedSeen] = useState(false);
+  useEffect(() => {
+    if (!generated) setGeneratedSeen(false);
+    else if (showPassword) setGeneratedSeen(true);
+  }, [generated, showPassword]);
   const [showTextSecret, setShowTextSecret] = useState(false);
   // Advanced encryption options (Encrypt tab only — the KEYM container is
   // self-describing, so decryption needs no knobs).
@@ -3133,6 +3156,18 @@ export function useEncryptorState() {
     backupDiffers, receipt, exportsStarted, printoutCoverage, rehearsal]);
   const accessRule = useMemo(() => describeAccessRule(policy.waysIn.map(describeWayIn)), [policy]);
 
+  // Guided mode follows the backup: sealing moves on to saving, and a form
+  // that no longer holds a backup cannot be on a screen about one.
+  const backupExists = workflow.phase === "created";
+  useEffect(() => {
+    if (!guided) return;
+    setGuideScreen((screen) => {
+      if (backupExists && screen === "review") return "saved-copy";
+      if (!backupExists && (screen === "saved-copy" || screen === "recovery")) return "content";
+      return screen;
+    });
+  }, [guided, backupExists]);
+
   const rehearseFromPaper = useCallback(() => {
     const armored = createdArmor;
     if (!armored.startsWith("keym2:")) return;
@@ -3487,6 +3522,7 @@ export function useEncryptorState() {
     password, setPassword,
     generated, setGenerated,
     showPassword, setShowPassword,
+    guided, setGuided, guideScreen, setGuideScreen, generatedSeen,
     showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
     formatDetail, setFormatDetail,

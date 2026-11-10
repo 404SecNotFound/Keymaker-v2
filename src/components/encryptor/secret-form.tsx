@@ -71,12 +71,14 @@ import {
   PASSPHRASE_ENTROPY_BITS,
 } from "./shared";
 import { useEncryptorContext } from "./context";
+import { GuideHeading, GuideNav, GuideRecovery, GuideReview } from "./guide";
 import { atDetail } from "@/lib/detail-level";
 
 export function SecretForm({ mode }: { mode: Mode }) {
   const {
     inputType, seedMode, seedWords, bip39, file, setFile, qrScanBusy,
     qrInputRef, shareQrInputRef, textSecret, outputText, password,
+    guided, guideScreen,
     generated, showPassword, setShowPassword, showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
     kdfChoice, setKdfChoice, argon2Available, argonTimeCost, setArgonTimeCost,
@@ -160,7 +162,8 @@ export function SecretForm({ mode }: { mode: Mode }) {
 
 
   return (
-    <div className="km-workform space-y-5">
+    <div className="km-workform space-y-5" data-guided-screen={mode === "encrypt" && guided ? guideScreen : undefined}>
+      {mode === "encrypt" && guided && <GuideHeading />}
       {mode === "encrypt" && inheritanceOpen && (
         <InheritancePlan
           policy={accessPolicy}
@@ -168,7 +171,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
         />
       )}
       <div className="space-y-5">
-        <section className="km-form-section" aria-labelledby={`${mode}-content-title`}>
+        <section className="km-form-section" data-guide="content" aria-labelledby={`${mode}-content-title`}>
         <div className="km-section-heading">
           <span className="km-section-number">01</span>
           <h2 id={`${mode}-content-title`}>{mode === "encrypt" ? "Content" : "Encrypted content"}</h2>
@@ -453,7 +456,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
         )}
 
         </section>
-        <section className="km-form-section" aria-labelledby={`${mode}-protection-title`}>
+        <section className="km-form-section" data-guide="access" aria-labelledby={`${mode}-protection-title`}>
         <div className="km-section-heading">
           <span className="km-section-number">02</span>
           <h2 id={`${mode}-protection-title`}>{mode === "encrypt" ? "Protection" : "Unlock method"}</h2>
@@ -1436,6 +1439,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
           role="status"
           aria-labelledby="receipt-title"
           data-testid="seal-receipt"
+          data-guide="saved-copy"
           className="animate-in fade-in-0 slide-in-from-bottom-2 space-y-3 rounded-xl border border-border p-4 duration-500"
         >
           <div className="flex items-center gap-2">
@@ -1504,7 +1508,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
       )}
 
       {outputText && (
-        <div className="animate-in fade-in-50 space-y-2">
+        <div className="animate-in fade-in-50 space-y-2" data-guide={mode === "encrypt" ? "saved-copy" : undefined}>
           <div className="flex items-center justify-between gap-3">
             <Label htmlFor="output-text" className="text-[13px] font-medium text-muted-foreground">
               Result
@@ -1720,7 +1724,9 @@ export function SecretForm({ mode }: { mode: Mode }) {
         place the choice can be taught at the moment it means anything.
       */}
       {mode === 'encrypt' && outputText.startsWith('keym2:') && (
-        <SelfExtractExport armored={outputText} formatDetail={formatDetail} />
+        <div data-guide="saved-copy">
+          <SelfExtractExport armored={outputText} formatDetail={formatDetail} />
+        </div>
       )}
 
       {/*
@@ -1797,8 +1803,9 @@ export function SecretForm({ mode }: { mode: Mode }) {
       {/* Section 06: the exact rule, in the receipt's words, before the
           backup exists. Each way in opens it on its own, hence "or"; a way in
           that needs two things says "both needed" inside its own wording. */}
+      {mode === "encrypt" && guided && guideScreen === "review" && <GuideReview />}
       {mode === 'encrypt' && accessRule && (
-        <p data-testid="access-rule" className="mt-3 text-[12.5px] leading-snug text-muted-foreground">
+        <p data-testid="access-rule" data-guide="review" className="mt-3 text-[12.5px] leading-snug text-muted-foreground">
           Opens with: <span className="text-foreground">{accessRule}</span>
         </p>
       )}
@@ -1806,6 +1813,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}
+        data-guide={mode === "encrypt" ? "review" : undefined}
         className="mt-2 h-auto w-full py-3.5 text-[15px] font-medium"
       >
         {isLoading ? (
@@ -1831,6 +1839,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
           variant="ghost"
           onClick={cancelOperation}
           data-testid="cancel-operation"
+          data-guide={mode === "encrypt" ? "review" : undefined}
           className="mt-1 h-auto w-full py-2 text-[13px] text-muted-foreground hover:text-foreground"
         >
           Stop
@@ -1851,6 +1860,9 @@ export function SecretForm({ mode }: { mode: Mode }) {
           {' '}{PASSWORD_POLICY_HINT}
         </p>
       )}
+
+      {mode === "encrypt" && guided && guideScreen === "recovery" && <GuideRecovery />}
+      {mode === "encrypt" && guided && <GuideNav />}
 
       {/*
         Always available while there is something to wipe — the panic button
