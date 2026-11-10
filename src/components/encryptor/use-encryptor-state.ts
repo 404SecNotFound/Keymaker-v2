@@ -3458,6 +3458,11 @@ export function useEncryptorState() {
       setInputType("text");
       setTextSecret(armored);
     }
+    // The passkey control is hidden while shares are in use, so a passkey
+    // choice made earlier on the Decrypt tab would stay set with nothing on
+    // screen to show or undo it, and Verify would be enabled with no strips
+    // and no password.
+    if (withShares) setUsePasskey(false);
     setUseShares(withShares);
     setVerifyOnly(true);
   };
