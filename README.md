@@ -641,6 +641,7 @@ npm run test:csp-egress           # the build refuses a page whose CSP leaves an
 # Release and documentation gates
 npm run test:release-notes        # release notes stay generated from docs/VERIFYING.md
 npm run test:release-recipe       # VERIFYING.md's release rebuild recipe sets what release.yml sets
+npm run test:readme-local-recipe  # the README local-serving recipe puts index.html where its URL points
 npm run test:release-gate         # deploy and release wait for every suite before signing
 npm run test:reproduced-manifest  # the sign job refuses a manifest no other runner reproduced
 npm run test:screenshots          # every README and walkthrough screenshot is one width
