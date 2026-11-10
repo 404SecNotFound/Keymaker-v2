@@ -35,6 +35,7 @@ import {
 } from "../src/lib/keymaker-crypto.ts";
 import { encryptFile as legacyEncryptFile } from "../src/lib/crypto.ts";
 import { PasskeyError } from "../src/lib/webauthn-prf.ts";
+import { dropIgnorable, IGNORABLE_CHARS } from "../src/lib/keym-text.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LEGACY = JSON.parse(readFileSync(join(HERE, "crypto-fixtures.json"), "utf8"));
@@ -708,6 +709,40 @@ async function main() {
     check(
       new Uint8Array(handed).every((b) => b === 0),
       `legacy IBTZ erases the caller's key file (password with ${label})`
+    );
+  }
+
+  // ---- dropIgnorable: same answer as the definition, without the per-character cost ----
+  //
+  // The definition is "remove every IGNORABLE character", written here the
+  // slow, obvious way. The shipped function must agree with it on text that
+  // mixes every ignorable character with ASCII, non-ASCII and astral ones, and
+  // must not cost what it costs: appending a character at a time took about
+  // three seconds on a 20 MB paste. The timing check is relative to the slow
+  // version measured in this same process, so a slow machine slows both.
+  {
+    const naive = (text: string): string => {
+      const drop = new Set(IGNORABLE_CHARS);
+      let out = "";
+      for (const ch of text) if (!drop.has(ch)) out += ch;
+      return out;
+    };
+    const mixed = [...IGNORABLE_CHARS].map((c, i) => `a${c}é${c}${c}\u{1F511}${i}`).join("") + "tail";
+    check(dropIgnorable(mixed) === naive(mixed), "dropIgnorable agrees with the definition on mixed text");
+    check(dropIgnorable("") === "" && dropIgnorable("abc") === "abc", "dropIgnorable leaves clean text alone");
+    check(dropIgnorable(IGNORABLE_CHARS) === "", "dropIgnorable removes every ignorable character");
+
+    const big = ("A".repeat(64) + "\n").repeat(Math.floor((4 * 1024 * 1024) / 65));
+    let t = performance.now();
+    const slow = naive(big);
+    const slowMs = performance.now() - t;
+    t = performance.now();
+    const fast = dropIgnorable(big);
+    const fastMs = performance.now() - t;
+    check(fast === slow, "dropIgnorable agrees with the definition on a 4 MB armor-shaped paste");
+    check(
+      fastMs * 2 < slowMs,
+      `dropIgnorable is at least 2x faster than per-character appending (${fastMs.toFixed(0)} ms against ${slowMs.toFixed(0)} ms)`
     );
   }
 

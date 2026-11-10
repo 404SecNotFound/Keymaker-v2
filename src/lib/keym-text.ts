@@ -30,9 +30,21 @@ export function stripIgnorable(text: string): string {
 
 /** Remove IGNORABLE characters everywhere. */
 export function dropIgnorable(text: string): string {
-  let out = "";
-  for (const ch of text) if (!IGNORABLE.has(ch)) out += ch;
-  return out;
+  // Kept runs are sliced out and joined once. Appending a character at a time
+  // took seconds on a paste of a few megabytes, on the main thread. Every
+  // IGNORABLE character is a single UTF-16 unit, so walking units and walking
+  // code points remove the same things, and a slice never splits a pair.
+  const kept: string[] = [];
+  let runStart = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (IGNORABLE.has(text[i] as string)) {
+      if (i > runStart) kept.push(text.slice(runStart, i));
+      runStart = i + 1;
+    }
+  }
+  if (runStart === 0) return text;
+  if (runStart < text.length) kept.push(text.slice(runStart));
+  return kept.join("");
 }
 
 /**
