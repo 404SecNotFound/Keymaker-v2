@@ -341,6 +341,27 @@
 .km-intents { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
 .km-intents button { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 14px; border: 1px solid var(--color-border); border-radius: 9999px; color: var(--color-action); font-size: 12px; cursor: pointer; }
 .km-intents button[aria-pressed="true"] { background: var(--color-selection); border-color: var(--color-selection-border); color: var(--color-selected); }
+.km-topbar .km-guide-toggle { margin-left: auto; min-height: 32px; }
+.km-guide-state { border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 1px 6px; font-family: var(--font-mono); font-size: 12px; }
+.km-guide-toggle[aria-checked="true"] { border-color: var(--color-selection-border); background: var(--color-selection); color: var(--color-selected); }
+.km-guide-toggle[aria-checked="true"] .km-guide-state { border-color: var(--color-selection-border); color: var(--color-signal); }
+.km-guide-intro { margin-bottom: 20px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-card); padding: 16px 18px; }
+.km-guide-intro h2 { margin-top: 4px; font-size: 15px; font-weight: 500; color: var(--color-heading); }
+.km-guide-intro ol { display: grid; gap: 8px; margin-top: 12px; max-width: 72ch; font-size: 13px; line-height: 1.6; color: var(--color-muted-foreground); }
+.km-guide-intro li { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 10px; align-items: start; }
+.km-guide-intro li > span { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--color-border-strong); border-radius: 9999px; font-family: var(--font-mono); font-size: 12px; color: var(--color-muted-foreground); }
+/* Guided mode. One part of the form on screen at a time: every element that
+   belongs to a step carries data-guide, and the ones that are not the current
+   screen are taken out of the page, and so out of the tab order. */
+.km-workform[data-guided-screen="content"] [data-guide]:not([data-guide="content"]),
+.km-workform[data-guided-screen="access"] [data-guide]:not([data-guide="access"]),
+.km-workform[data-guided-screen="review"] [data-guide]:not([data-guide="review"]),
+.km-workform[data-guided-screen="saved-copy"] [data-guide]:not([data-guide="saved-copy"]),
+.km-workform[data-guided-screen="recovery"] [data-guide]:not([data-guide="recovery"]) { display: none; }
+.km-guide-heading h2 { margin-top: 4px; font-size: 22px; line-height: 1.25; letter-spacing: -.02em; font-weight: 400; color: var(--color-heading); }
+.km-guide-heading > p:last-child { margin-top: 6px; max-width: 60ch; font-size: 13px; line-height: 1.7; color: var(--color-muted-foreground); }
+.km-guide-count { font-family: var(--font-mono); font-size: 12px; color: var(--color-structural); }
+.km-guide-nav { display: grid; gap: 10px; }
 .km-choice-track { border-radius: 9999px; }
 .km-input-choice { display: flex; flex: 1; align-items: center; justify-content: center; gap: 7px; min-width: 0; cursor: pointer; border: 1px solid transparent; border-radius: 9999px; padding: 8px; font-size: 13px; font-weight: 500; color: var(--color-muted-foreground); transition: color 150ms, background-color 150ms, border-color 150ms; }
 .km-input-choice:hover { color: var(--color-foreground); }
@@ -451,7 +472,13 @@
 .km-recovery-reference > * + * { margin-top: 0; }
 .km-utility-panel { max-width: 760px; padding: 24px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-card); }
 .km-app button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
-:where(input, textarea, select, [role="combobox"]):focus-visible { outline-color: var(--color-ring); }
+/* Text fields get the same ring as buttons (DESIGN-SYSTEM.md, "Focus: a
+   visible 2px action-blue ring, offset from the control"). The field classes
+   carry focus-visible:outline-hidden, which removes the outline, and the
+   rule that stood here set only its colour, so a focused field showed a
+   slightly lighter border and nothing else. This rule is outside any layer,
+   so it wins over the utility. */
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]), textarea, select):focus-visible { outline: 2px solid var(--color-ring); outline-offset: 2px; }
 @media (max-width: 480px) {
   .km-input-choice svg { display: none; }
 }

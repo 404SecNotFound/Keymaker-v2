@@ -153,6 +153,8 @@ export default function RootLayout({
                 // a new visitor.
                 var hadController = navigator.serviceWorker.controller !== null;
                 var reloaded = false;
+                // True once this tab's own banner was pressed.
+                var accepted = false;
 
                 function offerUpdate(registration) {
                   if (document.getElementById('sw-update-banner')) return;
@@ -167,6 +169,7 @@ export default function RootLayout({
                     // Nothing swaps until this click. Promoting the waiting
                     // worker triggers controllerchange, which reloads the page
                     // onto the new version.
+                    accepted = true;
                     banner.disabled = true;
                     banner.textContent = 'Updating…';
                     if (registration.waiting) {
@@ -190,6 +193,27 @@ export default function RootLayout({
                 navigator.serviceWorker.addEventListener('controllerchange', function() {
                   if (!hadController) { hadController = true; return; }
                   if (reloaded) return;
+                  // Another tab accepted the update, and this one is showing
+                  // something that exists nowhere else: one-time recovery
+                  // shares, a backup not yet saved, or a job that is running.
+                  // The app marks that on the root element. A reload here
+                  // would destroy it with nobody having asked, so this tab
+                  // says what happened and waits to be told. Its page code is
+                  // already loaded and keeps working. What it gives up until
+                  // it reloads is fetching a part it has not loaded yet while
+                  // offline, which is the smaller loss.
+                  if (!accepted && document.documentElement.hasAttribute('data-keymaker-holding')) {
+                    var held = document.getElementById('sw-update-banner');
+                    if (!held) {
+                      offerUpdate({ waiting: null });
+                      held = document.getElementById('sw-update-banner');
+                    }
+                    if (held) {
+                      held.textContent = 'Keymaker was updated in another tab. Save your work, then tap to reload';
+                      held.onclick = function() { window.location.reload(); };
+                    }
+                    return;
+                  }
                   reloaded = true;
                   window.location.reload();
                 });

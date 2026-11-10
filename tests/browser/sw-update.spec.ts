@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { appPath, BASE_PATH } from "./helpers";
+import { appPath, BASE_PATH, visible, useTextMode, selectCrypto, STRONG_PASSWORD } from "./helpers";
 
 /**
  * Service-worker update semantics.
@@ -233,6 +233,82 @@ test.describe("service worker updates wait for the user", () => {
       await expect(tabB.getByRole("tab", { name: "Encrypt" })).toBeVisible();
 
       // And it is genuinely on the new version: only the new cache remains.
+      await expect.poll(() => cacheNames(tabB)).toEqual([NEW_CACHE]);
+    } finally {
+      await context.close();
+      server.kill();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /**
+   * Review of 10 November, 2.2. R07 above reloads every other tab, which is
+   * right for a tab with nothing in it. A tab showing one-time recovery
+   * shares lost them to a click made somewhere else.
+   */
+  test("a tab showing one-time shares is not reloaded by an update accepted elsewhere", async ({ browser, browserName }) => {
+    test.skip(browserName === "webkit", "service workers are not testable in WebKit here");
+    test.setTimeout(180_000);
+
+    const { dir, server } = await startOwnOrigin();
+    const context = await browser.newContext();
+    // This origin is a new visitor. The test is about the whole form.
+    await context.addInitScript(() => {
+      try {
+        window.localStorage.setItem("keymaker.guided", "off");
+      } catch {}
+    });
+    const countLoads = () => {
+      const n = Number(sessionStorage.getItem("swLoads") || "0") + 1;
+      sessionStorage.setItem("swLoads", String(n));
+    };
+    const loads = (page: Page) => probe(page, () => Number(sessionStorage.getItem("swLoads") || "0"));
+
+    const tabA = await context.newPage();
+    const tabB = await context.newPage();
+    try {
+      await tabA.addInitScript(countLoads);
+      await tabB.addInitScript(countLoads);
+      await tabA.goto(`${ORIGIN}${appPath("/")}`);
+      await tabB.goto(`${ORIGIN}${appPath("/")}`);
+      await expect.poll(() => swState(tabA)).toMatchObject({ controlled: true, active: "activated" });
+      await expect.poll(() => swState(tabB)).toMatchObject({ controlled: true, active: "activated" });
+
+      // Tab B seals a note with a share set and is left showing the shares.
+      await useTextMode(tabB);
+      await selectCrypto(tabB, "pbkdf2", "aes");
+      await visible(tabB.getByLabel("Recovery shares")).click();
+      await visible(tabB.getByPlaceholder("Enter text to encrypt")).fill("shares someone is copying down");
+      await visible(tabB.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+      await visible(tabB.getByRole("button", { name: /^Encrypt Text$/i })).click();
+      const shares = tabB.getByText(/Save these 3 shares now/);
+      await expect(shares).toBeVisible({ timeout: 90_000 });
+
+      deployNextVersion(dir);
+      await tabA.evaluate(async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        await reg?.update();
+      });
+      await expect
+        .poll(() => swState(tabA), { message: "the replacement installs and waits" })
+        .toMatchObject({ waiting: "installed", active: "activated", controlled: true });
+
+      await tabA.locator("#sw-update-banner").click();
+      await expect.poll(() => loads(tabA), { message: "the accepting tab reloads" }).toBe(2);
+
+      // Tab B heard the change and said so, which is the proof its handler
+      // ran. It did not reload, and the shares are still on screen.
+      await expect(
+        tabB.locator("#sw-update-banner"),
+        "the tab holding shares did not say an update happened elsewhere"
+      ).toContainText("updated in another tab", { timeout: 30_000 });
+      expect(await loads(tabB), "an update accepted in another tab reloaded the tab showing shares").toBe(1);
+      await expect(shares, "the one-time shares were destroyed by another tab's update").toBeVisible();
+
+      // Once the shares are saved, the banner reloads onto the new version.
+      await tabB.getByRole("dialog").getByRole("button", { name: "I have saved these shares" }).click();
+      await tabB.locator("#sw-update-banner").click();
+      await expect.poll(() => loads(tabB), { message: "the held tab reloads when asked" }).toBe(2);
       await expect.poll(() => cacheNames(tabB)).toEqual([NEW_CACHE]);
     } finally {
       await context.close();

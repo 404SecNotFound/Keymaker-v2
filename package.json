@@ -45,6 +45,7 @@
     "test:csp-egress": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/csp-egress-gate-test.mjs",
     "test:release-notes": "node scripts/release-notes-test.mjs",
     "test:release-recipe": "node scripts/release-recipe-test.mjs",
+    "test:readme-local-recipe": "node scripts/readme-local-recipe-test.mjs",
     "test:release-gate": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/release-gate-test.mjs",
     "test:reproduced-manifest": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/check-reproduced-manifest-test.mjs",
     "test:verify-recipe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON scripts/verify-recipe-test.mjs",

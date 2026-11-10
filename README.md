@@ -402,11 +402,12 @@ Verifying today says nothing about tomorrow's visit.
 
 **Downloaded-and-verified is the real upgrade**, and it is why releases exist.
 Fetch the tarball, check `SHA256SUMS` against its Sigstore signature, extract,
-and serve the folder locally:
+and serve the folder locally. The archive holds one `keymaker-<tag>/` folder,
+which `--strip-components=1` removes so the app sits where the URL points:
 
 ```bash
 mkdir -p keymaker-local/Keymaker-v2
-tar -xzf keymaker-<tag>.tar.gz -C keymaker-local/Keymaker-v2
+tar -xzf keymaker-<tag>.tar.gz --strip-components=1 -C keymaker-local/Keymaker-v2
 cd keymaker-local && python3 -m http.server 8000
 # then open http://localhost:8000/Keymaker-v2/
 ```
@@ -640,6 +641,7 @@ npm run test:csp-egress           # the build refuses a page whose CSP leaves an
 # Release and documentation gates
 npm run test:release-notes        # release notes stay generated from docs/VERIFYING.md
 npm run test:release-recipe       # VERIFYING.md's release rebuild recipe sets what release.yml sets
+npm run test:readme-local-recipe  # the README local-serving recipe puts index.html where its URL points
 npm run test:release-gate         # deploy and release wait for every suite before signing
 npm run test:reproduced-manifest  # the sign job refuses a manifest no other runner reproduced
 npm run test:screenshots          # every README and walkthrough screenshot is one width

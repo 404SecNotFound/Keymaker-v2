@@ -62,5 +62,50 @@ ok(res && res.data instanceof ArrayBuffer && res.data.byteLength > 0,
 ok(buf.byteLength === 64 && new Uint8Array(buf).every((b) => b === 0),
    "the page's plaintext input buffer is zeroed after a no-worker fallback encrypt");
 
+// ---- The worker path ----
+//
+// Transfer does not erase anything: it moves the bytes into the worker, which
+// then holds the only copy for the life of the page. So the worker has to
+// erase what it was handed, on success and on a refused request alike. This
+// loads the real worker module against a stand-in `self` and calls its message
+// handler directly.
+//
+// The control bites: with `secureErase(req.data)` removed from the worker's
+// `finally`, both buffers below stay non-zero.
+{
+  let handler;
+  const posted = [];
+  globalThis.self = {
+    addEventListener: (type, fn) => { if (type === "message") handler = fn; },
+    postMessage: (msg) => posted.push(msg),
+  };
+  const workerOut = join(mkdtempSync(join(tmpdir(), "cw-")), "crypto-worker.mjs");
+  await esbuild.build({
+    entryPoints: [join(HERE, "..", "src", "lib", "crypto-worker.ts")],
+    bundle: true, format: "esm", platform: "node", outfile: workerOut,
+  });
+  await import(pathToFileURL(workerOut).href);
+  ok(typeof handler === "function", "the worker registered a message handler");
+
+  const fresh = () => Uint8Array.from({ length: 64 }, (_, i) => (i * 7 + 1) & 0xff || 0x5a).buffer;
+
+  const good = { id: 1, op: "encrypt", data: fresh(), password: "correct horse battery staple", keyFile: null, options: OPTIONS };
+  await handler({ data: good });
+  ok(posted[0]?.ok === true && posted[0].data?.byteLength > 0, "the worker produced a container");
+  ok(new Uint8Array(good.data).every((b) => b === 0),
+     "the worker zeroes the plaintext it was handed after a successful encrypt");
+
+  // An encrypt the worker refuses: a passkey beside a password-and-shares slot.
+  const refused = {
+    id: 2, op: "encrypt", data: fresh(), password: "correct horse battery staple", keyFile: null, options: OPTIONS,
+    shamir: { threshold: 2, count: 3, withPassword: true },
+    passkey: { credentialId: new Uint8Array(16), prfSalt: new Uint8Array(32), prfOutput: new Uint8Array(32).fill(7) },
+  };
+  await handler({ data: refused });
+  ok(posted[1]?.ok === false, "the worker refused the contradictory request");
+  ok(new Uint8Array(refused.data).every((b) => b === 0),
+     "the worker zeroes the plaintext it was handed after a refused encrypt");
+}
+
 console.log(failed === 0 ? "\nAll encrypt-input-erase checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

@@ -267,7 +267,7 @@ const server = spawn('node', [join(ROOT, 'scripts/static-server.mjs'), 'out', St
 });
 await new Promise((r) => setTimeout(r, 1200));
 
-const VIEWS = 13;
+const VIEWS = 15;
 const unreadable = [];
 const collect = ({ out, unreadable: bad }) => {
   samples.push(...out);
@@ -280,6 +280,20 @@ const samples = [];
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
+  // The audit arrives as a new visitor, so the guide is on. Its two surfaces,
+  // the step heading with Back and Next and the how-to box on the other
+  // pages, are painted nowhere else, so they are scanned first. The guide is
+  // then switched off, because every view below is about the whole form.
+  const guideToggle = page.getByTestId('guide-toggle').locator('visible=true').first();
+  await page.getByTestId('guide-heading').waitFor({ timeout: 15_000 });
+  collect(await scan(page, 'encrypt · guide'));
+  await page.getByRole('tab', { name: 'Tools' }).locator('visible=true').first().click();
+  await page.getByTestId('guide-intro').waitFor({ timeout: 15_000 });
+  collect(await scan(page, 'tools · guide'));
+  await page.getByRole('tab', { name: 'Encrypt' }).locator('visible=true').first().click();
+  await guideToggle.click();
+  await page.getByTestId('guide-heading').waitFor({ state: 'detached', timeout: 15_000 });
+  await page.waitForTimeout(400);
   collect(await scan(page, 'encrypt'));
 
   // The inspector's sealed status, opened and with its in-place check run:

@@ -81,6 +81,13 @@ const page = await browser.newPage({ viewport: { width: 1440, height: 1050 } });
 
 try {
   await page.goto(BASE, { waitUntil: 'networkidle' });
+  // A new visitor gets the guide. Its icons are scanned, then it is switched
+  // off, because every view below is about the whole form.
+  await page.getByTestId('guide-heading').waitFor({ timeout: 15_000 });
+  icons.push(...(await scan(page, 'encrypt · guide')));
+  await page.getByTestId('guide-toggle').locator('visible=true').first().click();
+  await page.getByTestId('guide-heading').waitFor({ state: 'detached', timeout: 15_000 });
+  await page.waitForTimeout(400);
   icons.push(...(await scan(page, 'encrypt')));
 
   // The inspector's sealed status, opened and with its in-place check run:
@@ -228,5 +235,5 @@ if (badSize.length || badStroke.length) {
 const histogram = [...SIZES.keys()]
   .map((px) => `${icons.filter((i) => i.w === px).length}×${px}px`)
   .join(', ');
-console.log(`icon-audit: ${icons.length} lucide icons across 11 views — ${histogram}\n`);
+console.log(`icon-audit: ${icons.length} lucide icons across 13 views — ${histogram}\n`);
 console.log(`All icons are a size docs/design/DESIGN-SYSTEM.md names, at stroke ${STROKE}.`);

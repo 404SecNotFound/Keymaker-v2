@@ -372,6 +372,12 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     // response — a trailing call would be skipped on most exits, including
     // every failed unlock, which is the case an attacker gets to repeat.
     if (req.op === "encrypt") secureErase(req.passkey?.prfOutput);
+    // The plaintext is transferred in, so this realm holds the only copy, and
+    // nothing downstream erases its plaintext input. Without this the secret
+    // stays in the worker's heap for as long as the worker lives, which is
+    // the life of the page. Same reasoning as above for doing it here: every
+    // exit, including a refused or failed encrypt, passes through.
+    if (req.op === "encrypt") secureErase(req.data);
     if (req.op === "decrypt" || req.op === "verify") secureErase(req.prfOutput);
   }
 });

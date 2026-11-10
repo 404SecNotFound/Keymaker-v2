@@ -40,6 +40,12 @@ is structural rather than a matter of remembering.
 > would stop being tested. Miss the second one and `npm run test:keymaker` fails
 > with an off-by-one that looks like a corrupted corpus.
 
+> **A new fixture also needs its line in `scripts/fixtures/keymaker/SHA256SUMS`.**
+> Both suites hash every fixture file against that list, because a fixture
+> replaced by a container written today still opens and still counts. Add the
+> line with `sha256sum <file> >> SHA256SUMS` from that directory. An existing
+> line never changes.
+
 ---
 
 ## Build and test traps
@@ -73,7 +79,10 @@ is structural rather than a matter of remembering.
   often absent, and every test in those projects then fails with
   *"Executable doesn't exist"* — an environment fact, not a regression. Run
   `--project=chromium` locally and let CI cover the other two. Do **not** run
-  `npx playwright install`.
+  `npx playwright install`. If the config stops with *"No Playwright browser
+  binaries are installed"*, the container's Chromium is a different revision
+  from the pinned one. Point the config at it with
+  `KEYMAKER_BROWSER_PATH=/opt/pw-browsers/chromium` (any Chromium binary works).
 
 - **`scripts/apply-csp-hashes.mjs` fails the build if `connect-src` is not
   `'none'`.** That is deliberate (KM-07). Design around it; do not relax it.

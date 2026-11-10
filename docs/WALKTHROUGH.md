@@ -30,6 +30,11 @@ choice below.
 
 ## Part 1 — Make the container
 
+> **The guide.** On a first visit the page shows one step at a time, with Back
+> and Next. It covers the same ground as this part. The screenshots here show
+> the whole form at once, which is what you get by switching **Guide** off in
+> the top bar. The choice is remembered on that device.
+
 ### Step 1: choose Text, and type the secret
 
 Open [the app](https://404secnotfound.github.io/Keymaker-v2/) and switch from

@@ -21,7 +21,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { webcrypto } from "node:crypto";
+import { webcrypto, createHash } from "node:crypto";
 import {
   encryptData,
   decryptData,
@@ -35,6 +35,7 @@ import {
 } from "../src/lib/keymaker-crypto.ts";
 import { encryptFile as legacyEncryptFile } from "../src/lib/crypto.ts";
 import { PasskeyError } from "../src/lib/webauthn-prf.ts";
+import { dropIgnorable, IGNORABLE_CHARS } from "../src/lib/keym-text.ts";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const LEGACY = JSON.parse(readFileSync(join(HERE, "crypto-fixtures.json"), "utf8"));
@@ -481,6 +482,40 @@ async function main() {
     const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
     const bothCount = meta.fixtures.filter((f: any) => f.both).length;
     const audioCount = meta.fixtures.filter((f: any) => f.audio).length;
+    // The corpus is pinned by bytes, not only counted. Counting catches a
+    // fixture that stopped being listed. It does not catch one whose file was
+    // replaced by a container written today, which opens with the same
+    // password and plaintext and so passes every check above while no longer
+    // being evidence that an old file still opens. SHA256SUMS holds one line
+    // per fixture file; a new fixture adds a line, and no line ever changes.
+    {
+      const dir = join(HERE, "fixtures", "keymaker");
+      const pins = new Map(
+        readFileSync(join(dir, "SHA256SUMS"), "utf8")
+          .split("\n")
+          .filter((l) => l.trim() !== "")
+          .map((l) => {
+            const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(l);
+            if (!m) throw new Error(`SHA256SUMS: unreadable line ${JSON.stringify(l)}`);
+            return [m[2] as string, m[1] as string] as const;
+          })
+      );
+      const onDisk = readdirSync(dir).filter((f) => f !== "fixtures.json" && f !== "SHA256SUMS").sort();
+      const changed = onDisk.filter(
+        (f) => pins.has(f) && createHash("sha256").update(readFileSync(join(dir, f))).digest("hex") !== pins.get(f)
+      );
+      const unpinned = onDisk.filter((f) => !pins.has(f));
+      const missing = [...pins.keys()].filter((f) => !onDisk.includes(f));
+      const unlisted = meta.fixtures.map((f: any) => f.file as string).filter((f: string) => !pins.has(f));
+      check(changed.length === 0, `no frozen fixture's bytes have changed${changed.length ? ` — changed: ${changed.join(", ")}` : ""}`);
+      check(
+        unpinned.length === 0 && missing.length === 0 && unlisted.length === 0,
+        `every fixture file is pinned in SHA256SUMS and every pin has its file (${pins.size} pinned)` +
+          (unpinned.length ? ` — unpinned: ${unpinned.join(", ")}` : "") +
+          (missing.length ? ` — pinned but absent: ${missing.join(", ")}` : "") +
+          (unlisted.length ? ` — listed in fixtures.json but unpinned: ${unlisted.join(", ")}` : "")
+      );
+    }
     check(
       fixtureCount === 46 && v1Count === 6 && v2Count === 13 && v3Count === 20 && v4Count === 7 &&
         shamirCount === 9 && passkeyCount === 9 && pageCount === 1 && strippedCount === 1 &&
@@ -690,6 +725,59 @@ async function main() {
     check(dec.decode(res.data) === PLAINTEXT, "legacy IBTZ + key file survives the retry");
   } catch (err) {
     check(false, `legacy IBTZ + key file survives the retry — threw: ${(err as Error).message}`);
+  }
+
+  // The caller's key file is erased on the retry path as it is on the direct
+  // one. An ASCII password takes the direct path, where the frozen core zeroes
+  // the buffer it is handed. A password with more than one normal form takes
+  // the retry, which works on copies, and used to leave the caller's buffer
+  // intact: the same call erased the key file or not depending on the password.
+  for (const [label, pw] of [["one normal form", "plain-ascii-password"], ["several normal forms", NFD_PASSWORD]] as const) {
+    const container = await legacyEncryptFile(
+      enc.encode(PLAINTEXT).buffer as ArrayBuffer,
+      pw,
+      KEYFILE.slice(0).buffer as ArrayBuffer
+    );
+    const handed = KEYFILE.slice(0).buffer as ArrayBuffer;
+    await decryptData(container.slice(0), pw, handed);
+    check(
+      new Uint8Array(handed).every((b) => b === 0),
+      `legacy IBTZ erases the caller's key file (password with ${label})`
+    );
+  }
+
+  // ---- dropIgnorable: same answer as the definition, without the per-character cost ----
+  //
+  // The definition is "remove every IGNORABLE character", written here the
+  // slow, obvious way. The shipped function must agree with it on text that
+  // mixes every ignorable character with ASCII, non-ASCII and astral ones, and
+  // must not cost what it costs: appending a character at a time took about
+  // three seconds on a 20 MB paste. The timing check is relative to the slow
+  // version measured in this same process, so a slow machine slows both.
+  {
+    const naive = (text: string): string => {
+      const drop = new Set(IGNORABLE_CHARS);
+      let out = "";
+      for (const ch of text) if (!drop.has(ch)) out += ch;
+      return out;
+    };
+    const mixed = [...IGNORABLE_CHARS].map((c, i) => `a${c}é${c}${c}\u{1F511}${i}`).join("") + "tail";
+    check(dropIgnorable(mixed) === naive(mixed), "dropIgnorable agrees with the definition on mixed text");
+    check(dropIgnorable("") === "" && dropIgnorable("abc") === "abc", "dropIgnorable leaves clean text alone");
+    check(dropIgnorable(IGNORABLE_CHARS) === "", "dropIgnorable removes every ignorable character");
+
+    const big = ("A".repeat(64) + "\n").repeat(Math.floor((4 * 1024 * 1024) / 65));
+    let t = performance.now();
+    const slow = naive(big);
+    const slowMs = performance.now() - t;
+    t = performance.now();
+    const fast = dropIgnorable(big);
+    const fastMs = performance.now() - t;
+    check(fast === slow, "dropIgnorable agrees with the definition on a 4 MB armor-shaped paste");
+    check(
+      fastMs * 2 < slowMs,
+      `dropIgnorable is at least 2x faster than per-character appending (${fastMs.toFixed(0)} ms against ${slowMs.toFixed(0)} ms)`
+    );
   }
 
   // ---- 6. v3 slot-table authentication (docs/FORMAT-V3-DESIGN.md §5) ----

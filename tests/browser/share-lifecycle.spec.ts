@@ -292,6 +292,24 @@ test.describe("issued shares survive what they must", () => {
     ).toBeVisible();
   });
 
+  /**
+   * The dialog refuses Escape and outside clicks, since closing it destroys
+   * the only copy of the shares. Ctrl+K was a way round both: the palette
+   * opened over the dialog and "Go to Decrypt" reset the form, shares
+   * included, with no confirmation.
+   */
+  test("Ctrl+K does not open the command palette over issued shares", async ({ page }) => {
+    await issueShares(page);
+    const strips = page.getByText(/Save these 3 shares now/);
+
+    await page.keyboard.press("Control+k");
+    await expect(
+      page.getByPlaceholder("Type a command…"),
+      "the palette opened over the one-time shares dialog"
+    ).toHaveCount(0);
+    await expect(strips, "the shares did not survive the shortcut").toBeVisible();
+  });
+
   test("Wipe now still destroys them, because that is a person deciding", async ({ page }) => {
     // The control on the test above. Sparing them from the timer must not
     // spare them from the panic button, or the button stops meaning anything.
@@ -311,6 +329,32 @@ test.describe("issued shares survive what they must", () => {
  * route to this dialog — left it empty, so `dearmorKeym2('')` threw inside an
  * async handler with no catch: no print, no error, nothing.
  */
+/**
+ * The passkey control is hidden while recovery shares are in use. Choosing a
+ * passkey on the Decrypt tab and then starting "Verify with recovery shares"
+ * from the Recovery tab left that hidden choice set, so Verify was enabled
+ * with no strips and no password, and pressed, it asked for a passkey nobody
+ * had chosen on that screen.
+ */
+test("starting a shares verify drops an earlier passkey choice", async ({ page }) => {
+  await page.goto("/");
+  await visible(page.getByRole("tab", { name: "Decrypt" })).click();
+  const passkey = page.getByRole("button", { name: /^Use a passkey$/ });
+  await passkey.first().waitFor({ state: "visible", timeout: 5_000 }).catch(() => {});
+  test.skip((await passkey.count()) === 0, "this engine offers no passkey control");
+  await visible(passkey).click();
+
+  await visible(page.getByRole("tab", { name: "Recovery" })).click();
+  await visible(page.getByRole("button", { name: "Verify with recovery shares" })).click();
+  await useTextMode(page);
+  await visible(page.getByPlaceholder("Enter text to decrypt")).fill("keym2:AAAA");
+
+  await expect(
+    visible(page.getByRole("button", { name: /^Verify Text$/i })),
+    "Verify is enabled with no strips and no password, so a hidden passkey choice survived"
+  ).toBeDisabled();
+});
+
 test("the paper vault button never fails silently", async ({ page }) => {
   await page.goto("/");
   await selectCrypto(page, "pbkdf2", "aes");

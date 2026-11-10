@@ -340,5 +340,6 @@ Do not use the deployment, and do not assume it is a bug in these instructions.
 
 Any of the three is worth reporting through
 [SECURITY.md](../SECURITY.md). Your existing `.keym` files are unaffected either
-way — they are decryptable with `reference/keym.py` and the printed procedure
+way — they are decryptable with `reference/keym2.py` (or `reference/keym.py` for
+a v1 container) and the printed procedure
 in [RECOVERY.md](RECOVERY.md), neither of which involves the website at all.

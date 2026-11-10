@@ -144,6 +144,14 @@ import {
  * return value is provided to the tab modules through `EncryptorContext`;
  * see `context.tsx`.
  */
+/** The screens of guided mode, in order. */
+export type GuideScreen = "content" | "access" | "review" | "saved-copy" | "recovery";
+export const GUIDE_SCREENS: GuideScreen[] = ["content", "access", "review", "saved-copy", "recovery"];
+/** Opening a backup has no saving or testing step, so its guide ends at the button. */
+export const GUIDE_SCREENS_DECRYPT: GuideScreen[] = ["content", "access", "review"];
+/** The one thing the app keeps in browser storage: whether the guide is on. */
+export const GUIDE_STORAGE_KEY = "keymaker.guided";
+
 export function useEncryptorState() {
   const [mode, setMode] = useState<Mode>("encrypt");
   /** The last mode that owns a form (anything but Tools), so a return from a
@@ -187,6 +195,50 @@ export function useEncryptorState() {
   // Gates the entropy figure, which is meaningless for a typed password.
   const [generated, setGenerated] = useState<GeneratedSecret | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  /**
+   * Guided mode. The same form, shown one step at a time with Back and Next.
+   * Off by default, so the single-page form stays what a visitor gets unless
+   * they ask to be walked through it. `guideScreen` is which part of the form
+   * is on screen; Review and Create share a screen, since pressing Encrypt is
+   * the whole of Create.
+   */
+  const [guided, setGuidedState] = useState(false);
+  const [guideScreen, setGuideScreen] = useState<GuideScreen>("content");
+  /**
+   * On for a new visitor, and the choice is remembered. It starts false and
+   * is decided after mount, because the page is prerendered and the stored
+   * choice is not known until it runs in a browser. One word is stored,
+   * "on" or "off", and nothing else: no content, no settings, no history.
+   * Where storage is unavailable the guide is simply on each visit.
+   */
+  useEffect(() => {
+    let stored: string | null = null;
+    try {
+      stored = window.localStorage.getItem(GUIDE_STORAGE_KEY);
+    } catch {
+      // Private windows and blocked site data land here.
+    }
+    setGuidedState(stored !== "off");
+  }, []);
+  const setGuided = useCallback((on: boolean) => {
+    setGuidedState(on);
+    if (on) setGuideScreen("content");
+    try {
+      window.localStorage.setItem(GUIDE_STORAGE_KEY, on ? "on" : "off");
+    } catch {
+      // The switch still works for this visit.
+    }
+  }, []);
+  /**
+   * Whether a generated password has been shown since it was made. Guided
+   * mode does not let the owner past the password step until it has, because
+   * the field is masked and the password is cleared once the backup is sealed.
+   */
+  const [generatedSeen, setGeneratedSeen] = useState(false);
+  useEffect(() => {
+    if (!generated) setGeneratedSeen(false);
+    else if (showPassword) setGeneratedSeen(true);
+  }, [generated, showPassword]);
   const [showTextSecret, setShowTextSecret] = useState(false);
   // Advanced encryption options (Encrypt tab only — the KEYM container is
   // self-describing, so decryption needs no knobs).
@@ -358,6 +410,11 @@ export function useEncryptorState() {
         // while this page has focus the palette wins, which is the trade
         // every ⌘K app makes.
         e.preventDefault();
+        // The one-time shares dialog refuses Escape and outside clicks because
+        // closing it destroys the only copy. The palette's mode commands reset
+        // the form, which drops the shares the same way, so it stays shut
+        // while they are on screen.
+        if (issuedSharesRef.current !== null) return;
         setIsCommandBarOpen((open) => !open);
       }
     };
@@ -3090,6 +3147,23 @@ export function useEncryptorState() {
   }, [workflow, currentSettings, mode, inputType, file, textSecret]);
   const exportsStarted = useMemo(() => latestExports(workflow), [workflow]);
   /**
+   * Review of 10 November, 2.2. Whether this tab holds something that exists
+   * nowhere else: recovery shares shown once, a backup on screen that has not
+   * been downloaded, printed or copied, or a job that is running. The update
+   * script in layout.tsx reads the mark and does not reload this tab when a
+   * different tab accepts an update.
+   */
+  const holdsUnsaved =
+    issuedShares !== null ||
+    isLoading ||
+    (workflow.phase === "created" && receipt?.onScreen === true && Object.keys(exportsStarted).length === 0);
+  useEffect(() => {
+    const root = document.documentElement;
+    if (holdsUnsaved) root.setAttribute("data-keymaker-holding", "");
+    else root.removeAttribute("data-keymaker-holding");
+    return () => root.removeAttribute("data-keymaker-holding");
+  }, [holdsUnsaved]);
+  /**
    * Section 06d. What has changed since the verify on screen checked its
    * input, or null while the form still holds exactly that. A successful
    * check clears the password and any shares it used, so anything in them now
@@ -3127,6 +3201,32 @@ export function useEncryptorState() {
   }), [workflow, inputType, file, textSecret, seedIncomplete, password, passwordMeetsPolicy,
     backupDiffers, receipt, exportsStarted, printoutCoverage, rehearsal]);
   const accessRule = useMemo(() => describeAccessRule(policy.waysIn.map(describeWayIn)), [policy]);
+
+  // Guided mode follows the backup: sealing moves on to saving, and a form
+  // that no longer holds a backup cannot be on a screen about one.
+  const backupExists = workflow.phase === "created";
+  // The same test the Content step uses. A shortcut above the form, a wipe or
+  // the idle lock can empty the form while a later screen is showing.
+  const guideHasContent = (inputType === 'file' ? !!file : !!textSecret) && !seedIncomplete;
+  useEffect(() => {
+    if (!guided || mode !== "encrypt") return;
+    setGuideScreen((screen) => {
+      if (backupExists && screen === "review") return "saved-copy";
+      if (!backupExists && (screen === "saved-copy" || screen === "recovery")) return "content";
+      // Nothing to protect and no backup: the password and review screens
+      // have nothing to be about, so the guide starts again. Not while a
+      // seal is running, which clears the content just before the backup
+      // exists.
+      if (!backupExists && !guideHasContent && !isLoading && (screen === "access" || screen === "review")) {
+        return "content";
+      }
+      return screen;
+    });
+  }, [guided, backupExists, mode, guideHasContent, isLoading]);
+  // Each page's guide starts at its first step.
+  useEffect(() => {
+    setGuideScreen("content");
+  }, [mode]);
 
   const rehearseFromPaper = useCallback(() => {
     const armored = createdArmor;
@@ -3453,6 +3553,11 @@ export function useEncryptorState() {
       setInputType("text");
       setTextSecret(armored);
     }
+    // The passkey control is hidden while shares are in use, so a passkey
+    // choice made earlier on the Decrypt tab would stay set with nothing on
+    // screen to show or undo it, and Verify would be enabled with no strips
+    // and no password.
+    if (withShares) setUsePasskey(false);
     setUseShares(withShares);
     setVerifyOnly(true);
   };
@@ -3477,6 +3582,7 @@ export function useEncryptorState() {
     password, setPassword,
     generated, setGenerated,
     showPassword, setShowPassword,
+    guided, setGuided, guideScreen, setGuideScreen, generatedSeen, backupExists,
     showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
     formatDetail, setFormatDetail,
