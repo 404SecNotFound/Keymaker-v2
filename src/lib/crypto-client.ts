@@ -394,9 +394,9 @@ async function encryptViaWorkerInner(
       }
       return { data: await encryptContainer(data, password, keyFile, options) };
     } finally {
-      // The worker path transfers `data`, which detaches it and so erases this
-      // side's only copy of the plaintext. The no-worker fallback never
-      // transfers it, and neither encryptContainer nor encryptKeym2 erases its
+      // The worker path transfers `data`, which detaches it here and leaves
+      // the worker holding the only copy; the worker erases that copy in its
+      // own `finally`. The no-worker fallback never transfers it, and neither encryptContainer nor encryptKeym2 erases its
       // plaintext input (they erase the key file and master key, not this), so
       // the plaintext would otherwise outlive the operation in the page heap.
       // The caller hands `data` to this function as owned on both paths, so zero
