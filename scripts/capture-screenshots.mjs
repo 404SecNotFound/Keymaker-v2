@@ -36,6 +36,13 @@ const context = await browser.newContext({
   colorScheme: 'dark',
   reducedMotion: 'reduce',
 });
+// The documentation's screenshots show the whole form. The guide is on for a
+// new visitor, so this context is a visitor who has switched it off.
+await context.addInitScript(() => {
+  try {
+    window.localStorage.setItem('keymaker.guided', 'off');
+  } catch {}
+});
 const page = await context.newPage();
 
 const visible = (l) => l.locator('visible=true').first();

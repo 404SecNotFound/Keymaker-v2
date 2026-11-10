@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **A guide.** On a first visit the app walks through its pages. Encrypt and
+  Decrypt show their form one step at a time, with a heading that says what
+  to do now and Back and Next. Recovery, Audio, Tools and the workspace show
+  a short numbered how-to. A Guide switch in the top bar turns it off and on.
+  The form itself is unchanged, and with the guide off it is shown whole, as
+  before.
+- **A generated password must be shown before the guide moves on.** The field
+  is masked and the password is cleared once the backup is sealed, so the
+  guide holds Next on the password step until Show has been pressed.
+
+### Changed
+- **The app now stores one word in the browser.** Whether the guide is on is
+  kept in `localStorage` under `keymaker.guided`, as "on" or "off". Nothing
+  else is stored. Where storage is unavailable the guide is on each visit.
+
 ## Keymaker v2.4.0
 
 No format change. v2.4.0 writes exactly what v2.3.0 wrote, every container

@@ -125,6 +125,21 @@ export default defineConfig({
 
   use: {
     baseURL: "http://127.0.0.1:4321",
+    // The guide is on for a new visitor and shows the form one step at a
+    // time. Nearly every spec here is about the form itself, so the suite
+    // runs as a visitor who has switched the guide off, which is the one
+    // word the app stores. guided-mode.spec.ts clears this to be a new
+    // visitor. A spec that serves the app from another port is a new visitor
+    // there too, and switches the guide off itself if it needs the form.
+    storageState: {
+      cookies: [],
+      // Both spellings of the test server: the passkey specs reach it as
+      // localhost, because WebAuthn wants a name rather than an address.
+      origins: ["http://127.0.0.1:4321", "http://localhost:4321"].map((origin) => ({
+        origin,
+        localStorage: [{ name: "keymaker.guided", value: "off" }],
+      })),
+    },
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },

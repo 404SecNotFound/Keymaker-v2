@@ -341,7 +341,15 @@
 .km-intents { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
 .km-intents button { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 14px; border: 1px solid var(--color-border); border-radius: 9999px; color: var(--color-action); font-size: 12px; cursor: pointer; }
 .km-intents button[aria-pressed="true"] { background: var(--color-selection); border-color: var(--color-selection-border); color: var(--color-selected); }
-.km-intents .km-guide-toggle { margin-left: auto; }
+.km-topbar .km-guide-toggle { margin-left: auto; min-height: 32px; }
+.km-guide-state { border: 1px solid var(--color-border-strong); border-radius: 4px; padding: 1px 6px; font-family: var(--font-mono); font-size: 12px; }
+.km-guide-toggle[aria-checked="true"] { border-color: var(--color-selection-border); background: var(--color-selection); color: var(--color-selected); }
+.km-guide-toggle[aria-checked="true"] .km-guide-state { border-color: var(--color-selection-border); color: var(--color-signal); }
+.km-guide-intro { margin-bottom: 20px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-card); padding: 16px 18px; }
+.km-guide-intro h2 { margin-top: 4px; font-size: 15px; font-weight: 500; color: var(--color-heading); }
+.km-guide-intro ol { display: grid; gap: 8px; margin-top: 12px; max-width: 72ch; font-size: 13px; line-height: 1.6; color: var(--color-muted-foreground); }
+.km-guide-intro li { display: grid; grid-template-columns: 22px minmax(0, 1fr); column-gap: 10px; align-items: start; }
+.km-guide-intro li > span { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border: 1px solid var(--color-border-strong); border-radius: 9999px; font-family: var(--font-mono); font-size: 12px; color: var(--color-muted-foreground); }
 /* Guided mode. One part of the form on screen at a time: every element that
    belongs to a step carries data-guide, and the ones that are not the current
    screen are taken out of the page, and so out of the tab order. */

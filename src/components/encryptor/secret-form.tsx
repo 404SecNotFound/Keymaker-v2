@@ -162,8 +162,8 @@ export function SecretForm({ mode }: { mode: Mode }) {
 
 
   return (
-    <div className="km-workform space-y-5" data-guided-screen={mode === "encrypt" && guided ? guideScreen : undefined}>
-      {mode === "encrypt" && guided && <GuideHeading />}
+    <div className="km-workform space-y-5" data-guided-screen={guided ? guideScreen : undefined}>
+      {guided && <GuideHeading />}
       {mode === "encrypt" && inheritanceOpen && (
         <InheritancePlan
           policy={accessPolicy}
@@ -1508,7 +1508,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
       )}
 
       {outputText && (
-        <div className="animate-in fade-in-50 space-y-2" data-guide={mode === "encrypt" ? "saved-copy" : undefined}>
+        <div className="animate-in fade-in-50 space-y-2" data-guide={mode === "encrypt" ? "saved-copy" : "review"}>
           <div className="flex items-center justify-between gap-3">
             <Label htmlFor="output-text" className="text-[13px] font-medium text-muted-foreground">
               Result
@@ -1813,7 +1813,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}
-        data-guide={mode === "encrypt" ? "review" : undefined}
+        data-guide="review"
         className="mt-2 h-auto w-full py-3.5 text-[15px] font-medium"
       >
         {isLoading ? (
@@ -1839,7 +1839,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
           variant="ghost"
           onClick={cancelOperation}
           data-testid="cancel-operation"
-          data-guide={mode === "encrypt" ? "review" : undefined}
+          data-guide="review"
           className="mt-1 h-auto w-full py-2 text-[13px] text-muted-foreground hover:text-foreground"
         >
           Stop
@@ -1862,7 +1862,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
       )}
 
       {mode === "encrypt" && guided && guideScreen === "recovery" && <GuideRecovery />}
-      {mode === "encrypt" && guided && <GuideNav />}
+      {guided && <GuideNav />}
 
       {/*
         Always available while there is something to wipe — the panic button

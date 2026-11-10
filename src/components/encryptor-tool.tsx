@@ -37,6 +37,7 @@ import { RecoveryTab } from "./encryptor/recovery-tab";
 import { SharesDialog } from "./encryptor/shares-dialog";
 import { RecoveryKitDialog } from "./encryptor/recovery-kit-dialog";
 import { WorkflowSteps } from "./encryptor/workflow-steps";
+import { GuidePageIntro } from "./encryptor/guide";
 import { cn } from "@/lib/utils";
 import { BASE_PATH, KEYMAKER_REPO, APP_VERSION, IS_RELEASE_BUILD, DOORS } from "./encryptor/shared";
 
@@ -61,6 +62,21 @@ export function EncryptorTool() {
           <span className="km-brand-divider" aria-hidden="true" />
           <span className="km-topbar-context">Secure workspace</span>
         </div>
+        {/* The guide. In the top bar because it covers every page, and a
+            switch rather than a button because it has two states and says
+            which one it is in. */}
+        <button
+          type="button"
+          role="switch"
+          aria-checked={guided}
+          onClick={() => setGuided(!guided)}
+          data-testid="guide-toggle"
+          className="km-command km-guide-toggle"
+        >
+          <Compass className="h-4 w-4" aria-hidden="true" />
+          <span>Guide</span>
+          <span className="km-guide-state" aria-hidden="true">{guided ? "On" : "Off"}</span>
+        </button>
         <button
           type="button"
           onClick={() => setIsCommandBarOpen(true)}
@@ -122,6 +138,7 @@ export function EncryptorTool() {
             <p>{pageCopy[activePage][1]}</p>
           </div>
 
+          {guided && <GuidePageIntro page={activePage} />}
           <WorkspaceTab />
           <RecoveryTab />
           <TabsContent value="docs" className="mt-0" tabIndex={-1}>
@@ -136,21 +153,6 @@ export function EncryptorTool() {
                     <Icon className="h-4 w-4" aria-hidden="true" />{title}
                   </button>
                 ))}
-                {/* Guided mode. Beside the doors because it answers the same
-                    question, how to start, for someone who would rather be
-                    walked through the form than read all of it at once. */}
-                {mode === "encrypt" && (
-                  <button
-                    type="button"
-                    onClick={() => setGuided(!guided)}
-                    aria-pressed={guided}
-                    data-testid="guide-toggle"
-                    className="km-guide-toggle"
-                  >
-                    <Compass className="h-4 w-4" aria-hidden="true" />
-                    Guide me step by step
-                  </button>
-                )}
               </div>
             )}
             <div

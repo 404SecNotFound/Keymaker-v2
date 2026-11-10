@@ -147,6 +147,10 @@ import {
 /** The screens of guided mode, in order. */
 export type GuideScreen = "content" | "access" | "review" | "saved-copy" | "recovery";
 export const GUIDE_SCREENS: GuideScreen[] = ["content", "access", "review", "saved-copy", "recovery"];
+/** Opening a backup has no saving or testing step, so its guide ends at the button. */
+export const GUIDE_SCREENS_DECRYPT: GuideScreen[] = ["content", "access", "review"];
+/** The one thing the app keeps in browser storage: whether the guide is on. */
+export const GUIDE_STORAGE_KEY = "keymaker.guided";
 
 export function useEncryptorState() {
   const [mode, setMode] = useState<Mode>("encrypt");
@@ -198,8 +202,33 @@ export function useEncryptorState() {
    * is on screen; Review and Create share a screen, since pressing Encrypt is
    * the whole of Create.
    */
-  const [guided, setGuided] = useState(false);
+  const [guided, setGuidedState] = useState(false);
   const [guideScreen, setGuideScreen] = useState<GuideScreen>("content");
+  /**
+   * On for a new visitor, and the choice is remembered. It starts false and
+   * is decided after mount, because the page is prerendered and the stored
+   * choice is not known until it runs in a browser. One word is stored,
+   * "on" or "off", and nothing else: no content, no settings, no history.
+   * Where storage is unavailable the guide is simply on each visit.
+   */
+  useEffect(() => {
+    let stored: string | null = null;
+    try {
+      stored = window.localStorage.getItem(GUIDE_STORAGE_KEY);
+    } catch {
+      // Private windows and blocked site data land here.
+    }
+    setGuidedState(stored !== "off");
+  }, []);
+  const setGuided = useCallback((on: boolean) => {
+    setGuidedState(on);
+    if (on) setGuideScreen("content");
+    try {
+      window.localStorage.setItem(GUIDE_STORAGE_KEY, on ? "on" : "off");
+    } catch {
+      // The switch still works for this visit.
+    }
+  }, []);
   /**
    * Whether a generated password has been shown since it was made. Guided
    * mode does not let the owner past the password step until it has, because
@@ -3160,13 +3189,17 @@ export function useEncryptorState() {
   // that no longer holds a backup cannot be on a screen about one.
   const backupExists = workflow.phase === "created";
   useEffect(() => {
-    if (!guided) return;
+    if (!guided || mode !== "encrypt") return;
     setGuideScreen((screen) => {
       if (backupExists && screen === "review") return "saved-copy";
       if (!backupExists && (screen === "saved-copy" || screen === "recovery")) return "content";
       return screen;
     });
-  }, [guided, backupExists]);
+  }, [guided, backupExists, mode]);
+  // Each page's guide starts at its first step.
+  useEffect(() => {
+    setGuideScreen("content");
+  }, [mode]);
 
   const rehearseFromPaper = useCallback(() => {
     const armored = createdArmor;
