@@ -472,7 +472,13 @@
 .km-recovery-reference > * + * { margin-top: 0; }
 .km-utility-panel { max-width: 760px; padding: 24px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-card); }
 .km-app button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 3px; }
-:where(input, textarea, select, [role="combobox"]):focus-visible { outline-color: var(--color-ring); }
+/* Text fields get the same ring as buttons (DESIGN-SYSTEM.md, "Focus: a
+   visible 2px action-blue ring, offset from the control"). The field classes
+   carry focus-visible:outline-hidden, which removes the outline, and the
+   rule that stood here set only its colour, so a focused field showed a
+   slightly lighter border and nothing else. This rule is outside any layer,
+   so it wins over the utility. */
+:is(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]), textarea, select):focus-visible { outline: 2px solid var(--color-ring); outline-offset: 2px; }
 @media (max-width: 480px) {
   .km-input-choice svg { display: none; }
 }

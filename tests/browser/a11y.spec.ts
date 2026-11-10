@@ -234,6 +234,41 @@ test.describe("information that must not be carried by colour alone", () => {
    * privacy. They were icon-only with no name, so a screen reader announced
    * three anonymous "button"s among the security settings.
    */
+  /**
+   * Review of 10 November, 2.3 (October 1.4). The text fields carried
+   * focus-visible:outline-hidden and ring-0, so a focused field showed a
+   * slightly lighter border and no ring. A text field matches :focus-visible
+   * however it is focused, so this runs in every engine.
+   */
+  test("a focused text field shows the focus ring", async ({ page }) => {
+    await page.goto("/");
+    await useTextMode(page);
+    const ringToken = await page.evaluate(() => {
+      const probe = document.createElement("span");
+      probe.style.color = "hsl(var(--ring))";
+      document.body.appendChild(probe);
+      const color = getComputedStyle(probe).color;
+      probe.remove();
+      return color;
+    });
+    for (const [name, field] of [
+      ["the password", visible(page.getByPlaceholder("Enter a strong password"))],
+      ["the secret text", visible(page.getByPlaceholder("Enter text to encrypt"))],
+    ] as const) {
+      await field.focus();
+      // transition-colors animates outline-color.
+      await page.waitForTimeout(400);
+      const ring = await field.evaluate((el) => {
+        const cs = getComputedStyle(el);
+        return { style: cs.outlineStyle, width: parseFloat(cs.outlineWidth) || 0, color: cs.outlineColor };
+      });
+      expect(
+        ring,
+        `${name} field has no visible focus ring (${ring.style} ${ring.width}px ${ring.color})`
+      ).toEqual({ style: "solid", width: 2, color: ringToken });
+    }
+  });
+
   test("every icon-only control has a name and a visible focus ring", async ({
     page,
     browserName,
