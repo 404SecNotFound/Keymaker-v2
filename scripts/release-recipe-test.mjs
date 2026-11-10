@@ -150,6 +150,19 @@ check(
   `found ${deploymentBlocks.length} deployment recipe(s); deploy.yml base path ${JSON.stringify(deploy.KEYMAKER_BASE_PATH)}`
 );
 
+// ---- 4. The fallback the document names can read a current container ----
+//
+// The document ends by telling a reader whose verification failed that their
+// files still open with the recovery script. It named `reference/keym.py`,
+// which reads v1 only; everything written today needs `reference/keym2.py`.
+
+const fallback = doc.split('\n').filter((l) => /reference\/keym2?\.py/.test(l));
+check(
+  'the document names keym2.py wherever it names a recovery script',
+  fallback.length >= 1 && fallback.every((l) => l.includes('reference/keym2.py')),
+  `lines naming only the v1 reader: ${fallback.filter((l) => !l.includes('reference/keym2.py')).length}`
+);
+
 console.log();
 if (failures > 0) {
   console.error(`${failures} check(s) failed.`);
