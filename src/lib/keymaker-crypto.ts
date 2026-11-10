@@ -1390,6 +1390,10 @@ async function legacyDecryptWithNormalizationFallback(
     throw firstError ?? new Error("Decryption failed.");
   } finally {
     if (keyFileSnapshot) secureErase(keyFileSnapshot);
+    // The single-candidate path above hands the caller's buffer to the frozen
+    // core, which zeroes it. This path only ever touched copies, so the
+    // caller's buffer is erased here to keep the two the same.
+    if (keyFileBuffer) secureErase(keyFileBuffer);
   }
 }
 

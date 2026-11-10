@@ -692,6 +692,25 @@ async function main() {
     check(false, `legacy IBTZ + key file survives the retry — threw: ${(err as Error).message}`);
   }
 
+  // The caller's key file is erased on the retry path as it is on the direct
+  // one. An ASCII password takes the direct path, where the frozen core zeroes
+  // the buffer it is handed. A password with more than one normal form takes
+  // the retry, which works on copies, and used to leave the caller's buffer
+  // intact: the same call erased the key file or not depending on the password.
+  for (const [label, pw] of [["one normal form", "plain-ascii-password"], ["several normal forms", NFD_PASSWORD]] as const) {
+    const container = await legacyEncryptFile(
+      enc.encode(PLAINTEXT).buffer as ArrayBuffer,
+      pw,
+      KEYFILE.slice(0).buffer as ArrayBuffer
+    );
+    const handed = KEYFILE.slice(0).buffer as ArrayBuffer;
+    await decryptData(container.slice(0), pw, handed);
+    check(
+      new Uint8Array(handed).every((b) => b === 0),
+      `legacy IBTZ erases the caller's key file (password with ${label})`
+    );
+  }
+
   // ---- 6. v3 slot-table authentication (docs/FORMAT-V3-DESIGN.md §5) ----
   //
   // The attack the whole revision exists for. §1.1 measured three ways to edit
