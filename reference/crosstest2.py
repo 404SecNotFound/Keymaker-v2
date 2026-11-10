@@ -36,6 +36,7 @@ them.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import struct
@@ -315,6 +316,26 @@ def main() -> int:
                     check(f"{f['name']}: k-1 js-written shares still refused", False)
                 except keym2.KeymError:
                     check(f"{f['name']}: k-1 js-written shares still refused", True)
+
+        # The corpus is pinned by bytes as well as counted. A fixture replaced
+        # by a container written today opens with the same password and
+        # plaintext, so every check above passes while the file is no longer
+        # evidence that an old backup still opens. SHA256SUMS has one line per
+        # fixture file; scripts/keymaker-regression.mts asserts the same pins.
+        fixture_dir = ROOT / "scripts/fixtures/keymaker"
+        pins = {}
+        for line in (fixture_dir / "SHA256SUMS").read_text().splitlines():
+            if line.strip():
+                digest, _, pinned_name = line.partition(" ")
+                pins[pinned_name.lstrip(" *")] = digest
+        on_disk = sorted(p.name for p in fixture_dir.iterdir()
+                         if p.name not in ("fixtures.json", "SHA256SUMS"))
+        changed = [n for n in on_disk if n in pins
+                   and hashlib.sha256((fixture_dir / n).read_bytes()).hexdigest() != pins[n]]
+        check("no frozen fixture's bytes have changed", not changed, ", ".join(changed))
+        check("every fixture file is pinned in SHA256SUMS and every pin has its file",
+              set(on_disk) == set(pins),
+              f"unpinned: {sorted(set(on_disk) - set(pins))}; pinned but absent: {sorted(set(pins) - set(on_disk))}")
 
         modern = v2_fixtures + v3_fixtures + v4_fixtures
         shamir_fixtures = [f for f in modern if "shamir" in f]

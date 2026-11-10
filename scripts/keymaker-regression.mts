@@ -21,7 +21,7 @@
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { webcrypto } from "node:crypto";
+import { webcrypto, createHash } from "node:crypto";
 import {
   encryptData,
   decryptData,
@@ -482,6 +482,40 @@ async function main() {
     const strippedCount = meta.fixtures.filter((f: any) => f.strippedPasskey).length;
     const bothCount = meta.fixtures.filter((f: any) => f.both).length;
     const audioCount = meta.fixtures.filter((f: any) => f.audio).length;
+    // The corpus is pinned by bytes, not only counted. Counting catches a
+    // fixture that stopped being listed. It does not catch one whose file was
+    // replaced by a container written today, which opens with the same
+    // password and plaintext and so passes every check above while no longer
+    // being evidence that an old file still opens. SHA256SUMS holds one line
+    // per fixture file; a new fixture adds a line, and no line ever changes.
+    {
+      const dir = join(HERE, "fixtures", "keymaker");
+      const pins = new Map(
+        readFileSync(join(dir, "SHA256SUMS"), "utf8")
+          .split("\n")
+          .filter((l) => l.trim() !== "")
+          .map((l) => {
+            const m = /^([0-9a-f]{64}) [ *](.+)$/.exec(l);
+            if (!m) throw new Error(`SHA256SUMS: unreadable line ${JSON.stringify(l)}`);
+            return [m[2] as string, m[1] as string] as const;
+          })
+      );
+      const onDisk = readdirSync(dir).filter((f) => f !== "fixtures.json" && f !== "SHA256SUMS").sort();
+      const changed = onDisk.filter(
+        (f) => pins.has(f) && createHash("sha256").update(readFileSync(join(dir, f))).digest("hex") !== pins.get(f)
+      );
+      const unpinned = onDisk.filter((f) => !pins.has(f));
+      const missing = [...pins.keys()].filter((f) => !onDisk.includes(f));
+      const unlisted = meta.fixtures.map((f: any) => f.file as string).filter((f: string) => !pins.has(f));
+      check(changed.length === 0, `no frozen fixture's bytes have changed${changed.length ? ` — changed: ${changed.join(", ")}` : ""}`);
+      check(
+        unpinned.length === 0 && missing.length === 0 && unlisted.length === 0,
+        `every fixture file is pinned in SHA256SUMS and every pin has its file (${pins.size} pinned)` +
+          (unpinned.length ? ` — unpinned: ${unpinned.join(", ")}` : "") +
+          (missing.length ? ` — pinned but absent: ${missing.join(", ")}` : "") +
+          (unlisted.length ? ` — listed in fixtures.json but unpinned: ${unlisted.join(", ")}` : "")
+      );
+    }
     check(
       fixtureCount === 46 && v1Count === 6 && v2Count === 13 && v3Count === 20 && v4Count === 7 &&
         shamirCount === 9 && passkeyCount === 9 && pageCount === 1 && strippedCount === 1 &&
