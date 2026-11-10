@@ -3147,6 +3147,23 @@ export function useEncryptorState() {
   }, [workflow, currentSettings, mode, inputType, file, textSecret]);
   const exportsStarted = useMemo(() => latestExports(workflow), [workflow]);
   /**
+   * Review of 10 November, 2.2. Whether this tab holds something that exists
+   * nowhere else: recovery shares shown once, a backup on screen that has not
+   * been downloaded, printed or copied, or a job that is running. The update
+   * script in layout.tsx reads the mark and does not reload this tab when a
+   * different tab accepts an update.
+   */
+  const holdsUnsaved =
+    issuedShares !== null ||
+    isLoading ||
+    (workflow.phase === "created" && receipt?.onScreen === true && Object.keys(exportsStarted).length === 0);
+  useEffect(() => {
+    const root = document.documentElement;
+    if (holdsUnsaved) root.setAttribute("data-keymaker-holding", "");
+    else root.removeAttribute("data-keymaker-holding");
+    return () => root.removeAttribute("data-keymaker-holding");
+  }, [holdsUnsaved]);
+  /**
    * Section 06d. What has changed since the verify on screen checked its
    * input, or null while the form still holds exactly that. A successful
    * check clears the password and any shares it used, so anything in them now

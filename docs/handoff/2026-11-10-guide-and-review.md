@@ -25,7 +25,7 @@ Continuing work in the `404SecNotFound/Keymaker-v2` repository, on branch `claud
 3. Ask the owner to read the four how-to boxes in `guide.tsx` for accuracy, Tools and Audio first. The text was written from the page descriptions and code.
 4. Update the description of #291 to cover the guide, or split the guide into its own pull request if the owner says so. Splitting needs permission to push a second branch.
 5. Decide with the owner whether the generated-password rule should also apply with the guide off. With the guide off, "Random" then "Encrypt" still seals behind an unseen password (review finding 2.1).
-6. Remaining open review items, in order. Reload from another tab loses shares or an unsaved backup (still open). The focus ring on text fields is done. Then the P2 list in the report.
+6. Remaining open review items, in order. The reload from another tab is guarded, tested for shares only. A `beforeunload` prompt is still open, because Playwright dismisses that dialog and specs that reload mid-flow may need changes. The focus ring on text fields is done. Then the P2 list in the report.
 7. This handoff file sits on the pull request branch. Remove it before merge, or move it to a `handoff/` branch as earlier sessions did.
 
 ## Open decisions for the owner
