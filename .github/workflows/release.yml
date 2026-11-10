@@ -129,6 +129,34 @@ jobs:
           fi
           echo "$TAG is annotated."
 
+      # The tagged commit must already be on main.
+      #
+      # Every check above reads the tag's name and kind, none reads where it
+      # points. A tag on a branch commit carries that branch's copy of this
+      # workflow and its scripts, so without this a release could be signed
+      # under the documented identity from content no pull request merged.
+      #
+      # Asked over the API, like the annotated-tag check, so the checkout
+      # stays shallow. Comparing main...<sha> reports `behind` when main
+      # contains the commit and has moved on, and `identical` when the commit
+      # is main's tip. `ahead` and `diverged` both mean it has commits main
+      # does not.
+      - name: The tagged commit must be on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          STATUS=$(gh api "repos/$REPO/compare/main...$SHA" --jq '.status')
+          case "$STATUS" in
+            behind|identical) echo "$SHA is on main ($STATUS)." ;;
+            *)
+              echo "::error::$SHA is not on main (compare status: $STATUS). Releases are cut from commits that were merged."
+              exit 1
+              ;;
+          esac
+
   # R01, for the release channel: the same suites that gate a deployment gate a
   # published release, on the tagged commit, in this run. `build` needs all
   # four, so nothing is built, signed, packaged or published unless every suite

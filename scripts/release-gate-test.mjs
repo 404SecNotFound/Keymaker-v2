@@ -231,6 +231,21 @@ for (const [verifyJob, file] of Object.entries(SUITES)) {
   }
 }
 
+// A release is cut from a commit that is already on main. The other preflight
+// checks read the tag's name and kind; a tag on a branch commit passes all of
+// them and brings that branch's copy of the workflow with it. To watch this
+// bite, delete the "The tagged commit must be on main" step from release.yml.
+{
+  const src = readFileSync(join(WF, "release.yml"), "utf8");
+  const preflight = jobBlock(src, "preflight") ?? "";
+  const asks = /gh api "repos\/\$REPO\/compare\/main\.\.\.\$SHA" --jq '\.status'/.test(preflight);
+  const sha = /^\s*SHA:\s*\$\{\{ github\.sha \}\}\s*$/m.test(preflight);
+  const accepts = /^\s*behind\|identical\)/m.test(preflight);
+  const refuses = /^\s*\*\)\s*\n(?:.*\n)*?\s*exit 1/m.test(preflight);
+  if (asks && sha && accepts && refuses) ok("release.yml preflight refuses a tag whose commit is not on main");
+  else bad("release.yml preflight does not check that the tagged commit is on main; a tag on a branch commit could be released");
+}
+
 if (failures > 0) {
   console.log(`\n${failures} check(s) failed: a publish path is not gated on its tests.`);
   process.exit(1);
