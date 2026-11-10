@@ -246,6 +246,12 @@ jobs:
       - name: The release rebuild recipe still matches release.yml
         run: npm run test:release-recipe
 
+      # The README's local-serving recipe extracts the release tarball and
+      # names a URL. This packs a stand-in the way release.yml does, runs the
+      # README's lines, and requires index.html where that URL points.
+      - name: The README local-serving recipe serves the app
+        run: npm run test:readme-local-recipe
+
       # R01: deploy.yml and release.yml must not build, sign or publish bytes
       # the suites have not passed. This asserts the `needs` edges that make the
       # publish jobs wait for every verification workflow, and the
