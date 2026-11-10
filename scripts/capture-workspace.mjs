@@ -16,6 +16,12 @@ try {
     colorScheme: "dark",
     reducedMotion: "reduce",
   });
+  // The preview shows the whole form, so this is a visitor with the guide off.
+  await context.addInitScript(() => {
+    try {
+      window.localStorage.setItem("keymaker.guided", "off");
+    } catch {}
+  });
   const page = await context.newPage();
   await page.goto(base, { waitUntil: "networkidle" });
   await page.evaluate(() => document.fonts.ready);
