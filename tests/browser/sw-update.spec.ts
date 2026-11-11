@@ -108,6 +108,29 @@ const swState = (page: Page) =>
     };
   });
 
+/**
+ * The update script does not reload a tab that carries this mark (the
+ * two-tab test below). A backup on screen that has not been saved anywhere
+ * is the second thing that sets it, and saving it is what clears it.
+ */
+test("a backup that has not been saved marks the tab as holding work", async ({ page }) => {
+  const holding = () => page.evaluate(() => document.documentElement.hasAttribute("data-keymaker-holding"));
+  await page.goto("/");
+  expect(await holding()).toBe(false);
+  await useTextMode(page);
+  await selectCrypto(page, "pbkdf2", "aes");
+  await visible(page.getByPlaceholder("Enter text to encrypt")).fill("not saved yet");
+  await visible(page.getByPlaceholder("Enter a strong password")).fill(STRONG_PASSWORD);
+  await visible(page.getByRole("button", { name: /^Encrypt Text$/i })).click();
+  await expect(visible(page.getByRole("button", { name: /Download \.keym/ }))).toBeVisible({ timeout: 90_000 });
+  await expect.poll(holding, { message: "an unsaved backup did not mark the tab" }).toBe(true);
+
+  const download = page.waitForEvent("download");
+  await visible(page.getByRole("button", { name: /Download \.keym/ })).click();
+  await download;
+  await expect.poll(holding, { message: "the mark stayed after the backup was downloaded" }).toBe(false);
+});
+
 test.describe("service worker updates wait for the user", () => {
   test("a waiting update leaves the running version untouched until accepted", async ({
     browser,

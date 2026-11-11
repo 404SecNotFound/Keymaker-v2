@@ -79,7 +79,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     inputType, seedMode, seedWords, bip39, file, setFile, qrScanBusy,
     qrInputRef, shareQrInputRef, textSecret, outputText, password,
     guided, guideScreen,
-    generated, showPassword, setShowPassword, showTextSecret, setShowTextSecret,
+    generated, generatedSeen, showPassword, setShowPassword, showTextSecret, setShowTextSecret,
     isAdvancedOpen, setIsAdvancedOpen,
     kdfChoice, setKdfChoice, argon2Available, argonTimeCost, setArgonTimeCost,
     argonMemoryMiB, setArgonMemoryMiB, argonParallelism, setArgonParallelism,
@@ -1810,9 +1810,20 @@ export function SecretForm({ mode }: { mode: Mode }) {
         </p>
       )}
 
+      {mode === 'encrypt' && generated && !generatedSeen && (
+        <p
+          id="generated-unseen"
+          data-testid="generated-unseen"
+          data-guide="review"
+          className="mt-3 text-[12.5px] leading-snug text-muted-foreground"
+        >
+          Press Show and write the generated password down before you encrypt. It cannot be shown again after the backup is sealed.
+        </p>
+      )}
       <Button
         onClick={processData}
         disabled={isProcessButtonDisabled()}
+        aria-describedby={mode === 'encrypt' && generated && !generatedSeen ? "generated-unseen" : undefined}
         data-guide="review"
         className="mt-2 h-auto w-full py-3.5 text-[15px] font-medium"
       >

@@ -230,14 +230,20 @@ export function useEncryptorState() {
     }
   }, []);
   /**
-   * Whether a generated password has been shown since it was made. Guided
-   * mode does not let the owner past the password step until it has, because
+   * Whether a generated password has been shown since it was made. Encrypt
+   * is held until it has, and so is Next on the guide's password step, because
    * the field is masked and the password is cleared once the backup is sealed.
    */
   const [generatedSeen, setGeneratedSeen] = useState(false);
+  // A newly generated password has been seen only if the field is showing at
+  // that moment. Having seen an earlier one does not count for this one.
+  const showPasswordRef = useRef(showPassword);
+  showPasswordRef.current = showPassword;
   useEffect(() => {
-    if (!generated) setGeneratedSeen(false);
-    else if (showPassword) setGeneratedSeen(true);
+    setGeneratedSeen(generated !== null && showPasswordRef.current);
+  }, [generated]);
+  useEffect(() => {
+    if (generated && showPassword) setGeneratedSeen(true);
   }, [generated, showPassword]);
   const [showTextSecret, setShowTextSecret] = useState(false);
   // Advanced encryption options (Encrypt tab only — the KEYM container is
@@ -2968,6 +2974,12 @@ export function useEncryptorState() {
       // a passkey unlock is disabled by the absence of the thing it produces.
       (mode === 'decrypt' && usePasskey);
     if (!hasInput || !hasCredential) return true;
+
+    // Review of 10 November, 2.1. A generated password sits in a masked field
+    // and is cleared once the backup is sealed, so sealing before it has been
+    // shown makes a backup nobody can open. Copy does not count: the
+    // clipboard is wiped on a timer.
+    if (mode === 'encrypt' && generated && !generatedSeen) return true;
 
     if (mode === 'encrypt' && !passwordMeetsPolicy) {
         return true;

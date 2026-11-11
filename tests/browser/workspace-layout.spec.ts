@@ -144,6 +144,8 @@ test("blue actions remain distinct from disabled controls, input and mint valida
   await expect(page.locator(".km-file-icon")).toHaveCSS("color", "rgb(76, 141, 255)");
   await expect(page.locator(".km-file-name > span")).toHaveCSS("color", "rgb(240, 242, 245)");
   await random.click();
+  // A generated password has to be shown before Encrypt is available.
+  await page.getByRole("button", { name: "Show password", exact: true }).click();
   await expect(submit).toBeEnabled();
   await expect(submit).toHaveCSS("background-color", "rgb(20, 95, 228)");
   await expect(submit).toHaveCSS("color", "rgb(255, 255, 255)");

@@ -9,9 +9,19 @@
   a short numbered how-to. A Guide switch in the top bar turns it off and on.
   The form itself is unchanged, and with the guide off it is shown whole, as
   before.
-- **A generated password must be shown before the guide moves on.** The field
-  is masked and the password is cleared once the backup is sealed, so the
-  guide holds Next on the password step until Show has been pressed.
+- **A generated password must be shown before it can seal a backup.** The
+  field is masked and the password is cleared once the backup is sealed, so
+  Encrypt is held until Show has been pressed, and so is Next on the guide's
+  password step. Copy does not count, because the clipboard is wiped on a
+  timer. A password generated after an earlier one was shown has to be shown
+  too.
+- **A focus ring on text fields.** Fields now show the same ring as buttons.
+
+### Fixed
+- **An update accepted in one tab no longer reloads a tab holding unsaved
+  work.** A tab showing one-time recovery shares, a backup not yet saved, or
+  a running job stays as it is, says Keymaker was updated in another tab, and
+  reloads when its banner is pressed.
 
 ### Changed
 - **The app now stores one word in the browser.** Whether the guide is on is
