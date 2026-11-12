@@ -36,6 +36,8 @@ import {
   encryptContainer,
   encryptContainerWithSharesRequired,
   encryptContainerWithSlots,
+  encryptContainerToSink,
+  openContainerStream,
   KeymakerError,
   secureErase,
   decryptData,
@@ -45,7 +47,26 @@ import {
   type DetectedFormat,
   type OpenedBy,
 } from "./keymaker-crypto";
+import type { Keym2ByteSink } from "./keym-v2";
 import type { Argon2Sample } from "./kdf-calibration";
+
+/**
+ * At most this many chunk messages are in flight to the page, un-acknowledged.
+ *
+ * The worker can seal faster than the page can write, and every chunk posted
+ * and not yet written is a mebibyte held in the page's heap. Four bounds that
+ * at a few mebibytes whatever the file's size, and is enough to keep a write
+ * queued behind the one in progress.
+ */
+export const STREAM_WINDOW = 4;
+
+/**
+ * What an `open-stream` request is for. Only `verify` exists: the plaintext is
+ * counted and erased here, and nothing but the count crosses (roadmap 9.2). A
+ * streamed decrypt, whose chunks do cross, is a later addition to this union;
+ * the worker refuses any purpose it does not list.
+ */
+export type OpenStreamPurpose = "verify";
 
 export type CryptoRequest =
   /**
@@ -108,7 +129,47 @@ export type CryptoRequest =
    * devices that do not exist. Keeping the judgement out of here preserves what
    * this file claims to be — a transport, not a second implementation.
    */
-  | { id: number; op: "calibrate"; parallelism: number };
+  | { id: number; op: "calibrate"; parallelism: number }
+  /**
+   * `encrypt`, reading the plaintext from a `File` a chunk at a time and
+   * posting the container back as `chunk` messages, under the streaming
+   * ceiling. The fields are `encrypt`'s with `file` for `data`.
+   *
+   * The file is read here, by slicing it: a `File` posted to a worker can be
+   * sliced in the worker. The output is written by the page, because the
+   * writable it goes to cannot be posted here.
+   */
+  | {
+      id: number;
+      op: "encrypt-stream";
+      file: Blob;
+      password: string;
+      keyFile: ArrayBuffer | null;
+      options: KeymakerOptions;
+      shamir?: { threshold: number; count: number; withPassword?: boolean } | undefined;
+      passkey?: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
+    }
+  /**
+   * Open a container in a `File` without reading it whole. `purpose` says what
+   * happens to the plaintext; see `OpenStreamPurpose`. `digest` asks for the
+   * SHA-256 of the container bytes the reader read.
+   */
+  | {
+      id: number;
+      op: "open-stream";
+      file: Blob;
+      password: string;
+      keyFile: ArrayBuffer | null;
+      shares?: string[] | undefined;
+      prfOutput?: Uint8Array | undefined;
+      purpose: OpenStreamPurpose;
+      digest: boolean;
+    }
+  /**
+   * The page has written chunk `seq` of stream `stream` (the id of the request
+   * that started it), and every chunk before it. A valid ack gets no response.
+   */
+  | { id: number; op: "ack"; stream: number; seq: number };
 
 export type CryptoResponse =
   | { id: number; ok: true; op: "ping" }
@@ -157,6 +218,34 @@ export type CryptoResponse =
        */
       slotTable: "authentic" | "changed" | "not_available";
       weakKdf: string | null;
+      /**
+       * Lowercase hex SHA-256 of exactly the container bytes the reader read,
+       * when a streamed verify asked for it; null otherwise, and always null
+       * for the in-memory `verify`. A digest of ciphertext says nothing about
+       * the plaintext.
+       */
+      digest: string | null;
+    }
+  /**
+   * One piece of a stream's output, in order from `seq` 0, its buffer
+   * transferred. `id` is the stream's: the id of the request that started it.
+   * Not a settlement: the request's own response comes after the last chunk.
+   */
+  | { id: number; ok: true; op: "chunk"; seq: number; data: ArrayBuffer }
+  /**
+   * An `encrypt-stream` finished: every chunk has been posted and acknowledged.
+   * `bytes` is the container's length, `head` its bytes before the first chunk
+   * (the first `chunk` message, again), and `digest` the lowercase hex SHA-256
+   * of every byte posted. `shares` as for `encrypt`.
+   */
+  | {
+      id: number;
+      ok: true;
+      op: "encrypt-stream";
+      bytes: number;
+      head: ArrayBuffer;
+      digest: string;
+      shares?: string[] | undefined;
     }
   /**
    * Errors cross the boundary as plain data.
@@ -227,6 +316,116 @@ async function calibrate(parallelism: number): Promise<{ low: Argon2Sample; high
   return { low: await sample(CALIBRATE_LOW_KIB), high: await sample(CALIBRATE_HIGH_KIB) };
 }
 
+// ---------------------------------------------------------------------------
+// Streams: chunk messages under flow control
+// ---------------------------------------------------------------------------
+
+/** One stream's flow-control state, keyed by the id of the request that started it. */
+interface StreamState {
+  /** Chunks posted. The next chunk's `seq`. */
+  sent: number;
+  /** Chunks the page has acknowledged: every `seq` below this. */
+  acked: number;
+  /** The stream's writer, parked until an ack arrives. */
+  wake: (() => void) | null;
+}
+
+const streams = new Map<number, StreamState>();
+
+/** Park until the page has acknowledged enough that `ready(state)` holds. */
+async function until(state: StreamState, ready: (s: StreamState) => boolean): Promise<void> {
+  while (!ready(state)) await new Promise<void>((resolve) => (state.wake = resolve));
+}
+
+/**
+ * The sink a streamed encrypt writes to: each write becomes one `chunk`
+ * message, posted only while fewer than `STREAM_WINDOW` are unacknowledged,
+ * and hashed first, because the transfer detaches it.
+ */
+function chunkSink(id: number, state: StreamState, hasher: { update(data: Uint8Array): unknown }): Keym2ByteSink {
+  return {
+    async write(bytes: Uint8Array): Promise<void> {
+      await until(state, (s) => s.sent - s.acked < STREAM_WINDOW);
+      hasher.update(bytes);
+      // The core hands the sink ownership of `bytes`. A view that does not
+      // span its buffer would transfer bytes that are not this chunk's.
+      const data =
+        bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer
+          ? bytes.buffer
+          : (bytes.slice().buffer as ArrayBuffer);
+      const seq = state.sent++;
+      ctx.postMessage({ id, ok: true, op: "chunk", seq, data } satisfies CryptoResponse, [data]);
+    },
+  };
+}
+
+/**
+ * Answer an `ack`. A valid one moves the window and gets no response; one that
+ * is malformed, names a stream that is not running, or acknowledges a chunk
+ * that was never posted gets `ok: false`, because each is a page bug that
+ * would otherwise stall a stream with nothing said.
+ */
+function acknowledge(req: { id: number; stream?: unknown; seq?: unknown }): void {
+  const { stream, seq } = req;
+  if (!Number.isSafeInteger(stream) || !Number.isSafeInteger(seq) || (seq as number) < 0) {
+    ctx.postMessage({ id: req.id, ok: false, code: "invalid-input", message: "Malformed acknowledgement." } satisfies CryptoResponse);
+    return;
+  }
+  const state = streams.get(stream as number);
+  if (!state) {
+    ctx.postMessage({
+      id: req.id,
+      ok: false,
+      code: "invalid-input",
+      message: "Acknowledgement for a stream that is not running.",
+    } satisfies CryptoResponse);
+    return;
+  }
+  if ((seq as number) >= state.sent) {
+    ctx.postMessage({
+      id: req.id,
+      ok: false,
+      code: "invalid-input",
+      message: "Acknowledgement for a chunk that was not sent.",
+    } satisfies CryptoResponse);
+    return;
+  }
+  state.acked = Math.max(state.acked, (seq as number) + 1);
+  const wake = state.wake;
+  state.wake = null;
+  wake?.();
+}
+
+/**
+ * Hash exactly the container bytes a streamed reader reads, once each, in
+ * order. The reader's ranges overlap (the head read runs into the first
+ * chunk) and are otherwise contiguous; a range that skipped ahead would leave
+ * bytes out of the digest, so it marks the digest unusable rather than wrong.
+ */
+function containerHasher(hasher: { update(data: Uint8Array): unknown; digest(f: "hex"): string }) {
+  let upTo = 0;
+  let gap = false;
+  return {
+    onRead(offset: number, bytes: Uint8Array): void {
+      if (offset > upTo) gap = true;
+      const end = offset + bytes.length;
+      if (gap || end <= upTo) return;
+      hasher.update(bytes.subarray(upTo - offset));
+      upTo = end;
+    },
+    /** The digest, once the reader has read all `total` bytes of the container. */
+    digest(total: number): string {
+      if (gap || upTo !== total) {
+        throw new KeymakerError(
+          "invalid-input",
+          "The file's digest could not be taken over every byte that was read, so the check was not completed."
+        );
+      }
+      return hasher.digest("hex");
+    },
+  };
+}
+
 ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
   const req = event.data;
 
@@ -247,9 +446,108 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     return;
   }
 
+  // Handled before the `try`, so its `finally` (which erases the secrets an
+  // operation carried) is not reached by a message that carries none.
+  if (req.op === "ack") {
+    acknowledge(req);
+    return;
+  }
+
   try {
     if (req.op === "ping") {
       ctx.postMessage({ id: req.id, ok: true, op: "ping" } satisfies CryptoResponse);
+      return;
+    }
+
+    if (req.op === "encrypt-stream") {
+      const state: StreamState = { sent: 0, acked: 0, wake: null };
+      streams.set(req.id, state);
+      const { createSHA256 } = await loadHashWasm();
+      const hasher = await createSHA256();
+      hasher.init();
+      const written = await encryptContainerToSink(
+        req.file,
+        req.password,
+        req.keyFile,
+        req.options,
+        { shamir: req.shamir, passkey: req.passkey },
+        chunkSink(req.id, state, hasher)
+      );
+      // The response is the page's signal that the container is complete, so
+      // it waits until the page has written every chunk: nothing it says can
+      // overtake a chunk still in flight, and no acknowledgement can arrive
+      // for a stream that has already ended.
+      await until(state, (s) => s.acked === s.sent);
+      const head = written.head.slice().buffer as ArrayBuffer;
+      const response: CryptoResponse = {
+        id: req.id,
+        ok: true,
+        op: "encrypt-stream",
+        bytes: written.bytes,
+        head,
+        digest: hasher.digest("hex"),
+        shares: written.shares,
+      };
+      ctx.postMessage(response, [head]);
+      return;
+    }
+
+    if (req.op === "open-stream") {
+      // Checked before anything is read or derived. Only `verify` exists, and
+      // a purpose this worker does not list must not fall through to it.
+      if (req.purpose !== "verify") {
+        throw new KeymakerError(
+          "invalid-input",
+          `Unknown open-stream purpose: ${String((req as { purpose?: unknown }).purpose).slice(0, 32)}`
+        );
+      }
+      let hash: ReturnType<typeof containerHasher> | null = null;
+      if (req.digest === true) {
+        const { createSHA256 } = await loadHashWasm();
+        const hasher = await createSHA256();
+        hasher.init();
+        hash = containerHasher(hasher);
+      }
+      const opened = await openContainerStream(
+        req.file,
+        req.password,
+        req.keyFile,
+        req.shares,
+        req.prfOutput,
+        hash ? { onRead: hash.onRead } : undefined
+      );
+      let bytes = 0;
+      try {
+        // Counted and erased here; nothing is posted until the last chunk
+        // has verified, and then only the count (roadmap 9.2).
+        await opened.drain({
+          async write(chunk: Uint8Array): Promise<void> {
+            bytes += chunk.length;
+            secureErase(chunk);
+          },
+        });
+      } finally {
+        opened.discard();
+      }
+      const response: CryptoResponse = {
+        id: req.id,
+        ok: true,
+        op: "verify",
+        format: opened.format,
+        bytes,
+        openedBy: opened.openedBy,
+        keyFileUsed: opened.keyFileUsed,
+        slotTable:
+          opened.slotTableAuthentic === null
+            ? "not_available"
+            : opened.slotTableAuthentic
+              ? "authentic"
+              : "changed",
+        weakKdf: opened.weakKdf,
+        // `file` is a Blob by now: openContainerStream refuses anything else.
+        digest: hash ? hash.digest(req.file.size) : null,
+      };
+      ctx.postMessage(response);
       return;
     }
 
@@ -320,6 +618,7 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
               ? "authentic"
               : "changed",
         weakKdf: result.weakKdf,
+        digest: null,
       };
       // Nothing to transfer: the response carries no buffer at all.
       ctx.postMessage(response);
@@ -354,7 +653,7 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       // to keep it for every op.
       message: isUserFacingError(error)
         ? error.message
-        : req.op === "encrypt"
+        : req.op === "encrypt" || req.op === "encrypt-stream"
           ? "Processing failed. Please try again."
           : "Decryption failed.",
     };
@@ -379,5 +678,19 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     // exit, including a refused or failed encrypt, passes through.
     if (req.op === "encrypt") secureErase(req.data);
     if (req.op === "decrypt" || req.op === "verify") secureErase(req.prfOutput);
+    // The streaming ops: the same two secrets. The key file is transferred in
+    // and the core zeroes it on every exit already; this is the backstop for
+    // a request that failed before reaching the core. The plaintext of an
+    // `encrypt-stream` is a File, read and erased a chunk at a time by the
+    // writer, so there is no whole buffer of it here to erase.
+    if (req.op === "encrypt-stream") {
+      secureErase(req.passkey?.prfOutput);
+      if (req.keyFile instanceof ArrayBuffer) secureErase(req.keyFile);
+      streams.delete(req.id);
+    }
+    if (req.op === "open-stream") {
+      secureErase(req.prfOutput);
+      if (req.keyFile instanceof ArrayBuffer) secureErase(req.keyFile);
+    }
   }
 });

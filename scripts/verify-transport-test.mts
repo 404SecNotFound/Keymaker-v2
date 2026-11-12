@@ -74,8 +74,10 @@ async function send(req: Record<string, unknown>): Promise<{ message: any; trans
 // ---------------------------------------------------------------------------
 // The scanner.
 // ---------------------------------------------------------------------------
+// `digest` is the SHA-256 of the container, not of the plaintext: null for an
+// in-memory verify, and hex of ciphertext for a streamed one.
 const VERIFY_FIELDS = new Set([
-  "id", "ok", "op", "format", "bytes", "openedBy", "keyFileUsed", "slotTable", "weakKdf",
+  "id", "ok", "op", "format", "bytes", "openedBy", "keyFileUsed", "slotTable", "weakKdf", "digest",
 ]);
 const ERROR_FIELDS = new Set(["id", "ok", "code", "message"]);
 
