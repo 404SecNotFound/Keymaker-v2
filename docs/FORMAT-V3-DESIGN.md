@@ -216,6 +216,23 @@ keeps §1.2's property true, and it means authorised revocation and unauthorised
 stripping produce different files: the first carries a valid MAC, the second
 does not.
 
+#### What revocation does not do
+
+Removing a slot changes the file it is applied to and nothing else. A copy made
+before the removal still carries the removed slot and still opens with the
+removed secret. No format can change a copy its writer does not hold.
+
+Removal also leaves the master key as it was, because the payload is not
+re-encrypted. Someone who held the removed secret and kept an older copy can
+unwrap the master key from that copy's slot. The same master key opens the
+payload of the current file, so removal does not lock that person out of the
+current container's contents if they obtain the file. The only way to make a
+former secret useless against new content is a fresh container: decrypt, then
+encrypt again, which draws a new master key. Nothing protects content already
+present in a copy the other party holds. Re-passwording a slot (v2 §4) has the
+same limits, and is a convenience for the person who holds the container, not a
+revocation.
+
 An implementation that cannot recompute the MAC — because it holds no slot
 secret — MUST NOT write a slot table at all. There is no partial edit.
 
@@ -269,6 +286,10 @@ fix a gap v2 never claimed to close.
 ## 7. What this does not fix
 
 - **A v2 container is still strippable.** v3 protects containers written as v3.
+- **Revocation against an older copy.** Removing a slot edits one file. A copy
+  made earlier still opens with the removed secret, and the master key it yields
+  also opens the current file's payload, which removal does not re-encrypt.
+  Cutting off a former secret for new content takes a fresh container (§5.3).
 - **Deletion.** An attacker who can write the file can also truncate or delete
   it. v3 makes *silent* modification detectable; it does not make the file
   durable. Backups in more than one place remain the answer to that.

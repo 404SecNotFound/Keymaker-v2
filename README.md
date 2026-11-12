@@ -502,6 +502,12 @@ a way of not saying anything:
   switch write it, and it is opt-in because it costs bytes, and on paper bytes
   are symbols. Padding is not deniability: the file
   is still plainly a backup.
+- **An older copy after a slot is removed.** Removing a slot or changing a
+  password edits one file and keeps the same master key. A copy made earlier
+  still opens with the old secret, and that copy's master key also opens the
+  current file. To cut off a former secret for new content, decrypt and
+  encrypt into a fresh container
+  ([format design §5.3](docs/FORMAT-V3-DESIGN.md)).
 - **A weak password.** Argon2id makes guessing expensive; it cannot make a
   guessable password unguessable.
 - **Forgetting the password.** There is no reset, no recovery email and nobody

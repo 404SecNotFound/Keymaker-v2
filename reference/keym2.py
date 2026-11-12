@@ -2853,6 +2853,10 @@ def remove_slot(
     An attacker is of course not obliged to call this function; they can edit
     the bytes directly, and v3 does not stop them. What v3 does is make the
     result detectable, which is all §5.2 ever claimed.
+
+    This is not revocation against an older copy. The master key and the payload
+    are unchanged, so a copy made before the removal still opens with the removed
+    secret (v3 §5.3, "What revocation does not do").
     """
     core = parse_core_header(container)
     master: Optional[bytes] = None
@@ -2919,6 +2923,9 @@ def rewrap_slot(
     slot, so aiming it at a Shamir slot silently converts one and every printed
     share for that set becomes scrap. Replacing a share set with a password is a
     legitimate thing to want; arriving at it by asking to re-password is not.
+
+    The master key is unchanged, so the old password still opens any copy made
+    before this call (v3 §5.3, "What revocation does not do").
     """
     core, records, payload, master = recover_master_key(
         container, unlock_password, keyfile_bytes=unlock_keyfile,
