@@ -121,6 +121,21 @@ export function workerWillBeUsed(): Promise<boolean> {
   return ready();
 }
 
+/**
+ * Has this page already proven it cannot use a worker? Synchronous, for the
+ * one caller that may not await before asking: a streamed encrypt has to open
+ * the save dialog as the first thing after the click, and must not open it at
+ * all on a browser that will then refuse to stream.
+ *
+ * True only on a settled verdict (no `Worker`, a constructor that threw, a
+ * script that failed, or two probes that timed out). A probe still in flight
+ * is not a verdict, and `encryptFileViaWorker` still refuses with a typed
+ * error if it ends badly.
+ */
+export function workerKnownUnavailable(): boolean {
+  return workerUnavailable || typeof Worker === "undefined";
+}
+
 function spawn(): Worker | null {
   if (workerUnavailable) return null;
   if (worker) return worker;

@@ -13,6 +13,7 @@
  *   node scripts/keymaker-test.mjs keym2-dispatch → KEYM version routing
  *   node scripts/keymaker-test.mjs keym2-stream   → the KEYM v2 streaming core
  *   node scripts/keymaker-test.mjs worker-stream  → the worker's streaming protocol
+ *   node scripts/keymaker-test.mjs save-target    → per-browser file limits and the save target
  */
 import { build } from "esbuild";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -34,6 +35,7 @@ const ENTRY_BY_MODE = {
   vectors: "vectors-test.mts",
   "keym2-stream": "keym2-stream-test.mts",
   "worker-stream": "worker-stream-test.mts",
+  "save-target": "save-target-test.mts",
 };
 const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
 const entry = join(HERE, ENTRY_BY_MODE[mode]);

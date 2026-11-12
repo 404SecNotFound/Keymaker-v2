@@ -11,6 +11,9 @@
     "incremental": false,
     "types": ["node"]
   },
-  "include": ["scripts/*.mts", "reference/*.mts"],
+  // src/types holds ambient declarations (the save dialog) that the app
+  // project picks up through its own include and these suites reach only
+  // through the sources they import.
+  "include": ["scripts/*.mts", "reference/*.mts", "src/types/*.d.ts"],
   "exclude": ["node_modules", "out", ".next"]
 }

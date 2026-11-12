@@ -38,6 +38,7 @@ scripts/.shamir.build.mjs
 scripts/.vectors.build.mjs
 scripts/.keym2-stream.build.mjs
 scripts/.worker-stream.build.mjs
+scripts/.save-target.build.mjs
 *.tsbuildinfo
 
 # playwright

@@ -312,6 +312,13 @@ jobs:
       - name: Streaming through the worker
         run: npm run test:worker-stream
 
+      # Stage C1. How large a file each action takes in a browser with and
+      # without a save dialog and a worker, the words the page builds from
+      # that, and the save target's rules: nothing committed after an abort, an
+      # abort after the commit does nothing, a rejected close is not a save.
+      - name: File limits and the save target
+        run: npm run test:save-target
+
       # Roadmap 9.3. Creating a backup with extra ways in derives the password
       # once, writes the same bytes as enrolling them one by one, and refuses
       # bad input before any derivation.
