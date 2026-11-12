@@ -1884,10 +1884,26 @@ export interface OpenStreamObserver {
   onRead?: (offset: number, bytes: Uint8Array) => void;
 }
 
-const STREAM_FORMAT_REFUSAL =
-  "This file is not a KEYM v2, v3 or v4 container, so it cannot be read a chunk at a time. " +
-  "KEYM v1 and the older IttyBitz formats seal the whole file as one block, and this app opens " +
-  `those only in memory, up to ${MAX_PLAINTEXT_SIZE / 1024 / 1024} MB.`;
+/**
+ * Why a container cannot be read a chunk at a time, naming what it is where
+ * the header says. The format is in the clear, so naming it tells nobody
+ * anything; it tells the owner of a large KEYM v1 backup why it was refused.
+ * A headerless IttyBitz v0 file cannot be told from any other bytes, so it is
+ * not named.
+ */
+export function streamFormatRefusal(format: DetectedFormat): string {
+  const what =
+    format === "keym-v1"
+      ? "This is a KEYM v1 backup"
+      : format === "ibtz-v1"
+        ? "This is an IttyBitz v1 backup"
+        : "This file is not a KEYM v2, v3 or v4 backup";
+  return (
+    `${what}, so it cannot be read a chunk at a time. ` +
+    "KEYM v1 and the older IttyBitz formats seal the whole file as one block, and this app opens " +
+    `those only in memory, up to ${MAX_PLAINTEXT_SIZE / 1024 / 1024} MB.`
+  );
+}
 
 /**
  * Open the KEYM v2/v3/v4 container in `file` without reading it whole: every
@@ -1931,7 +1947,7 @@ export async function openContainerStream(
     const base = keym2.blobSource(file);
     const format = detectFormat(await base.read(0, Math.min(file.size, KEYM_MAGIC.length + 1)));
     if (format !== "keym-v2" && format !== "keym-v3" && format !== "keym-v4") {
-      throw new KeymakerError("unsupported-config", STREAM_FORMAT_REFUSAL);
+      throw new KeymakerError("unsupported-config", streamFormatRefusal(format));
     }
     const onRead = observer?.onRead;
     const source = onRead

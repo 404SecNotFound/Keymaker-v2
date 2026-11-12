@@ -989,6 +989,122 @@ const secureEraseLocal = (v) => v && v.fill(0);
     ok(left.length === 0, "after a failed drain no plaintext copy of the core's survives", left.join("; "));
   }
 
+  // -- the worker's open session (streamed decrypt) ------------------------------
+  // `open-stream` with purpose "decrypt" keeps the opened container in the
+  // worker between the page's two clicks: the ChaCha payload key and chunk 0's
+  // plaintext. The shipping worker is loaded as-is with a stand-in `self`
+  // whose postMessage transfers, as the real one does; the page's copy of each
+  // chunk is erased on arrival with the native constructor, as the page erases
+  // it once written, so the census sees only what the worker made. Every way
+  // the session ends is driven: close-stream, a new request, a second open, a
+  // drain that fails part-way, and one that succeeds.
+  //
+  // Negative control: remove `s.opened.discard()` from the worker's
+  // `discardSession`; the close-stream, new-request and second-open checks
+  // fail. The drains are erased by the core's own `finally` as well, so that
+  // control does not reach them; removing that `finally`'s discard too makes
+  // the failed-drain check fail.
+  {
+    let handler = null;
+    const inbox = [];
+    globalThis.self = {
+      addEventListener: (_type, h) => {
+        handler = h;
+      },
+      postMessage: (message, transfer) => {
+        const received = transfer && transfer.length ? structuredClone(message, { transfer }) : structuredClone(message);
+        if (received?.op === "chunk") new U8(received.data).fill(0);
+        inbox.push(received);
+      },
+    };
+    const wk = await bundle(
+      "worker-session",
+      `import "./crypto-worker";
+       export { encryptKeym2WithExplicitSecrets } from "./keym-v2";`
+    );
+    let id = 7000;
+    const send = (req) => handler({ data: { id: ++id, ...req } });
+    const openReq = (bytes) => ({
+      op: "open-stream", file: new Blob([bytes]), password: PASSWORD, keyFile: null, purpose: "decrypt", digest: false,
+    });
+    const answered = (op) => inbox.some((m) => m.op === op && m.ok === true);
+    /** Run a drain to its end, acknowledging each chunk as the page would once written. */
+    const drainAll = async () => {
+      const drainId = ++id;
+      const done = handler({ data: { id: drainId, op: "drain" } });
+      let acked = 0;
+      let settled = false;
+      done.then(() => (settled = true));
+      while (!settled) {
+        const chunks = inbox.filter((m) => m.id === drainId && m.op === "chunk");
+        for (; acked < chunks.length; acked++) await send({ op: "ack", stream: drainId, seq: chunks[acked].seq });
+        await new Promise((r) => setTimeout(r, 5));
+      }
+      return inbox.find((m) => m.id === drainId && m.op !== "chunk");
+    };
+    const MASTER2 = U8.from({ length: 32 }, (_, i) => (i * 23 + 5) & 0xff);
+    // A different plaintext as well as a different key, so what the second
+    // session holds cannot be mistaken for what the first left behind.
+    const otherPlain = U8.from({ length: 1000 }, (_, i) => (i * 31 + 7) & 0xff);
+    const other = await wk.encryptKeym2WithExplicitSecrets(otherPlain, PASSWORD, null, chacha, SALT,
+      U8.from(MASTER2), st.KEYM2_VERSION_V3, CID);
+
+    for (const [label, end] of [
+      ["close-stream", () => send({ op: "close-stream" })],
+      ["a new request (a ping)", () => send({ op: "ping" })],
+    ]) {
+      inbox.length = 0;
+      let before = false;
+      const run = await observe(async () => {
+        await send(openReq(container));
+        before = holders(census, MASTER).length > 0 && holders(census, needles[0]).length > 0;
+        await end();
+      });
+      ok(answered("opened"), `worker session, ${label}: the open answered`, JSON.stringify(inbox.map((m) => m.message ?? m.op)));
+      ok(before, `worker session, ${label}: while open the census sees the payload key and chunk 0 (not vacuous)`);
+      ok(holders(run.seen, MASTER).length === 0, `worker session, after ${label}: no copy of the payload key survives`,
+         none(holders(run.seen, MASTER)));
+      const left = plaintextLeft(run.seen);
+      ok(left.length === 0, `worker session, after ${label}: chunk 0's held plaintext does not survive`, left.join("; "));
+    }
+    {
+      inbox.length = 0;
+      let secondHeld = false;
+      const run = await observe(async () => {
+        await send(openReq(container));
+        await send(openReq(other));
+        secondHeld = holders(census, MASTER2).length > 0;
+      });
+      ok(inbox.filter((m) => m.op === "opened").length === 2 && secondHeld,
+         "worker session, a second open: both opened, and the second's key is held (not vacuous)");
+      ok(holders(run.seen, MASTER).length === 0, "worker session, a second open: no copy of the first session's payload key survives",
+         none(holders(run.seen, MASTER)));
+      const left = plaintextLeft(run.seen);
+      ok(left.length === 0, "worker session, a second open: the first session's chunk 0 does not survive", left.join("; "));
+      await send({ op: "close-stream" });
+    }
+    for (const [label, bytes, expectOk] of [
+      ["a drain that fails on chunk 2", (() => { const t = U8.from(container); t[t.length - 3] ^= 0x01; return t; })(), false],
+      ["a drain that succeeds", container, true],
+    ]) {
+      inbox.length = 0;
+      let final = null;
+      const run = await observe(async () => {
+        await send(openReq(bytes));
+        final = await drainAll();
+      });
+      const chunks = inbox.filter((m) => m.op === "chunk").length;
+      ok(final?.ok === expectOk && (expectOk ? chunks === 3 : chunks === 2),
+         `worker session, ${label}: ${expectOk ? "the drain answered" : "the drain failed"} after ${expectOk ? 3 : 2} chunks (not vacuous)`,
+         `${chunks} chunks, final ${JSON.stringify(final)}`);
+      ok(holders(run.seen, MASTER).length === 0, `worker session, after ${label}: no copy of the payload key survives`,
+         none(holders(run.seen, MASTER)));
+      const left = plaintextLeft(run.seen);
+      ok(left.length === 0, `worker session, after ${label}: no plaintext copy the worker made survives`, left.join("; "));
+    }
+    delete globalThis.self;
+  }
+
   crypto.getRandomValues = nativeRandom;
   subtle.encrypt = nativeEncrypt;
 }

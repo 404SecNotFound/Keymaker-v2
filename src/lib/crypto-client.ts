@@ -77,6 +77,17 @@ const pending = new Map<number, Pending>();
 const streams = new Map<number, { chunk: (seq: number, data: ArrayBuffer) => void }>();
 
 /**
+ * The worker holding an opened backup (phase 1 of a streamed decrypt), or
+ * null. The worker keeps one session and ends it on any request but a drain,
+ * so this is cleared by every `post` and by `terminate`, and taken by
+ * `drainOpenedFileViaWorker`: it is never true of a worker that no longer
+ * holds one.
+ */
+let openedIn: Worker | null = null;
+/** Counts every request that ends a session, so an open can tell whether one overtook it. */
+let postEpoch = 0;
+
+/**
  * Why a streaming call was refused on a browser with no worker.
  *
  * There is deliberately no page-thread fallback for streaming. The in-memory
@@ -86,7 +97,7 @@ const streams = new Map<number, { chunk: (seq: number, data: ArrayBuffer) => voi
  * in-memory path still covers every file up to its own limit.
  */
 export const STREAM_NEEDS_WORKER =
-  "Large files are encrypted and checked in Keymaker's background worker, and this browser could not " +
+  "Large files are encrypted, opened and checked in Keymaker's background worker, and this browser could not " +
   "start one, so nothing was read. Files up to 100 MB can still be processed on the page.";
 
 /**
@@ -329,6 +340,8 @@ function failAllPending(reason: unknown) {
 }
 
 function terminate() {
+  // A terminated worker's heap is gone, and an opened backup with it.
+  openedIn = null;
   if (worker) {
     worker.terminate();
     worker = null;
@@ -366,6 +379,12 @@ function post<T extends CryptoResponse>(
   request: CryptoRequest,
   transfer: Transferable[]
 ): Promise<T> {
+  // The worker ends an opened backup's session on every request but a drain
+  // (and an ack, which is never posted through here).
+  if (request.op !== "drain") {
+    openedIn = null;
+    postEpoch++;
+  }
   return new Promise<T>((resolve, reject) => {
     pending.set(request.id, { resolve: resolve as (v: never) => void, reject });
     w.postMessage(request, transfer);
@@ -817,6 +836,172 @@ export async function verifyFileViaWorker(
     secureErase(prfOutput);
     secureErase(keyFile);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Streamed decrypt: open, then drain to a file the page chose (§5.5)
+// ---------------------------------------------------------------------------
+
+/** What phase 1 of a streamed decrypt established. Not a result: nothing past chunk 0 is checked. */
+export interface OpenedFileOutcome {
+  format: DetectedFormat;
+  /** The plaintext length the drain will hand over if every chunk verifies. */
+  bytes: number;
+  openedBy: OpenedBy;
+  keyFileUsed: boolean;
+  slotTable: "authentic" | "changed" | "not_available";
+  weakKdf: string | null;
+}
+
+/** Why a drain was refused: nothing is open in the worker. */
+export const NOTHING_OPENED = "There is no opened backup to save. Open it again, then save it.";
+
+/**
+ * Phase 1 of a streamed decrypt: open a KEYM v2, v3 or v4 container in a
+ * `File` of up to `MAX_STREAM_CONTAINER_SIZE` in the worker (the slot walk
+ * and chunk 0), and keep it open there for `drainOpenedFileViaWorker`.
+ *
+ * No plaintext crosses. The answer says what opened it and how large its
+ * contents are, and that is all it can say: a container whose last chunk is
+ * corrupt or missing opens here, and fails only when drained. So this is
+ * never a result to show as one (§5.5).
+ *
+ * KEYM v1 and the IttyBitz formats are refused by name; with no worker the
+ * call is refused (`STREAM_NEEDS_WORKER`). The key file is transferred and the
+ * PRF output erased here on every exit, as `verifyFileViaWorker` does.
+ */
+export async function openFileViaWorker(
+  file: File,
+  password: string,
+  keyFile: ArrayBuffer | null,
+  shares?: string[],
+  prfOutput?: Uint8Array
+): Promise<OpenedFileOutcome> {
+  try {
+    const w = (await ready()) ? spawn() : null;
+    if (!w) {
+      lastRunUsedWorker = false;
+      throw new KeymakerError("unsupported-config", STREAM_NEEDS_WORKER);
+    }
+    lastRunUsedWorker = true;
+
+    const id = nextId++;
+    const transfer: Transferable[] = keyFile ? [keyFile] : [];
+    const answer = post<Extract<CryptoResponse, { op: "opened"; ok: true }>>(
+      w,
+      { id, op: "open-stream", file, password, keyFile, shares, prfOutput, purpose: "decrypt", digest: false },
+      transfer
+    );
+    const posted = postEpoch;
+    const res = await answer;
+    // Only if nothing has been posted or terminated since: either would have
+    // ended the session this answer describes.
+    if (worker === w && postEpoch === posted) openedIn = w;
+    return {
+      format: res.format,
+      bytes: res.bytes,
+      openedBy: res.openedBy,
+      keyFileUsed: res.keyFileUsed,
+      slotTable: res.slotTable,
+      weakKdf: res.weakKdf,
+    };
+  } finally {
+    secureErase(prfOutput);
+    secureErase(keyFile);
+  }
+}
+
+/**
+ * Phase 2 of a streamed decrypt: drain the backup `openFileViaWorker` opened.
+ *
+ * Each verified chunk of plaintext reaches `onChunk` in order, in a buffer
+ * transferred from the worker, and is acknowledged only once `onChunk` has
+ * resolved; it is erased here as soon as `onChunk` settles, so the caller
+ * writes it and keeps nothing. At most `STREAM_WINDOW` chunks wait here.
+ *
+ * **Resolves only on the worker's final `drain` answer**, which it sends only
+ * after the last chunk opened under `final_flag`, the payload was consumed
+ * exactly, the v4 checks passed and every chunk was acknowledged. That is the
+ * caller's one signal to commit (§5.5). Until then what `onChunk` received is
+ * not a verified prefix of anything, and on a rejection the caller discards it.
+ *
+ * - If `onChunk` rejects, the worker is terminated and this rejects with that
+ *   error.
+ * - Stop (`cancelAllCryptoWork`) terminates the worker; this rejects with
+ *   `CryptoCancelled`.
+ * - With nothing open (never opened, already drained, discarded, or the worker
+ *   since replaced) this is refused with a typed error and nothing is posted.
+ */
+export async function drainOpenedFileViaWorker(
+  onChunk: (bytes: Uint8Array) => Promise<void>
+): Promise<{ bytes: number }> {
+  const w = openedIn;
+  if (!w || w !== worker) {
+    openedIn = null;
+    throw new KeymakerError("invalid-input", NOTHING_OPENED);
+  }
+  // Single use: the worker ends the session when the drain settles.
+  openedIn = null;
+  lastRunUsedWorker = true;
+
+  const id = nextId++;
+  let writes: Promise<void> = Promise.resolve();
+  let writeFailure: { error: unknown } | null = null;
+  streams.set(id, {
+    chunk: (seq, data) => {
+      writes = writes.then(async () => {
+        const bytes = new Uint8Array(data);
+        if (writeFailure || !streams.has(id)) {
+          secureErase(bytes);
+          return;
+        }
+        try {
+          await onChunk(bytes);
+        } catch (error) {
+          writeFailure = { error };
+          abortStream(id, error);
+          return;
+        } finally {
+          // Plaintext. The caller has written it, or failed to; either way
+          // this page has no further use for its copy.
+          secureErase(bytes);
+        }
+        if (streams.has(id)) w.postMessage({ id: nextId++, op: "ack", stream: id, seq } satisfies CryptoRequest);
+      });
+    },
+  });
+
+  try {
+    const res = await post<Extract<CryptoResponse, { op: "drain"; ok: true }>>(w, { id, op: "drain" }, []);
+    // The worker answers only once every chunk is acknowledged, and a chunk is
+    // acknowledged only after its write resolved, so this has settled.
+    await writes;
+    if (writeFailure) throw (writeFailure as { error: unknown }).error;
+    return { bytes: res.bytes };
+  } catch (error) {
+    // As in `encryptFileViaWorker`: no further chunk is started, and the
+    // rejection waits for a write already in progress, so the caller's target
+    // is idle when it is told to discard.
+    streams.delete(id);
+    await writes;
+    throw error;
+  } finally {
+    streams.delete(id);
+  }
+}
+
+/**
+ * End phase 1 without saving: the worker drops the opened backup and erases
+ * the keys and chunk 0 it held. A no-op when nothing is open. Not for a drain
+ * in progress; Stop (`cancelAllCryptoWork`) ends that.
+ */
+export function discardOpenedFile(): void {
+  const w = openedIn;
+  openedIn = null;
+  if (!w || w !== worker) return;
+  void post(w, { id: nextId++, op: "close-stream" }, []).catch(() => {
+    // A worker that died has dropped the session with its heap.
+  });
 }
 
 /**

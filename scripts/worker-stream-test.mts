@@ -398,7 +398,7 @@ console.log("\nAcknowledgements and open-stream:");
   await finish(noDigest, "the verify without digest");
   check(noDigest.finals[0]?.ok === true && noDigest.finals[0].digest === null, "without digest, the digest is null");
 
-  for (const purpose of ["decrypt", "bogus", undefined]) {
+  for (const purpose of ["bogus", "Decrypt", undefined]) {
     const refused = start(
       { op: "open-stream", file: fileOf(container), password: PASSWORD, keyFile: null, purpose, digest: false },
       true
@@ -558,6 +558,290 @@ console.log("\nShare sets and passkeys through encrypt-stream:");
     "a passkey beside a password-and-strips slot is refused, and nothing is posted",
     JSON.stringify(contradictory.finals)
   );
+}
+
+// ---------------------------------------------------------------------------
+// Streamed decrypt: `open-stream` with purpose "decrypt", then `drain`.
+// ---------------------------------------------------------------------------
+//
+// Phase 1 opens the container and keeps it as the worker's one session; its
+// answer carries no plaintext. Phase 2 drains the session to the page under
+// the ack window, and its final answer is the page's commit signal (§5.5), so
+// it must come only after the last chunk opened under final_flag and every
+// chunk was acknowledged, and never for a container that does not verify to
+// the end. Negative controls, each built and run: post chunk 0 with the
+// `opened` answer (h fails); post the final answer before the last ack (i
+// fails); open the last chunk under final_flag 0 in the core (the truncation
+// check in j fails); post the final answer however the drain ended (both
+// checks in j fail); skip the session discard on a new request (k fails).
+console.log("\nStreamed decrypt:");
+{
+  const OPENED_FIELDS = new Set(["id", "ok", "op", "format", "bytes", "openedBy", "keyFileUsed", "slotTable", "weakKdf"]);
+  /** Every buffer, typed array or Blob anywhere in a message, by path. */
+  const buffersIn = (value: unknown, path = "message"): string[] => {
+    if (value instanceof ArrayBuffer || ArrayBuffer.isView(value)) return [`${path} is a buffer`];
+    if (value instanceof Blob) return [`${path} is a Blob`];
+    if (value && typeof value === "object") {
+      return Object.entries(value).flatMap(([k, v]) => buffersIn(v, `${path}.${k}`));
+    }
+    return [];
+  };
+  const openReq = (file: Blob, password = PASSWORD) => ({
+    op: "open-stream",
+    file,
+    password,
+    keyFile: null,
+    purpose: "decrypt",
+    digest: false,
+  });
+  const MiBTag = MiB + 16; // one full AES-GCM chunk on the wire
+  const lastChunkWire = (plaintext.length % MiB) + 16;
+
+  // h. Phase 1 posts one `opened` answer, with no buffer and no plaintext.
+  const opened = start(openReq(fileOf(container, "backup.keym")), true);
+  await finish(opened, "(h) the open");
+  const o = opened.finals[0];
+  const extra = o ? Object.keys(o).filter((k) => !OPENED_FIELDS.has(k)) : ["no message"];
+  check(
+    opened.chunks.length === 0 && opened.finals.length === 1 && o?.ok === true && o.op === "opened",
+    "(h) open-stream for decrypt posts exactly one opened answer and no chunk",
+    `${opened.chunks.length} chunks; ${JSON.stringify(opened.finals.map((f) => f.op ?? f.message))}`
+  );
+  check(
+    extra.length === 0 && buffersIn(o).length === 0 && !JSON.stringify(o ?? {}).includes(CANARY),
+    "(h) the opened answer holds no buffer, no plaintext and nothing off its allow-list",
+    [...extra, ...buffersIn(o)].join("; ")
+  );
+  check(
+    o?.bytes === plaintext.length && o?.format === "keym-v3" && o?.openedBy === "passphrase" &&
+      o?.slotTable === "authentic" && o?.keyFileUsed === false,
+    "(h) it reports the plaintext's length, the format, the slot and the slot table",
+    JSON.stringify(o)
+  );
+
+  // i. The drain yields the plaintext, and its final answer waits for the last ack.
+  const drain = start({ op: "drain" }, false);
+  const expectedDrainChunks = Math.ceil(plaintext.length / MiB);
+  {
+    const deadline = Date.now() + 60_000;
+    let acked = 0;
+    while (Date.now() < deadline) {
+      const ready = drain.chunks.filter((c) => c.seq >= acked && c.seq < expectedDrainChunks - 1).map((c) => c.seq);
+      for (const seq of ready.sort((x, y) => x - y)) {
+        await drain.ack(seq);
+        acked = seq + 1;
+      }
+      if (drain.chunks.length >= expectedDrainChunks || drain.finals.length > 0) break;
+      await waitFor(() => drain.chunks.some((c) => c.seq >= acked) || drain.finals.length > 0, 5_000);
+    }
+  }
+  // Every chunk is posted and all but the last acknowledged. A worker that
+  // answered on `drain()` resolving, rather than on the last ack, has answered.
+  await sleep(500);
+  check(
+    drain.chunks.length === expectedDrainChunks && drain.finals.length === 0,
+    "(i) with every chunk posted and the last not yet acknowledged, no final answer has been sent",
+    `${drain.chunks.length} chunks, finals ${JSON.stringify(drain.finals)}`
+  );
+  await drain.ack(expectedDrainChunks - 1);
+  await finish(drain, "(i) the drain");
+  const d = drain.finals[0];
+  check(
+    drain.finals.length === 1 && d?.ok === true && d.op === "drain" && d.bytes === plaintext.length,
+    "(i) acknowledging the last chunk brings the one final drain answer, with the plaintext's length",
+    JSON.stringify(drain.finals)
+  );
+  check(
+    Buffer.compare(containerOf(drain), plaintext) === 0,
+    "(i) the drained chunks, in seq order, are the original plaintext",
+    `${containerOf(drain).length} bytes vs ${plaintext.length}`
+  );
+  check(drain.chunks.every((c, i) => c.seq === i), "(i) the chunks arrive in order");
+  check(
+    drain.maxOutstanding <= workerModule.STREAM_WINDOW,
+    "(i) never more than 4 chunks un-acknowledged",
+    `${drain.maxOutstanding}`
+  );
+  {
+    const again = start({ op: "drain" }, true);
+    await finish(again, "(i) a second drain");
+    check(
+      again.chunks.length === 0 && again.finals[0]?.ok === false && /no opened backup/i.test(again.finals[0]?.message ?? ""),
+      "(i) the session is single use: a second drain is refused and posts nothing",
+      JSON.stringify(again.finals)
+    );
+  }
+
+  // j. A container that does not verify to the end: never a final success.
+  const flipped = container.slice();
+  flipped[flipped.length - 1]! ^= 0x01;
+  // Exactly the last chunk removed: a payload of whole chunks, valid by length,
+  // whose new last chunk was sealed with final_flag 0.
+  const truncated = container.slice(0, container.length - lastChunkWire);
+  {
+    const payloadOffset = keym2SlotTableOffset(KEYM2_VERSION_V3) + keym2SlotLen(CipherId.AES_256_GCM);
+    check(
+      container.length === payloadOffset + 6 * MiBTag + lastChunkWire && truncated.length === payloadOffset + 6 * MiBTag,
+      "(j) tripwire: the truncated container is six whole chunks, ending exactly on a chunk boundary",
+      `${container.length}, ${truncated.length}, payload at ${payloadOffset}`
+    );
+  }
+  for (const [label, bad] of [
+    ["its last chunk flipped", flipped],
+    ["truncated exactly at a chunk boundary", truncated],
+  ] as const) {
+    const op = start(openReq(fileOf(bad)), true);
+    await finish(op, `(j) open, ${label}`);
+    check(
+      op.finals[0]?.ok === true && op.finals[0].op === "opened",
+      `(j) a container with ${label} opens in phase 1 (only chunk 0 is checked there)`,
+      JSON.stringify(op.finals)
+    );
+    const dr = start({ op: "drain" }, true);
+    await finish(dr, `(j) drain, ${label}`);
+    await sleep(100);
+    const successes = dr.finals.filter((f) => f.ok === true);
+    const errors = dr.finals.filter((f) => f.ok === false);
+    check(
+      successes.length === 0 && errors.length === 1,
+      `(j) draining a container with ${label} sends an error and never a final success`,
+      `${dr.chunks.length} chunks; ${JSON.stringify(dr.finals)}`
+    );
+    check(
+      errors[0]?.message === "Decryption failed." && errors[0]?.code === null,
+      `(j) and the error is the generic one, saying nothing about which check failed`,
+      JSON.stringify(errors[0])
+    );
+    check(dr.chunks.length > 0, `(j) chunks before the bad one did reach the page (the check is not vacuous)`,
+      `${dr.chunks.length} chunks`);
+  }
+
+  // k. Every way a session ends: a later drain is refused.
+  const refusedDrain = async (label: string) => {
+    const dr = start({ op: "drain" }, true);
+    await finish(dr, label);
+    check(
+      dr.chunks.length === 0 && dr.finals.length === 1 && dr.finals[0]?.ok === false &&
+        /no opened backup/i.test(dr.finals[0]?.message ?? ""),
+      `(k) after ${label}, a drain is refused and posts nothing`,
+      `${dr.chunks.length} chunks; ${JSON.stringify(dr.finals)}`
+    );
+  };
+  const openOk = async (label: string, file: Blob = fileOf(container)) => {
+    const op = start(openReq(file), true);
+    await finish(op, label);
+    if (op.finals[0]?.op !== "opened") check(false, `${label}: the open succeeded`, JSON.stringify(op.finals));
+  };
+  await openOk("(k) open before close-stream");
+  {
+    const cs = start({ op: "close-stream" }, true);
+    await finish(cs, "(k) close-stream");
+    check(cs.finals[0]?.ok === true && cs.finals[0].op === "close-stream", "(k) close-stream is answered", JSON.stringify(cs.finals));
+  }
+  await refusedDrain("close-stream");
+  await openOk("(k) open before a ping");
+  {
+    const p = start({ op: "ping" }, true);
+    await finish(p, "(k) ping");
+  }
+  await refusedDrain("a new request (a ping)");
+  await openOk("(k) open before a verify");
+  {
+    const v = start({ op: "open-stream", file: fileOf(container), password: PASSWORD, keyFile: null, purpose: "verify", digest: false }, true);
+    await finish(v, "(k) verify");
+    check(v.finals[0]?.ok === true, "(k) the verify in between succeeds");
+  }
+  await refusedDrain("a new request (a streamed verify)");
+  await openOk("(k) open before a wrong-password open");
+  {
+    const wrong = start(openReq(fileOf(container), `${PASSWORD} but wrong`), true);
+    await finish(wrong, "(k) the wrong-password open");
+    check(
+      wrong.finals.length === 1 && wrong.finals[0]?.ok === false && wrong.chunks.length === 0,
+      "(k) a wrong password gets no opened answer, only an error",
+      JSON.stringify(wrong.finals)
+    );
+  }
+  await refusedDrain("a second open that failed");
+  {
+    // A second open that succeeds replaces the first: the drain is the second's.
+    const other = new TextEncoder().encode(`${CANARY} the second backup `.repeat(100));
+    const secondContainer = await encryptContainerWithSlots(ab(other), PASSWORD, null, OPTIONS, {});
+    await openOk("(k) the first open");
+    await openOk("(k) the second open", fileOf(new Uint8Array(secondContainer.data)));
+    const dr = start({ op: "drain" }, true);
+    await finish(dr, "(k) the drain after two opens");
+    check(
+      dr.finals[0]?.ok === true && Buffer.compare(containerOf(dr), other) === 0,
+      "(k) after a second open, the drain is the second backup's",
+      JSON.stringify(dr.finals)
+    );
+  }
+  await refusedDrain("a drain that finished");
+  {
+    // A request that arrives while an open is still deriving ends the session
+    // that open is about to make.
+    const slow = start(openReq(fileOf(container)), true);
+    const cs = start({ op: "close-stream" }, true);
+    await finish(slow, "(k) the overtaken open");
+    await finish(cs, "(k) the overtaking close-stream");
+    check(
+      slow.finals[0]?.ok === false,
+      "(k) an open overtaken by close-stream while deriving does not answer opened",
+      JSON.stringify(slow.finals)
+    );
+    await refusedDrain("an open overtaken while deriving");
+  }
+  {
+    // A drain overtaken by a new request mid-stream ends with an error.
+    await openOk("(k) open before an overtaken drain");
+    const dr = start({ op: "drain" }, false);
+    await waitFor(() => dr.chunks.length >= 1, 30_000);
+    const p = start({ op: "ping" }, true);
+    await finish(p, "(k) the ping that overtakes the drain");
+    await finish(dr, "(k) the overtaken drain");
+    check(
+      dr.finals.length === 1 && dr.finals[0]?.ok === false,
+      "(k) a drain overtaken by a new request ends with an error, not a success",
+      JSON.stringify(dr.finals)
+    );
+  }
+
+  // l. Formats that cannot be read a chunk at a time, refused by name.
+  {
+    const refusedByName = async (label: string, file: Blob, name: RegExp) => {
+      const op = start(openReq(file), true);
+      await finish(op, label);
+      const f = op.finals[0];
+      check(
+        op.finals.length === 1 && f?.ok === false && f.code === "unsupported-config" && name.test(f.message ?? ""),
+        `(l) ${label} is refused by name`,
+        JSON.stringify(op.finals)
+      );
+      await refusedDrain(`a refused ${label}`);
+    };
+    const { readFileSync } = await import("node:fs");
+    const { dirname, join } = await import("node:path");
+    const { fileURLToPath } = await import("node:url");
+    const here = dirname(fileURLToPath(import.meta.url));
+    const meta = JSON.parse(readFileSync(join(here, "fixtures", "keymaker", "fixtures.json"), "utf8"));
+    const v1 = meta.fixtures.find((f: { version?: number; file: string; audio?: boolean; selfextract?: boolean }) =>
+      (f.version ?? 1) === 1 && !f.audio && !f.selfextract);
+    const v1Bytes = new Uint8Array(readFileSync(join(here, "fixtures", "keymaker", v1.file)));
+    await refusedByName("a KEYM v1 backup", fileOf(v1Bytes), /This is a KEYM v1 backup/);
+    // Above the in-memory limit: the header decides, before anything is read past it.
+    const bigV1 = new Blob([v1Bytes as Uint8Array<ArrayBuffer>, new Uint8Array(101 * MiB)]);
+    await refusedByName("a KEYM v1 backup above 100 MB", bigV1, /This is a KEYM v1 backup/);
+    const legacy = JSON.parse(readFileSync(join(here, "crypto-fixtures.json"), "utf8"));
+    const ibtz1 = legacy.fixtures.find((f: { format: string }) => f.format === "v1");
+    const ibtzBytes = Uint8Array.from(Buffer.from(ibtz1.base64, "base64"));
+    await refusedByName("an IttyBitz v1 backup", fileOf(ibtzBytes), /This is an IttyBitz v1 backup/);
+    await refusedByName(
+      "a file with no header (IttyBitz v0, or not a backup)",
+      new Blob([new Uint8Array(101 * MiB).fill(0x61)]),
+      /not a KEYM v2, v3 or v4 backup/
+    );
+  }
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
