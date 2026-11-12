@@ -51,6 +51,8 @@ export function RecoveryTab() {
                 <div><dt>Saved copy</dt><dd data-testid="recovery-saved-copy" className="km-fact-sentence">{
                   fromDisk
                     ? `A saved file was loaded at ${when(fromDisk.at)}, matched this backup byte for byte, and opened with ${openedWith(fromDisk.how)}.`
+                    : !receipt.onScreen && exportsStarted.save
+                    ? `Saved to the file you chose at ${when(exportsStarted.save)}. Load it on the Decrypt tab and verify it to check it`
                     : !receipt.onScreen
                     ? "Downloaded when encryption finished. Check your downloads folder"
                     : exportsStarted.download || exportsStarted.print
@@ -68,7 +70,9 @@ export function RecoveryTab() {
                   <Button onClick={downloadContainer}><Download className="h-4 w-4" />Download container</Button>
                   <Button variant="outline" onClick={() => void printPaperVault()}><Printer className="h-4 w-4" />Paper backup</Button>
                 </div>
-              ) : <p className="km-help">The file download was requested when encryption finished. Keymaker kept only its header; load your saved file to test it.</p>}
+              ) : <p className="km-help">{exportsStarted.save
+                  ? "The file was saved where you chose when encryption finished. Keymaker kept only its header; load your saved file to test it."
+                  : "The file download was requested when encryption finished. Keymaker kept only its header; load your saved file to test it."}</p>}
             </>
           ) : (
             <>

@@ -214,6 +214,19 @@ check("an AND way in keeps its own wording",
     stateOf({ ...made, exports: { print: "2026-09-28T10:00:00Z" } }, "saved-copy") === "started");
   check("a file-mode backup, downloaded when written, is started, not done",
     stateOf({ ...made, keptOnScreen: false }, "saved-copy") === "started");
+  {
+    // Stage C1: a large file saved through the save dialog. Started, never
+    // done (the page cannot see the file afterwards), and described as saved
+    // where the user chose rather than as a download.
+    const saved = { ...made, keptOnScreen: false, exports: { save: "2026-11-12T10:00:00Z" } };
+    const detail = workflowSteps(saved).find((s) => s.id === "saved-copy")!.detail;
+    check("a file saved through the save dialog is started, not done", stateOf(saved, "saved-copy") === "started");
+    check("and says it was saved where the user chose, not downloaded",
+      detail.includes("Saved to the file you chose") && !detail.includes("Downloaded"), detail);
+    check("the export is recorded only once a backup exists",
+      run([{ type: "export-started", how: "save", at: "x" }]).phase === "editing");
+    check("the latest save is reported", latestExports(run([{ type: "export-started", how: "save", at: "t1" }], created)).save === "t1");
+  }
   check("once a copy is started, recovery becomes next",
     stateOf({ ...made, exports: { download: "x" } }, "recovery") === "current");
   check("a partial printout check is started, not done",
