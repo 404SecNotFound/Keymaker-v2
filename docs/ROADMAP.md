@@ -1588,13 +1588,31 @@ with Argon2id and AES: a 150 MiB backup decrypts in under a second at about
 both byte for byte, roughly four times the file. Through the page in headless
 Chromium, into an OPFS stand-in (not a real disk), a 512 MiB streamed encrypt
 took about 6 seconds and the two-step open about 4 seconds for its save phase,
-one run each. A 1 GiB streamed encrypt into the same stand-in did not finish in
-any of four runs. In the three that recorded it, the stand-in's file was aborted after about 800 to
-950 MiB had been written, and in the one run that recorded the page's messages
-it showed its write-failure message. The cause was not found (the browser reported a 3.2 GB
-quota and almost none used), so it is open whether it is the stand-in, the
-headless browser or the page, and no document claims that a 1 GiB file completes
-in a browser. The suites' largest streamed file is 104 MiB.
+one run each.
+
+**The 1 GiB runs, and what the first failures were.** A 1 GiB streamed encrypt
+into the same stand-in first failed in most runs, after about 800 to 1,000 MiB
+had been written, with the page showing its write-failure message. The cause
+was the test setup and not the app. The browser tests run in Playwright's
+default context, which is an incognito-style context, and there Chromium keeps
+OPFS in the browser process's memory under a per-origin limit that
+`navigator.storage.estimate()` does not report. The rejected write carried
+`QuotaExceededError`. A bare page with no app code, writing to OPFS in the
+same kind of context, failed the same way, and each of 20 contexts failed at
+its own fixed offset between 807 and 1,062 MiB on a 16 GB machine. In a
+persistent context, where OPFS is on disk, the bare page wrote 1.2 GiB.
+
+In that persistent context the app's own path was then run at the ceiling,
+three times, each an encrypt of a 1 GiB file followed by a two-step open of
+the result. Every run completed. The saved container was 1,073,758,361 bytes
+and its SHA-256 equalled the digest the page recorded, and the decrypted
+output equalled the original plaintext by SHA-256. The encrypt took 11 to 12
+seconds and the save phase of the open 9 to 10 seconds. The renderer process,
+which holds the page and the worker, peaked at 378 to 473 MiB, and at 356 MiB
+for a 512 MiB file, so memory did not grow with the file. This is still the
+OPFS stand-in and not the real save dialog on a real disk, which has not been
+observed. A browser test above about 800 MiB has to use a persistent context,
+or it fails at random. The suites' largest streamed file is 104 MiB.
 
 **Checks.** `npm run test:save-target` holds each browser's limits, the words
 built from them, and the save target's rules: no commit after an abort, an abort
