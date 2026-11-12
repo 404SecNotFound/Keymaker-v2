@@ -49,11 +49,17 @@ import {
  * 1 costs well under a second of derivation; each phase 2 drains 103 MiB.
  *
  * Negative controls, each applied to the source, built and seen to fail here:
- * the page committing once the drain stops rather than on its success answer;
- * the commit moved into the `finally`; the dialog opened in phase 1; the
- * pending state cleared when the dialog is cancelled; the worker left alive on
- * Wipe; the success panel rendered at phase 1; the decrypt label read without
- * the dialog. Recorded in the commit that added this file.
+ * - the page committing once the drain's chunks stop, whatever the drain's
+ *   outcome, rather than on its success answer: the flipped and the cut
+ *   backups leave bytes in the chosen file. (Committing when "the last chunk
+ *   arrives" cannot be written as a control: the core never hands over the
+ *   chunk that fails, so for these backups no last chunk arrives.)
+ * - the commit moved into the `finally`: Stop leaves the file closed.
+ * - the dialog opened in phase 1: a wrong password opens it.
+ * - the pending state cleared when the dialog is cancelled: no second click.
+ * - the worker not terminated by Wipe and the lock: it drains on request.
+ * - the success panel rendered at phase 1: the wording test sees it.
+ * - the decrypt label read without the dialog: the no-dialog label is wrong.
  */
 
 /**
@@ -213,11 +219,12 @@ test.describe("with a save dialog", () => {
     await phaseOne(page, flippedContainer());
     await expect(pending(page)).toBeVisible({ timeout: 60_000 });
     await saveButton(page).click();
-    await expect(toast(page, "Decryption failed, so nothing was saved. An empty or partial temporary file may be left where you chose to save it."))
-      .toBeVisible({ timeout: 90_000 });
-    await expect.poll(async () => (await picker(page)).settled, { timeout: 30_000 }).not.toBeNull();
-    expect((await picker(page)).settled, "the file was closed, which saves it").toBe("aborted");
+    // The file first: closed is saved, whatever the page then says.
+    await expect.poll(async () => (await picker(page)).settled, { timeout: 90_000 }).not.toBeNull();
     expect((await chosenFile(page)).size, "a failed decrypt left bytes in the chosen file").toBe(0);
+    expect((await picker(page)).settled, "the file was closed, which saves it").toBe("aborted");
+    await expect(toast(page, "Decryption failed, so nothing was saved. An empty or partial temporary file may be left where you chose to save it."))
+      .toBeVisible();
     await expect(page.getByTestId("decrypt-saved")).toHaveCount(0);
     await expect(page.getByTestId("pending-save")).toHaveCount(0);
   });
@@ -226,10 +233,10 @@ test.describe("with a save dialog", () => {
     await phaseOne(page, truncatedContainer());
     await expect(pending(page)).toBeVisible({ timeout: 60_000 });
     await saveButton(page).click();
-    await expect(toast(page, /^Decryption failed, so nothing was saved\./)).toBeVisible({ timeout: 90_000 });
-    await expect.poll(async () => (await picker(page)).settled, { timeout: 30_000 }).not.toBeNull();
-    expect((await picker(page)).settled).toBe("aborted");
+    await expect.poll(async () => (await picker(page)).settled, { timeout: 90_000 }).not.toBeNull();
     expect((await chosenFile(page)).size, "a failed decrypt left bytes in the chosen file").toBe(0);
+    expect((await picker(page)).settled, "the file was closed, which saves it").toBe("aborted");
+    await expect(toast(page, /^Decryption failed, so nothing was saved\./)).toBeVisible();
     await expect(page.getByTestId("decrypt-saved")).toHaveCount(0);
   });
 
