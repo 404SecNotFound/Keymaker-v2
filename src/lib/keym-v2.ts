@@ -28,11 +28,15 @@
  *   KDF input instead of 100 MB.
  * - **Chunked AEAD** (§5). The plaintext no longer has to be held, encrypted
  *   and authenticated as one buffer, which is what forced the *format* to cap
- *   payloads at 100 MB. The app still caps them there — MAX_PLAINTEXT_SIZE,
- *   enforced by the UI — because this build assembles the plaintext as one
- *   array before encrypting and again after decrypting. The format is
- *   unbounded; the browser is not, and lifting the limit without streaming
- *   those paths would swap a clear refusal for an out-of-memory tab.
+ *   payloads at 100 MB. The in-memory paths still cap them there,
+ *   MAX_PLAINTEXT_SIZE, because they assemble the plaintext as one array before
+ *   encrypting and again after decrypting. The streaming core in this module
+ *   does not: the app uses it, a chunk at a time, for a file of up to
+ *   MAX_STREAM_PLAINTEXT_SIZE (1 GiB), but only where the page can save to a
+ *   file the user chooses (see `save-target.ts`). The format is unbounded; the
+ *   browser is not, and a browser without that save path keeps the 100 MB
+ *   limit, because lifting it without streaming would swap a clear refusal for
+ *   an out-of-memory tab.
  * - **Armor that cannot be mistaken for the magic** (§7): `keym2:` starts with
  *   0x6B, the magic with 0x4B.
  *

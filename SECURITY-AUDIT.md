@@ -519,7 +519,8 @@ written by the application as of Phase 3. It carries:
 - key files hashed to a fixed size before derivation, so a 100 MB key file is
   not a 100 MB KDF input
 - chunked AEAD with counter nonces and a final-chunk flag, removing the
-  whole-file memory cost that makes the current 100 MB cap necessary
+  format's whole-file memory cost, which is what had made the 100 MB cap
+  necessary
 - multi-slot envelope keys: a random master key per container, wrapped
   independently per unlock secret
 - the bounds as part of the format from the start
@@ -530,8 +531,15 @@ marker; a prefix of verified chunks is not a verified prefix of a file, so
 streaming output must not be committed until the last chunk authenticates; and
 the format change alone does not lift the size cap, because a browser
 assembling a Blob to download still holds the whole ciphertext. **That last one
-still stands** — the 100 MB user-visible cap has not moved, and the format was
-necessary but not sufficient for it.
+is now answered in part.** Where a browser has a save dialog and a worker
+(desktop Chromium), the app encrypts a file of up to 1 GB straight to a file the
+user chooses, and opens a backup of up to 1 GB and saves it to one, a chunk at a
+time, saving nothing until the file is complete. In any browser with a worker,
+Verify only checks a backup of up to 1 GB. Everywhere else the 100 MB
+user-visible cap has not moved: Firefox and Safari have no save dialog, and
+KEYM v1 and legacy IttyBitz files are one block by format. These streamed paths
+are not among the findings above. What the real save dialog does on disk has
+not been observed, because the browser tests use a stand-in for it.
 
 Writing the specification, then two implementations against it, produced seven
 findings in the *document* rather than in the code (F1–F7, recorded in its

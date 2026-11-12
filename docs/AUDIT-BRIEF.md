@@ -109,7 +109,7 @@ is a promise that a container written on that day still opens.
 | 9.3 | Creating a backup with extra ways in derived the password once per way in | roadmap 9.3; fixed, derived once, not yet merged |
 | 9.4 | Shamir polynomial coefficients were not erased after the split, with four related gaps | roadmap 9.4; fixed, not yet merged |
 | §10 | Whether 1 MiB chunks and a cap of eight slots are the right constants | FORMAT-V2-DESIGN §10, open rows |
-| — | The 100 MB user-visible size cap, which the format did not lift | SECURITY-AUDIT.md, "Remaining work" |
+| — | The 100 MB in-memory size cap, which the format did not lift. Above it only a browser with a save dialog and a worker (desktop Chromium) streams, up to 1 GB, to a file the user chooses | roadmap 9.7; SECURITY-AUDIT.md, "Remaining work" |
 
 ## 6. Questions for the reviewer
 

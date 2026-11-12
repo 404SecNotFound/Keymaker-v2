@@ -424,9 +424,11 @@ check(describeUnlockCost(null) === null, "a null cost produces no notice");
 //
 // MAX_PLAINTEXT_SIZE is a property of this build: a tab holds the container
 // and the recovered file at once. §5's chunking means the format has no such
-// limit, and keym2.py has none either — verified before this message was
-// written, not after: a 150 MiB file round-trips through the reference
-// byte-identically in about two seconds at ~634 MiB peak RSS.
+// limit, and keym2.py has no limit of its own either (it reads the whole file
+// into memory). Measured, not asserted: a 150 MiB file round-trips through the
+// reference byte for byte in under a second at ~640 MiB peak RSS, and a 1 GiB
+// file in about six seconds at ~4.1 GiB, on one machine with 4 cores and 15 GB
+// of RAM.
 //
 // The old refusal said "maximum size is 100MB" and, on the decrypt side, told
 // the reader to choose a smaller file. There is no smaller version of a
@@ -440,6 +442,11 @@ check(help.includes("RECOVERY.md"), "the oversize message points at the full pro
 check(
   /no size limit/i.test(help),
   "the oversize message says the format is not the limit"
+);
+// Plain punctuation in text a person reads while recovering a backup.
+check(
+  !/\u2014/.test(help) && !/\u2014/.test(oversizeRecoveryHelp("streaming")),
+  "the oversize message, in-memory and streaming, has no em-dash"
 );
 // The two failure modes this replaces, neither of which may come back.
 check(

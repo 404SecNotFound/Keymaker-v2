@@ -251,14 +251,23 @@ found`. None of these messages is about what you typed.
 ## If the web app said the backup was too large
 
 That limit belongs to the web app, not to your backup and not to the format.
-A browser tab has to hold the container and the recovered file in memory at
-once, so the app stops at 100 MB. `keym2.py` does not: it has no size limit,
-and the steps above are the whole procedure regardless of how big the file is.
+In most browsers a tab has to hold the container and the recovered file in
+memory at once, so the app stops at 100 MB. A desktop Chromium browser, such as
+Chrome or Edge, opens a backup of up to 1 GB and saves it to a file you choose,
+so a backup between 100 MB and 1 GB may open there. Firefox and Safari have no
+save dialog and stay at 100 MB. An older KEYM v1 or IttyBitz backup is one block
+by format and stays at 100 MB in every browser. `keym2.py` has no size limit of
+its own, and the steps above are the whole procedure regardless of how big the
+file is.
 
-Measured on an ordinary laptop, a 150 MiB backup decrypts in about two seconds
-and needs roughly 640 MB of RAM while it runs. Larger files scale from there —
-budget several times the file size in memory, and use a machine with room for
-it rather than the smallest one to hand.
+It does read the whole backup into memory, and that is why the app's streamed
+limit is 1 GB and no more. Measured on one machine (4 cores, 15 GB of RAM) with
+the default settings (Argon2id and AES-256-GCM), `keym2.py` decrypted a 150 MiB
+backup in under a second at a peak of about 640 MiB, and a 1 GiB backup in about
+six seconds at a peak of about 4.1 GiB. Both recovered the original bytes
+exactly. That is roughly four times the file size, so budget at least that much
+free memory, and use a machine with room for it rather than the smallest one to
+hand. The times are for one run each and do not include typing the password.
 
 Nothing else changes. Same command, same password, same output.
 

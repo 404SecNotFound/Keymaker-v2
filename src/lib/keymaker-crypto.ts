@@ -109,8 +109,10 @@ const SALT_LEN_PBKDF2 = 16;
 const SALT_LEN_ARGON2ID = 32;
 const NONCE_LEN = 12;
 /**
- * Largest plaintext we will encrypt. Exported so the UI enforces the *same*
- * number rather than declaring a parallel copy that can drift.
+ * Largest plaintext the in-memory path will encrypt, and the limit everywhere
+ * the page cannot stream to a file the user chooses. `MAX_STREAM_PLAINTEXT_SIZE`
+ * is the larger ceiling for the streaming path. Exported so the UI enforces the
+ * *same* number rather than declaring a parallel copy that can drift.
  */
 export const MAX_PLAINTEXT_SIZE = 100 * 1024 * 1024; // 100 MB
 const MAX_FILE_SIZE = MAX_PLAINTEXT_SIZE;
@@ -137,13 +139,24 @@ export const MAX_STREAM_PLAINTEXT_SIZE = 2 ** 30; // 1 GiB
 export const MAX_PASSWORD_LENGTH = 1024;
 
 /**
+ * Which of this build's two ceilings a refusal is about. `"in-memory"` is the
+ * 100 MB the whole-buffer functions hold at once; `"streaming"` is the 1 GiB
+ * the chunk-at-a-time functions will read through.
+ */
+export type SizeLimit = "in-memory" | "streaming";
+
+/**
  * What to tell someone whose backup is too big for this app to open.
  *
  * The cap is a property of *this build*, not of the format and not of their
  * file. §5 of FORMAT-V2-DESIGN.md is chunked precisely so a payload need never
- * be held whole; the browser holds it anyway, twice — once as the container
- * and once as the assembled plaintext — so 100 MB is where a tab stops being
- * reliable. `reference/keym2.py` has no such limit.
+ * be held whole. The whole-buffer functions hold it anyway, twice (once as the
+ * container and once as the assembled plaintext), so 100 MB is where a tab
+ * stops being reliable doing that. The chunk-at-a-time functions hold one chunk
+ * and are bounded at 1 GiB instead, but only where the page can save to a file
+ * the user chooses. `reference/keym2.py` has no size limit of its own; it reads
+ * the whole backup into memory, which is why the streaming ceiling is not
+ * higher.
  *
  * Until now both refusals said a variant of "maximum size is 100MB", which on
  * the *decrypt* side is not merely unhelpful but wrong: it presents a dead end
@@ -151,17 +164,12 @@ export const MAX_PASSWORD_LENGTH = 1024;
  * which is not a thing that can be done to a backup. Someone recovering an
  * inheritance would reasonably conclude the archive was unusable.
  *
- * Verified rather than asserted before being promised to anyone: a 150 MiB
- * file encrypted and decrypted through `keym2.py` round-trips byte-identically
- * in about two seconds each way, at roughly 634 MiB peak RSS.
+ * Measured rather than asserted before being promised to anyone. Through
+ * `keym2.py`, with Argon2id and AES, on one machine with 4 cores and 15 GB of
+ * RAM: a 150 MiB file round-trips byte for byte in under a second each way at
+ * about 640 MiB peak RSS, and a 1 GiB file in about six seconds each way at
+ * about 4.1 GiB, roughly four times the file.
  */
-/**
- * Which of this build's two ceilings a refusal is about. `"in-memory"` is the
- * 100 MB the whole-buffer functions hold at once; `"streaming"` is the 1 GiB
- * the chunk-at-a-time functions will read through.
- */
-export type SizeLimit = "in-memory" | "streaming";
-
 export function oversizeRecoveryHelp(limit: SizeLimit = "in-memory"): string {
   const reason =
     limit === "streaming"
@@ -171,7 +179,7 @@ export function oversizeRecoveryHelp(limit: SizeLimit = "in-memory"): string {
         `browser tab, which has to hold the container and the recovered file in memory at once. `;
   return (
     reason +
-    `Nothing is wrong with the backup and the KEYM v2 format has no size limit — the ` +
+    `Nothing is wrong with the backup and the KEYM v2 format has no size limit. The ` +
     `command-line reference opens it:\n\n` +
     `    python3 keym2.py decrypt --in <your-backup> --out <destination>\n\n` +
     `It ships in the recovery kit linked in the footer; docs/RECOVERY.md has the full procedure.`

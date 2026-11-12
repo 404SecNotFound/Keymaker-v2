@@ -422,7 +422,7 @@ does less.
 |---|---|
 | Memory hygiene is best-effort | Buffers are zero-filled after use, but JavaScript's garbage collector may have already copied them. This cannot be fully solved in a browser. |
 | Clipboard clearing is best-effort | The 60-second auto-clear depends on the page keeping permission; browsers may refuse. |
-| No streaming | Files are processed whole, in memory, with a 100 MB cap. Large-file encryption has a peak-memory cost of several times the file size. |
+| Streaming only where the browser can save to a file you choose | By default files are processed whole, in memory, with a 100 MB cap, and that is a peak-memory cost of several times the file size. A browser with a save dialog and a worker (desktop Chromium, such as Chrome and Edge) instead encrypts a file of up to 1 GB, and opens a KEYM v2 or later backup of up to 1 GB, a chunk at a time, straight to a file you choose. Firefox and Safari have no save dialog and stay at 100 MB. KEYM v1 and IttyBitz files are one block by format and stay at 100 MB everywhere. Verify only checks a backup of up to 1 GB in any browser with a worker. Nothing is saved until the file is complete. |
 | The served bundle is the trust anchor | Loading over the network means trusting the host that served it. For high-value secrets, use a copy you have verified and keep offline. |
 | Argon2id needs WebAssembly | Environments that forbid WASM must fall back to PBKDF2. |
 | A compromised device defeats everything | Keyloggers, malicious extensions, and screen capture are all outside what any in-browser tool can defend against. |
