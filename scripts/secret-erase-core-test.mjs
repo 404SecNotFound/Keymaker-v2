@@ -993,6 +993,164 @@ const secureEraseLocal = (v) => v && v.fill(0);
   subtle.encrypt = nativeEncrypt;
 }
 
+// ---------------------------------------------------------------------------
+// The key-file contract on a refusal. `encryptData`, `encryptContainer`,
+// `encryptContainerWithSlots` and `encryptContainerWithSharesRequired` document
+// that the caller's key-file buffer is zeroed once used, and so does
+// `decryptData`. Each of them ran its input checks *before* the `try` whose
+// `finally` does the erase, so an input the function refused (plaintext over
+// the cap, a bad password string, a KDF below the floor, ...) threw with the
+// key file still intact. `encryptContainerToSink` keeps its checks inside the
+// `try` and is the model; this holds the others to it.
+//
+// Every refusal is driven for every function that makes it, and each is
+// checked twice: the key file is all zeroes afterwards, and the error is the
+// one the function has always raised (code and text, matched against literals
+// here rather than against anything derived from the source), so a change
+// that moves a check cannot quietly change what the user is told.
+//
+// Only refusals that happen with a key file in hand are reachable: a decrypt
+// with no password, no shares and no PRF output is refused for want of a
+// credential, but a key file *is* a credential, so that refusal cannot have
+// one to leak.
+// ---------------------------------------------------------------------------
+{
+  const refusal = await bundle(
+    "refusal",
+    `export { encryptData, encryptContainer, encryptContainerWithSharesRequired,
+       encryptContainerWithSlots, decryptData, isUserFacingError,
+       MAX_PLAINTEXT_SIZE, MAX_CONTAINER_SIZE } from "./keymaker-crypto";`
+  );
+  // The KEYM v2 module unreachable, as a chunk that failed to load is. A real
+  // dynamic import of a file that does not exist, as in Finding 6.
+  const missingKeym2 = {
+    name: "missing-keym2-chunk",
+    setup(build) {
+      build.onResolve({ filter: /\/keym-v2$/ }, () => ({ path: "./keym-v2.never-arrives.mjs", external: true }));
+    },
+  };
+  const noKeym2 = await bundle("refusal-no-keym2", `export { decryptData } from "./keymaker-crypto";`, [missingKeym2]);
+
+  const zeroed = (u) => u.byteLength > 0 && u.every((b) => b === 0);
+  const freshKey = () => U8.from({ length: 48 }, (_, i) => (i * 13 + 7) & 0xff || 1);
+  const goodData = () => toAB(U8.from(Buffer.from("refusal plaintext")));
+  const good = "correct horse battery staple";
+  const KDF_FLOOR = /^KDF parameter out of range: PBKDF2 iterations is 1, expected \d+\.\.\d+\. Refusing to run a key derivation with unsafe cost parameters\.$/;
+
+  const run = (name, { data, password, key, options }) => {
+    const shamir = { threshold: 2, count: 3 };
+    switch (name) {
+      case "encryptData": return refusal.encryptData(data, password, key, options);
+      case "encryptContainer": return refusal.encryptContainer(data, password, key, options);
+      case "encryptContainerWithSlots": return refusal.encryptContainerWithSlots(data, password, key, options, { shamir });
+      case "encryptContainerWithSharesRequired":
+        return refusal.encryptContainerWithSharesRequired(data, password, key, options, 2, 3);
+      default: throw new Error(`unknown function ${name}`);
+    }
+  };
+  const caught = async (fn) => { try { await fn(); return null; } catch (e) { return e; } };
+  const same = (e, want) =>
+    e !== null &&
+    (want.code === undefined ? e.code === undefined && !refusal.isUserFacingError(e) : e.code === want.code) &&
+    (typeof want.message === "string" ? e.message === want.message : want.message.test(e.message));
+  const show = (e) => (e ? `${e.code ?? "(untyped)"}: ${String(e.message).slice(0, 90)}` : "no error");
+
+  const tooLarge = `File is too large. Maximum size is ${refusal.MAX_PLAINTEXT_SIZE / 1024 / 1024}MB.`;
+  const optionsMissing = {
+    encryptData: "encryptData requires explicit kdf and cipher options — algorithm selection is the caller's decision.",
+    encryptContainer: "encryptContainer requires explicit kdf and cipher options — algorithm selection is the caller's decision.",
+    encryptContainerWithSlots: "encryptContainerWithSlots requires explicit kdf and cipher options.",
+    encryptContainerWithSharesRequired: "encryptContainerWithSharesRequired requires explicit kdf and cipher options.",
+  };
+  // `applies`: which functions make the refusal at all. The shares-required
+  // writer has no cipher or Web Crypto check of its own.
+  const encryptCases = [
+    { why: "plaintext over the cap",
+      args: () => ({ data: new ArrayBuffer(refusal.MAX_PLAINTEXT_SIZE + 1), password: good, options: OPTIONS }),
+      want: () => ({ code: "too-large", message: tooLarge }) },
+    { why: "empty plaintext",
+      args: () => ({ data: new ArrayBuffer(0), password: good, options: OPTIONS }),
+      want: () => ({ code: "empty-input", message: "Cannot process empty data." }) },
+    { why: "a password with a NUL in it",
+      args: () => ({ data: goodData(), password: "bad\0password", options: OPTIONS }),
+      want: () => ({ code: "password-invalid", message: "Password contains invalid characters." }) },
+    { why: "a password that is not a string",
+      args: () => ({ data: goodData(), password: 12345, options: OPTIONS }),
+      want: () => ({ code: "password-invalid", message: "Password must be a string." }) },
+    { why: "an empty password",
+      args: () => ({ data: goodData(), password: "", options: OPTIONS }),
+      want: () => ({ code: "credential-required", message: "A password is required for encryption." }) },
+    { why: "no kdf and cipher options",
+      args: () => ({ data: goodData(), password: good, options: {} }),
+      want: (name) => ({ code: undefined, message: optionsMissing[name] }) },
+    { why: "a KDF cost below the floor",
+      args: () => ({ data: goodData(), password: good, options: { ...OPTIONS, kdf: { kdf: m.KdfId.PBKDF2, params: { iterations: 1 } } } }),
+      want: () => ({ code: "kdf-params-out-of-range", message: KDF_FLOOR }) },
+    { why: "an unknown cipher id",
+      applies: (name) => name !== "encryptContainerWithSharesRequired",
+      args: () => ({ data: goodData(), password: good, options: { ...OPTIONS, cipher: 99 } }),
+      want: () => ({ code: "unsupported-config", message: "Invalid cipher id: 99." }) },
+    { why: "no Web Crypto",
+      applies: (name) => name !== "encryptContainerWithSharesRequired",
+      noSubtle: true,
+      args: () => ({ data: goodData(), password: good, options: OPTIONS }),
+      want: () => ({ code: "webcrypto-unavailable", message: "Web Crypto API not available." }) },
+  ];
+
+  // Web Crypto withdrawn for the span of one call, and put back on every exit.
+  const withoutSubtle = async (fn) => {
+    Object.defineProperty(globalThis.crypto, "subtle", { value: undefined, configurable: true });
+    try { return await fn(); } finally { delete globalThis.crypto.subtle; }
+  };
+
+  for (const name of Object.keys(optionsMissing)) {
+    for (const c of encryptCases) {
+      if (c.applies && !c.applies(name)) continue;
+      const key = freshKey();
+      const call = () => run(name, { ...c.args(), key: key.buffer });
+      const error = await caught(() => (c.noSubtle ? withoutSubtle(call) : call()));
+      ok(same(error, c.want(name)), `${name}: ${c.why} is refused with the same error`, show(error));
+      ok(zeroed(key), `${name}: the key file is zeroed when it refuses ${c.why}`);
+    }
+  }
+  ok(crypto.subtle !== undefined, "tripwire: Web Crypto is back after the checks that withdrew it");
+
+  // decryptData: the same two checks, for the refusals it can make with a key
+  // file in hand.
+  const legacyTooShort = () => toAB(U8.from({ length: 10 }, () => 0x41));
+  const decryptCases = [
+    { why: "a container over the cap",
+      args: () => ({ data: new ArrayBuffer(refusal.MAX_CONTAINER_SIZE + 1), password: good }),
+      want: { code: "too-large", message: /^This backup is larger than the 100 MB this app can open in a browser tab/ } },
+    { why: "an empty container",
+      args: () => ({ data: new ArrayBuffer(0), password: good }),
+      want: { code: "empty-input", message: "Cannot process empty data." } },
+    { why: "a password with a NUL in it",
+      args: () => ({ data: legacyTooShort(), password: "bad\0password" }),
+      want: { code: "password-invalid", message: "Password contains invalid characters." } },
+    { why: "no Web Crypto",
+      noSubtle: true,
+      args: () => ({ data: legacyTooShort(), password: good }),
+      want: { code: undefined, message: "Web Crypto API not available." } },
+    { why: "a KEYM v2 reader that cannot be loaded",
+      lib: noKeym2,
+      args: () => ({ data: toAB(fixture("v3-pbkdf2-aes256gcm").bytes), password: meta.password }),
+      want: { code: "dependency-unavailable", message: /the KEYM v2 reader and writer, could not be loaded/ } },
+    { why: "a legacy blob too short to hold its header",
+      args: () => ({ data: legacyTooShort(), password: good }),
+      want: { code: undefined, message: "Invalid encrypted data format." } },
+  ];
+  for (const c of decryptCases) {
+    const key = freshKey();
+    const { data, password } = c.args();
+    const decrypt = () => (c.lib ?? refusal).decryptData(data, password, key.buffer);
+    const error = await caught(() => (c.noSubtle ? withoutSubtle(decrypt) : decrypt()));
+    ok(same(error, c.want), `decryptData: ${c.why} is refused with the same error`, show(error));
+    ok(zeroed(key), `decryptData: the key file is zeroed when it refuses ${c.why}`);
+  }
+  ok(crypto.subtle !== undefined, "tripwire: Web Crypto is back after the decrypt checks");
+}
+
 await settle();
 console.log(failed === 0 ? "\nAll core secret-erase checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);
