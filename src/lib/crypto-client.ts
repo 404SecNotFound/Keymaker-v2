@@ -991,6 +991,16 @@ export async function drainOpenedFileViaWorker(
 }
 
 /**
+ * Does the worker still hold the backup `openFileViaWorker` opened? False once
+ * anything else was posted to it, it was terminated, or the backup was drained
+ * or discarded. Asked before phase 2 opens the save dialog, so a session that
+ * has already ended never creates a file.
+ */
+export function openedFileHeld(): boolean {
+  return openedIn !== null && openedIn === worker;
+}
+
+/**
  * End phase 1 without saving: the worker drops the opened backup and erases
  * the keys and chunk 0 it held. A no-op when nothing is open. Not for a drain
  * in progress; Stop (`cancelAllCryptoWork`) ends that.

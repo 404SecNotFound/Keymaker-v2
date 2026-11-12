@@ -94,6 +94,7 @@ import {
   openFileViaWorker,
   drainOpenedFileViaWorker,
   discardOpenedFile,
+  openedFileHeld,
   cancelAllCryptoWork,
   warmCryptoWorker,
   workerKnownUnavailable,
@@ -149,6 +150,7 @@ import {
   NOTHING_SAVED_ON_STOP,
   NOTHING_DECRYPTED_SAVED_ON_STOP,
   DECRYPT_SAVE_FAILED,
+  OPENED_BACKUP_CLOSED,
   type PendingSave,
   DOORS,
   BASE_PATH,
@@ -3373,6 +3375,14 @@ export function useEncryptorState() {
   const savePendingFile = useCallback(async () => {
     const pending = pendingSaveRef.current;
     if (!pending || isLoadingRef.current || committingRef.current) return;
+    // Anything posted to the worker since phase 1 (a rehearsal on the
+    // Recovery page, say) ended its session. Said before the dialog, so no
+    // file is created for a save that cannot happen.
+    if (!openedFileHeld()) {
+      setPending(null);
+      toast({ title: "Nothing was saved", description: OPENED_BACKUP_CLOSED });
+      return;
+    }
     const opId = ++opSeqRef.current;
     const isStale = () => opSeqRef.current !== opId;
 

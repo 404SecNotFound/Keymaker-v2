@@ -602,6 +602,10 @@ export const NOTHING_DECRYPTED_SAVED_ON_STOP =
  */
 export const DECRYPT_SAVE_FAILED = `Decryption failed, so nothing was saved. ${SAVE_MAY_REMAIN}`;
 
+/** "Save decrypted file…" after the worker's session ended some other way. No dialog was opened. */
+export const OPENED_BACKUP_CLOSED =
+  "The opened backup was closed by something else this page did, so nothing was saved. Open it again, then save it.";
+
 // QR version 40, error-correction level L, byte mode. Every QRCodeCanvas below
 // pins level="L" explicitly — raising the ECC level without lowering this
 // limit would make qrcode.react throw for inputs above the new capacity
