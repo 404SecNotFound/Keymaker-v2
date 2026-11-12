@@ -871,124 +871,130 @@ export async function encryptData(
   keyFileBuffer: ArrayBuffer | null,
   options: KeymakerOptions
 ): Promise<ArrayBuffer> {
-  validateCommon(dataBuffer, password, true);
-  if (!password) {
-    throw new KeymakerError("credential-required", "A password is required for encryption.");
-  }
-  if (!crypto.subtle) {
-    throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
-  }
-
-  // No fallback: the caller states the algorithms, or this throws. See the
-  // note on KeymakerOptions for why an implicit default was a footgun.
-  if (!options || !options.kdf || options.cipher === undefined) {
-    throw new Error(
-      "encryptData requires explicit kdf and cipher options — algorithm selection is the caller's decision."
-    );
-  }
-  const kdf: KdfParams = options.kdf;
-  const cipher = options.cipher;
-
-  // Validate caller-supplied options rather than trusting that a UI slider
-  // constrained them. Encryption enforces the policy floor as well as the
-  // ceiling: writing a new file at 1,000 PBKDF2 iterations is a mistake worth
-  // refusing, even though we will still *read* such a file.
-  validateKdfParams(kdf, writeMode(options));
-  if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
-    throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
-  }
-
-  const saltLen = kdf.kdf === KdfId.PBKDF2 ? SALT_LEN_PBKDF2 : SALT_LEN_ARGON2ID;
-  const salt = crypto.getRandomValues(new Uint8Array(saltLen));
-  const nonceCount = cipher === CipherId.CHAINED ? 2 : 1;
-  const nonces: Uint8Array[] = [];
-  for (let i = 0; i < nonceCount; i++) {
-    nonces.push(crypto.getRandomValues(new Uint8Array(NONCE_LEN)));
-  }
-
-  const headerLen = kdfHeaderLength(kdf) + nonceCount * NONCE_LEN;
-  const header = new Uint8Array(headerLen);
-  let o = 0;
-  header.set(KEYM_MAGIC, o);
-  o += 4;
-  header[o++] = KEYM_VERSION;
-  header[o++] = kdf.kdf;
-  header[o++] = cipher;
-  if (kdf.kdf === KdfId.PBKDF2) {
-    new DataView(header.buffer).setUint32(o, kdf.params.iterations, false);
-    o += 4;
-  } else {
-    const dv = new DataView(header.buffer);
-    dv.setUint16(o, kdf.params.timeCost, false);
-    o += 2;
-    dv.setUint32(o, kdf.params.memoryKiB, false);
-    o += 4;
-    header[o++] = kdf.params.parallelism;
-  }
-  header[o++] = keyFileBuffer ? 0x01 : 0x00;
-  header.set(salt, o);
-  o += salt.length;
-  for (const n of nonces) {
-    header.set(n, o);
-    o += n.length;
-  }
-
-  let baseMaterial: Uint8Array | null = null;
-  let keys: CipherKeys | null = null;
-  let ciphertext: Uint8Array | null = null;
-
   try {
-    baseMaterial = buildBaseMaterial(password, keyFileBuffer);
-    const master = await deriveMasterKey(baseMaterial, salt, kdf);
-    keys = await masterToCipherKeys(master, cipher);
+    validateCommon(dataBuffer, password, true);
+    if (!password) {
+      throw new KeymakerError("credential-required", "A password is required for encryption.");
+    }
+    if (!crypto.subtle) {
+      throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
+    }
 
-    // The settings block IS the header — pass it as AAD.
-    const aad = header as BufferSource;
-    const plain = new Uint8Array(dataBuffer);
-
-    if (cipher === CipherId.AES_256_GCM) {
-      const ct = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: nonces[0] as BufferSource, additionalData: aad },
-        keys.aesKey!,
-        plain as BufferSource
+    // No fallback: the caller states the algorithms, or this throws. See the
+    // note on KeymakerOptions for why an implicit default was a footgun.
+    if (!options || !options.kdf || options.cipher === undefined) {
+      throw new Error(
+        "encryptData requires explicit kdf and cipher options — algorithm selection is the caller's decision."
       );
-      ciphertext = new Uint8Array(ct);
-    } else if (cipher === CipherId.CHACHA20_POLY1305) {
-      const { chacha20poly1305 } = await loadNoble();
-      ciphertext = chacha20poly1305(keys.chachaKey!, nonces[0]!, header).encrypt(plain);
+    }
+    const kdf: KdfParams = options.kdf;
+    const cipher = options.cipher;
+
+    // Validate caller-supplied options rather than trusting that a UI slider
+    // constrained them. Encryption enforces the policy floor as well as the
+    // ceiling: writing a new file at 1,000 PBKDF2 iterations is a mistake worth
+    // refusing, even though we will still *read* such a file.
+    validateKdfParams(kdf, writeMode(options));
+    if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+      throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
+    }
+
+    const saltLen = kdf.kdf === KdfId.PBKDF2 ? SALT_LEN_PBKDF2 : SALT_LEN_ARGON2ID;
+    const salt = crypto.getRandomValues(new Uint8Array(saltLen));
+    const nonceCount = cipher === CipherId.CHAINED ? 2 : 1;
+    const nonces: Uint8Array[] = [];
+    for (let i = 0; i < nonceCount; i++) {
+      nonces.push(crypto.getRandomValues(new Uint8Array(NONCE_LEN)));
+    }
+
+    const headerLen = kdfHeaderLength(kdf) + nonceCount * NONCE_LEN;
+    const header = new Uint8Array(headerLen);
+    let o = 0;
+    header.set(KEYM_MAGIC, o);
+    o += 4;
+    header[o++] = KEYM_VERSION;
+    header[o++] = kdf.kdf;
+    header[o++] = cipher;
+    if (kdf.kdf === KdfId.PBKDF2) {
+      new DataView(header.buffer).setUint32(o, kdf.params.iterations, false);
+      o += 4;
     } else {
-      // Chained: inner AES-256-GCM (AAD = settings block), then outer
-      // ChaCha20-Poly1305 (AAD = settings block).
-      const inner = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: nonces[0] as BufferSource, additionalData: aad },
-        keys.chained!.aesKey,
-        plain as BufferSource
-      );
-      const { chacha20poly1305 } = await loadNoble();
-      ciphertext = chacha20poly1305(keys.chained!.chachaKey, nonces[1]!, header).encrypt(new Uint8Array(inner));
-      secureErase(new Uint8Array(inner));
+      const dv = new DataView(header.buffer);
+      dv.setUint16(o, kdf.params.timeCost, false);
+      o += 2;
+      dv.setUint32(o, kdf.params.memoryKiB, false);
+      o += 4;
+      header[o++] = kdf.params.parallelism;
+    }
+    header[o++] = keyFileBuffer ? 0x01 : 0x00;
+    header.set(salt, o);
+    o += salt.length;
+    for (const n of nonces) {
+      header.set(n, o);
+      o += n.length;
     }
 
-    const out = new Uint8Array(header.length + ciphertext.length);
-    out.set(header, 0);
-    out.set(ciphertext, header.length);
-    return out.buffer;
-  } catch (error) {
-    if (error instanceof Error && /required|too (large|long)|invalid characters|not available/i.test(error.message)) {
-      throw error;
+    let baseMaterial: Uint8Array | null = null;
+    let keys: CipherKeys | null = null;
+    let ciphertext: Uint8Array | null = null;
+
+    try {
+      baseMaterial = buildBaseMaterial(password, keyFileBuffer);
+      const master = await deriveMasterKey(baseMaterial, salt, kdf);
+      keys = await masterToCipherKeys(master, cipher);
+
+      // The settings block IS the header — pass it as AAD.
+      const aad = header as BufferSource;
+      const plain = new Uint8Array(dataBuffer);
+
+      if (cipher === CipherId.AES_256_GCM) {
+        const ct = await crypto.subtle.encrypt(
+          { name: "AES-GCM", iv: nonces[0] as BufferSource, additionalData: aad },
+          keys.aesKey!,
+          plain as BufferSource
+        );
+        ciphertext = new Uint8Array(ct);
+      } else if (cipher === CipherId.CHACHA20_POLY1305) {
+        const { chacha20poly1305 } = await loadNoble();
+        ciphertext = chacha20poly1305(keys.chachaKey!, nonces[0]!, header).encrypt(plain);
+      } else {
+        // Chained: inner AES-256-GCM (AAD = settings block), then outer
+        // ChaCha20-Poly1305 (AAD = settings block).
+        const inner = await crypto.subtle.encrypt(
+          { name: "AES-GCM", iv: nonces[0] as BufferSource, additionalData: aad },
+          keys.chained!.aesKey,
+          plain as BufferSource
+        );
+        const { chacha20poly1305 } = await loadNoble();
+        ciphertext = chacha20poly1305(keys.chained!.chachaKey, nonces[1]!, header).encrypt(new Uint8Array(inner));
+        secureErase(new Uint8Array(inner));
+      }
+
+      const out = new Uint8Array(header.length + ciphertext.length);
+      out.set(header, 0);
+      out.set(ciphertext, header.length);
+      return out.buffer;
+    } catch (error) {
+      if (error instanceof Error && /required|too (large|long)|invalid characters|not available/i.test(error.message)) {
+        throw error;
+      }
+      throw new Error("Encryption failed. Please try again.");
+    } finally {
+      if (baseMaterial) secureErase(baseMaterial);
+      secureErase(salt);
+      for (const n of nonces) secureErase(n);
+      if (keys) {
+        if (keys.masterRaw) secureErase(keys.masterRaw);
+        if (keys.chachaKey) secureErase(keys.chachaKey);
+        if (keys.chained) secureErase(keys.chained.chachaKey);
+      }
+      if (ciphertext) secureErase(ciphertext);
     }
-    throw new Error("Encryption failed. Please try again.");
   } finally {
-    if (baseMaterial) secureErase(baseMaterial);
+    // Every exit, refusals included: the caller's key-file buffer is zeroed once
+    // used, and the checks above run inside this `try` so that an input refused
+    // before any work is done is erased too.
     if (keyFileBuffer) secureErase(keyFileBuffer);
-    secureErase(salt);
-    for (const n of nonces) secureErase(n);
-    if (keys) {
-      if (keys.masterRaw) secureErase(keys.masterRaw);
-      if (keys.chachaKey) secureErase(keys.chachaKey);
-      if (keys.chained) secureErase(keys.chained.chachaKey);
-    }
-    if (ciphertext) secureErase(ciphertext);
   }
 }
 
@@ -1018,46 +1024,49 @@ export async function encryptContainer(
   keyFileBuffer: ArrayBuffer | null,
   options: KeymakerOptions
 ): Promise<ArrayBuffer> {
-  validateCommon(dataBuffer, password, true);
-  if (!password) {
-    throw new KeymakerError("credential-required", "A password is required for encryption.");
-  }
-  if (!crypto.subtle) {
-    throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
-  }
-  // Same contract as encryptData: the caller states the algorithms, or this
-  // throws. See the note on KeymakerOptions for why an implicit default was a
-  // footgun.
-  if (!options || !options.kdf || options.cipher === undefined) {
-    throw new Error(
-      "encryptContainer requires explicit kdf and cipher options — algorithm selection is the caller's decision."
-    );
-  }
-  validateKdfParams(options.kdf, writeMode(options));
-  const cipher = options.cipher;
-  if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
-    throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
-  }
-
   try {
-    const { encryptKeym2, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
-    const out = await encryptKeym2(
-      new Uint8Array(dataBuffer),
-      password,
-      keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
-      { kdf: options.kdf, cipher },
-      options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
-    );
-    return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
-  } catch (error) {
-    if (isUserFacingError(error)) throw error;
-    if (error instanceof Error && /required|too (large|long)|invalid characters|not available/i.test(error.message)) {
-      throw error;
+    validateCommon(dataBuffer, password, true);
+    if (!password) {
+      throw new KeymakerError("credential-required", "A password is required for encryption.");
     }
-    throw new Error("Encryption failed. Please try again.");
+    if (!crypto.subtle) {
+      throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
+    }
+    // Same contract as encryptData: the caller states the algorithms, or this
+    // throws. See the note on KeymakerOptions for why an implicit default was a
+    // footgun.
+    if (!options || !options.kdf || options.cipher === undefined) {
+      throw new Error(
+        "encryptContainer requires explicit kdf and cipher options — algorithm selection is the caller's decision."
+      );
+    }
+    validateKdfParams(options.kdf, writeMode(options));
+    const cipher = options.cipher;
+    if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+      throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
+    }
+
+    try {
+      const { encryptKeym2, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
+      const out = await encryptKeym2(
+        new Uint8Array(dataBuffer),
+        password,
+        keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+        { kdf: options.kdf, cipher },
+        options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
+      );
+      return out.buffer.slice(out.byteOffset, out.byteOffset + out.byteLength) as ArrayBuffer;
+    } catch (error) {
+      if (isUserFacingError(error)) throw error;
+      if (error instanceof Error && /required|too (large|long)|invalid characters|not available/i.test(error.message)) {
+        throw error;
+      }
+      throw new Error("Encryption failed. Please try again.");
+    }
   } finally {
-    // Same contract as every other path here: the caller's key file buffer is
-    // zeroed in place once used.
+    // Every exit, refusals included: the caller's key-file buffer is zeroed once
+    // used, and the checks above run inside this `try` so that an input refused
+    // before any work is done is erased too.
     if (keyFileBuffer) secureErase(keyFileBuffer);
   }
 }
@@ -1078,38 +1087,43 @@ export async function encryptContainerWithSharesRequired(
   threshold: number,
   count: number
 ): Promise<{ data: ArrayBuffer; shares: string[] }> {
-  validateCommon(dataBuffer, password, true);
-  if (!password) {
-    throw new KeymakerError("credential-required", "A password is required for encryption.");
-  }
-  if (!options || !options.kdf || options.cipher === undefined) {
-    throw new Error(
-      "encryptContainerWithSharesRequired requires explicit kdf and cipher options."
-    );
-  }
-  validateKdfParams(options.kdf, writeMode(options));
   try {
-    const { encryptKeym2WithSharesRequired, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
-    const { container, shares } = await encryptKeym2WithSharesRequired(
-      new Uint8Array(dataBuffer),
-      password,
-      keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
-      { kdf: options.kdf, cipher: options.cipher },
-      threshold,
-      count,
-      options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
-    );
-    return {
-      data: container.buffer.slice(container.byteOffset, container.byteOffset + container.byteLength) as ArrayBuffer,
-      shares,
-    };
-  } catch (error) {
-    if (isUserFacingError(error)) throw error;
-    if (error instanceof Error && /required|too (large|long)|invalid characters|not available|threshold|count/i.test(error.message)) {
-      throw error;
+    validateCommon(dataBuffer, password, true);
+    if (!password) {
+      throw new KeymakerError("credential-required", "A password is required for encryption.");
     }
-    throw new Error("Encryption failed. Please try again.");
+    if (!options || !options.kdf || options.cipher === undefined) {
+      throw new Error(
+        "encryptContainerWithSharesRequired requires explicit kdf and cipher options."
+      );
+    }
+    validateKdfParams(options.kdf, writeMode(options));
+    try {
+      const { encryptKeym2WithSharesRequired, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
+      const { container, shares } = await encryptKeym2WithSharesRequired(
+        new Uint8Array(dataBuffer),
+        password,
+        keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+        { kdf: options.kdf, cipher: options.cipher },
+        threshold,
+        count,
+        options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
+      );
+      return {
+        data: container.buffer.slice(container.byteOffset, container.byteOffset + container.byteLength) as ArrayBuffer,
+        shares,
+      };
+    } catch (error) {
+      if (isUserFacingError(error)) throw error;
+      if (error instanceof Error && /required|too (large|long)|invalid characters|not available|threshold|count/i.test(error.message)) {
+        throw error;
+      }
+      throw new Error("Encryption failed. Please try again.");
+    }
   } finally {
+    // Every exit, refusals included: the caller's key-file buffer is zeroed once
+    // used, and the checks above run inside this `try` so that an input refused
+    // before any work is done is erased too.
     if (keyFileBuffer) secureErase(keyFileBuffer);
   }
 }
@@ -1134,42 +1148,47 @@ export async function encryptContainerWithSlots(
     passkey?: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
   }
 ): Promise<{ data: ArrayBuffer; shares?: string[] | undefined }> {
-  validateCommon(dataBuffer, password, true);
-  if (!password) {
-    throw new KeymakerError("credential-required", "A password is required for encryption.");
-  }
-  if (!crypto.subtle) {
-    throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
-  }
-  if (!options || !options.kdf || options.cipher === undefined) {
-    throw new Error("encryptContainerWithSlots requires explicit kdf and cipher options.");
-  }
-  validateKdfParams(options.kdf, writeMode(options));
-  const cipher = options.cipher;
-  if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
-    throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
-  }
   try {
-    const { encryptKeym2WithSlots, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
-    const { container, shares } = await encryptKeym2WithSlots(
-      new Uint8Array(dataBuffer),
-      password,
-      keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
-      { kdf: options.kdf, cipher },
-      slots,
-      options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
-    );
-    return {
-      data: container.buffer.slice(container.byteOffset, container.byteOffset + container.byteLength) as ArrayBuffer,
-      shares,
-    };
-  } catch (error) {
-    if (isUserFacingError(error)) throw error;
-    if (error instanceof Error && /required|too (large|long)|invalid characters|not available|threshold|count/i.test(error.message)) {
-      throw error;
+    validateCommon(dataBuffer, password, true);
+    if (!password) {
+      throw new KeymakerError("credential-required", "A password is required for encryption.");
     }
-    throw new Error("Encryption failed. Please try again.");
+    if (!crypto.subtle) {
+      throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
+    }
+    if (!options || !options.kdf || options.cipher === undefined) {
+      throw new Error("encryptContainerWithSlots requires explicit kdf and cipher options.");
+    }
+    validateKdfParams(options.kdf, writeMode(options));
+    const cipher = options.cipher;
+    if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+      throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
+    }
+    try {
+      const { encryptKeym2WithSlots, KEYM2_VERSION, KEYM2_VERSION_V4 } = await loadKeym2();
+      const { container, shares } = await encryptKeym2WithSlots(
+        new Uint8Array(dataBuffer),
+        password,
+        keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+        { kdf: options.kdf, cipher },
+        slots,
+        options.padded ? KEYM2_VERSION_V4 : KEYM2_VERSION
+      );
+      return {
+        data: container.buffer.slice(container.byteOffset, container.byteOffset + container.byteLength) as ArrayBuffer,
+        shares,
+      };
+    } catch (error) {
+      if (isUserFacingError(error)) throw error;
+      if (error instanceof Error && /required|too (large|long)|invalid characters|not available|threshold|count/i.test(error.message)) {
+        throw error;
+      }
+      throw new Error("Encryption failed. Please try again.");
+    }
   } finally {
+    // Every exit, refusals included: the caller's key-file buffer is zeroed once
+    // used, and the checks above run inside this `try` so that an input refused
+    // before any work is done is erased too.
     if (keyFileBuffer) secureErase(keyFileBuffer);
   }
 }
@@ -1552,29 +1571,29 @@ export async function decryptData(
   /** §4.7. 32 bytes from an authenticator, obtained by the caller. */
   prfOutput?: Uint8Array
 ): Promise<DecryptResult> {
-  validateCommon(encryptedBuffer, password, false);
-  const hasShares = !!shares && shares.length > 0;
-  if (!password && !keyFileBuffer && !hasShares && !prfOutput) {
-    throw new KeymakerError(
-      "credential-required",
-      "A password, key file, recovery shares, or a passkey is required for decryption."
-    );
-  }
-  if (!crypto.subtle) {
-    throw new Error("Web Crypto API not available.");
-  }
+  try {
+    validateCommon(encryptedBuffer, password, false);
+    const hasShares = !!shares && shares.length > 0;
+    if (!password && !keyFileBuffer && !hasShares && !prfOutput) {
+      throw new KeymakerError(
+        "credential-required",
+        "A password, key file, recovery shares, or a passkey is required for decryption."
+      );
+    }
+    if (!crypto.subtle) {
+      throw new Error("Web Crypto API not available.");
+    }
 
-  const fullData = new Uint8Array(encryptedBuffer);
-  const format = detectFormat(fullData);
+    const fullData = new Uint8Array(encryptedBuffer);
+    const format = detectFormat(fullData);
 
-  if (format === "keym-v2" || format === "keym-v3" || format === "keym-v4") {
-    // Dynamically imported so keymaker-crypto.ts does not depend on keym-v2.ts
-    // at module-evaluation time — the dependency runs one way, which is what
-    // keeps the v1 path structurally unable to be changed by v2 work. It also
-    // keeps v2 out of the initial bundle until a v2 container is actually
-    // opened.
-    const keym2 = await loadKeym2();
-    try {
+    if (format === "keym-v2" || format === "keym-v3" || format === "keym-v4") {
+      // Dynamically imported so keymaker-crypto.ts does not depend on keym-v2.ts
+      // at module-evaluation time — the dependency runs one way, which is what
+      // keeps the v1 path structurally unable to be changed by v2 work. It also
+      // keeps v2 out of the initial bundle until a v2 container is actually
+      // opened.
+      const keym2 = await loadKeym2();
       const result = await keym2.decryptKeym2(
         fullData,
         password,
@@ -1589,104 +1608,104 @@ export async function decryptData(
         slotTableAuthentic: result.slotTableAuthentic,
         ...describeOpenedSlot(keym2, result.slot),
       };
-    } finally {
-      // Same contract as every other path here: the caller's key file buffer
-      // is zeroed in place once used.
-      if (keyFileBuffer) secureErase(keyFileBuffer);
     }
-  }
 
-  if (format !== "keym-v1") {
-    const data = await legacyDecryptWithNormalizationFallback(
-      encryptedBuffer,
-      password,
-      keyFileBuffer
-    );
-    return {
-      data,
-      format,
-      keyFileUsed: keyFileBuffer !== null,
-      slotTableAuthentic: null,
-      weakKdf: null,
-      openedBy: "passphrase",
-    };
-  }
-
-  let parsed: ParsedKeym | null = null;
-  let baseMaterial: Uint8Array | null = null;
-  let keys: CipherKeys | null = null;
-
-  try {
-    parsed = parseKeym(fullData);
-    baseMaterial = buildBaseMaterial(password, keyFileBuffer);
-    const master = await deriveMasterKey(baseMaterial, parsed.salt, parsed.kdf);
-    keys = await masterToCipherKeys(master, parsed.cipher);
-
-    const aad = parsed.settingsBlock as BufferSource;
-    let plain: ArrayBuffer | Uint8Array;
-
-    if (parsed.cipher === CipherId.AES_256_GCM) {
-      plain = await crypto.subtle.decrypt(
-        { name: "AES-GCM", iv: parsed.nonces[0] as BufferSource, additionalData: aad },
-        keys.aesKey!,
-        parsed.ciphertext as BufferSource
+    if (format !== "keym-v1") {
+      const data = await legacyDecryptWithNormalizationFallback(
+        encryptedBuffer,
+        password,
+        keyFileBuffer
       );
-    } else if (parsed.cipher === CipherId.CHACHA20_POLY1305) {
-      const { chacha20poly1305 } = await loadNoble();
-      plain = chacha20poly1305(keys.chachaKey!, parsed.nonces[0]!, parsed.settingsBlock).decrypt(parsed.ciphertext);
-    } else {
-      // Chained: outer ChaCha20-Poly1305 then inner AES-256-GCM, both with
-      // the settings block as AAD.
-      const { chacha20poly1305 } = await loadNoble();
-      const inner = chacha20poly1305(keys.chained!.chachaKey, parsed.nonces[1]!, parsed.settingsBlock).decrypt(
-        parsed.ciphertext
-      );
-      try {
+      return {
+        data,
+        format,
+        keyFileUsed: keyFileBuffer !== null,
+        slotTableAuthentic: null,
+        weakKdf: null,
+        openedBy: "passphrase",
+      };
+    }
+
+    let parsed: ParsedKeym | null = null;
+    let baseMaterial: Uint8Array | null = null;
+    let keys: CipherKeys | null = null;
+
+    try {
+      parsed = parseKeym(fullData);
+      baseMaterial = buildBaseMaterial(password, keyFileBuffer);
+      const master = await deriveMasterKey(baseMaterial, parsed.salt, parsed.kdf);
+      keys = await masterToCipherKeys(master, parsed.cipher);
+
+      const aad = parsed.settingsBlock as BufferSource;
+      let plain: ArrayBuffer | Uint8Array;
+
+      if (parsed.cipher === CipherId.AES_256_GCM) {
         plain = await crypto.subtle.decrypt(
           { name: "AES-GCM", iv: parsed.nonces[0] as BufferSource, additionalData: aad },
-          keys.chained!.aesKey,
-          inner as BufferSource
+          keys.aesKey!,
+          parsed.ciphertext as BufferSource
         );
-      } finally {
-        secureErase(inner);
+      } else if (parsed.cipher === CipherId.CHACHA20_POLY1305) {
+        const { chacha20poly1305 } = await loadNoble();
+        plain = chacha20poly1305(keys.chachaKey!, parsed.nonces[0]!, parsed.settingsBlock).decrypt(parsed.ciphertext);
+      } else {
+        // Chained: outer ChaCha20-Poly1305 then inner AES-256-GCM, both with
+        // the settings block as AAD.
+        const { chacha20poly1305 } = await loadNoble();
+        const inner = chacha20poly1305(keys.chained!.chachaKey, parsed.nonces[1]!, parsed.settingsBlock).decrypt(
+          parsed.ciphertext
+        );
+        try {
+          plain = await crypto.subtle.decrypt(
+            { name: "AES-GCM", iv: parsed.nonces[0] as BufferSource, additionalData: aad },
+            keys.chained!.aesKey,
+            inner as BufferSource
+          );
+        } finally {
+          secureErase(inner);
+        }
+      }
+
+      const out = plain instanceof Uint8Array ? takePlaintextBuffer(plain) : plain;
+      return {
+        data: out,
+        format,
+        keyFileUsed: (parsed.flags & 0x01) !== 0,
+        slotTableAuthentic: null,
+        // v1 has one slot and `parsed` is it, so the same verdict is available
+        // here as in the header inspection the UI was doing. The difference is
+        // that here it cannot be about a different slot.
+        weakKdf: describeWeakKdf(parsed.kdf),
+        openedBy: "passphrase",
+      };
+    } catch (error) {
+      // Structural and configuration failures pass through with their real
+      // message; everything else collapses to the one generic string. This used
+      // to be a regex over error text, which could not match the interpolated
+      // "KDF parameter out of range: …" and so reported a *tampered* container as
+      // a possible wrong password. The type carries the distinction now.
+      if (isUserFacingError(error)) throw error;
+      throw new Error(
+        "Decryption failed. The password or key file may be incorrect, or the data may be corrupted."
+      );
+    } finally {
+      if (parsed) {
+        secureErase(parsed.salt);
+        for (const n of parsed.nonces) secureErase(n);
+        secureErase(parsed.ciphertext);
+      }
+      if (baseMaterial) secureErase(baseMaterial);
+      if (keys) {
+        if (keys.masterRaw) secureErase(keys.masterRaw);
+        if (keys.chachaKey) secureErase(keys.chachaKey);
+        if (keys.chained) secureErase(keys.chained.chachaKey);
       }
     }
-
-    const out = plain instanceof Uint8Array ? takePlaintextBuffer(plain) : plain;
-    return {
-      data: out,
-      format,
-      keyFileUsed: (parsed.flags & 0x01) !== 0,
-      slotTableAuthentic: null,
-      // v1 has one slot and `parsed` is it, so the same verdict is available
-      // here as in the header inspection the UI was doing. The difference is
-      // that here it cannot be about a different slot.
-      weakKdf: describeWeakKdf(parsed.kdf),
-      openedBy: "passphrase",
-    };
-  } catch (error) {
-    // Structural and configuration failures pass through with their real
-    // message; everything else collapses to the one generic string. This used
-    // to be a regex over error text, which could not match the interpolated
-    // "KDF parameter out of range: …" and so reported a *tampered* container as
-    // a possible wrong password. The type carries the distinction now.
-    if (isUserFacingError(error)) throw error;
-    throw new Error(
-      "Decryption failed. The password or key file may be incorrect, or the data may be corrupted."
-    );
   } finally {
-    if (parsed) {
-      secureErase(parsed.salt);
-      for (const n of parsed.nonces) secureErase(n);
-      secureErase(parsed.ciphertext);
-    }
-    if (baseMaterial) secureErase(baseMaterial);
+    // Every exit, refusals included: the caller's key-file buffer is zeroed once
+    // used, and the checks above run inside this `try` so that an input refused
+    // before any work is done is erased too.
     if (keyFileBuffer) secureErase(keyFileBuffer);
-    if (keys) {
-      if (keys.masterRaw) secureErase(keys.masterRaw);
-      if (keys.chachaKey) secureErase(keys.chachaKey);
-      if (keys.chained) secureErase(keys.chained.chachaKey);
-    }
   }
 }
 
