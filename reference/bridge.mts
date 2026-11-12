@@ -13,6 +13,8 @@
  *   bridge encrypt2 ... --salt HEX --master-key HEX   (KEYM v2, deterministic)
  *   bridge encryptapp ...                             (KEYM v2, the real writer)
  *   bridge decrypt2 ...                               (KEYM v2)
+ *   bridge encrypt2stream ...  same flags as encrypt2, through the streaming writer
+ *   bridge decrypt2stream ...  same flags as decrypt2, through openKeym2Stream and drain
  *   bridge addshares --threshold K --shares N --salt HEX --share-secret HEX
  *                    --share-coefficients HEX --shares-out FILE  (§4.6)
  *   bridge decrypt2 --share-file FILE                 (§4.6, no password)
@@ -45,7 +47,7 @@
  * spells out the hazard: §4.5 forbids caller-supplied values for either on real
  * data, because reusing a master key reuses every nonce in the container.
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from "node:fs";
 import { webcrypto } from "node:crypto";
 import {
   encryptData,
@@ -58,7 +60,11 @@ import {
 import {
   encryptKeym2,
   encryptKeym2WithExplicitSecrets,
+  encryptKeym2WithExplicitSecretsToSink,
   encryptKeym2WithSharesRequired,
+  openKeym2Stream,
+  blobSource,
+  type Keym2ByteSink,
   decryptKeym2,
   KEYM2_VERSION_V2,
   KEYM2_VERSION_V3,
@@ -216,6 +222,46 @@ try {
       containerId === undefined ? new Uint8Array(0) : Uint8Array.from(Buffer.from(containerId, "hex"))
     );
     writeFileSync(outFile, Buffer.from(out));
+
+  } else if (cmd === "encrypt2stream") {
+    // encrypt2 through the streaming writer: the plaintext read a range at a
+    // time from a Blob, the container appended to --out one sink write at a
+    // time. crosstest2.py compares the bytes this emits with the reference's,
+    // because the in-memory API being byte-identical says nothing about what a
+    // streaming caller actually receives.
+    const kdf: KdfParams =
+      flag("kdf") === "argon2id"
+        ? {
+            kdf: KdfId.ARGON2ID,
+            params: {
+              timeCost: Number(flag("time") ?? 2),
+              memoryKiB: Number(flag("mem") ?? 16384),
+              parallelism: Number(flag("par") ?? 2),
+            },
+          }
+        : { kdf: KdfId.PBKDF2, params: { iterations: Number(flag("iterations") ?? 600_000) } };
+    const containerId = flag("container-id");
+    const fd = openSync(outFile, "w");
+    const sink: Keym2ByteSink = {
+      async write(bytes) {
+        writeSync(fd, bytes);
+      },
+    };
+    try {
+      await encryptKeym2WithExplicitSecretsToSink(
+        blobSource(new Blob([input as BlobPart])),
+        password,
+        keyFile ? new Uint8Array(keyFile) : null,
+        { kdf, cipher: CIPHERS[flag("cipher") ?? "aes"]!, enforceWritePolicy: false },
+        Uint8Array.from(Buffer.from(flag("salt")!, "hex")),
+        Uint8Array.from(Buffer.from(flag("master-key")!, "hex")),
+        sink,
+        containerId === undefined ? KEYM2_VERSION_V2 : flag("version") === "4" ? KEYM2_VERSION_V4 : KEYM2_VERSION_V3,
+        containerId === undefined ? new Uint8Array(0) : Uint8Array.from(Buffer.from(containerId, "hex"))
+      );
+    } finally {
+      closeSync(fd);
+    }
 
   } else if (cmd === "encryptboth") {
     // §4.8. A container whose only slot takes the password and k of n shares,
@@ -465,6 +511,53 @@ try {
     console.log(
       `slot-table: ${
         out.slotTableAuthentic === null ? "absent" : out.slotTableAuthentic ? "authentic" : "not-authentic"
+      }`
+    );
+
+  } else if (cmd === "decrypt2stream") {
+    // decrypt2 through openKeym2Stream and drain, applying §5.5 the way a
+    // streaming caller must: the plaintext goes to `--out.tmp` as chunks
+    // verify, and becomes `--out` only once drain resolves. On a rejection
+    // the temporary file is removed, so a truncated or tampered container
+    // leaves no --out behind, which crosstest2.py asserts.
+    const shareFile = flag("share-file");
+    const shares = shareFile
+      ? readFileSync(shareFile, "utf8").split("\n").map((l) => l.trim()).filter(Boolean)
+      : undefined;
+    const prfFlag = flag("prf-output");
+    const temporary = `${outFile}.tmp`;
+    const stream = await openKeym2Stream(
+      blobSource(new Blob([input as BlobPart])),
+      password,
+      keyFile ? new Uint8Array(keyFile) : null,
+      shares,
+      prfFlag ? Uint8Array.from(Buffer.from(prfFlag, "hex")) : undefined
+    );
+    const fd = openSync(temporary, "w");
+    let committed = false;
+    try {
+      await stream.drain({
+        async write(bytes) {
+          writeSync(fd, bytes);
+        },
+      });
+      closeSync(fd);
+      renameSync(temporary, outFile);
+      committed = true;
+    } finally {
+      stream.discard();
+      if (!committed) {
+        try {
+          closeSync(fd);
+        } catch {
+          // already closed
+        }
+        if (existsSync(temporary)) rmSync(temporary);
+      }
+    }
+    console.log(
+      `slot-table: ${
+        stream.slotTableAuthentic === null ? "absent" : stream.slotTableAuthentic ? "authentic" : "not-authentic"
       }`
     );
 
