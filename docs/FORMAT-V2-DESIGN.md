@@ -2029,8 +2029,10 @@ older reader, and `--capacity` still overrides the size.
   Chromium), the app encrypts a file of up to 1 GiB straight to a file the user
   chooses, which is saved only when it is complete, and any browser with a worker
   verifies a backup of that size a chunk at a time. Browsers without the save
-  dialog keep the in-memory cap of 100 MB for encrypting, and opening a backup
-  above it is not yet streamed in any browser.
+  dialog keep the in-memory cap of 100 MB for encrypting and for opening.
+  Where the dialog exists, a backup above it is opened in two clicks and its
+  contents written to a file the user chooses, which is closed, and so saved,
+  only after the final chunk has verified under `final_flag`, as §5.5 asks.
 - **Metadata.** Container length reveals plaintext length *exactly*: neither the
   payload nor the final chunk is padded, so overhead is a constant and container
   length determines plaintext length byte for byte. v2 adds no padding scheme:

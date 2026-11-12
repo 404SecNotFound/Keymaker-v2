@@ -108,7 +108,9 @@ jobs:
       # the set, and the worker's key-file copy when an enrolment throws. None
       # is visible to a caller, so this takes a census of every Uint8Array the
       # core allocates during a call and searches what survives. Also pins a
-      # Shamir chunk that fails to load as a typed dependency error.
+      # Shamir chunk that fails to load as a typed dependency error, and that
+      # the worker's open decrypt session (payload key, chunk 0) is erased on
+      # every way it ends.
       - name: Internal secret copies are zeroed by the crypto core
         run: npm run test:secret-erase-core
 
@@ -308,14 +310,19 @@ jobs:
       # file encrypted through encrypt-stream comes back as chunks that
       # concatenate to a container the in-memory reader opens, with a digest
       # over exactly those bytes; at most 4 chunks are ever un-acknowledged; no
-      # chunk carries plaintext; a streamed verify posts no chunk. Seconds.
+      # chunk carries plaintext; a streamed verify posts no chunk. Stage C2: a
+      # streamed decrypt's open posts one answer and no plaintext, its drain's
+      # final answer comes only after the last ack and never for a backup with
+      # a bad last chunk or one cut at a chunk boundary, and every way the
+      # session ends refuses a later drain. Seconds.
       - name: Streaming through the worker
         run: npm run test:worker-stream
 
-      # Stage C1. How large a file each action takes in a browser with and
-      # without a save dialog and a worker, the words the page builds from
-      # that, and the save target's rules: nothing committed after an abort, an
-      # abort after the commit does nothing, a rejected close is not a save.
+      # Stages C1 and C2. How large a file each action (encrypt, open, verify)
+      # takes in a browser with and without a save dialog and a worker, the
+      # words the page builds from that, and the save target's rules: nothing
+      # committed after an abort, an abort after the commit does nothing, a
+      # rejected close is not a save.
       - name: File limits and the save target
         run: npm run test:save-target
 
