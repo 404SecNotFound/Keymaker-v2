@@ -2,9 +2,12 @@
  * A one-shot save target: the file the user chose in the browser's save
  * dialog, written once, in order, and committed at the end.
  *
- * This is what lets a file above the in-memory cap be encrypted at all. The
- * container is too large to assemble into a Blob and download, so it is
- * written a chunk at a time to a file the user picked, and nothing else.
+ * This is what lets a file above the in-memory cap be encrypted at all, and a
+ * backup above it be opened. The output is too large to assemble into a Blob
+ * and download, so it is written a chunk at a time to a file the user picked,
+ * and nothing else. A decrypt writes plaintext here, so §5.5 of the format
+ * applies in full: the page commits only after the worker's final answer,
+ * which comes only after the last chunk verified with `final_flag`.
  * Nothing is stored between visits, no handle is kept, nothing is read back:
  * the ciphertext lands only where the user chose to save it, as a download
  * would. The roadmap records why this much of the File System Access API is
@@ -42,17 +45,42 @@ export class SaveFailed extends Error {
   }
 }
 
-const MAY_REMAIN = "An empty or partial temporary file may be left where you chose to save it.";
+/** What may be left after a save that did not complete. The page claims no more than this. */
+export const SAVE_MAY_REMAIN = "An empty or partial temporary file may be left where you chose to save it.";
 
 export const SAVE_WRITE_FAILED =
-  `The encrypted file could not be written where you chose to save it, so nothing was saved. ${MAY_REMAIN}`;
+  `The encrypted file could not be written where you chose to save it, so nothing was saved. ${SAVE_MAY_REMAIN}`;
 export const SAVE_COMMIT_FAILED =
-  `The browser could not finish saving the encrypted file, so nothing was saved. ${MAY_REMAIN}`;
+  `The browser could not finish saving the encrypted file, so nothing was saved. ${SAVE_MAY_REMAIN}`;
 export const SAVE_OPEN_FAILED =
   "The browser could not open the file you chose for writing, so nothing was encrypted or saved.";
 export const SAVE_PICKER_FAILED =
   "The browser could not show the save dialog, so nothing was encrypted or saved.";
 export const SAVE_NOT_OPEN = "This save has already finished or been stopped.";
+
+// The same four for a streamed decrypt. By the time its dialog opens the
+// backup has been opened, so "nothing was encrypted" would be wrong; what
+// matters is that nothing was saved.
+export const DECRYPT_SAVE_WRITE_FAILED =
+  `The decrypted file could not be written where you chose to save it, so nothing was saved. ${SAVE_MAY_REMAIN}`;
+export const DECRYPT_SAVE_COMMIT_FAILED =
+  `The browser could not finish saving the decrypted file, so nothing was saved. ${SAVE_MAY_REMAIN}`;
+export const DECRYPT_SAVE_OPEN_FAILED =
+  "The browser could not open the file you chose for writing, so nothing was saved.";
+export const DECRYPT_SAVE_PICKER_FAILED = "The browser could not show the save dialog, so nothing was saved.";
+
+/** What a save target is writing, which decides only the words of its failures and the dialog's file type. */
+export type SavePurpose = "encrypt" | "decrypt";
+
+const MESSAGES: Record<SavePurpose, { write: string; commit: string; open: string; picker: string }> = {
+  encrypt: { write: SAVE_WRITE_FAILED, commit: SAVE_COMMIT_FAILED, open: SAVE_OPEN_FAILED, picker: SAVE_PICKER_FAILED },
+  decrypt: {
+    write: DECRYPT_SAVE_WRITE_FAILED,
+    commit: DECRYPT_SAVE_COMMIT_FAILED,
+    open: DECRYPT_SAVE_OPEN_FAILED,
+    picker: DECRYPT_SAVE_PICKER_FAILED,
+  },
+};
 
 /**
  * Can this page save straight to a file the user chooses?
@@ -94,8 +122,9 @@ export interface WritableLike {
 }
 
 /** The state machine, over any writable. `chooseSaveTarget` wraps the real one. */
-export function saveTargetOver(name: string, writable: WritableLike): SaveTarget {
+export function saveTargetOver(name: string, writable: WritableLike, purpose: SavePurpose = "encrypt"): SaveTarget {
   let state: SaveTargetState = "open";
+  const words = MESSAGES[purpose];
   return {
     name,
     get state() {
@@ -109,7 +138,7 @@ export function saveTargetOver(name: string, writable: WritableLike): SaveTarget
         // The target stays open so the caller's `abort()` still discards the
         // temporary file; nothing here can be committed after a failed write
         // because the caller stops at the first rejection.
-        throw new SaveFailed(SAVE_WRITE_FAILED, { cause });
+        throw new SaveFailed(words.write, { cause });
       }
     },
     async commit(): Promise<void> {
@@ -121,7 +150,7 @@ export function saveTargetOver(name: string, writable: WritableLike): SaveTarget
         // Not committed, and it cannot be: a stream whose close rejected is
         // errored. Marked aborted so a later `abort()` does not touch it.
         state = "aborted";
-        throw new SaveFailed(SAVE_COMMIT_FAILED, { cause });
+        throw new SaveFailed(words.commit, { cause });
       }
       state = "committed";
     },
@@ -144,28 +173,44 @@ export function saveTargetOver(name: string, writable: WritableLike): SaveTarget
  * dialog needs the click's transient activation, which Chromium was observed
  * to keep for about three seconds and lose by six. Resolves null when the user
  * cancels the dialog.
+ *
+ * `purpose` decides the words of a failure and, for an encrypt, offers the
+ * `.keym` type. A decrypted file is whatever was sealed, so its dialog offers
+ * no type and keeps the name it is given.
  */
-export async function chooseSaveTarget(suggestedName: string): Promise<SaveTarget | null> {
-  if (!canSaveToDisk()) throw new SaveFailed(SAVE_PICKER_FAILED);
+export async function chooseSaveTarget(
+  suggestedName: string,
+  purpose: SavePurpose = "encrypt"
+): Promise<SaveTarget | null> {
+  const words = MESSAGES[purpose];
+  if (!canSaveToDisk()) throw new SaveFailed(words.picker);
   let handle: FileSystemFileHandle;
   try {
-    handle = await window.showSaveFilePicker!({
-      suggestedName,
-      types: [{ description: "Keymaker backup", accept: { "application/octet-stream": [".keym"] } }],
-    });
+    handle = await window.showSaveFilePicker!(
+      purpose === "encrypt"
+        ? {
+            suggestedName,
+            types: [{ description: "Keymaker backup", accept: { "application/octet-stream": [".keym"] } }],
+          }
+        : { suggestedName }
+    );
   } catch (error) {
     if ((error as { name?: unknown } | null)?.name === "AbortError") return null;
-    throw new SaveFailed(SAVE_PICKER_FAILED, { cause: error });
+    throw new SaveFailed(words.picker, { cause: error });
   }
   let writable: FileSystemWritableFileStream;
   try {
     writable = await handle.createWritable();
   } catch (error) {
-    throw new SaveFailed(SAVE_OPEN_FAILED, { cause: error });
+    throw new SaveFailed(words.open, { cause: error });
   }
-  return saveTargetOver(handle.name, {
-    write: (bytes) => writable.write(bytes as Uint8Array<ArrayBuffer>),
-    close: () => writable.close(),
-    abort: (reason) => writable.abort(reason),
-  });
+  return saveTargetOver(
+    handle.name,
+    {
+      write: (bytes) => writable.write(bytes as Uint8Array<ArrayBuffer>),
+      close: () => writable.close(),
+      abort: (reason) => writable.abort(reason),
+    },
+    purpose
+  );
 }

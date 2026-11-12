@@ -37,6 +37,11 @@ import {
   SAVE_OPEN_FAILED,
   SAVE_PICKER_FAILED,
   SAVE_WRITE_FAILED,
+  SAVE_MAY_REMAIN,
+  DECRYPT_SAVE_COMMIT_FAILED,
+  DECRYPT_SAVE_OPEN_FAILED,
+  DECRYPT_SAVE_PICKER_FAILED,
+  DECRYPT_SAVE_WRITE_FAILED,
   type WritableLike,
 } from "../src/lib/save-target.ts";
 import {
@@ -213,6 +218,24 @@ function fakeWritable(opts: { closeRejects?: boolean; writeRejects?: boolean; ab
 }
 
 {
+  // A decrypt's target: the same rules, its failures in its own words.
+  const w = fakeWritable({ writeRejects: true });
+  const t = saveTargetOver("photo.jpg", w.w, "decrypt");
+  const error = await thrown(() => t.write(new Uint8Array(1)));
+  check("a decrypt's failed write says the decrypted file was not saved, and what may be left",
+    error instanceof SaveFailed && (error as Error).message === DECRYPT_SAVE_WRITE_FAILED
+      && DECRYPT_SAVE_WRITE_FAILED.endsWith(SAVE_MAY_REMAIN));
+  const c = fakeWritable({ closeRejects: true });
+  const tc = saveTargetOver("photo.jpg", c.w, "decrypt");
+  const closeError = await thrown(() => tc.commit());
+  check("a decrypt's rejected close is not a save, in its own words",
+    closeError instanceof SaveFailed && (closeError as Error).message === DECRYPT_SAVE_COMMIT_FAILED && tc.state !== "committed");
+  check("no save message uses an em-dash or claims a file was encrypted on decrypt",
+    ![DECRYPT_SAVE_WRITE_FAILED, DECRYPT_SAVE_COMMIT_FAILED, DECRYPT_SAVE_OPEN_FAILED, DECRYPT_SAVE_PICKER_FAILED]
+      .some((m) => /—|encrypt/.test(m)));
+}
+
+{
   const f = fakeWritable({ abortRejects: true });
   const t = saveTargetOver("e.keym", f.w);
   const error = await thrown(() => t.abort());
@@ -281,6 +304,27 @@ function fakeWritable(opts: { closeRejects?: boolean; writeRejects?: boolean; ab
     const t = await chooseSaveTarget("x.keym");
     check("a chosen file opens as an open target named as the browser reports it",
       t !== null && t.state === "open" && t.name === "chosen.keym");
+
+    // A decrypt's dialog: no .keym type offered, the name passed through,
+    // and its failures in its own words.
+    let options: unknown = null;
+    fakeWindow.showSaveFilePicker = (o: unknown) => {
+      options = o;
+      return pickResult();
+    };
+    const plain = await chooseSaveTarget("photo.jpg", "decrypt");
+    check("a decrypt's dialog suggests the name it is given and offers no file type",
+      plain !== null && JSON.stringify(options) === JSON.stringify({ suggestedName: "photo.jpg" }), JSON.stringify(options));
+    pickResult = async () => {
+      throw Object.assign(new Error("Must be handling a user gesture"), { name: "SecurityError" });
+    };
+    const refusedDecrypt = await thrown(() => chooseSaveTarget("photo.jpg", "decrypt"));
+    check("a decrypt's dialog failure says nothing was saved, not that nothing was encrypted",
+      refusedDecrypt instanceof SaveFailed && (refusedDecrypt as Error).message === DECRYPT_SAVE_PICKER_FAILED);
+    pickResult = async () => ({ name: "y", createWritable: async () => { throw new Error("locked"); } });
+    const unopenedDecrypt = await thrown(() => chooseSaveTarget("photo.jpg", "decrypt"));
+    check("a decrypt's file that will not open says nothing was saved",
+      unopenedDecrypt instanceof SaveFailed && (unopenedDecrypt as Error).message === DECRYPT_SAVE_OPEN_FAILED);
   } finally {
     delete g.window;
   }
