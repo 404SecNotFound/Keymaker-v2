@@ -2439,6 +2439,174 @@ def main() -> int:
                         if "shares" in combo:
                             check(f"{tag}: the five strips are the same strings", py_s == js_s)
 
+        # ---------------------------------------------------------------
+        # The streaming entry points: encrypt2stream and decrypt2stream
+        # ---------------------------------------------------------------
+        #
+        # The TypeScript's in-memory writers and decryptKeym2 are now its
+        # streaming core over a memory source and a collecting sink, so every
+        # section above already holds that core to the reference's bytes.
+        # This holds the streaming *entry points* to them: the bytes a caller
+        # that reads its plaintext from a Blob and appends each sink write to a
+        # file actually ends up with, compared with what the reference writes,
+        # at every chunk boundary and every v4 bucket boundary. Then the other
+        # direction, and §5.5 as a streaming caller must apply it: output goes
+        # to a temporary file that becomes --out only once drain resolves, so
+        # a truncated or tampered container must leave no --out at all.
+        #
+        # Every bridge call is guarded: a divergence that makes the bridge
+        # refuse has to print the one line naming the case, not a traceback.
+        print("\nStreaming core: emitted bytes and commit-on-resolve (encrypt2stream, decrypt2stream):")
+        C = keym2.CHUNK_SIZE
+        st_src, st_js, st_out = tmp / "st-pt.bin", tmp / "st-js.keym2", tmp / "st-out.bin"
+
+        def st_py_write(plaintext: bytes, cipher: str, version: int) -> bytes | None:
+            try:
+                return keym2.encrypt(
+                    plaintext, PASSWORD, kdf_id=keym2.KDF_PBKDF2, cipher_id=CIPHER_IDS[cipher],
+                    iterations=PBKDF2_ITERS, salt=SALT, master_key=MASTER_KEY,
+                    container_id=None if version == 2 else CONTAINER_ID, version=version,
+                    enforce_write_policy=False)
+            except keym2.KeymError:
+                return None
+
+        def st_js_write(plaintext: bytes, cipher: str, version: int) -> tuple[bytes | None, str]:
+            st_src.write_bytes(plaintext)
+            if st_js.exists():
+                st_js.unlink()
+            args = ["encrypt2stream", "--password", PASSWORD, "--in", str(st_src), "--out", str(st_js),
+                    "--cipher", cipher, "--salt", SALT.hex(), "--master-key", MASTER_KEY.hex(),
+                    *kdf_flags("pbkdf2")]
+            if version >= 3:
+                args += ["--container-id", CONTAINER_ID.hex()]
+            if version == 4:
+                args += ["--version", "4"]
+            try:
+                bridge(*args)
+                return st_js.read_bytes(), ""
+            except BridgeError as e:
+                return None, f"js refused to write: {e}"
+
+        def st_js_read(container: bytes, password: str = PASSWORD) -> tuple[bytes | None, str]:
+            """decrypt2stream: the plaintext if --out was committed, else None and why."""
+            blob = tmp / "st-in.keym2"
+            blob.write_bytes(container)
+            for leftover in (st_out, st_out.with_name(st_out.name + ".tmp")):
+                if leftover.exists():
+                    leftover.unlink()
+            try:
+                bridge("decrypt2stream", "--password", password, "--in", str(blob), "--out", str(st_out))
+            except BridgeError as e:
+                return None, str(e)
+            return (st_out.read_bytes() if st_out.exists() else None), "drain resolved but no --out"
+
+        def st_compare(label: str, py_bytes: bytes | None, js_bytes: bytes | None, why: str, header: int) -> None:
+            if py_bytes is None:
+                check(label, False, "the reference refused to write")
+            elif js_bytes is None:
+                check(label, False, why)
+            elif py_bytes == js_bytes:
+                check(label, True)
+            else:
+                n = min(len(py_bytes), len(js_bytes))
+                at = next((i for i in range(n) if py_bytes[i] != js_bytes[i]), n)
+                where = "header or slot" if at < header else f"payload+{at - header}"
+                check(label, False, f"first difference at byte {at} ({where}); "
+                                    f"py {len(py_bytes)}B, js {len(js_bytes)}B")
+
+        def st_header(cipher: str, version: int) -> int:
+            table = keym2.SLOT_TABLE_OFFSET if version == 2 else keym2.SLOT_TABLE_OFFSET_V3
+            return table + keym2.slot_len(CIPHER_IDS[cipher])
+
+        st_written: dict[tuple[int, str, int], bytes] = {}
+        st_cases = [(3, cipher, n, why) for cipher in ("aes", "chacha", "chained") for n, why in (
+            (0, "empty"), (1, "one byte"), (C - 1, "one below the chunk size"),
+            (C, "exactly the chunk size"), (C + 1, "one above the chunk size"), (2 * C, "exactly two chunks"))]
+        st_cases += [(2, "aes", n, why) for n, why in (
+            (C - 1, "one below the chunk size"), (C, "exactly the chunk size"), (C + 1, "one above the chunk size"))]
+        st_cases += [(4, "aes", n, why) for n, why in (
+            (0, "empty"), (1, "one byte"), (248, "the last plaintext at the floor"),
+            (249, "the first past the floor"), (300, "inside Padmé's first unit"),
+            (C - 8, "a stream of exactly one chunk"), (C - 7, "the first stream needing two chunks"),
+            (C, "one chunk of plaintext"))]
+        st_cases += [(4, "chained", n, why) for n, why in (
+            (C - 8, "a stream of exactly one chunk"), (C - 7, "the first stream needing two chunks"))]
+        for version, cipher, n, why in st_cases:
+            plaintext = bytes((i * 31 + 7) & 0xFF for i in range(n))
+            py_bytes = st_py_write(plaintext, cipher, version)
+            js_bytes, err = st_js_write(plaintext, cipher, version)
+            st_compare(f"v{version} {cipher} {why} ({n} B): encrypt2stream emits the reference's bytes",
+                       py_bytes, js_bytes, err, st_header(cipher, version))
+            if py_bytes is not None:
+                st_written[(version, cipher, n)] = py_bytes
+
+        # Python writes, the streaming reader reads: every cipher at the chunk
+        # edges, and every v4 bucket boundary, where a reader that handed on a
+        # padding byte or stopped one short would be caught.
+        for (version, cipher, n), py_bytes in st_written.items():
+            if not (version == 4 or n in (0, C, 2 * C)):
+                continue
+            want = bytes((i * 31 + 7) & 0xFF for i in range(n))
+            got, why = st_js_read(py_bytes)
+            check(f"v{version} {cipher} {n} B: decrypt2stream commits the plaintext of the reference's container",
+                  got == want, why if got is None else f"got {len(got)} B for {n}")
+
+        # §5.5. A three-chunk container from the reference, then the ways a
+        # streaming reader is tempted to commit what it has already emitted.
+        three = st_py_write(bytes((i * 13 + 5) & 0xFF for i in range(2 * C + 100)), "aes", 3)
+        if three is None:
+            check("the reference writes a three-chunk container for the §5.5 cases", False)
+        else:
+            off = st_header("aes", 3)
+            stride = C + keym2.TAG_LEN
+            got, why = st_js_read(three)
+            check("the untouched three-chunk container commits --out (the checks below are not vacuous)",
+                  got == bytes((i * 13 + 5) & 0xFF for i in range(2 * C + 100)), why)
+
+            def flipped(at: int) -> bytes:
+                b = bytearray(three)
+                b[at] ^= 0x01
+                return bytes(b)
+
+            for why_bad, bad in (
+                    ("truncated exactly at a chunk boundary (two whole chunks left)", three[:off + 2 * stride]),
+                    ("truncated exactly at a chunk boundary (one whole chunk left)", three[:off + stride]),
+                    ("a middle chunk flipped", flipped(off + stride + 100)),
+                    ("the last chunk flipped", flipped(len(three) - 5))):
+                got, detail = st_js_read(bad)
+                leftover = [p.name for p in (st_out, st_out.with_name(st_out.name + ".tmp")) if p.exists()]
+                check(f"§5.5 {why_bad}: decrypt2stream refuses and leaves no --out",
+                      got is None and not leftover,
+                      f"committed {len(got)} B" if got is not None else f"left {leftover}" if leftover else detail)
+
+        # v4 §4.4 across the boundary, streaming: the reference's own sealer
+        # builds the streams no conforming writer emits (as in the v4 section
+        # above), and the streaming reader must commit none of them.
+        try:
+            mk_st = bytes(range(32))
+            base_st = keym2.encrypt(b"a small secret", PASSWORD, kdf_id=keym2.KDF_PBKDF2,
+                                    iterations=PBKDF2_ITERS, master_key=mk_st,
+                                    version=keym2.VERSION_V4, enforce_write_policy=False)
+            core_st, _r_st, pay_st = keym2.parse_container(base_st)
+            head_st = base_st[:len(base_st) - len(pay_st)]
+            good_st = keym2.pad_stream(b"a small secret")
+            v4_bad = (
+                ("step 3: a prefix past the stream", (1 << 40).to_bytes(8, "big") + good_st[8:]),
+                ("step 4: another rule's bucket", good_st + b"\x00"),
+                ("step 5: a non-zero padding byte", good_st[:-1] + b"\x01"),
+                ("step 5: a non-zero byte in the second chunk's padding",
+                 keym2.pad_stream(b"\x07" * (C - 7))[:-1] + b"\x01"),
+            )
+            for why_bad, stream in v4_bad:
+                got, detail = st_js_read(head_st + keym2._seal_stream(core_st, mk_st, stream))
+                leftover = [p.name for p in (st_out, st_out.with_name(st_out.name + ".tmp")) if p.exists()]
+                check(f"v4 {why_bad}: decrypt2stream refuses and leaves no --out",
+                      got is None and not leftover,
+                      f"committed {len(got)} B" if got is not None else f"left {leftover}" if leftover else detail)
+        except keym2.KeymError as e:
+            check("the reference builds the v4 §4.4 streams for the streaming reader", False, str(e))
+
+
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

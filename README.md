@@ -607,6 +607,7 @@ npm run typecheck         # the app, then the test suites and the conformance br
 npm run test:crypto       # frozen IBTZ core — the legacy decryption contract
 npm run test:keymaker     # container suite — round-trips, tamper rejection, fixtures
 npm run test:keym2-dispatch  # version routing: v1 unchanged, v2 onward routed, failures generic
+npm run test:keym2-stream    # the streaming core: sink order, ownership, commit only once drain resolves
 npm run test:calibration  # the Argon2id cost the device measures, against synthetic devices
 npm run test:fuzz         # malformed containers against the v1 parser
 npm run test:fuzz2        # the v2 surfaces: slot table, armor, shares, self-extract

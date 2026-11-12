@@ -9,6 +9,7 @@
     "test:crypto": "node scripts/crypto-regression.mts",
     "test:keymaker": "node scripts/keymaker-test.mjs",
     "test:keym2-dispatch": "node scripts/keymaker-test.mjs keym2-dispatch",
+    "test:keym2-stream": "node scripts/keymaker-test.mjs keym2-stream",
     "test:calibration": "node scripts/keymaker-test.mjs calibration",
     "test:access-policy": "node scripts/keymaker-test.mjs access-policy",
     "test:verify-transport": "node scripts/keymaker-test.mjs verify-transport",

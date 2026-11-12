@@ -277,6 +277,13 @@ jobs:
       - name: KEYM version dispatch
         run: npm run test:keym2-dispatch
 
+      # The streaming core under the in-memory API: what a sink receives and
+      # in what order, that the core never touches a buffer it handed over,
+      # that drain resolves only once the final chunk verifies (v2 section 5.5),
+      # and that a v4 sink sees the plaintext and nothing else. Seconds.
+      - name: KEYM streaming core
+        run: npm run test:keym2-stream
+
       # The Argon2id calibration solver, against synthetic devices. Pure, so it
       # belongs here rather than in the browser job — and so a runner ten times
       # slower than a laptop measures the same fixtures and reaches the same

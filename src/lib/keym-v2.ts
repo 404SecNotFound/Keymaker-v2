@@ -491,19 +491,35 @@ export function parseKeym2CoreHeader(data: Uint8Array): Keym2CoreHeader {
 }
 
 
-interface Keym2Container {
+/** Everything before the payload: what a reader needs before it touches a chunk. */
+interface Keym2Head {
   core: Keym2CoreHeader;
   coreBytes: Uint8Array;
   /** Raw fixed-width slot records, unparsed — see `parseKeym2Slot`. */
   records: Uint8Array[];
-  payload: Uint8Array;
   /** v3 §3, the stored `slot_table_mac`; null for a v2 container. */
   slotTableMac: Uint8Array | null;
+  /** §3, where the first chunk starts. */
+  payloadOffset: number;
+}
+
+interface Keym2Container extends Keym2Head {
+  payload: Uint8Array;
 }
 
 
 /**
- * Split a container into core header, raw slot records and payload.
+ * Split a container's head into core header and raw slot records, from the
+ * head bytes and the container's total length alone.
+ *
+ * `head` is the container's first `min(totalLength, KEYM2_HEADER_PEEK_BYTES)`
+ * bytes, or more (the whole container is fine). Every length check runs
+ * against `totalLength`, and every one of them compares against a bound no
+ * larger than the largest head the format permits (953 bytes, see
+ * `KEYM2_HEADER_PEEK_BYTES`), so for those checks a head of that many bytes and
+ * the whole container give the same answer: this is §6's checks in the order
+ * `parseKeym2Container` has always run them, and the streaming reader runs
+ * exactly these.
  *
  * Slot *contents* are deliberately not parsed here (§4.4, finding F7). A reader
  * validates only the slots it attempts, because validating a slot it is going
@@ -511,10 +527,15 @@ interface Keym2Container {
  * they could otherwise open through a perfectly valid passphrase slot beside
  * it.
  */
-function parseKeym2Container(data: Uint8Array): Keym2Container {
-  const core = parseKeym2CoreHeader(data);
+function parseKeym2Head(head: Uint8Array, totalLength: number): Keym2Head {
+  if (head.length < Math.min(totalLength, KEYM2_HEADER_PEEK_BYTES) || head.length > totalLength) {
+    // A caller bug, not a property of the container: the checks below would
+    // be answering a different question from the one §6 asks.
+    throw new Error("KEYM: parseKeym2Head needs the container's leading bytes.");
+  }
+  const core = parseKeym2CoreHeader(head);
 
-  const slotCount = data[keym2SlotCountOffset(core.version)] as number;
+  const slotCount = head[keym2SlotCountOffset(core.version)] as number;
   if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) reject();
 
   const width = keym2SlotLen(core.cipher);
@@ -523,24 +544,33 @@ function parseKeym2Container(data: Uint8Array): Keym2Container {
 
   // §6: shorter than payload_offset plus the minimum payload for one chunk.
   // The smallest chunk is zero plaintext bytes and its tag(s).
-  if (data.length < payloadOffset + core.tagOverhead) reject();
+  if (totalLength < payloadOffset + core.tagOverhead) reject();
 
   const records: Uint8Array[] = [];
   for (let i = 0; i < slotCount; i++) {
-    records.push(data.subarray(table + i * width, table + (i + 1) * width));
+    records.push(head.subarray(table + i * width, table + (i + 1) * width));
   }
   return {
     core,
-    coreBytes: data.subarray(0, coreHeaderLen(core.version)),
+    coreBytes: head.subarray(0, coreHeaderLen(core.version)),
     records,
-    payload: data.subarray(payloadOffset),
     // Read at a fixed offset, deliberately without consulting `slot_count` —
     // that is why v3 §3 puts the MAC *before* the table rather than after it.
     slotTableMac:
       keym2HasAuthenticatedTable(core.version)
-        ? data.subarray(SLOT_TABLE_MAC_OFFSET_V3, SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN)
+        ? head.subarray(SLOT_TABLE_MAC_OFFSET_V3, SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN)
         : null,
+    payloadOffset,
   };
+}
+
+/**
+ * Split a container into core header, raw slot records and payload: the head
+ * as `parseKeym2Head` reads it, and the rest.
+ */
+function parseKeym2Container(data: Uint8Array): Keym2Container {
+  const head = parseKeym2Head(data, data.length);
+  return { ...head, payload: data.subarray(head.payloadOffset) };
 }
 
 
@@ -710,7 +740,7 @@ async function computeSlotTableMac(
  * have every v2 container assert an assurance the format cannot give: v2's
  * table is strippable and the strip is undetectable.
  */
-async function verifySlotTable(parsed: Keym2Container, master: Uint8Array): Promise<boolean | null> {
+async function verifySlotTable(parsed: Keym2Head, master: Uint8Array): Promise<boolean | null> {
   if (parsed.slotTableMac === null) return null;
   const expected = await computeSlotTableMac(parsed.coreBytes, parsed.records, master);
   // Constant-time. Not because a timing signal here is worth much — reaching
@@ -749,7 +779,7 @@ const SLOT_TABLE_CHANGED_WRITE =
  * v2 container, which claims nothing and must keep the enrolment it always
  * allowed.
  */
-async function requireAuthenticSlotTable(parsed: Keym2Container, master: Uint8Array): Promise<void> {
+async function requireAuthenticSlotTable(parsed: Keym2Head, master: Uint8Array): Promise<void> {
   if ((await verifySlotTable(parsed, master)) === false) {
     secureErase(master);
     throw new KeymakerError("invalid-input", SLOT_TABLE_CHANGED_WRITE);
@@ -1116,36 +1146,10 @@ export function keym2PaddedLen(n: number): number {
   return Math.ceil(n / unit) * unit;
 }
 
-/** v4 §4.1. Prefix, plaintext, zeros. A fresh buffer is already zero. */
-function padStream(plaintext: Uint8Array): Uint8Array {
-  const n = PAD_PREFIX_LEN + plaintext.length;
-  const stream = new Uint8Array(keym2PaddedLen(n));
-  new DataView(stream.buffer, stream.byteOffset, PAD_PREFIX_LEN).setBigUint64(0, BigInt(plaintext.length), false);
-  stream.set(plaintext, PAD_PREFIX_LEN);
-  return stream;
-}
-
-/**
- * v4 §4.4, its six steps in its order. Every failure is §6's generic
- * rejection. Step 3 runs on the 64-bit value before it is narrowed to a
- * number, so a prefix no conforming writer emits cannot be led past
- * `Number.MAX_SAFE_INTEGER` into a length that compares as something else.
- *
- * The zero check has no cryptographic job — the AEAD already covers every
- * byte — and exists so the two implementations agree on every input (§4.5).
- */
-function unpadStream(stream: Uint8Array): Uint8Array {
-  if (stream.length < PAD_PREFIX_LEN) reject();
-  const claimed = new DataView(stream.buffer, stream.byteOffset, stream.byteLength).getBigUint64(0, false);
-  if (claimed > BigInt(stream.length - PAD_PREFIX_LEN)) reject();
-  const length = Number(claimed);
-  if (stream.length !== keym2PaddedLen(PAD_PREFIX_LEN + length)) reject();
-  const end = PAD_PREFIX_LEN + length;
-  let nonzero = 0;
-  for (let i = end; i < stream.length; i++) nonzero |= stream[i] as number;
-  if (nonzero !== 0) reject();
-  return stream.slice(PAD_PREFIX_LEN, end);
-}
+// The padded stream is never materialised. v4 §4.1's construction happens a
+// chunk at a time in `writeKeym2SlotsToSink`, and v4 §4.4's six steps in
+// `openKeym2Stream`: steps 1-4 on chunk 0, step 5 on each chunk as it arrives,
+// and step 6 is the window of each chunk that `drain` hands to its sink.
 
 function chunkCount(plaintextLength: number): number {
   return Math.max(1, Math.ceil(plaintextLength / KEYM2_CHUNK_SIZE));
@@ -1164,15 +1168,26 @@ function chunkCount(plaintextLength: number): number {
  * remainder above CHUNK means a truncated or padded payload.
  */
 function chunkLayout(payloadLength: number, tagOverhead: number): number[] {
+  const { count, lastSize } = chunkGeometry(payloadLength, tagOverhead);
+  const sizes = new Array<number>(count - 1).fill(KEYM2_CHUNK_SIZE);
+  sizes.push(lastSize);
+  return sizes;
+}
+
+/**
+ * `chunkLayout` without the array: the chunk count and the last chunk's
+ * plaintext size. Every chunk before the last is full. The streaming reader
+ * takes this rather than a list, which for a large file would be one entry
+ * per mebibyte of payload.
+ */
+function chunkGeometry(payloadLength: number, tagOverhead: number): { count: number; lastSize: number } {
   if (payloadLength < tagOverhead) reject();
   const stride = KEYM2_CHUNK_SIZE + tagOverhead;
   const rest = payloadLength - tagOverhead;
   const full = Math.floor(rest / stride);
   const remainder = rest - full * stride;
   if (remainder > KEYM2_CHUNK_SIZE) reject();
-  const sizes = new Array<number>(full).fill(KEYM2_CHUNK_SIZE);
-  sizes.push(remainder);
-  return sizes;
+  return { count: full + 1, lastSize: remainder };
 }
 
 /** §5.4. Chained is AES inner, ChaCha outer, both under the same nonce —
@@ -1423,7 +1438,7 @@ async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Sl
  * it discards.
  */
 async function* unwrapCandidates(
-  container: Keym2Container,
+  container: Keym2Head,
   secrets: Keym2Secrets
 ): AsyncGenerator<{ master: Uint8Array; slot: Keym2Slot }> {
   for (const record of container.records) {
@@ -1557,6 +1572,199 @@ export interface Keym2Options {
   enforceWritePolicy?: boolean;
 }
 
+// ---------------------------------------------------------------------------
+// Streaming: byte sources and sinks
+// ---------------------------------------------------------------------------
+//
+// One writer and one reader, parameterised by where the bytes come from and
+// where they go. The in-memory API below is these two with a source over a
+// Uint8Array and a sink that assembles one buffer, so every byte-equality gate
+// that exercises `encryptKeym2*` and `decryptKeym2` (crosstest2, the published
+// vectors, the frozen corpus) exercises the streaming core too.
+
+/**
+ * Where a writer reads its plaintext from, or a reader its container.
+ *
+ * `length` is known before the first read. v4 §4.5 needs that of a writer — the
+ * length prefix is sealed into chunk 0 — and a reader needs it to compute the
+ * chunk layout before it derives anything (§6).
+ */
+export interface Keym2ByteSource {
+  readonly length: number;
+  /**
+   * Exactly `length` bytes at `offset`, in a fresh buffer the caller owns and
+   * may erase; throws otherwise. The writer erases every buffer it reads, which
+   * is why a source over memory must copy.
+   */
+  read(offset: number, length: number): Promise<Uint8Array>;
+}
+
+/**
+ * Where a writer puts the container, or a reader the plaintext.
+ *
+ * Called in order, and the next call waits for this one to settle. Ownership
+ * of `bytes` passes to the sink: the core never reads, reuses or erases a
+ * buffer once it has handed it over, so a sink may keep it or erase it.
+ */
+export interface Keym2ByteSink {
+  write(bytes: Uint8Array): Promise<void>;
+}
+
+/** What a streaming writer reports once the last chunk has been handed to the sink. */
+export interface Keym2WriteSummary {
+  /** Total bytes handed to the sink, header included. */
+  bytes: number;
+  /**
+   * Container bytes [0, payload_offset): the header, the v3 MAC and the slot
+   * records. The writer's own copy, not the buffer the sink was given.
+   */
+  head: Uint8Array;
+}
+
+function inRange(offset: number, length: number, total: number): boolean {
+  return (
+    Number.isSafeInteger(offset) && Number.isSafeInteger(length) && offset >= 0 && length >= 0 && offset + length <= total
+  );
+}
+
+/**
+ * A source over bytes already in memory. Every read is a copy, because the
+ * writer erases what it reads and the bytes are the caller's.
+ */
+export function bytesSource(data: Uint8Array): Keym2ByteSource {
+  return {
+    length: data.length,
+    async read(offset: number, length: number): Promise<Uint8Array> {
+      if (!inRange(offset, length, data.length)) {
+        throw new Error("KEYM: a read past the end of the input.");
+      }
+      return data.slice(offset, offset + length);
+    },
+  };
+}
+
+/**
+ * A source over a container already in memory, for `decryptKeym2` only.
+ *
+ * Unlike `bytesSource` it hands out views, not copies. That breaks the source
+ * contract's "fresh buffer the caller may erase" on purpose, and is safe for
+ * one reason: the reader never erases or writes what it reads. Ciphertext is
+ * not a secret, and the caller's container must come back unchanged.
+ *
+ * A read past the end is §6's generic rejection, as a short container always
+ * was; the layout is computed from the length, so the reader never asks.
+ */
+function containerViewSource(data: Uint8Array): Keym2ByteSource {
+  return {
+    length: data.length,
+    async read(offset: number, length: number): Promise<Uint8Array> {
+      if (!inRange(offset, length, data.length)) reject();
+      return data.subarray(offset, offset + length);
+    },
+  };
+}
+
+const UNREADABLE_INPUT =
+  "The file could not be read to the end, so nothing was saved. " +
+  "It may have been moved, changed or removed while Keymaker was reading it. Choose it again and retry.";
+
+/**
+ * A source over a `Blob` or `File`, read a range at a time.
+ *
+ * A read that fails or comes back short — the file was moved, truncated or
+ * revoked while it was being read — is a typed `invalid-input` error saying so,
+ * never the generic decryption failure: the container was not judged, and
+ * telling someone their password is wrong because their disk went away sends
+ * them looking in the wrong place.
+ */
+export function blobSource(blob: Blob): Keym2ByteSource {
+  return {
+    length: blob.size,
+    async read(offset: number, length: number): Promise<Uint8Array> {
+      if (!inRange(offset, length, blob.size)) throw new KeymakerError("invalid-input", UNREADABLE_INPUT);
+      let bytes: ArrayBuffer;
+      try {
+        bytes = await blob.slice(offset, offset + length).arrayBuffer();
+      } catch {
+        throw new KeymakerError("invalid-input", UNREADABLE_INPUT);
+      }
+      if (bytes.byteLength !== length) throw new KeymakerError("invalid-input", UNREADABLE_INPUT);
+      return new Uint8Array(bytes);
+    },
+  };
+}
+
+/**
+ * The exact size of the container a writer produces: header, slot table, and
+ * one tag (two for chained) per chunk of the stream — the plaintext for v2 and
+ * v3, v4 §4.1's padded stream for v4. A caller sizes its destination from this
+ * before anything is derived.
+ */
+export function keym2ContainerLength(
+  version: number,
+  cipher: CipherId,
+  slotCount: number,
+  plaintextLength: number
+): number {
+  if (!isKnownKeym2Version(version)) {
+    throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
+  }
+  if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+    throw new KeymakerError("invalid-input", `KEYM: unknown cipher ${cipher}.`);
+  }
+  if (!Number.isInteger(slotCount) || slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) {
+    throw new KeymakerError("invalid-input", `A container holds 1 to ${KEYM2_MAX_SLOTS} slots.`);
+  }
+  if (!Number.isSafeInteger(plaintextLength) || plaintextLength < 0) {
+    throw new KeymakerError("invalid-input", "KEYM: a plaintext length is a non-negative integer.");
+  }
+  const stream = keym2IsPadded(version) ? keym2PaddedLen(PAD_PREFIX_LEN + plaintextLength) : plaintextLength;
+  return (
+    keym2SlotTableOffset(version) +
+    slotCount * keym2SlotLen(cipher) +
+    stream +
+    chunkCount(stream) * tagOverheadFor(cipher)
+  );
+}
+
+/**
+ * The sink the in-memory writers hand the streaming core: one buffer, sized
+ * by `keym2ContainerLength` from the head it receives first (version, cipher
+ * and slot count are all in it), and filled in order.
+ *
+ * Sized on the first write rather than up front so that nothing about the
+ * order in which a writer refuses bad input changes: by the time the head
+ * exists, every check the writer makes has passed.
+ */
+function containerCollector(plaintextLength: number): { sink: Keym2ByteSink; take(): Uint8Array } {
+  let out: Uint8Array | null = null;
+  let at = 0;
+  return {
+    sink: {
+      async write(bytes: Uint8Array): Promise<void> {
+        if (out === null) {
+          const version = bytes[4] as number;
+          out = new Uint8Array(
+            keym2ContainerLength(
+              version,
+              bytes[5] as CipherId,
+              bytes[keym2SlotCountOffset(version)] as number,
+              plaintextLength
+            )
+          );
+        }
+        if (at + bytes.length > out.length) throw new Error("KEYM: the writer overran the container length.");
+        out.set(bytes, at);
+        at += bytes.length;
+      },
+    },
+    take(): Uint8Array {
+      if (out === null || at !== out.length) throw new Error("KEYM: the writer stopped short of the container length.");
+      return out;
+    },
+  };
+}
+
 /**
  * Encrypt into a KEYM v2 container with a single passphrase slot.
  *
@@ -1565,6 +1773,8 @@ export interface Keym2Options {
  * deterministic counter (§5.2), so reusing a master key reuses every nonce in
  * the container. See `encryptKeym2WithExplicitSecrets` for the one caller that
  * needs otherwise.
+ *
+ * `encryptKeym2ToSink` over the plaintext, assembled into one buffer.
  */
 export async function encryptKeym2(
   plaintext: Uint8Array,
@@ -1573,6 +1783,30 @@ export async function encryptKeym2(
   options: Keym2Options,
   version: number = KEYM2_VERSION
 ): Promise<Uint8Array> {
+  const out = containerCollector(plaintext.length);
+  await encryptKeym2ToSink(bytesSource(plaintext), password, keyFile, options, out.sink, version);
+  return out.take();
+}
+
+/**
+ * `encryptKeym2`, reading the plaintext from `source` and handing the
+ * container to `sink`: the header and slot table as one write, then one write
+ * per sealed chunk. Nothing about the container's bytes depends on which of
+ * the two is used.
+ *
+ * A sink that throws stops the write, and the error reaches the caller as
+ * itself; the master key and every buffer read are erased either way. What the
+ * sink already holds is a prefix of a container, not a container, and is the
+ * caller's to discard.
+ */
+export async function encryptKeym2ToSink(
+  source: Keym2ByteSource,
+  password: string,
+  keyFile: Uint8Array | null,
+  options: Keym2Options,
+  sink: Keym2ByteSink,
+  version: number = KEYM2_VERSION
+): Promise<Keym2WriteSummary> {
   const salt = new Uint8Array(SALT_LEN);
   crypto.getRandomValues(salt);
   const masterKey = new Uint8Array(MASTER_KEY_LEN);
@@ -1582,13 +1816,14 @@ export async function encryptKeym2(
   const containerId = keym2HasAuthenticatedTable(version) ? new Uint8Array(CONTAINER_ID_LEN) : EMPTY;
   if (keym2HasAuthenticatedTable(version)) crypto.getRandomValues(containerId);
   try {
-    return await encryptKeym2WithExplicitSecrets(
-      plaintext,
+    return await encryptKeym2WithExplicitSecretsToSink(
+      source,
       password,
       keyFile,
       options,
       salt,
       masterKey,
+      sink,
       version,
       containerId
     );
@@ -1646,6 +1881,41 @@ export async function encryptKeym2WithExplicitSecrets(
   version: number = KEYM2_VERSION,
   containerId: Uint8Array = EMPTY
 ): Promise<Uint8Array> {
+  const out = containerCollector(plaintext.length);
+  await encryptKeym2WithExplicitSecretsToSink(
+    bytesSource(plaintext),
+    password,
+    keyFile,
+    options,
+    salt,
+    masterKey,
+    out.sink,
+    version,
+    containerId
+  );
+  return out.take();
+}
+
+/**
+ * `encryptKeym2WithExplicitSecrets` over a source and a sink. **Conformance
+ * harnesses only**, for the same reason and under the same §4.5 warning: a
+ * caller-supplied master key that is ever reused reuses every (key, nonce)
+ * pair in the container, which for an AEAD means recoverable plaintext and
+ * forgeable tags. `encryptKeym2ToSink` is the API.
+ *
+ * The salt and master key are the caller's and are not erased here.
+ */
+export async function encryptKeym2WithExplicitSecretsToSink(
+  source: Keym2ByteSource,
+  password: string,
+  keyFile: Uint8Array | null,
+  options: Keym2Options,
+  salt: Uint8Array,
+  masterKey: Uint8Array,
+  sink: Keym2ByteSink,
+  version: number = KEYM2_VERSION,
+  containerId: Uint8Array = EMPTY
+): Promise<Keym2WriteSummary> {
   if (!password) {
 
     throw new KeymakerError("credential-required", "A password is required for encryption.");
@@ -1662,7 +1932,7 @@ export async function encryptKeym2WithExplicitSecrets(
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
   }
   const prefix = packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt);
-  return writeKeym2(plaintext, options.cipher, masterKey, version, containerId, prefix, async () => {
+  return writeKeym2ToSink(source, options.cipher, masterKey, version, containerId, prefix, sink, async () => {
     // `finally`, not a trailing call: `kdfInput` holds the NFC password bytes and
     // the key-file digest, and `deriveSlotKey` throws on reachable input — an
     // Argon2id slot at §6's memory ceiling on a device that cannot allocate it,
@@ -1686,16 +1956,17 @@ export async function encryptKeym2WithExplicitSecrets(
  * type byte and how its key is derived. Both prefixes go through the reader's
  * own validators first.
  */
-async function writeKeym2(
-  plaintext: Uint8Array,
+async function writeKeym2ToSink(
+  source: Keym2ByteSource,
   cipher: CipherId,
   masterKey: Uint8Array,
   version: number,
   containerId: Uint8Array,
   prefix: Uint8Array,
+  sink: Keym2ByteSink,
   slotKey: () => Promise<Uint8Array>
-): Promise<Uint8Array> {
-  return writeKeym2Slots(plaintext, cipher, masterKey, version, containerId, [{ prefix, slotKey }]);
+): Promise<Keym2WriteSummary> {
+  return writeKeym2SlotsToSink(source, cipher, masterKey, version, containerId, [{ prefix, slotKey }], sink);
 }
 
 /** One slot to write: its prefix, and how to derive the key that wraps the master key into it. */
@@ -1706,7 +1977,8 @@ interface Keym2SlotSpec {
 
 /**
  * A container with every slot in `slots`, in that order, all wrapping the same
- * master key, and the payload under it.
+ * master key, and the payload under it. The one writer: every `encryptKeym2*`
+ * function, in memory or streaming, ends here.
  *
  * The bytes are exactly those of writing the first slot and enrolling the rest
  * one by one: a slot's wrap is keyed and authenticated by nothing but its own
@@ -1715,15 +1987,30 @@ interface Keym2SlotSpec {
  * the work. Enrolling a slot into an existing container first has to open it,
  * which means deriving the password again; here the master key is still in
  * hand, so each credential is derived once (roadmap 9.3).
+ *
+ * ## Streaming
+ *
+ * The head — core header, `slot_count`, the v3 MAC and every slot record — is
+ * complete before the first chunk is sealed, so it goes to the sink as one
+ * write, followed by one write per sealed chunk. The plaintext is read one
+ * chunk at a time, and for v4 chunk `i` of the padded stream is assembled
+ * from the 8-byte length prefix, the plaintext range it covers and zeros up to
+ * the padded length; the whole padded stream never exists. `L` is
+ * `source.length`, known before chunk 0 is sealed, as v4 §4.5 requires.
+ *
+ * Every buffer read and every assembled chunk is erased once its chunk is
+ * sealed, and in a `finally` if the source, the AEAD or the sink throws. The
+ * master key is the caller's (roadmap 9.4) and is not erased here.
  */
-async function writeKeym2Slots(
-  plaintext: Uint8Array,
+async function writeKeym2SlotsToSink(
+  source: Keym2ByteSource,
   cipher: CipherId,
   masterKey: Uint8Array,
   version: number,
   containerId: Uint8Array,
-  slots: Keym2SlotSpec[]
-): Promise<Uint8Array> {
+  slots: Keym2SlotSpec[],
+  sink: Keym2ByteSink
+): Promise<Keym2WriteSummary> {
   if (!isKnownKeym2Version(version)) {
     throw new KeymakerError("invalid-input", `KEYM: unknown container version ${version}.`);
   }
@@ -1749,6 +2036,15 @@ async function writeKeym2Slots(
       throw new KeymakerError("invalid-input", "KEYM v2 refused to write a slot its own parser rejects.");
     }
   }
+  // v4 §4.1: what gets chunked is the padded stream, not the plaintext. Its
+  // length is a function of L alone, and refused here, before any derivation,
+  // if it cannot be represented.
+  const plaintextLength = source.length;
+  if (!Number.isSafeInteger(plaintextLength) || plaintextLength < 0) {
+    throw new KeymakerError("invalid-input", "KEYM: a plaintext length is a non-negative integer.");
+  }
+  const padded = keym2IsPadded(version);
+  const streamLength = padded ? keym2PaddedLen(PAD_PREFIX_LEN + plaintextLength) : plaintextLength;
 
   const records: Uint8Array[] = [];
   for (const { prefix, slotKey } of slots) {
@@ -1760,28 +2056,61 @@ async function writeKeym2Slots(
     }
   }
 
-  // v4 §4.1: what gets chunked is the padded stream, not the plaintext. Built
-  // once, here, and erased on the way out, since it is a second copy of the
-  // plaintext with a length prefix and zeros attached.
-  const stream = keym2IsPadded(version) ? padStream(plaintext) : plaintext;
   const keys = await payloadKeys(masterKey, cipher);
+  // The two plaintext-bearing buffers a chunk can be in, held here so the
+  // `finally` reaches whichever exists when something throws.
+  let piece: Uint8Array | null = null;
+  let chunk: Uint8Array | null = null;
   try {
-    const count = chunkCount(stream.length);
+    const count = chunkCount(streamLength);
     // v3 §3 puts the MAC between slot_count and the table. It is computed over
     // the finished record, so the table has to exist before the head does.
-    const head: Uint8Array[] = [coreBytes, new Uint8Array([records.length])];
+    const headParts: Uint8Array[] = [coreBytes, new Uint8Array([records.length])];
     if (keym2HasAuthenticatedTable(version)) {
-      head.push(await computeSlotTableMac(coreBytes, records, masterKey));
+      headParts.push(await computeSlotTableMac(coreBytes, records, masterKey));
     }
-    const parts: Uint8Array[] = [...head, ...records];
+    const head = concat([...headParts, ...records]);
+    // The sink owns `head` from here and may erase it; the summary keeps its own.
+    const summaryHead = head.slice();
+    await sink.write(head);
+    let written = summaryHead.length;
+
     for (let i = 0; i < count; i++) {
-      const chunk = stream.subarray(i * KEYM2_CHUNK_SIZE, (i + 1) * KEYM2_CHUNK_SIZE);
-      parts.push(await seal(cipher, keys, nonceFor(i, i === count - 1), chunk, coreBytes));
+      const start = i * KEYM2_CHUNK_SIZE;
+      const end = Math.min(start + KEYM2_CHUNK_SIZE, streamLength);
+      if (padded) {
+        // v4 §4.1, `uint64_be(L) ‖ plaintext ‖ zeros`, one chunk's window of
+        // it. A fresh buffer is already zero, so only the prefix and the
+        // plaintext have to be written. P ≥ 256, so chunk 0 holds the whole
+        // prefix and no other chunk holds any of it.
+        chunk = new Uint8Array(end - start);
+        if (i === 0) {
+          new DataView(chunk.buffer, chunk.byteOffset, PAD_PREFIX_LEN).setBigUint64(0, BigInt(plaintextLength), false);
+        }
+        const from = Math.max(start, PAD_PREFIX_LEN);
+        const to = Math.min(end, PAD_PREFIX_LEN + plaintextLength);
+        if (to > from) {
+          piece = await source.read(from - PAD_PREFIX_LEN, to - from);
+          if (piece.length !== to - from) throw new KeymakerError("invalid-input", UNREADABLE_INPUT);
+          chunk.set(piece, from - start);
+          secureErase(piece);
+          piece = null;
+        }
+      } else {
+        chunk = await source.read(start, end - start);
+        if (chunk.length !== end - start) throw new KeymakerError("invalid-input", UNREADABLE_INPUT);
+      }
+      const sealed = await seal(cipher, keys, nonceFor(i, i === count - 1), chunk, coreBytes);
+      secureErase(chunk);
+      chunk = null;
+      written += sealed.length;
+      await sink.write(sealed);
     }
-    return concat(parts);
+    return { bytes: written, head: summaryHead };
   } finally {
     secureErase(keys.chachaKey);
-    if (stream !== plaintext) secureErase(stream);
+    secureErase(piece);
+    secureErase(chunk);
   }
 }
 
@@ -1804,14 +2133,48 @@ export async function encryptKeym2WithSharesRequired(
   threshold: number,
   count: number,
   version: number = KEYM2_VERSION,
-  explicit?: {
-    salt?: Uint8Array;
-    masterKey?: Uint8Array;
-    containerId?: Uint8Array;
-    shareSecret?: Uint8Array;
-    coefficients?: Uint8Array;
-  }
+  explicit?: Keym2SharesRequiredExplicit
 ): Promise<Keym2ShareSet> {
+  const out = containerCollector(plaintext.length);
+  const { shares } = await encryptKeym2WithSharesRequiredToSink(
+    bytesSource(plaintext),
+    password,
+    keyFile,
+    options,
+    threshold,
+    count,
+    out.sink,
+    version,
+    explicit
+  );
+  return { container: out.take(), shares };
+}
+
+/** The random inputs `encryptKeym2WithSharesRequired` lets the conformance bridge pin (§4.5). */
+interface Keym2SharesRequiredExplicit {
+  salt?: Uint8Array;
+  masterKey?: Uint8Array;
+  containerId?: Uint8Array;
+  shareSecret?: Uint8Array;
+  coefficients?: Uint8Array;
+}
+
+/**
+ * `encryptKeym2WithSharesRequired` over a source and a sink. The shares are
+ * encoded only once the last chunk has been handed to the sink, so a write
+ * that failed returns none.
+ */
+export async function encryptKeym2WithSharesRequiredToSink(
+  source: Keym2ByteSource,
+  password: string,
+  keyFile: Uint8Array | null,
+  options: Keym2Options,
+  threshold: number,
+  count: number,
+  sink: Keym2ByteSink,
+  version: number = KEYM2_VERSION,
+  explicit?: Keym2SharesRequiredExplicit
+): Promise<Keym2WriteSummary & { shares: string[] }> {
   if (!password) {
     throw new KeymakerError("credential-required", "A password is required for encryption.");
   }
@@ -1834,20 +2197,29 @@ export async function encryptKeym2WithSharesRequired(
     // nothing, not an Argon2id derivation.
     parts = shamirSplit(shareSecret, threshold, count, explicit?.coefficients);
     const prefix = packSlotPrefix(options.kdf, keyFile ? SLOT_FLAG_KEYFILE : 0, salt, KEYM2_SLOT_TYPE_BOTH);
-    const container = await writeKeym2(plaintext, options.cipher, masterKey, version, containerId, prefix, async () => {
-      const kdfInput = await buildKdfInput(password, keyFile);
-      try {
-        return await deriveBothSlotKey(kdfInput, shareSecret, salt, options.kdf);
-      } finally {
-        secureErase(kdfInput);
+    const summary = await writeKeym2ToSink(
+      source,
+      options.cipher,
+      masterKey,
+      version,
+      containerId,
+      prefix,
+      sink,
+      async () => {
+        const kdfInput = await buildKdfInput(password, keyFile);
+        try {
+          return await deriveBothSlotKey(kdfInput, shareSecret, salt, options.kdf);
+        } finally {
+          secureErase(kdfInput);
+        }
       }
-    });
+    );
     const setId = await shareSetIdV2(salt);
     const shares: string[] = [];
     for (const part of parts) {
       shares.push(await encodeShareV2({ setId, threshold, index: part.index, value: part.value }));
     }
-    return { container, shares };
+    return { ...summary, shares };
   } finally {
     // Every part's value, not only the ones the loop above reached: a write
     // that failed before it, or an encode that threw part-way, used to leave
@@ -1864,6 +2236,16 @@ export interface Keym2InitialSlots {
   shamir?: { threshold: number; count: number } | undefined;
   /** §4.7. The authenticator's PRF output for `derivePrfSalt(salt)`, and that slot salt. */
   passkey?: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
+}
+
+/** The random inputs `encryptKeym2WithSlots` lets the conformance bridge pin (§4.5). */
+interface Keym2SlotsExplicit {
+  salt?: Uint8Array;
+  masterKey?: Uint8Array;
+  containerId?: Uint8Array;
+  shareSalt?: Uint8Array;
+  shareSecret?: Uint8Array;
+  coefficients?: Uint8Array;
 }
 
 /**
@@ -1900,15 +2282,38 @@ export async function encryptKeym2WithSlots(
   options: Keym2Options,
   slots: Keym2InitialSlots,
   version: number = KEYM2_VERSION,
-  explicit?: {
-    salt?: Uint8Array;
-    masterKey?: Uint8Array;
-    containerId?: Uint8Array;
-    shareSalt?: Uint8Array;
-    shareSecret?: Uint8Array;
-    coefficients?: Uint8Array;
-  }
+  explicit?: Keym2SlotsExplicit
 ): Promise<{ container: Uint8Array; shares?: string[] }> {
+  const out = containerCollector(plaintext.length);
+  const { shares } = await encryptKeym2WithSlotsToSink(
+    bytesSource(plaintext),
+    password,
+    keyFile,
+    options,
+    slots,
+    out.sink,
+    version,
+    explicit
+  );
+  return shares === undefined ? { container: out.take() } : { container: out.take(), shares };
+}
+
+/**
+ * `encryptKeym2WithSlots` over a source and a sink, under the same ownership
+ * rules. The shares are encoded only once the last chunk has been handed to
+ * the sink: a write that failed returns no shares, so nobody is handed strips
+ * for a backup that was never made.
+ */
+export async function encryptKeym2WithSlotsToSink(
+  source: Keym2ByteSource,
+  password: string,
+  keyFile: Uint8Array | null,
+  options: Keym2Options,
+  slots: Keym2InitialSlots,
+  sink: Keym2ByteSink,
+  version: number = KEYM2_VERSION,
+  explicit?: Keym2SlotsExplicit
+): Promise<Keym2WriteSummary & { shares?: string[] }> {
   if (!password) {
     throw new KeymakerError("credential-required", "A password is required for encryption.");
   }
@@ -1993,9 +2398,9 @@ export async function encryptKeym2WithSlots(
       });
     }
 
-    const container = await writeKeym2Slots(plaintext, options.cipher, masterKey, version, containerId, specs);
+    const summary = await writeKeym2SlotsToSink(source, options.cipher, masterKey, version, containerId, specs, sink);
 
-    if (!shareSalt || !shamirModule || !slots.shamir) return { container };
+    if (!shareSalt || !shamirModule || !slots.shamir) return summary;
     // Encoded only once the container exists: a write that failed returns no
     // shares, so nobody is handed strips for a backup that was never made.
     const setId = await shamirModule.shareSetIdV2(shareSalt);
@@ -2005,7 +2410,7 @@ export async function encryptKeym2WithSlots(
         await shamirModule.encodeShareV2({ setId, threshold: slots.shamir.threshold, index: part.index, value: part.value })
       );
     }
-    return { container, shares };
+    return { ...summary, shares };
   } finally {
     for (const part of parts) secureErase(part.value);
     if (!explicit?.shareSecret) secureErase(shareSecret);
@@ -2365,6 +2770,10 @@ export interface Keym2DecryptResult {
  * written 899 MB of attacker-chosen truncation. Nothing is returned until the
  * final chunk verifies *and* carries `final_flag`, so a caller cannot treat a
  * partial result as a success by accident.
+ *
+ * This is `openKeym2Stream` drained into one buffer sized to the plaintext,
+ * which is the commit-on-resolve rule `drain` asks of its callers: the buffer
+ * is returned only once `drain` resolves, and erased if it rejects.
  */
 export async function decryptKeym2(
   container: Uint8Array,
@@ -2373,8 +2782,126 @@ export async function decryptKeym2(
   shares?: string[],
   prfOutput?: Uint8Array
 ): Promise<Keym2DecryptResult> {
-  const parsed = parseKeym2Container(container); // every structural §6 check
-  const sizes = chunkLayout(parsed.payload.length, parsed.core.tagOverhead); // also before any KDF
+  const opened = await openKeym2Stream(containerViewSource(container), password, keyFile, shares, prfOutput);
+  const data = new Uint8Array(opened.plaintextLength);
+  let at = 0;
+  try {
+    await opened.drain({
+      async write(bytes: Uint8Array): Promise<void> {
+        if (at + bytes.length > data.length) reject();
+        data.set(bytes, at);
+        at += bytes.length;
+        // Ownership passed here, and this is the only copy that should
+        // survive: the chunk the reader handed over is a second one.
+        secureErase(bytes);
+      },
+    });
+    if (at !== data.length) reject();
+  } catch (error) {
+    // A container that authenticates for nine chunks and fails on the tenth
+    // has already produced nine chunks of real plaintext, and they are in
+    // `data` by now.
+    secureErase(data);
+    throw error;
+  } finally {
+    opened.discard();
+  }
+  return {
+    data,
+    keyFileUsed: opened.keyFileUsed,
+    core: opened.core,
+    slot: opened.slot,
+    slotTableAuthentic: opened.slotTableAuthentic,
+  };
+}
+
+/**
+ * A container whose slot has opened and whose chunk 0 has verified, ready to
+ * hand its plaintext to a sink. See `openKeym2Stream`.
+ */
+export interface Keym2OpenedStream {
+  readonly core: Keym2CoreHeader;
+  /** Which slot opened it. */
+  readonly slot: Keym2Slot;
+  readonly keyFileUsed: boolean;
+  /** v3 §5.2, exactly as `Keym2DecryptResult.slotTableAuthentic`: null for v2. */
+  readonly slotTableAuthentic: boolean | null;
+  /**
+   * The number of bytes `drain` hands to the sink if it resolves. For v2 and v3
+   * the sum of the chunk sizes; for v4 the `L` of v4 §4.1, read from chunk 0
+   * and already held to v4 §4.4 steps 1–4.
+   */
+  readonly plaintextLength: number;
+  /**
+   * Open every remaining chunk and hand the plaintext to `sink`, in order, as
+   * each chunk verifies. Single use.
+   *
+   * **§5.5: the caller commits only when this resolves.** Chunks reach the sink
+   * as they verify, and a verified chunk is genuine, but a prefix of verified
+   * chunks is not a verified prefix of the file: a container cut at a chunk
+   * boundary, or one whose chunk 900 fails, has already handed the sink
+   * everything before. So the sink writes to a temporary destination, and the
+   * caller makes that the result only after this promise resolves — which it
+   * does only once the final chunk has opened under `final_flag = 1`, the
+   * chunks have consumed the payload exactly, and, for v4, every byte past
+   * `8 + L` has been seen to be zero. On a rejection the caller discards what
+   * the sink holds.
+   *
+   * For v4 the sink receives stream bytes [8, 8 + L) and nothing else: never
+   * the length prefix, never a padding byte, and nothing at all before v4
+   * §4.4 steps 1–4 have passed (they pass in `openKeym2Stream`).
+   *
+   * Every rejection is §6's generic decryption failure, except a failure of
+   * the source or the sink, which reaches the caller as itself. The payload
+   * keys are erased when this settles, either way.
+   */
+  drain(sink: Keym2ByteSink): Promise<void>;
+  /**
+   * Erase the payload keys and chunk 0's plaintext if `drain` has not taken it.
+   * Idempotent, and safe after `drain`. A caller that opens and then decides
+   * not to drain must call this.
+   */
+  discard(): void;
+}
+
+/**
+ * Open a container read through `source`: every structural §6 check, the
+ * chunk layout from the length alone, then the slot walk and chunk 0 — the
+ * same steps, in the same order, as `decryptKeym2` has always taken — without
+ * reading any chunk after the first.
+ *
+ * What it reads is the head (the first `KEYM2_HEADER_PEEK_BYTES` at most) and
+ * chunk 0. The layout is computed before any KDF runs; every structural
+ * rejection is §6's generic one; and chunk 0 decides which slot candidate is
+ * the right one, as it does in `decryptKeym2` (see `unwrapCandidates`). For
+ * v4, v4 §4.4 steps 1–4 run here, on chunk 0, so a stream whose length prefix
+ * is wrong is refused before a single plaintext byte is handed anywhere.
+ *
+ * The result holds the payload keys and chunk 0's plaintext until `drain` or
+ * `discard`. Read `drain`'s §5.5 contract before using it: the caller commits
+ * the output only when `drain` resolves.
+ *
+ * A source that throws reaches the caller as itself — `blobSource`'s typed
+ * "could not be read" error stays that, rather than becoming a wrong password.
+ */
+export async function openKeym2Stream(
+  source: Keym2ByteSource,
+  password: string,
+  keyFile: Uint8Array | null,
+  shares?: string[],
+  prfOutput?: Uint8Array
+): Promise<Keym2OpenedStream> {
+  const total = source.length;
+  if (!Number.isSafeInteger(total) || total < 0) reject();
+  const headBytes = await source.read(0, Math.min(total, KEYM2_HEADER_PEEK_BYTES));
+  const parsed = parseKeym2Head(headBytes, total); // every structural §6 check
+  const tagOverhead = parsed.core.tagOverhead;
+  const { count, lastSize } = chunkGeometry(total - parsed.payloadOffset, tagOverhead); // also before any KDF
+  const last = count - 1;
+  const sizeOf = (i: number): number => (i === last ? lastSize : KEYM2_CHUNK_SIZE);
+  // The plaintext for v2 and v3; v4 §4.4's P′, the whole padded stream.
+  const streamLength = last * KEYM2_CHUNK_SIZE + lastSize;
+  const padded = keym2IsPadded(parsed.core.version);
 
   // An heir holds shares and no password, so an empty password must not become
   // a passphrase attempt: it would burn a full Argon2id derivation per slot to
@@ -2398,9 +2925,8 @@ export async function decryptKeym2(
   // the only thing that can tell the difference, and chunk 0 carries it, so a
   // candidate is confirmed or discarded for the price of one AEAD open. A walk
   // that committed to the first unwrap would reject a container that opens.
-  const last = sizes.length - 1;
-  const firstBlobLen = (sizes[0] as number) + parsed.core.tagOverhead;
-  const firstBlob = parsed.payload.subarray(0, firstBlobLen);
+  const firstBlobLen = sizeOf(0) + tagOverhead;
+  const firstBlob = await source.read(parsed.payloadOffset, firstBlobLen);
   if (firstBlob.length !== firstBlobLen) reject();
 
   let chosen:
@@ -2439,61 +2965,122 @@ export async function decryptKeym2(
   // Exhausting the table is the only failure, exactly as it was before: §6's
   // generic rejection, with nothing said about how far the walk got.
   if (chosen === null) reject();
-  const { keys, slot, slotTableAuthentic } = chosen;
+  const { slot, slotTableAuthentic } = chosen;
+  let keys: AeadKeys | null = chosen.keys;
+  // Chunk 0's plaintext, held until `drain` hands it on or `discard` erases it.
+  let held: Uint8Array | null = chosen.first;
 
-  // Declared outside the try so the `finally` can reach it: a mid-container
-  // authentication failure still leaves real plaintext in the chunks decoded
-  // before it.
-  const out: Uint8Array[] = [chosen.first];
-  try {
-    let offset = firstBlobLen;
-    for (let i = 1; i < sizes.length; i++) {
-      const size = sizes[i];
-      if (size === undefined) reject();
-      const blobLen = size + parsed.core.tagOverhead;
-      const blob = parsed.payload.subarray(offset, offset + blobLen);
-      if (blob.length !== blobLen) reject();
-      offset += blobLen;
-      // §5.2, normative: the last chunk consumed must carry final_flag = 1.
-      //
-      // Enforced by construction — there is no flag to read, only a nonce to
-      // get right. Chunk `last` is opened with final_flag = 1, so a truncated
-      // container (whose surviving last chunk was sealed with 0) fails
-      // authentication. That is the case a length check alone cannot catch:
-      // truncation exactly on a chunk boundary leaves a perfectly valid
-      // payload length.
-      const plain = await open(parsed.core.cipher, keys, nonceFor(i, i === last), blob, parsed.coreBytes);
-      if (plain === null) reject();
-      out.push(plain);
+  // The window of the stream that is plaintext: all of it for v2 and v3, and
+  // [8, 8 + L) for v4.
+  let emitFrom = 0;
+  let emitTo = streamLength;
+  if (padded) {
+    // v4 §4.4 steps 1–4, from chunk 0 alone and before anything is emitted.
+    // Chunk 0 holds the whole prefix whenever step 1 passes: it is the whole
+    // stream when there is one chunk, and a full mebibyte when there are more.
+    // Step 3 runs on the 64-bit value before it is narrowed to a number, so a
+    // prefix no conforming writer emits cannot be led past
+    // `Number.MAX_SAFE_INTEGER` into a length that compares as something else.
+    try {
+      if (streamLength < PAD_PREFIX_LEN) reject();
+      const claimed = new DataView(held.buffer, held.byteOffset, held.byteLength).getBigUint64(0, false);
+      if (claimed > BigInt(streamLength - PAD_PREFIX_LEN)) reject();
+      const length = Number(claimed);
+      if (streamLength !== keym2PaddedLen(PAD_PREFIX_LEN + length)) reject();
+      emitFrom = PAD_PREFIX_LEN;
+      emitTo = PAD_PREFIX_LEN + length;
+    } catch (error) {
+      secureErase(held);
+      secureErase(keys.chachaKey);
+      throw error;
     }
-    if (offset !== parsed.payload.length) reject();
-    // `concat` copies, so every chunk is now duplicated: the returned buffer
-    // and the originals. Only the caller's copy should survive — on a 100 MB
-    // file the difference is a second complete copy of the plaintext sitting
-    // in memory until the collector happens to reach it.
-    const stream = concat(out);
-    for (const chunk of out) secureErase(chunk);
-    out.length = 0;
-    // v4 §4.4: only now, with every chunk verified and the final flag seen.
-    // `unpadStream` copies the plaintext out; the stream — a second copy, with
-    // the padding attached — is erased whether or not the checks pass.
-    let data = stream;
-    if (keym2IsPadded(parsed.core.version)) {
-      try {
-        data = unpadStream(stream);
-      } finally {
-        secureErase(stream);
-      }
-    }
-    return { data, keyFileUsed: slot.keyFileUsed, core: parsed.core, slot, slotTableAuthentic };
-
-  } finally {
-    secureErase(keys.chachaKey);
-    // Also on the way out of a failure. A container that authenticates for
-    // nine chunks and fails on the tenth has already produced nine chunks of
-    // real plaintext, and `reject()` used to walk past all of them.
-    for (const chunk of out) secureErase(chunk);
   }
+
+  let used = false;
+  const discard = (): void => {
+    secureErase(held);
+    held = null;
+    if (keys !== null) secureErase(keys.chachaKey);
+    keys = null;
+    used = true;
+  };
+
+  const drain = async (sink: Keym2ByteSink): Promise<void> => {
+    if (used || keys === null) throw new Error("KEYM: this stream has already been drained or discarded.");
+    used = true;
+    // The chunk being worked on, held here so the `finally` reaches it.
+    let plain: Uint8Array | null = null;
+    try {
+      let offset = parsed.payloadOffset + firstBlobLen;
+      for (let i = 0; i < count; i++) {
+        if (i === 0) {
+          plain = held;
+          held = null;
+          if (plain === null) reject();
+        } else {
+          const blobLen = sizeOf(i) + tagOverhead;
+          const blob = await source.read(offset, blobLen);
+          if (blob.length !== blobLen) reject();
+          offset += blobLen;
+          const current = keys;
+          if (current === null) reject(); // discarded while draining
+          // §5.2, normative: the last chunk consumed must carry final_flag = 1.
+          //
+          // Enforced by construction — there is no flag to read, only a nonce
+          // to get right. Chunk `last` is opened with final_flag = 1, so a
+          // truncated container (whose surviving last chunk was sealed with 0)
+          // fails authentication. That is the case a length check alone cannot
+          // catch: truncation exactly on a chunk boundary leaves a perfectly
+          // valid payload length.
+          plain = await open(parsed.core.cipher, current, nonceFor(i, i === last), blob, parsed.coreBytes);
+          if (plain === null) reject();
+        }
+        const start = i * KEYM2_CHUNK_SIZE;
+        const end = start + plain.length;
+        // v4 §4.4 step 5, as the bytes arrive: everything past 8 + L is zero.
+        // Checked before this chunk's plaintext is handed on. The AEAD has
+        // already authenticated these bytes; the check exists so the two
+        // implementations agree on every input (v4 §4.5).
+        if (end > emitTo) {
+          let nonzero = 0;
+          for (let j = Math.max(start, emitTo) - start; j < plain.length; j++) nonzero |= plain[j] as number;
+          if (nonzero !== 0) reject();
+        }
+        const from = Math.max(start, emitFrom);
+        const to = Math.min(end, emitTo);
+        let out: Uint8Array | null = null;
+        if (to > from) {
+          if (from === start && to === end) {
+            out = plain;
+            plain = null;
+          } else {
+            out = plain.slice(from - start, to - start);
+          }
+        }
+        if (plain !== null) {
+          secureErase(plain);
+          plain = null;
+        }
+        // Ownership passes to the sink, which is not told whether this is the
+        // last chunk: the only success signal is this promise resolving.
+        if (out !== null) await sink.write(out);
+      }
+      if (offset !== total) reject();
+    } finally {
+      secureErase(plain);
+      discard();
+    }
+  };
+
+  return {
+    core: parsed.core,
+    slot,
+    keyFileUsed: slot.keyFileUsed,
+    slotTableAuthentic,
+    plaintextLength: emitTo - emitFrom,
+    drain,
+    discard,
+  };
 }
 
 // ---------------------------------------------------------------------------
