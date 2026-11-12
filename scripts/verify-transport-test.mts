@@ -29,9 +29,15 @@
  *     IttyBitz formats are refused by type. The failures in (3) fail the same
  *     way.
  *
+ *  6. Phase 1 of a streamed decrypt (`open-stream` with `purpose: "decrypt"`)
+ *     crosses with one `opened` answer on the same allow-list, no digest,
+ *     and nothing else; the failures in (3) never get one; KEYM v1 and
+ *     IttyBitz v1 are refused by name. The drain, where the plaintext is
+ *     meant to cross, is scanned too, and the scanner must find it there.
+ *
  * The negative control is to make `verify` answer with the decrypt response;
  * (1) must fail. The PR records the run. For (5) it is to have `open-stream`
- * post its chunks whatever the purpose.
+ * post its chunks whatever the purpose. For (6), post chunk 0 with `opened`.
  */
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -434,6 +440,126 @@ for (const f of failures) {
     finished && out.length === 1 && msg?.ok === false && found.length === 0 && extra.length === 0 &&
       out[0]!.transfer.length === 0,
     [msg?.ok !== false ? `ok=${msg?.ok}` : "", `${out.length} messages`, ...found].filter(Boolean).join("; ")
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 6. Phase 1 of a streamed decrypt: `open-stream` with `purpose: "decrypt"`.
+// ---------------------------------------------------------------------------
+//
+// The open keeps the container in the worker for a later `drain`, and its
+// answer must cross with no more than a verify's: the same allow-list minus
+// the digest, one message, no buffer, nothing transferred, no chunk. The
+// plaintext crosses only in the drain, which the scanner is shown to see.
+// Every open is followed by a `close-stream`, which must be answered and
+// carry nothing either.
+//
+// The negative control is to post chunk 0 with the `opened` answer; the
+// first check below must fail.
+const OPENED_FIELDS = new Set(["id", "ok", "op", "format", "bytes", "openedBy", "keyFileUsed", "slotTable", "weakKdf"]);
+
+console.log(`\nStreamed decrypt, phase 1 (${cases.length} containers as Blobs):`);
+for (const c of cases) {
+  const { finished, out } = await sendBounded({ ...streamRequest(c), purpose: "decrypt", digest: false });
+  const msg = out.at(-1)?.message;
+  const found = out.flatMap((o, i) => leaks(o.message, [c.plaintext], `message[${i}]`));
+  const transferred = out.flatMap((o) => o.transfer);
+  if (!STREAMABLE.has(c.format)) {
+    const name = c.format === "keym-v1" ? /KEYM v1 backup/ : c.format === "ibtz-v1" ? /IttyBitz v1 backup/ : /not a KEYM v2, v3 or v4 backup/;
+    check(
+      `${c.label}: refused by type and by name, and nothing secret crosses`,
+      finished && out.length === 1 && msg?.ok === false && msg.code === "unsupported-config" && name.test(msg.message) &&
+        found.length === 0 && transferred.length === 0,
+      [!finished ? "the worker did not finish" : "", `${msg?.ok} ${msg?.code} ${String(msg?.message ?? "").slice(0, 60)}`, ...found]
+        .filter(Boolean).join("; ")
+    );
+    continue;
+  }
+  const extra = msg ? Object.keys(msg).filter((k) => !OPENED_FIELDS.has(k)) : [];
+  check(
+    `${c.label}: one opened answer, on the allow-list, no chunk, no buffer, nothing transferred`,
+    finished && out.length === 1 && msg?.ok === true && msg.op === "opened" && found.length === 0 &&
+      transferred.length === 0 && extra.length === 0,
+    [
+      !finished ? "the worker did not finish" : "",
+      out.length !== 1 ? `${out.length} messages (${out.map((o) => o.message?.op).join(",")})` : "",
+      msg?.ok !== true ? `ok=${msg?.ok} ${msg?.message ?? ""}` : "",
+      ...found,
+      transferred.length ? `${transferred.length} transferred` : "",
+      extra.length ? `unexpected fields ${extra.join(", ")}` : "",
+    ].filter(Boolean).join("; ")
+  );
+  check(
+    `${c.label}: reports what the verify reports`,
+    msg?.bytes === enc.encode(c.plaintext).byteLength && msg?.format === c.format &&
+      msg?.openedBy === c.openedBy && msg?.slotTable === c.slotTable,
+    msg ? `got ${msg.bytes} bytes, ${msg.format}, ${msg.openedBy}, ${msg.slotTable}` : "no message"
+  );
+  const closed = await sendBounded({ op: "close-stream" });
+  check(
+    `${c.label}: close-stream is answered with nothing in it`,
+    closed.finished && closed.out.length === 1 && closed.out[0]!.message?.ok === true &&
+      leaks(closed.out[0]!.message, [c.plaintext]).length === 0 && closed.out[0]!.transfer.length === 0,
+    JSON.stringify(closed.out.map((o) => o.message))
+  );
+}
+
+console.log("\nStreamed decrypt, phase 1, failure:");
+for (const f of failures) {
+  const r = f.make();
+  const { finished, out } = await sendBounded({
+    op: "open-stream",
+    file: new Blob([r.data]),
+    password: r.password,
+    keyFile: r.keyFile,
+    shares: r.shares,
+    prfOutput: r.prfOutput,
+    purpose: "decrypt",
+    digest: false,
+  });
+  const msg = out[0]?.message;
+  const found = out.flatMap((o, i) => leaks(o.message, f.secrets, `message[${i}]`));
+  const extra = msg ? Object.keys(msg).filter((k) => !ERROR_FIELDS.has(k)) : [];
+  check(
+    `${f.label}: an error, no opened answer, and nothing secret in it`,
+    finished && out.length === 1 && msg?.ok === false && found.length === 0 && extra.length === 0 &&
+      out[0]!.transfer.length === 0,
+    [msg?.ok !== false ? `ok=${msg?.ok} op=${msg?.op}` : "", `${out.length} messages`, ...found].filter(Boolean).join("; ")
+  );
+}
+
+console.log("\nThe scanner, against the drain:");
+{
+  // The drain is where the plaintext is meant to cross, a chunk at a time.
+  // The scanner must see it there, or the checks above prove nothing.
+  await sendBounded({ ...streamRequest(v3), purpose: "decrypt", digest: false });
+  posted.length = 0;
+  const id = ++nextId;
+  const done = handler!({ data: { id, op: "drain" } });
+  // Acknowledge each chunk as it is posted, as the page does once written.
+  for (let seen = 0; ; ) {
+    const chunks = posted.filter((p) => p.message?.op === "chunk");
+    for (; seen < chunks.length; seen++) {
+      await handler!({ data: { id: ++nextId, op: "ack", stream: id, seq: chunks[seen]!.message.seq } });
+    }
+    if (posted.some((p) => p.message?.id === id && p.message?.op !== "chunk")) break;
+    await new Promise((r) => setTimeout(r, 10));
+  }
+  await done;
+  const out = posted.splice(0);
+  const chunkFound = out.filter((o) => o.message?.op === "chunk").flatMap((o) =>
+    o.message.data instanceof ArrayBuffer && new TextDecoder().decode(o.message.data).includes(v3.plaintext) ? ["chunk"] : []);
+  const final = out.find((o) => o.message?.id === id && o.message?.op === "drain")?.message;
+  check(
+    `${v3.label}: the drain's chunk carries the plaintext, and the scanner reports it`,
+    chunkFound.length === 1 && out.some((o) => leaks(o.message, [v3.plaintext]).length > 0),
+    `${chunkFound.length} chunk(s) with the plaintext`
+  );
+  check(
+    `${v3.label}: the drain's final answer is on its own allow-list and holds no buffer`,
+    final?.ok === true && Object.keys(final).every((k) => ["id", "ok", "op", "bytes"].includes(k)) &&
+      leaks(final, [v3.plaintext]).length === 0,
+    JSON.stringify(final)
   );
 }
 

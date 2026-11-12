@@ -46,6 +46,7 @@ import {
   type KeymakerOptions,
   type DetectedFormat,
   type OpenedBy,
+  type OpenedContainer,
 } from "./keymaker-crypto";
 import type { Keym2ByteSink } from "./keym-v2";
 import type { Argon2Sample } from "./kdf-calibration";
@@ -61,12 +62,18 @@ import type { Argon2Sample } from "./kdf-calibration";
 export const STREAM_WINDOW = 4;
 
 /**
- * What an `open-stream` request is for. Only `verify` exists: the plaintext is
- * counted and erased here, and nothing but the count crosses (roadmap 9.2). A
- * streamed decrypt, whose chunks do cross, is a later addition to this union;
- * the worker refuses any purpose it does not list.
+ * What an `open-stream` request is for. The worker refuses any purpose it does
+ * not list.
+ *
+ * - `verify`: the plaintext is counted and erased here, and nothing but the
+ *   count crosses (roadmap 9.2). One request, one answer.
+ * - `decrypt`: phase 1 of a streamed decrypt. The container is opened (the
+ *   slot walk and chunk 0) and kept here as the one open session; the answer
+ *   is `opened`, which says what opened it and how many bytes it holds, and
+ *   carries no plaintext. Phase 2 is `drain`, which streams the plaintext to
+ *   the page, or `close-stream`, which drops it.
  */
-export type OpenStreamPurpose = "verify";
+export type OpenStreamPurpose = "verify" | "decrypt";
 
 export type CryptoRequest =
   /**
@@ -169,7 +176,15 @@ export type CryptoRequest =
    * The page has written chunk `seq` of stream `stream` (the id of the request
    * that started it), and every chunk before it. A valid ack gets no response.
    */
-  | { id: number; op: "ack"; stream: number; seq: number };
+  | { id: number; op: "ack"; stream: number; seq: number }
+  /**
+   * Phase 2 of a streamed decrypt: hand the open session's plaintext to the
+   * page as `chunk` messages under the ack window, then answer `drain`. Refused
+   * when no session is open. Single use: the session ends either way.
+   */
+  | { id: number; op: "drain" }
+  /** Drop the open session, if there is one, erasing what it holds. */
+  | { id: number; op: "close-stream" };
 
 export type CryptoResponse =
   | { id: number; ok: true; op: "ping" }
@@ -227,9 +242,39 @@ export type CryptoResponse =
       digest: string | null;
     }
   /**
+   * Phase 1 of a streamed decrypt: the container opened and chunk 0 verified.
+   * The verify answer's vocabulary, without a digest. No field here is, or is
+   * derived from, a byte of the plaintext except its length, and nothing has
+   * been checked past chunk 0: this is not a result, and the page must not
+   * present it as one (§5.5).
+   */
+  | {
+      id: number;
+      ok: true;
+      op: "opened";
+      format: DetectedFormat;
+      /** The plaintext length `drain` will hand over if every chunk verifies. */
+      bytes: number;
+      openedBy: OpenedBy;
+      keyFileUsed: boolean;
+      slotTable: "authentic" | "changed" | "not_available";
+      weakKdf: string | null;
+    }
+  /**
+   * A `drain` finished: the last chunk opened under `final_flag`, the chunks
+   * consumed the payload exactly, the v4 checks passed, and the page has
+   * acknowledged every chunk. **This message is the page's commit signal**
+   * (§5.5); nothing else is.
+   */
+  | { id: number; ok: true; op: "drain"; bytes: number }
+  | { id: number; ok: true; op: "close-stream" }
+  /**
    * One piece of a stream's output, in order from `seq` 0, its buffer
    * transferred. `id` is the stream's: the id of the request that started it.
    * Not a settlement: the request's own response comes after the last chunk.
+   * For an `encrypt-stream` a piece of the container; for a `drain` one
+   * verified chunk of plaintext, which is not part of a verified file (§5.5)
+   * until the `drain` answer arrives.
    */
   | { id: number; ok: true; op: "chunk"; seq: number; data: ArrayBuffer }
   /**
@@ -328,13 +373,101 @@ interface StreamState {
   acked: number;
   /** The stream's writer, parked until an ack arrives. */
   wake: (() => void) | null;
+  /**
+   * Set when the stream's session is discarded under it (a decrypt drain
+   * overtaken by a new operation). A parked writer wakes and throws rather
+   * than waiting for an ack that will never come.
+   */
+  aborted?: boolean;
 }
 
 const streams = new Map<number, StreamState>();
 
 /** Park until the page has acknowledged enough that `ready(state)` holds. */
 async function until(state: StreamState, ready: (s: StreamState) => boolean): Promise<void> {
-  while (!ready(state)) await new Promise<void>((resolve) => (state.wake = resolve));
+  while (!ready(state)) {
+    if (state.aborted) throw new Error("Decryption failed.");
+    await new Promise<void>((resolve) => (state.wake = resolve));
+  }
+  if (state.aborted) throw new Error("Decryption failed.");
+}
+
+// ---------------------------------------------------------------------------
+// The open session: phase 1 of a streamed decrypt, held for phase 2
+// ---------------------------------------------------------------------------
+
+/**
+ * A container opened by `open-stream` with `purpose: "decrypt"`, waiting for
+ * `drain` or `close-stream`. It holds the payload keys and chunk 0's
+ * plaintext, so it is a secret for as long as it exists, and there is at most
+ * one.
+ *
+ * It ends, and `discard()` erases what it holds, on every path: `close-stream`;
+ * any new operation, including a second open (`discardSession` runs before any
+ * request but `ack` and `drain`); a drain that settles either way; and the
+ * worker being terminated, which drops the heap. The core's `drain` erases the
+ * same keys in its own `finally`; the erase here is what covers a session that
+ * is never drained.
+ */
+interface Session {
+  opened: OpenedContainer;
+  /** The drain's flow-control state while one runs. */
+  stream: StreamState | null;
+}
+
+let session: Session | null = null;
+
+/**
+ * Moves on every request that ends the session. An open that was still
+ * deriving when a newer request arrived finds it moved, and drops what it
+ * opened instead of installing a session nobody asked for.
+ */
+let sessionEpoch = 0;
+
+function discardSession(): void {
+  sessionEpoch++;
+  const s = session;
+  session = null;
+  if (!s) return;
+  s.opened.discard();
+  if (s.stream) {
+    s.stream.aborted = true;
+    const wake = s.stream.wake;
+    s.stream.wake = null;
+    wake?.();
+  }
+}
+
+/**
+ * The sink a decrypt drain writes to: each verified chunk of plaintext becomes
+ * one `chunk` message, posted only while fewer than `STREAM_WINDOW` are
+ * unacknowledged, with its buffer transferred, so this heap keeps no copy. The
+ * page erases its copy once written.
+ */
+function plaintextSink(id: number, state: StreamState, counted: { bytes: number }): Keym2ByteSink {
+  return {
+    async write(bytes: Uint8Array): Promise<void> {
+      try {
+        await until(state, (s) => s.sent - s.acked < STREAM_WINDOW);
+      } catch (error) {
+        secureErase(bytes);
+        throw error;
+      }
+      // The core hands the sink ownership of `bytes`. A view that does not
+      // span its buffer is copied out and the original erased: transferring
+      // its buffer would send bytes that are not this chunk's.
+      let data: ArrayBuffer;
+      if (bytes.byteOffset === 0 && bytes.byteLength === bytes.buffer.byteLength && bytes.buffer instanceof ArrayBuffer) {
+        data = bytes.buffer;
+      } else {
+        data = bytes.slice().buffer as ArrayBuffer;
+        secureErase(bytes);
+      }
+      counted.bytes += data.byteLength;
+      const seq = state.sent++;
+      ctx.postMessage({ id, ok: true, op: "chunk", seq, data } satisfies CryptoResponse, [data]);
+    },
+  };
 }
 
 /**
@@ -453,6 +586,12 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
     return;
   }
 
+  // Every request but an ack and a drain ends the open session first, a
+  // second open included. A session holds the payload keys and chunk 0's
+  // plaintext; it must not outlive the page's interest in it, and the page
+  // shows that interest only by asking to drain it next.
+  if (req.op !== "drain") discardSession();
+
   try {
     if (req.op === "ping") {
       ctx.postMessage({ id: req.id, ok: true, op: "ping" } satisfies CryptoResponse);
@@ -492,14 +631,81 @@ ctx.addEventListener("message", async (event: MessageEvent<CryptoRequest>) => {
       return;
     }
 
+    if (req.op === "drain") {
+      const s = session;
+      if (!s || s.stream) {
+        throw new KeymakerError("invalid-input", "There is no opened backup to save. Open it again, then save it.");
+      }
+      const state: StreamState = { sent: 0, acked: 0, wake: null };
+      s.stream = state;
+      streams.set(req.id, state);
+      const counted = { bytes: 0 };
+      try {
+        await s.opened.drain(plaintextSink(req.id, state, counted));
+        // The final answer is the page's commit signal (§5.5), so it waits
+        // until the page has written every chunk: nothing it says can
+        // overtake a chunk still in flight. `drain` resolving is the core's
+        // word that the last chunk opened under final_flag, the chunks
+        // consumed the payload exactly and, for v4, the padding was zero.
+        await until(state, (st) => st.acked === st.sent);
+        // A session discarded under the drain (a new request arrived) may
+        // still have finished its last open; that is not a success.
+        if (session !== s || state.aborted || counted.bytes !== s.opened.plaintextBytes) {
+          throw new Error("Decryption failed.");
+        }
+      } finally {
+        s.opened.discard();
+        if (session === s) session = null;
+        streams.delete(req.id);
+      }
+      ctx.postMessage({ id: req.id, ok: true, op: "drain", bytes: counted.bytes } satisfies CryptoResponse);
+      return;
+    }
+
+    if (req.op === "close-stream") {
+      // Already discarded above, as every request but a drain does.
+      ctx.postMessage({ id: req.id, ok: true, op: "close-stream" } satisfies CryptoResponse);
+      return;
+    }
+
     if (req.op === "open-stream") {
-      // Checked before anything is read or derived. Only `verify` exists, and
-      // a purpose this worker does not list must not fall through to it.
-      if (req.purpose !== "verify") {
+      // Checked before anything is read or derived. A purpose this worker
+      // does not list must not fall through to either branch.
+      if (req.purpose !== "verify" && req.purpose !== "decrypt") {
         throw new KeymakerError(
           "invalid-input",
           `Unknown open-stream purpose: ${String((req as { purpose?: unknown }).purpose).slice(0, 32)}`
         );
+      }
+      if (req.purpose === "decrypt") {
+        // Phase 1. The slot walk and chunk 0, then the session is kept for
+        // `drain`. No plaintext crosses here: chunk 0 stays in the session.
+        const epoch = sessionEpoch;
+        const opened = await openContainerStream(req.file, req.password, req.keyFile, req.shares, req.prfOutput);
+        if (epoch !== sessionEpoch) {
+          // A newer request arrived while this one was deriving. It ended
+          // whatever session there was; this one must not start after it.
+          opened.discard();
+          throw new KeymakerError("invalid-input", "This open was overtaken by a newer request, so it was dropped.");
+        }
+        session = { opened, stream: null };
+        ctx.postMessage({
+          id: req.id,
+          ok: true,
+          op: "opened",
+          format: opened.format,
+          bytes: opened.plaintextBytes,
+          openedBy: opened.openedBy,
+          keyFileUsed: opened.keyFileUsed,
+          slotTable:
+            opened.slotTableAuthentic === null
+              ? "not_available"
+              : opened.slotTableAuthentic
+                ? "authentic"
+                : "changed",
+          weakKdf: opened.weakKdf,
+        } satisfies CryptoResponse);
+        return;
       }
       let hash: ReturnType<typeof containerHasher> | null = null;
       if (req.digest === true) {

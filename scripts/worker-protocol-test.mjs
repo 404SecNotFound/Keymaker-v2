@@ -172,9 +172,10 @@ for (const [data, id] of cases) {
 }
 
 // An open-stream purpose the worker does not list is refused as such, before
-// anything is read: it must not fall through to `verify`, and in particular
-// not to a streamed decrypt that would post chunks.
-for (const purpose of ["decrypt", undefined]) {
+// anything is read: it must not fall through to `verify`, nor to the streamed
+// decrypt (`decrypt`, which exists since Stage C2 and is tested in
+// worker-stream-test.mts). Matching is exact, so a near miss is unlisted.
+for (const purpose of ["Decrypt", "bogus", undefined]) {
   const { responses } = await send({
     id: 40, op: "open-stream", file: new Blob([new Uint8Array(64)]), password: "pw", keyFile: null, purpose, digest: false,
   });

@@ -80,6 +80,7 @@ import {
   DEFAULT_ARGON2ID,
   type KdfParams,
   type DetectedFormat,
+  detectFormat,
   loadKeym2,
   secureErase,
 } from "@/lib/keymaker-crypto";
@@ -90,12 +91,23 @@ import {
   decryptViaWorker,
   verifyViaWorker,
   verifyFileViaWorker,
+  openFileViaWorker,
+  drainOpenedFileViaWorker,
+  discardOpenedFile,
+  openedFileHeld,
   cancelAllCryptoWork,
   warmCryptoWorker,
   workerKnownUnavailable,
   workerWillBeUsed,
 } from "@/lib/crypto-client";
-import { canSaveToDisk, chooseSaveTarget, SaveFailed, SAVE_PICKER_FAILED, type SaveTarget } from "@/lib/save-target";
+import {
+  canSaveToDisk,
+  chooseSaveTarget,
+  SaveFailed,
+  SAVE_PICKER_FAILED,
+  DECRYPT_SAVE_PICKER_FAILED,
+  type SaveTarget,
+} from "@/lib/save-target";
 import {
   describeCalibration,
   type DeviceFit,
@@ -133,7 +145,13 @@ import {
   encryptTooLarge,
   decryptOpenTooLarge,
   verifyTooLarge,
+  notStreamableRefusal,
+  decryptedFileName,
   NOTHING_SAVED_ON_STOP,
+  NOTHING_DECRYPTED_SAVED_ON_STOP,
+  DECRYPT_SAVE_FAILED,
+  OPENED_BACKUP_CLOSED,
+  type PendingSave,
   DOORS,
   BASE_PATH,
   KEYMAKER_REPO,
@@ -418,6 +436,21 @@ export function useEncryptorState() {
    * `finally` clears it only if no newer stream has taken it since.
    */
   const streamingSaveRef = useRef<number | null>(null);
+  /** What the streamed save in `streamingSaveRef` is writing, so Stop can say which. */
+  const streamingKindRef = useRef<"encrypt" | "decrypt">("encrypt");
+  /**
+   * Phase 1 of a streamed decrypt, done and waiting for phase 2 (see
+   * `PendingSave`). The ref is set with the state, by `setPending`, so a
+   * callback can read it without waiting for a render.
+   */
+  const [pendingSave, setPendingSave] = useState<PendingSave | null>(null);
+  const pendingSaveRef = useRef<PendingSave | null>(null);
+  const setPending = useCallback((next: PendingSave | null) => {
+    pendingSaveRef.current = next;
+    setPendingSave(next);
+  }, []);
+  /** A streamed decrypt that was saved: where, and how much. Shown as the result. */
+  const [savedDecrypt, setSavedDecrypt] = useState<{ name: string; bytes: number } | null>(null);
   /** Set before the derivation starts when this container will be slow. */
   const [unlockCostNotice, setUnlockCostNotice] = useState<string | null>(null);
   const [isCryptoAvailable, setIsCryptoAvailable] = useState(true);
@@ -1264,8 +1297,13 @@ export function useEncryptorState() {
     // A streamed encrypt always has a worker (it refuses without one), so
     // `stopped` is true here. Its file is discarded by the operation's own
     // `finally`, which still runs although the operation is now stale.
+    // A streamed decrypt's save is the same: its `finally` discards the file,
+    // and the worker's session went with the worker.
     if (streaming) {
-      toast({ title: "Stopped", description: NOTHING_SAVED_ON_STOP });
+      toast({
+        title: "Stopped",
+        description: streamingKindRef.current === "decrypt" ? NOTHING_DECRYPTED_SAVED_ON_STOP : NOTHING_SAVED_ON_STOP,
+      });
       return;
     }
     toast({
@@ -1359,6 +1397,11 @@ export function useEncryptorState() {
     setResealOffer(null);
     setResealNotice(null);
     setVerifyResult(null);
+    // A streamed decrypt waiting to be saved. The worker holds its keys and
+    // chunk 0, and `cancelAllCryptoWork` above has just terminated it, which
+    // is what ends the session; this takes the page's half.
+    setPending(null);
+    setSavedDecrypt(null);
     // Section 06e. A tab change keeps the created backup and what is known
     // about it: none of it is a secret, and testing it on the Decrypt tab is
     // the point of the Recovery tab. A wipe or a lock takes it, except that a
@@ -1412,7 +1455,7 @@ export function useEncryptorState() {
     // transcription produces none of those. Wiping on a five-minute idle is
     // therefore aimed precisely at the user who is doing the right thing.
     if (!opts?.sparingIssuedShares) setIssuedShares(null);
-  }, []);
+  }, [setPending]);
 
   /**
    * Clear the secrets *and* return the form to its defaults.
@@ -1485,7 +1528,10 @@ export function useEncryptorState() {
     // lists are the same list. Adding a secret to one without the other is the
     // bug class that produced every entry above.
     file !== null ||
-    keyFile !== null;
+    keyFile !== null ||
+    // A streamed decrypt waiting to be saved: the worker holds the backup's
+    // keys and its first chunk of contents for it.
+    pendingSave !== null;
 
   /**
    * Is there anything a wipe would clear? Everything the lock would, plus the
@@ -1673,6 +1719,10 @@ export function useEncryptorState() {
       opSeqRef.current++;
       cancelAllCryptoWork();
       setIsLoading(false);
+      // A streamed decrypt waiting to be saved belongs to File mode; the
+      // terminate above ended the worker's half of it.
+      setPending(null);
+      setSavedDecrypt(null);
       setInputType(newType === 'file' ? 'file' : 'text');
       // Seed Phrase mode is the text input in another editor. Entering it
       // takes whatever the textarea held into the cells, and writes the
@@ -1716,7 +1766,20 @@ export function useEncryptorState() {
       // good: its completion path is now stale and writes nothing.
       setRehearsal((r) => (r.kind === "running" ? { kind: "idle" } : r));
       setWipeAck(false);
-  }, [textSecret]);
+  }, [textSecret, setPending]);
+
+  /**
+   * Loading another backup ends one opened and waiting to be saved: the save
+   * would write the old backup's contents under a page now showing the new
+   * one. The worker drops the session and erases what it held.
+   */
+  useEffect(() => {
+    const pending = pendingSaveRef.current;
+    if (pending && pending.file !== file) {
+      setPending(null);
+      discardOpenedFile();
+    }
+  }, [file, setPending]);
 
   /**
    * Decrypt-side QR scan: turn one or more QR images into the encrypted text
@@ -2377,6 +2440,7 @@ export function useEncryptorState() {
         return;
       }
       streamingSaveRef.current = opId;
+      streamingKindRef.current = "encrypt";
       setSaveProgress(0);
     }
 
@@ -2389,6 +2453,11 @@ export function useEncryptorState() {
     setResealNotice(null);
     setVerifyResult(null);
     setDecryptedQrStatus({ kind: "idle" });
+    // A new operation ends a streamed decrypt waiting to be saved, here and
+    // in the worker, even if this one fails before it reaches the worker.
+    if (pendingSaveRef.current) discardOpenedFile();
+    setPending(null);
+    setSavedDecrypt(null);
     if (mode === 'encrypt') {
       // Section 06e. The Encrypt side's own state; a verify on the Decrypt tab
       // used to clear the header of the backup it was testing.
@@ -2716,26 +2785,27 @@ export function useEncryptorState() {
       } else { // Decrypt — the KEYM container is self-describing, and legacy
         // IttyBitz (IBTZ) blobs are auto-detected and handled transparently.
         //
-        // A backup above the in-memory cap reaches here only to be verified
-        // (the limits above refused anything else), and it is never read
-        // whole on this thread: the worker reads it a chunk at a time, and
-        // the page reads its head, which is all the notice, the passkey salt
-        // and the shares check below need.
-        const streamVerify = verifying && inputType === 'file' && file!.size > MAX_CONTAINER_SIZE;
+        // A backup above the in-memory cap is never read whole on this
+        // thread: the worker reads it a chunk at a time, and the page reads
+        // its head, which is all the notice, the passkey salt and the shares
+        // check below need. It reaches here to be verified in any browser
+        // with a worker, or to be opened and saved where the user chooses in
+        // one that also has the save dialog; the limits above refused the
+        // rest.
+        const streamOpen = inputType === 'file' && file!.size > MAX_CONTAINER_SIZE;
+        const streamVerify = streamOpen && verifying;
+        const streamDecrypt = streamOpen && !verifying;
         let streamHead: Uint8Array | null = null;
-        if (streamVerify) {
+        if (streamOpen) {
             streamHead = new Uint8Array(await file!.slice(0, KEYM2_HEADER_PEEK_BYTES).arrayBuffer());
             if (isStale()) return;
             const { isKeym2Binary } = await loadKeym2();
             if (!isKeym2Binary(streamHead)) {
               // Only a binary KEYM v2, v3 or v4 container can be read a chunk
-              // at a time. Anything else this large is not a file this app
-              // could open in memory either.
-              throw new KeymakerError(
-                "too-large",
-                "Above 100 MB, Verify only reads a binary .keym backup a piece at a time, and this file is not one. " +
-                  oversizeRecoveryHelp()
-              );
+              // at a time. KEYM v1 and IttyBitz are one block by format, and
+              // anything this large is not a file this app could open in
+              // memory either.
+              throw new KeymakerError("too-large", notStreamableRefusal(detectFormat(streamHead), verifying));
             }
         } else if (inputType === 'file') {
             inputBuffer = await file!.arrayBuffer();
@@ -2967,6 +3037,49 @@ export function useEncryptorState() {
 
         if (isStale()) return;
 
+        if (streamDecrypt) {
+          // Phase 1 of a streamed decrypt (format §5.5). The worker derives
+          // the key, opens the slot and chunk 0, and keeps the backup open;
+          // nothing else is checked yet and no plaintext crosses. No file is
+          // asked for here, so a wrong password never creates one, and the
+          // save dialog gets the fresh click it needs in phase 2.
+          const opened = await openFileViaWorker(
+            file!,
+            mutablePassword,
+            keyFileBuffer,
+            suppliedShares.length > 0 ? suppliedShares : undefined,
+            prfOutput ?? undefined
+          );
+          // Transferred to the worker; nothing of it is left here.
+          keyFileBuffer = null;
+          // The info line without the weak-KDF advisory, which says the
+          // contents are intact: they are not checked until phase 2 ends. The
+          // full line replaces it once the file is saved.
+          const firstInfo = await describeOpened({ ...opened, weakKdf: null });
+          const fullInfo = await describeOpened(opened);
+          if (isStale()) {
+            // Usually a no-op: whatever made this stale terminated the
+            // worker or posted to it, and either ended the session.
+            discardOpenedFile();
+            return;
+          }
+          setDecryptInfo(firstInfo);
+          setPending({
+            file: file!,
+            name: decryptedFileName(file!.name),
+            bytes: opened.bytes,
+            openedBy: opened.openedBy,
+            info: fullInfo,
+            slotTable: opened.slotTable,
+            format: opened.format,
+            usedShares: suppliedShares.length > 0,
+          });
+          // Not `finishOperation`: this is not a success yet. The password and
+          // any shares stay until the file is saved, so a save that fails on
+          // the disk can be tried again; the lock and Wipe still take them.
+          return;
+        }
+
         if (verifying) {
           // Roadmap 9.2. The worker answers with a count, not the contents:
           // there is no plaintext on this thread to render, encode, download
@@ -3035,7 +3148,8 @@ export function useEncryptorState() {
         }
 
         // Never a streamed input: a backup above the in-memory cap is refused
-        // before this unless it is being verified, which returned above.
+        // before this unless it is being verified or opened in two phases,
+        // both of which returned above.
         const decryptResult = await decryptViaWorker(
           inputBuffer!,
           mutablePassword,
@@ -3099,12 +3213,8 @@ export function useEncryptorState() {
         legacyNotice = decryptResult.format === "ibtz-v1" || decryptResult.format === "ibtz-v0";
 
         if (inputType === 'file') {
-             const stripped = file!.name.replace(/\.(keym|ibitz)$/i, '');
-             const resultFilename = stripped !== file!.name
-              ? stripped
-              : `decrypted-${file!.name}`;
             const blob = new Blob([resultBuffer]);
-            triggerDownload(blob, resultFilename);
+            triggerDownload(blob, decryptedFileName(file!.name));
         } else {
             // KM-R08. Fatal, because the default replaces every malformed byte
             // with U+FFFD and reports success. A container written by another
@@ -3243,8 +3353,150 @@ export function useEncryptorState() {
     // the render before the user touched any of them, so the share path took
     // the no-credential exit while every control leading to it looked live —
     // a click that did nothing at all, with no error to explain it.
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, hideSize, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey, policy, workerAvailable]);
-  
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, hideSize, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey, policy, workerAvailable, setPending]);
+
+  /**
+   * Phase 2 of a streamed decrypt: "Save decrypted file…".
+   *
+   * The save dialog is the first thing awaited, for the click's activation.
+   * Cancelling it changes nothing: the backup stays open in the worker and the
+   * control stays, so the owner can choose again. Once a file is chosen the
+   * worker drains the backup to it a chunk at a time, and each chunk is
+   * erased here as soon as it is written.
+   *
+   * §5.5, the reason for all of it: the file is committed (closed, which is
+   * what saves it) only after the worker's final drain answer, which it sends
+   * only after the last chunk opened under `final_flag`, the payload was
+   * consumed exactly and, for v4, the padding was zero. Any failure, a Stop,
+   * the lock, a switch or a newer operation discards the file instead, and
+   * never removes it (see `save-target.ts`). Only after the commit does the
+   * page say "decrypted".
+   */
+  const savePendingFile = useCallback(async () => {
+    const pending = pendingSaveRef.current;
+    if (!pending || isLoadingRef.current || committingRef.current) return;
+    // Anything posted to the worker since phase 1 (a rehearsal on the
+    // Recovery page, say) ended its session. Said before the dialog, so no
+    // file is created for a save that cannot happen.
+    if (!openedFileHeld()) {
+      setPending(null);
+      toast({ title: "Nothing was saved", description: OPENED_BACKUP_CLOSED });
+      return;
+    }
+    const opId = ++opSeqRef.current;
+    const isStale = () => opSeqRef.current !== opId;
+
+    let target: SaveTarget | null;
+    try {
+      target = await chooseSaveTarget(pending.name, "decrypt");
+    } catch (error) {
+      if (!isStale()) {
+        toast({
+          title: "Nothing was saved",
+          description: error instanceof SaveFailed ? error.message : DECRYPT_SAVE_PICKER_FAILED,
+          variant: "destructive",
+        });
+      }
+      return;
+    }
+    if (!target) {
+      if (!isStale()) {
+        toast({
+          title: "Nothing was saved",
+          description: "No file was chosen, so nothing was saved. The backup is still open, so you can choose where to save it again.",
+        });
+      }
+      return;
+    }
+    if (isStale() || pendingSaveRef.current !== pending) {
+      // The lock, a switch or a newer operation landed while the dialog was
+      // open. The writable is this click's, stale or not.
+      await target.abort();
+      return;
+    }
+
+    const saveTo = target;
+    // The worker's session is single use: from here it is drained or gone.
+    setPending(null);
+    streamingSaveRef.current = opId;
+    streamingKindRef.current = "decrypt";
+    setSaveProgress(0);
+    setIsLoading(true);
+    let written = 0;
+    let shown = -1;
+    try {
+      await drainOpenedFileViaWorker(async (bytes) => {
+        try {
+          await saveTo.write(bytes);
+        } finally {
+          // Plaintext. Written, or refused; either way this page is done with it.
+          bytes.fill(0);
+        }
+        written += bytes.byteLength;
+        if (pending.bytes > 0 && !isStale()) {
+          const now = Math.min(99, Math.floor((written / pending.bytes) * 100));
+          if (now !== shown) {
+            shown = now;
+            setSaveProgress(now / 100);
+          }
+        }
+      });
+
+      // The commit point: the worker has said every chunk verified to the end.
+      // Checked immediately before it, and held off against Stop and switches
+      // for the moment it takes, as the streamed encrypt does.
+      if (isStale()) return;
+      committingRef.current = true;
+      setSaveCommitting(true);
+      await saveTo.commit();
+      committingRef.current = false;
+      if (isStale()) return;
+
+      // Saved. Only now is anything described as decrypted, and only now are
+      // the advisory and the slot-table warning shown, both of which say the
+      // contents are intact.
+      setDecryptInfo(pending.info);
+      setSlotTableWarning(pending.slotTable === "changed");
+      setResealOffer(pending.format === "keym-v3" || pending.format === "keym-v4" ? null : pending.format);
+      setSavedDecrypt({ name: saveTo.name, bytes: written });
+      toast({
+        title: "Decrypted and saved",
+        description: `Every part of the backup checked out, and it was saved as ${saveTo.name}.`,
+      });
+      // U13, as `finishOperation` does on success.
+      if (pending.usedShares) setShareInput('');
+      setPassword('');
+    } catch (error) {
+      // Generic about why (format §6), except when the file itself refused a
+      // write or the close, which is about the disk and not the backup.
+      if (!isStale()) {
+        toast({
+          title: "Nothing was saved",
+          description: error instanceof SaveFailed ? error.message : DECRYPT_SAVE_FAILED,
+          variant: "destructive",
+        });
+      }
+    } finally {
+      committingRef.current = false;
+      if (saveTo.state !== "committed") await saveTo.abort();
+      if (streamingSaveRef.current === opId) {
+        streamingSaveRef.current = null;
+        setSaveCommitting(false);
+        setSaveProgress(null);
+      }
+      if (!isStale()) setIsLoading(false);
+    }
+  }, [toast, setPending]);
+
+  /** "Discard": end phase 1 without saving. The worker drops the backup and erases what it held. */
+  const discardPendingSave = useCallback(() => {
+    if (!pendingSaveRef.current) return;
+    setPending(null);
+    setDecryptInfo(null);
+    discardOpenedFile();
+    toast({ title: "Nothing was saved", description: "The opened backup was closed, and nothing was saved." });
+  }, [toast, setPending]);
+
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
       if (!checked) {
@@ -4029,6 +4281,10 @@ export function useEncryptorState() {
     limits,
     saveProgress,
     saveCommitting,
+    pendingSave,
+    savedDecrypt,
+    savePendingFile,
+    discardPendingSave,
     createdDigest: created?.digest ?? null,
     generatePassword,
     generatePassphrase,

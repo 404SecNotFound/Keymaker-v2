@@ -18,8 +18,10 @@ import {
   MAX_STREAM_CONTAINER_SIZE,
   MAX_STREAM_PLAINTEXT_SIZE,
   oversizeRecoveryHelp,
+  type DetectedFormat,
   type OpenedBy,
 } from "@/lib/keymaker-crypto";
+import { SAVE_MAY_REMAIN } from "@/lib/save-target";
 import { loadShamir } from "@/lib/keym-v2";
 import { looksLikeSelfExtract, extractSelfExtract } from "@/lib/keym-v2-selfextract";
 import { looksLikePaperPart, decodePaperPartsAny, splitPaperParts } from "@/lib/keym-v2-paper";
@@ -399,8 +401,11 @@ export const validateAndSanitizeFile = (file: File) => {
  *   worker to stream in; the in-memory cap everywhere else, because a browser
  *   must not write a backup it cannot hand over, and there is no streaming on
  *   the page's own thread.
- * - `decryptOpen`: the container, to open and hand back the contents. The
- *   in-memory cap in this stage, in every browser.
+ * - `decryptOpen`: the container, to open and hand back the contents. Up to
+ *   `MAX_STREAM_CONTAINER_SIZE` where encrypt streams (a save dialog and a
+ *   worker), because the contents are written a chunk at a time to a file the
+ *   user chooses and saved only once the last chunk verifies; the in-memory
+ *   cap everywhere else, for the same reason as encrypt.
  * - `verify`: the container, to check it opens without handing anything back.
  *   No output, so no save dialog is needed: streamed in every browser with a
  *   worker.
@@ -425,7 +430,7 @@ export interface BrowserCaps {
 export function fileLimits({ toDisk, worker }: BrowserCaps): FileLimits {
   return {
     encrypt: toDisk && worker ? MAX_STREAM_PLAINTEXT_SIZE : MAX_PLAINTEXT_SIZE,
-    decryptOpen: MAX_CONTAINER_SIZE,
+    decryptOpen: toDisk && worker ? MAX_STREAM_CONTAINER_SIZE : MAX_CONTAINER_SIZE,
     verify: worker ? MAX_STREAM_CONTAINER_SIZE : MAX_CONTAINER_SIZE,
   };
 }
@@ -454,6 +459,7 @@ export function dropzoneLabel(mode: "encrypt" | "decrypt", caps: BrowserCaps): s
   if (mode === "decrypt") {
     const open = limitLabel(limits.decryptOpen);
     const verify = limitLabel(limits.verify);
+    if (caps.toDisk && caps.worker) return `a .keym container, or a QR image to scan · ${open} max, saved where you choose`;
     return open === verify
       ? `a .keym container, or a QR image to scan · ${open} max`
       : `a .keym container, or a QR image to scan · ${open} to open here · ${verify} to verify`;
@@ -500,17 +506,43 @@ export function encryptTooLarge(caps: BrowserCaps): SizeRefusal {
   };
 }
 
-/** A backup above the in-memory cap, asked to be opened rather than verified. */
+/** A backup above what this browser can open, asked to be opened rather than verified. */
 export function decryptOpenTooLarge(caps: BrowserCaps): SizeRefusal {
+  if (caps.toDisk && caps.worker) {
+    // Above the streaming ceiling, where Verify only stops too.
+    return { title: "Too large for this app", description: oversizeRecoveryHelp("streaming") };
+  }
   return {
     title: "Too large to open here",
     description:
       oversizeRecoveryHelp() +
       (caps.worker
         ? `\n\nTo check that it opens without opening it here, turn on Verify only. Backups up to ` +
-          `${limitLabel(fileLimits(caps).verify)} can be checked that way.`
+          `${limitLabel(fileLimits(caps).verify)} can be checked that way. A desktop Chromium browser, such as ` +
+          `Chrome or Edge, can open backups up to ${limitLabel(MAX_STREAM_CONTAINER_SIZE)} and save them where you choose.`
         : ""),
   };
+}
+
+/**
+ * Why a file above the in-memory cap cannot be opened or verified a chunk at
+ * a time, naming what its header says it is. Only a binary KEYM v2, v3 or v4
+ * container can; KEYM v1 and the IttyBitz formats seal the whole file as one
+ * block. A headerless IttyBitz v0 file cannot be told from other bytes, so it
+ * is not named.
+ */
+export function notStreamableRefusal(format: DetectedFormat, verifying: boolean): string {
+  const what =
+    format === "keym-v1"
+      ? "This is a KEYM v1 backup, which seals the whole file as one block"
+      : format === "ibtz-v1"
+        ? "This is an IttyBitz v1 backup, which seals the whole file as one block"
+        : "This file is not a binary KEYM v2, v3 or v4 backup";
+  return (
+    `${what}. Above ${limitLabel(MAX_PLAINTEXT_SIZE)}, ${verifying ? "Verify only reads" : "this app opens"} only ` +
+    `a binary .keym backup of version 2 or later, a piece at a time. ` +
+    oversizeRecoveryHelp()
+  );
 }
 
 /** A backup above what Verify only can read in this browser. */
@@ -525,6 +557,54 @@ export function verifyTooLarge(caps: BrowserCaps): SizeRefusal {
 export const NOTHING_SAVED_ON_STOP =
   "The encryption was stopped and nothing was saved. An empty or partial temporary file may be left " +
   "where you chose to save it. Your password and file are still here.";
+
+/**
+ * The name a decrypted file is offered under: the backup's name without its
+ * `.keym` or `.ibitz`, or `decrypted-` and the name when it has neither.
+ */
+export function decryptedFileName(backupName: string): string {
+  const stripped = backupName.replace(/\.(keym|ibitz)$/i, "");
+  return stripped !== backupName ? stripped : `decrypted-${backupName}`;
+}
+
+/**
+ * Phase 1 of a streamed decrypt, done: the worker holds the opened backup (its
+ * keys and chunk 0) and the page waits for the owner to choose where to save
+ * it. Nothing past chunk 0 has been checked, so none of this is shown as a
+ * result. It is a secret for the lock and Wipe, because of what the worker
+ * holds for it.
+ */
+export interface PendingSave {
+  /** The backup it was opened from. Choosing another file ends it. */
+  file: File;
+  /** The name the save dialog suggests. */
+  name: string;
+  /** The contents' length, if every chunk verifies. */
+  bytes: number;
+  openedBy: OpenedBy;
+  /** The full info line, weak-KDF advisory included, for once it is saved. */
+  info: string;
+  slotTable: "authentic" | "changed" | "not_available";
+  format: DetectedFormat;
+  /** Whether recovery shares opened it, so they are cleared once it is saved. */
+  usedShares: boolean;
+}
+
+/** What Stop says while a streamed decrypt is saving. */
+export const NOTHING_DECRYPTED_SAVED_ON_STOP =
+  `The decryption was stopped and nothing was saved. ${SAVE_MAY_REMAIN} To save it, open the backup again.`;
+
+/**
+ * A streamed decrypt that failed after the save began, for any reason but the
+ * file itself refusing a write or the close. Deliberately silent about which
+ * check failed (format §6): a corrupt chunk, a cut-off file and a chunk that
+ * was moved all read the same.
+ */
+export const DECRYPT_SAVE_FAILED = `Decryption failed, so nothing was saved. ${SAVE_MAY_REMAIN}`;
+
+/** "Save decrypted file…" after the worker's session ended some other way. No dialog was opened. */
+export const OPENED_BACKUP_CLOSED =
+  "The opened backup was closed by something else this page did, so nothing was saved. Open it again, then save it.";
 
 // QR version 40, error-correction level L, byte mode. Every QRCodeCanvas below
 // pins level="L" explicitly — raising the ECC level without lowering this

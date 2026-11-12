@@ -1508,10 +1508,59 @@ streaming protocol already existed. This part puts them on the page.
   container a 1 GiB file becomes. The worker's digest replaces the page's
   whole-file hash, so part e's evidence (a checked saved copy, a recovery test)
   still counts for a large backup.
+- **Decrypt (Stage C2).** Where encrypt streams (the save dialog and a
+  worker), a KEYM v2 or later backup above 100 MB, up to the largest container
+  a 1 GiB file becomes, is opened in two clicks. Decrypt derives the key and
+  opens the slot and chunk 0 in the worker, asks for no file, and keeps the
+  opened backup there as the worker's one session; the page shows the info
+  line without the weak-KDF advisory, and a panel saying the password is right,
+  the first part opened, the rest is not checked yet and nothing is saved, with
+  "Save decrypted file…" and "Discard". "Save decrypted file…" opens the dialog
+  on its own click, so a wrong password never creates a file. The worker then
+  drains the backup to the chosen file under the ack window, each chunk
+  transferred to the page and erased there once written, and answers last; the
+  page closes the file only on that answer. At or below 100 MB nothing changed.
+- **Decrypt, elsewhere.** Without the save dialog or a worker, opening stays at
+  100 MB and a larger backup is refused with the recovery help, Verify only
+  where there is a worker, and where a larger one opens. KEYM v1 and IttyBitz
+  are one block by format, so above 100 MB they are refused by name.
 - **Words.** The file box states the limit that applies: "1 GB max, saved where
-  you choose" or "100 MB max in this browser", and on Decrypt "100 MB to open
-  here · 1 GB to verify". Nothing says a streamed file is saved before the
+  you choose" or "100 MB max in this browser", and on Decrypt "1 GB max, saved
+  where you choose" where it streams, "100 MB to open here · 1 GB to verify"
+  with a worker and no save dialog, and "100 MB max" with neither. Nothing says
+  a streamed file is saved, or a streamed decrypt is decrypted, before the
   close resolves.
+
+**How format §5.5 holds, by path.** The rule is that partially decrypted output
+is never presented as a result, and that output is committed only after the
+final chunk verifies under `final_flag`.
+
+- *Streamed decrypt, with the save dialog.* The worker's final `drain` answer is
+  sent only after the core's drain resolved (the last chunk opened under
+  `final_flag`, the chunks consumed the payload exactly, and for v4 the padding
+  was zero) and the page has acknowledged every chunk. Closing the file is the
+  commit, and the page closes it only on that answer. A bad chunk, a cut at a
+  chunk boundary, Stop, the lock, Wipe, a switch, another file or a newer
+  operation aborts it instead, and the page says decryption failed or stopped
+  and nothing was saved, and that an empty or partial temporary file may be
+  left. Until the close resolves the page says nothing is checked past the
+  first part and nothing is saved: no "decrypted", no success colour, no tick,
+  and neither the weak-KDF advisory nor the slot-table warning, both of which
+  say the contents are intact.
+- *In memory, every browser, up to 100 MB.* All or nothing as before: the
+  reader returns the plaintext only after every chunk verified, and only then
+  is it shown or downloaded.
+- *Verify only.* There is no output at all: the plaintext is counted and erased
+  in the worker, and only the count crosses.
+
+**Decision: two phases.** Opening and saving are separate clicks. A wrong
+password is found before any file exists, and the save dialog gets the click's
+activation instead of whatever is left of it after a derivation. The opened
+backup's keys and chunk 0 are held in the worker between the clicks, so the
+pending state counts as a secret for the lock and Wipe, and every way it ends
+erases them: Discard, any new request to the worker, a second open, a drain
+that settles, and terminating the worker. The password stays until the file is
+saved, so a save that fails on the disk can be tried again.
 
 **Decision: a save target, not a workspace.** The Cut table's row on the File
 System Access API is split. A vault, a workspace, persisted handles, directory
@@ -1519,12 +1568,14 @@ pickers and reading back what was written stay cut. A one-shot save target is
 admitted: the ciphertext lands only where the user chose to save it, as a
 download does, and nothing is kept between visits.
 
-**Not yet done.** Opening a backup above 100 MB, in any browser, is Stage C2;
-it is refused with a pointer to Verify only. What the real save dialog does on
-disk has not been observed: whether it creates or empties the chosen file on
-confirm, what is left after a crash, and how long closing a 1 GiB file takes.
-The page claims no more than that nothing is saved until the file is complete,
-and that a stopped or failed save may leave an empty or partial temporary file.
+**Not yet done.** Opening a backup above 100 MB in a browser without the save
+dialog (Firefox, Safari), which would need a different output. The broader
+"100 MB" wording in the docs page, the README body, HOW-IT-WORKS and RECOVERY.
+What the real save dialog does on disk has not been observed: whether it
+creates or empties the chosen file on confirm, what is left after a crash, and
+how long closing a 1 GiB file takes. The page claims no more than that nothing
+is saved until the file is complete, and that a stopped or failed save may
+leave an empty or partial temporary file.
 
 **Checks.** `npm run test:save-target` holds each browser's limits, the words
 built from them, and the save target's rules: no commit after an abort, an abort
@@ -1538,6 +1589,23 @@ run in Chromium with the dialog deleted. A recorded digest of something else,
 the commit moved into the `finally`, the dialog opened after the derivation,
 shares shown before the commit and a label read from the wrong limit each built
 and failed their own test.
+
+For decrypt, `npm run test:worker-stream` holds the worker's side: the open
+posts one answer and no plaintext, the drain's final answer waits for the last
+ack, a flipped last chunk and a cut exactly at a chunk boundary get an error and
+never a success, and close, a new request, a second open and an overtaken open
+each end the session. `npm run test:verify-transport` scans every corpus
+container's open answer, and `npm run test:secret-erase-core` takes a census of
+what the session leaves after each way it ends. `tests/browser/stream-open.spec.ts`
+opens and saves a 104 MiB backup byte for byte, and covers the phase 1 wording,
+the flipped and cut backups, Stop, a wrong password, a cancelled dialog, Wipe,
+the lock, Discard, a large KEYM v1 file and a browser without the dialog.
+Committing once the drain stopped whatever its outcome, the commit in the
+`finally`, the dialog in phase 1, the pending state cleared on cancel, the
+worker kept alive on Wipe, the success panel at phase 1 and the label read
+without the dialog each built and failed their own test; so did the final
+answer sent before the last ack, the last chunk opened under `final_flag` 0, the
+session kept on a new request and its erase removed, in the worker suites.
 
 ---
 

@@ -3,11 +3,11 @@
  * browser.
  *
  * `fileLimits` decides how large a file each action takes in this browser:
- * encrypt streams to a file the user chooses only where there is a save dialog
- * and a worker, and stays at the in-memory cap everywhere else; verify reads a
- * chunk at a time wherever there is a worker; opening a backup stays in memory
- * in this stage. The dropzone's label and the refusals are built from the same
- * answer, so they are held to it here too.
+ * encrypt, and opening a backup, stream to a file the user chooses only where
+ * there is a save dialog and a worker, and stay at the in-memory cap everywhere
+ * else; verify reads a chunk at a time wherever there is a worker. The
+ * dropzone's label and the refusals are built from the same answer, so they
+ * are held to it here too.
  *
  * `saveTargetOver` is the file the page writes a streamed backup to. Its rules
  * are the ones that keep a backup from being reported as saved when it was
@@ -20,6 +20,8 @@
  *   no-op" fails.
  * - return the streaming limit when `toDisk` is false: the "no save dialog"
  *   checks fail.
+ * - keep `decryptOpen` at the in-memory cap with a dialog and a worker: the
+ *   "opening streams to a chosen file" check fails.
  */
 import {
   MAX_CONTAINER_SIZE,
@@ -37,14 +39,24 @@ import {
   SAVE_OPEN_FAILED,
   SAVE_PICKER_FAILED,
   SAVE_WRITE_FAILED,
+  SAVE_MAY_REMAIN,
+  DECRYPT_SAVE_COMMIT_FAILED,
+  DECRYPT_SAVE_OPEN_FAILED,
+  DECRYPT_SAVE_PICKER_FAILED,
+  DECRYPT_SAVE_WRITE_FAILED,
   type WritableLike,
 } from "../src/lib/save-target.ts";
 import {
   dropzoneLabel,
+  decryptOpenTooLarge,
   encryptTooLarge,
   fileLimits,
+  notStreamableRefusal,
   pickerLimit,
+  DECRYPT_SAVE_FAILED,
+  NOTHING_DECRYPTED_SAVED_ON_STOP,
 } from "../src/components/encryptor/shared.ts";
+import { oversizeRecoveryHelp } from "../src/lib/keymaker-crypto.ts";
 
 let passed = 0;
 let failed = 0;
@@ -75,7 +87,8 @@ async function thrown(fn: () => Promise<unknown>): Promise<unknown> {
   const chromium = fileLimits({ toDisk: true, worker: true });
   check("save dialog and worker: encrypt streams up to 1 GiB", chromium.encrypt === MAX_STREAM_PLAINTEXT_SIZE);
   check("save dialog and worker: verify streams", chromium.verify === MAX_STREAM_CONTAINER_SIZE);
-  check("save dialog and worker: opening stays in memory in this stage", chromium.decryptOpen === MAX_CONTAINER_SIZE);
+  check("save dialog and worker: opening streams to a chosen file, as far as verify reads",
+    chromium.decryptOpen === MAX_STREAM_CONTAINER_SIZE && chromium.decryptOpen === chromium.verify, `got ${chromium.decryptOpen}`);
 
   const noDialog = fileLimits({ toDisk: false, worker: true });
   check("no save dialog: encrypt stays at the in-memory cap", noDialog.encrypt === MAX_PLAINTEXT_SIZE,
@@ -86,6 +99,8 @@ async function thrown(fn: () => Promise<unknown>): Promise<unknown> {
   const noWorker = fileLimits({ toDisk: true, worker: false });
   check("no worker: encrypt stays at the in-memory cap, dialog or not", noWorker.encrypt === MAX_PLAINTEXT_SIZE);
   check("no worker: verify stays at the in-memory cap", noWorker.verify === MAX_CONTAINER_SIZE);
+  check("no worker: opening stays in memory, dialog or not", noWorker.decryptOpen === MAX_CONTAINER_SIZE,
+    `got ${noWorker.decryptOpen}`);
 
   const neither = fileLimits({ toDisk: false, worker: false });
   check("neither: every action at the in-memory cap",
@@ -107,11 +122,41 @@ async function thrown(fn: () => Promise<unknown>): Promise<unknown> {
   check("encrypt label without a save dialog", label("encrypt", false, true) === "or click to browse · 100 MB max in this browser",
     label("encrypt", false, true));
   check("encrypt label without a worker", label("encrypt", true, false) === "or click to browse · 100 MB max in this browser");
-  check("decrypt label with a worker, in every browser",
-    label("decrypt", true, true) === "a .keym container, or a QR image to scan · 100 MB to open here · 1 GB to verify"
-      && label("decrypt", false, true) === label("decrypt", true, true),
+  check("decrypt label with a save dialog and a worker",
+    label("decrypt", true, true) === "a .keym container, or a QR image to scan · 1 GB max, saved where you choose",
+    label("decrypt", true, true));
+  check("decrypt label with a worker and no save dialog",
+    label("decrypt", false, true) === "a .keym container, or a QR image to scan · 100 MB to open here · 1 GB to verify",
     label("decrypt", false, true));
-  check("decrypt label without a worker", label("decrypt", false, false) === "a .keym container, or a QR image to scan · 100 MB max");
+  check("decrypt label without a worker", label("decrypt", false, false) === "a .keym container, or a QR image to scan · 100 MB max"
+    && label("decrypt", true, false) === label("decrypt", false, false), label("decrypt", true, false));
+
+  const openNoDialog = decryptOpenTooLarge({ toDisk: false, worker: true });
+  check("the no-dialog open refusal keeps the recovery help, offers Verify only, and names where it can be opened",
+    openNoDialog.description.includes("keym2.py decrypt") && /turn on Verify only/.test(openNoDialog.description)
+      && /Chrome or Edge, can open backups up to 1 GB/.test(openNoDialog.description),
+    openNoDialog.description);
+  const openNoWorker = decryptOpenTooLarge({ toDisk: true, worker: false });
+  check("the no-worker open refusal keeps the recovery help and offers nothing it cannot do",
+    openNoWorker.description.includes("keym2.py decrypt") && !/Verify only|Chrome/.test(openNoWorker.description),
+    openNoWorker.description);
+  const openOver = decryptOpenTooLarge({ toDisk: true, worker: true });
+  check("above the streaming ceiling the open refusal names 1 GiB and the reference",
+    openOver.description.includes("1 GiB") && openOver.description.includes("keym2.py decrypt") && !/Verify only/.test(openOver.description),
+    openOver.description);
+  for (const [format, name] of [["keym-v1", "KEYM v1 backup"], ["ibtz-v1", "IttyBitz v1 backup"], ["ibtz-v0", "not a binary KEYM v2"]] as const) {
+    const text = notStreamableRefusal(format, false);
+    check(`a ${format} file above the limit is refused by name, with the recovery help`,
+      text.includes(name) && text.includes("keym2.py decrypt") && /this app opens only/.test(text), text);
+  }
+  check("the verify form of that refusal says Verify only", /Verify only reads only/.test(notStreamableRefusal("keym-v1", true)));
+  check("no open refusal, nor the stop and failure words, uses an em-dash",
+    ![openNoDialog, openNoWorker, openOver].some((r) => /—/.test(r.title + r.description.replace(oversizeRecoveryHelp(), "")
+      .replace(oversizeRecoveryHelp("streaming"), "")))
+      && ![NOTHING_DECRYPTED_SAVED_ON_STOP, DECRYPT_SAVE_FAILED, notStreamableRefusal("keym-v1", false).replace(oversizeRecoveryHelp(), "")]
+        .some((m) => /—/.test(m)));
+  check("a failed decrypt save says decryption failed, nothing was saved, and what may be left",
+    DECRYPT_SAVE_FAILED.startsWith("Decryption failed, so nothing was saved.") && DECRYPT_SAVE_FAILED.endsWith(SAVE_MAY_REMAIN));
 
   const noDialog = encryptTooLarge({ toDisk: false, worker: true });
   check("the no-dialog refusal names this browser's limit and both alternatives",
@@ -213,6 +258,24 @@ function fakeWritable(opts: { closeRejects?: boolean; writeRejects?: boolean; ab
 }
 
 {
+  // A decrypt's target: the same rules, its failures in its own words.
+  const w = fakeWritable({ writeRejects: true });
+  const t = saveTargetOver("photo.jpg", w.w, "decrypt");
+  const error = await thrown(() => t.write(new Uint8Array(1)));
+  check("a decrypt's failed write says the decrypted file was not saved, and what may be left",
+    error instanceof SaveFailed && (error as Error).message === DECRYPT_SAVE_WRITE_FAILED
+      && DECRYPT_SAVE_WRITE_FAILED.endsWith(SAVE_MAY_REMAIN));
+  const c = fakeWritable({ closeRejects: true });
+  const tc = saveTargetOver("photo.jpg", c.w, "decrypt");
+  const closeError = await thrown(() => tc.commit());
+  check("a decrypt's rejected close is not a save, in its own words",
+    closeError instanceof SaveFailed && (closeError as Error).message === DECRYPT_SAVE_COMMIT_FAILED && tc.state !== "committed");
+  check("no save message uses an em-dash or claims a file was encrypted on decrypt",
+    ![DECRYPT_SAVE_WRITE_FAILED, DECRYPT_SAVE_COMMIT_FAILED, DECRYPT_SAVE_OPEN_FAILED, DECRYPT_SAVE_PICKER_FAILED]
+      .some((m) => /—|encrypt/.test(m)));
+}
+
+{
   const f = fakeWritable({ abortRejects: true });
   const t = saveTargetOver("e.keym", f.w);
   const error = await thrown(() => t.abort());
@@ -281,6 +344,27 @@ function fakeWritable(opts: { closeRejects?: boolean; writeRejects?: boolean; ab
     const t = await chooseSaveTarget("x.keym");
     check("a chosen file opens as an open target named as the browser reports it",
       t !== null && t.state === "open" && t.name === "chosen.keym");
+
+    // A decrypt's dialog: no .keym type offered, the name passed through,
+    // and its failures in its own words.
+    let options: unknown = null;
+    fakeWindow.showSaveFilePicker = (o: unknown) => {
+      options = o;
+      return pickResult();
+    };
+    const plain = await chooseSaveTarget("photo.jpg", "decrypt");
+    check("a decrypt's dialog suggests the name it is given and offers no file type",
+      plain !== null && JSON.stringify(options) === JSON.stringify({ suggestedName: "photo.jpg" }), JSON.stringify(options));
+    pickResult = async () => {
+      throw Object.assign(new Error("Must be handling a user gesture"), { name: "SecurityError" });
+    };
+    const refusedDecrypt = await thrown(() => chooseSaveTarget("photo.jpg", "decrypt"));
+    check("a decrypt's dialog failure says nothing was saved, not that nothing was encrypted",
+      refusedDecrypt instanceof SaveFailed && (refusedDecrypt as Error).message === DECRYPT_SAVE_PICKER_FAILED);
+    pickResult = async () => ({ name: "y", createWritable: async () => { throw new Error("locked"); } });
+    const unopenedDecrypt = await thrown(() => chooseSaveTarget("photo.jpg", "decrypt"));
+    check("a decrypt's file that will not open says nothing was saved",
+      unopenedDecrypt instanceof SaveFailed && (unopenedDecrypt as Error).message === DECRYPT_SAVE_OPEN_FAILED);
   } finally {
     delete g.window;
   }

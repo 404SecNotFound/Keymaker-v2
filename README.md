@@ -626,14 +626,14 @@ npm run test:wordlist             # the bundled EFF list against EFF's own check
 npm run test:password-policy      # the advisory password floor accepts and refuses the right secrets
 npm run test:access-policy        # every way in the form describes opens a real container, and no other does
 npm run test:verify-transport     # a verify sends back a byte count, never the plaintext, for every format
-npm run test:worker-stream        # a file streamed through the worker: chunks in order, at most 4 un-acked, no plaintext
+npm run test:worker-stream        # a file streamed through the worker: chunks in order, at most 4 un-acked; a decrypt's drain never ends in success for a bad or cut backup
 npm run test:save-target          # each browser's file limits, and a streamed save is never reported saved before it is
 npm run test:slot-transaction     # a new backup's ways in are written in one operation, deriving the password once
 npm run test:backup-workflow      # a stale job cannot restore a success state; no step is shown done without evidence
 npm run test:recovery-envelopes   # KMPART2 names a corrupt part, a truncated tail, a mixed set
 npm run test:passkey-binding      # passkey enrolment's second tap is bound to the credential it made
 npm run test:secret-erase         # the page's key-file buffer is erased after a worker encrypt
-npm run test:secret-erase-core    # the crypto core erases its own copies of a secret
+npm run test:secret-erase-core    # the crypto core, and the worker's open decrypt session, erase their own copies of a secret
 npm run test:encrypt-input-erase  # the plaintext buffer is erased on the no-worker fallback
 npm run test:dearmor-whitespace   # armor ignores exactly the characters keym2.py ignores
 npm run test:audio-wav-bounds     # a truncated WAV is a typed error, never a RangeError
