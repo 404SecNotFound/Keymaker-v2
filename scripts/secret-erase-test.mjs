@@ -42,15 +42,50 @@ const ok = (cond, msg) => {
 // client transfers ends up detached here, and one it structured-clones would
 // stay intact. Since roadmap 9.3 the key file is transferred on every path,
 // share set and passkey included, so none is left on the page.
+/**
+ * How the stub answers the streaming ops: "ok" streams two chunks and then
+ * answers once both are acknowledged; "fail" answers ok:false; "hang" never
+ * answers, so only Stop can end the operation.
+ */
+let streamMode = "ok";
+const workers = [];
 class FakeWorker {
-  constructor() { this.messageListeners = []; }
+  constructor() { this.messageListeners = []; this.terminated = false; this.requests = []; this.acks = 0; workers.push(this); }
   addEventListener(type, fn) { if (type === "message") this.messageListeners.push(fn); }
   removeEventListener() {}
-  terminate() {}
+  terminate() { this.terminated = true; }
+  emit(res) { for (const fn of this.messageListeners) fn({ data: res }); }
   postMessage(req, transfer) {
     for (const buf of transfer || []) {
       // Model the structured-clone transfer: detach the buffer on this side.
       try { structuredClone(buf, { transfer: [buf] }); } catch { /* already detached */ }
+    }
+    this.requests.push(req);
+    if (req.op === "ack") {
+      // The final answer comes only once every chunk is acknowledged, as the
+      // real worker's does.
+      if (++this.acks === 2) queueMicrotask(() => this.emit({
+        id: req.stream, ok: true, op: "encrypt-stream", bytes: 8,
+        head: new Uint8Array([1, 2, 3, 4]).buffer, digest: "ab".repeat(32),
+      }));
+      return;
+    }
+    if (req.op === "encrypt-stream" || req.op === "open-stream") {
+      if (streamMode === "hang") return;
+      queueMicrotask(() => {
+        if (streamMode === "fail") {
+          this.emit({ id: req.id, ok: false, code: null, message: "Decryption failed." });
+        } else if (req.op === "open-stream") {
+          this.emit({
+            id: req.id, ok: true, op: "verify", format: "keym-v3", bytes: 3, openedBy: "passkey",
+            keyFileUsed: false, slotTable: "authentic", weakKdf: null, digest: "cd".repeat(32),
+          });
+        } else {
+          this.emit({ id: req.id, ok: true, op: "chunk", seq: 0, data: new Uint8Array([1, 2, 3, 4]).buffer });
+          this.emit({ id: req.id, ok: true, op: "chunk", seq: 1, data: new Uint8Array([5, 6, 7, 8]).buffer });
+        }
+      });
+      return;
     }
     queueMicrotask(() => {
       let res;
@@ -109,6 +144,109 @@ const keyBytes = (n) => Uint8Array.from({ length: n }, (_, i) => (i * 13 + 7) & 
   const buf = keyFile.buffer;
   await m.encryptViaWorker(new Uint8Array([9, 9, 9]).buffer, "pw", buf, OPTIONS);
   ok(buf.byteLength === 0, "a plain encrypt transfers the key file (detached), and erasing is skipped for it");
+}
+
+// ---- The streaming calls ----
+//
+// encryptFileViaWorker and verifyFileViaWorker take a PRF output that is
+// structured-cloned to the worker, not transferred, so the page's copy is the
+// client's to erase: on success, on a failure the worker reports, on Stop, and
+// (for encrypt) when the page's own writer fails. The key file is transferred,
+// so it is detached on every path that reached the worker.
+//
+// The control bites: with the erases removed from the two functions'
+// `finally`, every PRF check below fails.
+{
+  const zeroed = (u) => u.byteLength === 32 && u.every((b) => b === 0);
+  const prf = () => new Uint8Array(32).fill(5);
+  const passkey = (p) => ({ prfOutput: p, salt: new Uint8Array(32).fill(6) });
+  const file = () => new File([new Uint8Array([9, 9, 9])], "plain.bin");
+  const settle = async (p) => { try { return { value: await p }; } catch (error) { return { error }; } };
+  const lastWorker = () => workers.at(-1);
+  const tick = () => new Promise((r) => setTimeout(r, 10));
+
+  // Encrypt, success: both chunks reach the writer in order, each is
+  // acknowledged after its write, and the call resolves after the last.
+  {
+    streamMode = "ok";
+    const p = prf();
+    const key = keyBytes(48).buffer;
+    const written = [];
+    const r = await settle(m.encryptFileViaWorker(file(), "pw", key, OPTIONS, async (b) => { written.push([...b]); }, undefined, passkey(p)));
+    ok(!r.error && r.value.bytes === 8 && r.value.digest === "ab".repeat(32) && r.value.head.length === 4,
+       "a streamed encrypt resolves with the worker's summary");
+    ok(JSON.stringify(written) === JSON.stringify([[1, 2, 3, 4], [5, 6, 7, 8]]), "both chunks reached the writer, in order");
+    const acks = lastWorker().requests.filter((q) => q.op === "ack").map((q) => q.seq);
+    ok(JSON.stringify(acks) === "[0,1]", "each chunk was acknowledged once it had been written");
+    ok(zeroed(p), "the page's PRF output is erased after a streamed encrypt");
+    ok(key.byteLength === 0, "the key file was transferred (detached) by a streamed encrypt");
+  }
+  // Encrypt, the worker reports a failure.
+  {
+    streamMode = "fail";
+    const p = prf();
+    const key = keyBytes(48).buffer;
+    const r = await settle(m.encryptFileViaWorker(file(), "pw", key, OPTIONS, async () => {}, undefined, passkey(p)));
+    ok(r.error instanceof Error, "a streamed encrypt the worker fails rejects");
+    ok(zeroed(p), "the page's PRF output is erased after a failed streamed encrypt");
+    ok(key.byteLength === 0, "and the key file had been transferred");
+  }
+  // Encrypt, Stop while the worker is working.
+  {
+    streamMode = "hang";
+    const p = prf();
+    const key = keyBytes(48).buffer;
+    const pending = settle(m.encryptFileViaWorker(file(), "pw", key, OPTIONS, async () => {}, undefined, passkey(p)));
+    await tick();
+    const w = lastWorker();
+    ok(m.cancelAllCryptoWork() === true, "Stop terminates a streaming operation");
+    const r = await pending;
+    ok(r.error instanceof m.CryptoCancelled && w.terminated, "the streamed encrypt rejects as cancelled, and the worker is gone");
+    ok(zeroed(p), "the page's PRF output is erased after a stopped streamed encrypt");
+  }
+  // Encrypt, the page's writer fails (a full disk): the worker is terminated
+  // and the call rejects with the writer's own error, not a cancellation.
+  {
+    streamMode = "ok";
+    const p = prf();
+    const diskFull = new Error("disk full");
+    const r = await settle(m.encryptFileViaWorker(file(), "pw", null, OPTIONS, async () => { throw diskFull; }, undefined, passkey(p)));
+    const w = lastWorker();
+    ok(r.error === diskFull, "a writer that fails rejects the streamed encrypt with that error", String(r.error));
+    ok(w.terminated, "and the worker is terminated");
+    ok(!w.requests.some((q) => q.op === "ack"), "and nothing it did not write was acknowledged");
+    ok(zeroed(p), "the page's PRF output is erased after the writer failed");
+  }
+  // Verify: success, failure and Stop.
+  {
+    streamMode = "ok";
+    const p = prf();
+    const key = keyBytes(48).buffer;
+    const r = await settle(m.verifyFileViaWorker(file(), "", key, undefined, p, { digest: true }));
+    ok(!r.error && r.value.bytes === 3 && r.value.digest === "cd".repeat(32) && r.value.inWorker === true,
+       "a streamed verify resolves with the count and the digest");
+    const sent = lastWorker().requests.find((q) => q.op === "open-stream");
+    ok(sent && sent.purpose === "verify" && sent.digest === true, "it asks for purpose verify, with the digest");
+    ok(zeroed(p), "the page's PRF output is erased after a streamed verify");
+    ok(key.byteLength === 0, "the key file was transferred (detached) by a streamed verify");
+  }
+  {
+    streamMode = "fail";
+    const p = prf();
+    const r = await settle(m.verifyFileViaWorker(file(), "", null, undefined, p));
+    ok(r.error instanceof Error, "a streamed verify the worker fails rejects");
+    ok(zeroed(p), "the page's PRF output is erased after a failed streamed verify");
+  }
+  {
+    streamMode = "hang";
+    const p = prf();
+    const pending = settle(m.verifyFileViaWorker(file(), "", null, undefined, p));
+    await tick();
+    ok(m.cancelAllCryptoWork() === true, "Stop terminates a streamed verify");
+    const r = await pending;
+    ok(r.error instanceof m.CryptoCancelled, "the streamed verify rejects as cancelled");
+    ok(zeroed(p), "the page's PRF output is erased after a stopped streamed verify");
+  }
 }
 
 console.log(failed === 0 ? "\nAll secret-erase checks passed." : `\n${failed} check(s) FAILED.`);

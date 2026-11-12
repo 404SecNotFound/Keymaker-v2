@@ -62,6 +62,47 @@ ok(res && res.data instanceof ArrayBuffer && res.data.byteLength > 0,
 ok(buf.byteLength === 64 && new Uint8Array(buf).every((b) => b === 0),
    "the page's plaintext input buffer is zeroed after a no-worker fallback encrypt");
 
+// ---- Streaming with no worker ----
+//
+// There is no page-thread fallback for streaming: both calls are refused with
+// a typed error before the file is read. The key file never reached a worker
+// (nothing was transferred, so nothing is detached), which makes erasing it
+// and the PRF output the client's job on this path.
+//
+// The control bites: with the erases removed from the two functions'
+// `finally`, the key file and the PRF output below stay non-zero.
+{
+  const zeroed = (u) => u.byteLength > 0 && u.every((b) => b === 0);
+  let sliced = 0;
+  class WatchedFile extends File {
+    slice(...args) { sliced++; return super.slice(...args); }
+  }
+  const attempt = async (call) => { try { await call(); return null; } catch (error) { return error; } };
+
+  const key = Uint8Array.from({ length: 48 }, (_, i) => (i * 13 + 7) & 0xff || 1);
+  const prf = new Uint8Array(32).fill(5);
+  const refused = await attempt(() => m.encryptFileViaWorker(
+    new WatchedFile([plaintext.slice()], "plain.bin"), "correct horse battery staple", key.buffer, OPTIONS,
+    async () => { throw new Error("no chunk should be written"); },
+    undefined, { prfOutput: prf, salt: new Uint8Array(32).fill(6) }
+  ));
+  ok(refused && refused.code === "unsupported-config" && m.lastRunUsedWorker === false,
+     "a streamed encrypt with no worker is refused with a typed error");
+  ok(sliced === 0, "and the file was never read");
+  ok(zeroed(key), "the key file is zeroed when a streamed encrypt is refused for want of a worker");
+  ok(zeroed(prf), "the PRF output is zeroed when a streamed encrypt is refused for want of a worker");
+
+  const vkey = Uint8Array.from({ length: 48 }, (_, i) => (i * 13 + 7) & 0xff || 1);
+  const vprf = new Uint8Array(32).fill(5);
+  const vrefused = await attempt(() => m.verifyFileViaWorker(
+    new WatchedFile([new Uint8Array(64)], "backup.keym"), "", vkey.buffer, undefined, vprf
+  ));
+  ok(vrefused && vrefused.code === "unsupported-config", "a streamed verify with no worker is refused with a typed error");
+  ok(sliced === 0, "and the file was never read");
+  ok(zeroed(vkey), "the key file is zeroed when a streamed verify is refused for want of a worker");
+  ok(zeroed(vprf), "the PRF output is zeroed when a streamed verify is refused for want of a worker");
+}
+
 // ---- The worker path ----
 //
 // Transfer does not erase anything: it moves the bytes into the worker, which
