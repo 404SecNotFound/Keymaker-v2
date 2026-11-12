@@ -32,6 +32,9 @@
  */
 
 import { decryptFile as legacyDecryptFile } from "./crypto";
+// Types only, erased at build time: the runtime dependency on keym-v2.ts stays
+// the one lazy `loadKeym2()` below (see `decryptData`).
+import type { Keym2ByteSink, Keym2Slot } from "./keym-v2";
 
 export const KEYM_MAGIC = new Uint8Array([0x4b, 0x45, 0x59, 0x4d]); // "KEYM"
 export const KEYM_VERSION = 1;
@@ -112,6 +115,18 @@ const NONCE_LEN = 12;
 export const MAX_PLAINTEXT_SIZE = 100 * 1024 * 1024; // 100 MB
 const MAX_FILE_SIZE = MAX_PLAINTEXT_SIZE;
 /**
+ * Largest plaintext the streaming path will encrypt: 1 GiB.
+ *
+ * A separate ceiling from `MAX_PLAINTEXT_SIZE`, not a raised one. The in-memory
+ * functions hold the whole input and the whole output at once, and 100 MB is
+ * where a tab stops being reliable doing that. The streaming functions
+ * (`encryptContainerToSink`, `openContainerStream`) hold one chunk at a time,
+ * so what bounds them is how long a person will wait and how much a page should
+ * be asked to write, not memory. Nothing about the format changes at this size:
+ * it is the same chunked KEYM v2/v3/v4 payload, only more of it.
+ */
+export const MAX_STREAM_PLAINTEXT_SIZE = 2 ** 30; // 1 GiB
+/**
  * Longest password we will accept.
  *
  * Exported (U24) because the UI now discloses it. A second copy of the number
@@ -140,10 +155,22 @@ export const MAX_PASSWORD_LENGTH = 1024;
  * file encrypted and decrypted through `keym2.py` round-trips byte-identically
  * in about two seconds each way, at roughly 634 MiB peak RSS.
  */
-export function oversizeRecoveryHelp(): string {
+/**
+ * Which of this build's two ceilings a refusal is about. `"in-memory"` is the
+ * 100 MB the whole-buffer functions hold at once; `"streaming"` is the 1 GiB
+ * the chunk-at-a-time functions will read through.
+ */
+export type SizeLimit = "in-memory" | "streaming";
+
+export function oversizeRecoveryHelp(limit: SizeLimit = "in-memory"): string {
+  const reason =
+    limit === "streaming"
+      ? `This backup is larger than the ${MAX_STREAM_PLAINTEXT_SIZE / 1024 / 1024 / 1024} GiB this app will ` +
+        `read through in a browser tab, a chunk at a time. `
+      : `This backup is larger than the ${MAX_PLAINTEXT_SIZE / 1024 / 1024} MB this app can open in a ` +
+        `browser tab, which has to hold the container and the recovered file in memory at once. `;
   return (
-    `This backup is larger than the ${MAX_PLAINTEXT_SIZE / 1024 / 1024} MB this app can open in a ` +
-    `browser tab, which has to hold the container and the recovered file in memory at once. ` +
+    reason +
     `Nothing is wrong with the backup and the KEYM v2 format has no size limit — the ` +
     `command-line reference opens it:\n\n` +
     `    python3 keym2.py decrypt --in <your-backup> --out <destination>\n\n` +
@@ -199,13 +226,42 @@ const KEYM2_PAYLOAD_CHUNK_SIZE = 1024 * 1024;
  * keym2-dispatch.mts holds it to `keym2PaddedLen(8 + MAX_PLAINTEXT_SIZE)`.
  */
 export const KEYM2_MAX_PADDED_STREAM = 51 * 2 * 1024 * 1024;
-export const MAX_CONTAINER_OVERHEAD =
-  KEYM2_MAX_SLOT_TABLE_OFFSET +
-  KEYM2_MAX_SLOT_COUNT * KEYM2_MAX_SLOT_LEN +
-  (KEYM2_MAX_PADDED_STREAM - MAX_PLAINTEXT_SIZE) +
-  Math.max(1, Math.ceil(KEYM2_MAX_PADDED_STREAM / KEYM2_PAYLOAD_CHUNK_SIZE)) * KEYM2_MAX_TAG_PER_CHUNK;
+/**
+ * The same for `MAX_STREAM_PLAINTEXT_SIZE`. At 1 GiB Padmé's granularity is
+ * 32 MiB (E = 30, S = 5, unit 2^25), and 8 + 2^30 rounds up to 33 × 32 MiB.
+ * Restated like the one above; keym2-dispatch.mts holds it to
+ * `keym2PaddedLen(8 + MAX_STREAM_PLAINTEXT_SIZE)`.
+ */
+export const KEYM2_MAX_STREAM_PADDED_STREAM = 33 * 32 * 1024 * 1024;
+
+/**
+ * Bytes over the plaintext the largest legal container can carry, for a build
+ * whose plaintext ceiling is `maxPlaintext` and whose longest v4 padded stream
+ * at that ceiling is `maxPaddedStream`: the largest slot table, the padding,
+ * and the tags of every chunk of the padded stream (which has at least as many
+ * chunks as the unpadded plaintext, so it covers v2 and v3 too).
+ */
+function containerOverhead(maxPlaintext: number, maxPaddedStream: number): number {
+  return (
+    KEYM2_MAX_SLOT_TABLE_OFFSET +
+    KEYM2_MAX_SLOT_COUNT * KEYM2_MAX_SLOT_LEN +
+    (maxPaddedStream - maxPlaintext) +
+    Math.max(1, Math.ceil(maxPaddedStream / KEYM2_PAYLOAD_CHUNK_SIZE)) * KEYM2_MAX_TAG_PER_CHUNK
+  );
+}
+export const MAX_CONTAINER_OVERHEAD = containerOverhead(MAX_PLAINTEXT_SIZE, KEYM2_MAX_PADDED_STREAM);
 export const MAX_CONTAINER_SIZE = MAX_PLAINTEXT_SIZE + MAX_CONTAINER_OVERHEAD;
 const MAX_CIPHERTEXT_SIZE = MAX_CONTAINER_SIZE;
+/**
+ * Largest container the streaming reader will attempt: the largest container a
+ * `MAX_STREAM_PLAINTEXT_SIZE` plaintext can legally become, by the same
+ * arithmetic as `MAX_CONTAINER_SIZE`.
+ */
+export const MAX_STREAM_CONTAINER_OVERHEAD = containerOverhead(
+  MAX_STREAM_PLAINTEXT_SIZE,
+  KEYM2_MAX_STREAM_PADDED_STREAM
+);
+export const MAX_STREAM_CONTAINER_SIZE = MAX_STREAM_PLAINTEXT_SIZE + MAX_STREAM_CONTAINER_OVERHEAD;
 
 /**
  * Longest base64 text we will even decode.
@@ -643,6 +699,36 @@ function validateCommon(dataBuffer: ArrayBuffer, password: string, isEncryption:
     // Not "pick a smaller file": there is no smaller version of a backup.
     throw new KeymakerError("too-large", oversizeRecoveryHelp());
   }
+  validatePassword(password);
+}
+
+/**
+ * `validateCommon` for the streaming functions, against the streaming
+ * ceilings: the same checks in the same order with the same messages, on a
+ * length rather than a buffer, because the input is a `Blob` that is never
+ * held whole.
+ */
+export function validateStreamCommon(length: number, password: string, isEncryption: boolean): void {
+  if (!Number.isSafeInteger(length) || length < 0) {
+    throw new KeymakerError("invalid-input", "Valid data buffer is required.");
+  }
+  if (length === 0) {
+    throw new KeymakerError("empty-input", "Cannot process empty data.");
+  }
+  if (isEncryption && length > MAX_STREAM_PLAINTEXT_SIZE) {
+    throw new KeymakerError(
+      "too-large",
+      `File is too large. Maximum size is ${MAX_STREAM_PLAINTEXT_SIZE / 1024 / 1024}MB.`
+    );
+  }
+  if (!isEncryption && length > MAX_STREAM_CONTAINER_SIZE) {
+    throw new KeymakerError("too-large", oversizeRecoveryHelp("streaming"));
+  }
+  validatePassword(password);
+}
+
+/** The password checks `validateCommon` and `validateStreamCommon` share. */
+function validatePassword(password: string): void {
   if (typeof password !== "string") {
     throw new KeymakerError("password-invalid", "Password must be a string.");
   }
@@ -1422,6 +1508,32 @@ function takePlaintextBuffer(plain: Uint8Array): ArrayBuffer {
   return copy;
 }
 
+/**
+ * What the reader settled on, in the terms `DecryptResult` reports it: the
+ * weak-KDF advisory for that slot and which kind of way in it was. Shared by
+ * `decryptData` and `openContainerStream` so the two cannot describe the same
+ * slot differently.
+ */
+function describeOpenedSlot(
+  keym2: Awaited<ReturnType<typeof loadKeym2>>,
+  slot: Keym2Slot
+): { weakKdf: string | null; openedBy: OpenedBy } {
+  return {
+    // The slot the walk settled on, not slot 0. `kdf` is HKDF for a Shamir
+    // or passkey slot, which has no cost parameters to be weak — §6 pins
+    // that pairing — so those correctly report nothing.
+    weakKdf: slot.kdf.kdf === keym2.KEYM2_KDF_HKDF ? null : describeWeakKdf(slot.kdf as KdfParams),
+    openedBy:
+      slot.slotType === keym2.KEYM2_SLOT_TYPE_PASSKEY
+        ? "passkey"
+        : slot.slotType === keym2.KEYM2_SLOT_TYPE_SHAMIR
+          ? "shares"
+          : slot.slotType === keym2.KEYM2_SLOT_TYPE_BOTH
+            ? "passphrase-and-shares"
+            : "passphrase",
+  };
+}
+
 export async function decryptData(
   encryptedBuffer: ArrayBuffer,
   password: string,
@@ -1461,15 +1573,9 @@ export async function decryptData(
     // keeps the v1 path structurally unable to be changed by v2 work. It also
     // keeps v2 out of the initial bundle until a v2 container is actually
     // opened.
-    const {
-      decryptKeym2,
-      KEYM2_KDF_HKDF,
-      KEYM2_SLOT_TYPE_PASSKEY,
-      KEYM2_SLOT_TYPE_SHAMIR,
-      KEYM2_SLOT_TYPE_BOTH,
-    } = await loadKeym2();
+    const keym2 = await loadKeym2();
     try {
-      const result = await decryptKeym2(
+      const result = await keym2.decryptKeym2(
         fullData,
         password,
         keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
@@ -1481,21 +1587,7 @@ export async function decryptData(
         format,
         keyFileUsed: result.keyFileUsed,
         slotTableAuthentic: result.slotTableAuthentic,
-        // The slot the walk settled on, not slot 0. `kdf` is HKDF for a Shamir
-        // or passkey slot, which has no cost parameters to be weak — §6 pins
-        // that pairing — so those correctly report nothing.
-        weakKdf:
-          result.slot.kdf.kdf === KEYM2_KDF_HKDF
-            ? null
-            : describeWeakKdf(result.slot.kdf as KdfParams),
-        openedBy:
-          result.slot.slotType === KEYM2_SLOT_TYPE_PASSKEY
-            ? "passkey"
-            : result.slot.slotType === KEYM2_SLOT_TYPE_SHAMIR
-              ? "shares"
-              : result.slot.slotType === KEYM2_SLOT_TYPE_BOTH
-                ? "passphrase-and-shares"
-                : "passphrase",
+        ...describeOpenedSlot(keym2, result.slot),
       };
     } finally {
       // Same contract as every other path here: the caller's key file buffer
@@ -1595,5 +1687,277 @@ export async function decryptData(
       if (keys.chachaKey) secureErase(keys.chachaKey);
       if (keys.chained) secureErase(keys.chained.chachaKey);
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming: a File in, a container out a chunk at a time, and the reverse
+// ---------------------------------------------------------------------------
+//
+// The in-memory functions above hold the whole input and the whole output at
+// once, which is what caps them at 100 MB. These two read a `Blob` a range at
+// a time through keym-v2.ts's streaming core and hand what they produce to a
+// sink, so the ceiling is `MAX_STREAM_PLAINTEXT_SIZE` instead. They write and
+// read exactly the containers the in-memory functions do: the in-memory writer
+// and reader are the same core with a source over a buffer and a sink that
+// assembles one.
+//
+// Error normalisation is the in-memory functions', with one addition: an error
+// thrown by the caller's own sink reaches the caller as itself. It is the
+// caller's (a full disk, a cancelled write), not text from inside the crypto,
+// and collapsing it to "Encryption failed" would hide the one failure the
+// caller can act on.
+
+/** The ways in a streamed backup opens with besides its passphrase; the worker's `encrypt` request's shape. */
+export interface StreamSlots {
+  /** §4.6, or with `withPassword` §4.8's single password-and-shares slot. */
+  shamir?: { threshold: number; count: number; withPassword?: boolean } | undefined;
+  /** §4.7. The authenticator's PRF output and the slot salt it was derived for. */
+  passkey?: { prfOutput: Uint8Array; salt: Uint8Array } | undefined;
+}
+
+/** A sink whose own failure can be told apart from one inside the crypto. */
+function guardSink(sink: Keym2ByteSink): { sink: Keym2ByteSink; threw: (error: unknown) => boolean } {
+  let failure: { error: unknown } | null = null;
+  return {
+    sink: {
+      async write(bytes: Uint8Array): Promise<void> {
+        try {
+          await sink.write(bytes);
+        } catch (error) {
+          failure = { error };
+          throw error;
+        }
+      },
+    },
+    threw: (error: unknown) => failure !== null && failure.error === error,
+  };
+}
+
+/**
+ * Encrypt `file` into a KEYM container handed to `sink` a write at a time: the
+ * head (core header, v3 MAC, slot records) first, then one write per sealed
+ * chunk. The same backup `encryptContainer`, `encryptContainerWithSlots` or
+ * `encryptContainerWithSharesRequired` writes for the same `slots`, read
+ * through `blobSource` instead of from a buffer.
+ *
+ * `bytes` is the total handed to the sink and `head` the writer's own copy of
+ * the first write. `shares` exist only if a share set was asked for, and only
+ * once the last chunk has been accepted by the sink: a write that failed
+ * returns none, so nobody is handed strips for a backup that was never made.
+ *
+ * What the sink holds when this rejects is a prefix of a container, not a
+ * container, and is the caller's to discard.
+ *
+ * Every refusal is made before the password is derived. The caller's key-file
+ * buffer is zeroed on every exit, refusals included. The PRF output is the
+ * caller's and is left alone, as `encryptContainerWithSlots` leaves it.
+ */
+export async function encryptContainerToSink(
+  file: Blob,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null,
+  options: KeymakerOptions,
+  slots: StreamSlots,
+  sink: Keym2ByteSink
+): Promise<{ bytes: number; head: Uint8Array; shares?: string[] }> {
+  const guarded = guardSink(sink);
+  try {
+    if (typeof Blob === "undefined" || !(file instanceof Blob)) {
+      throw new KeymakerError("invalid-input", "Valid data buffer is required.");
+    }
+    validateStreamCommon(file.size, password, true);
+    if (!password) {
+      throw new KeymakerError("credential-required", "A password is required for encryption.");
+    }
+    if (!crypto.subtle) {
+      throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
+    }
+    if (!options || !options.kdf || options.cipher === undefined) {
+      throw new KeymakerError("invalid-input", "encryptContainerToSink requires explicit kdf and cipher options.");
+    }
+    validateKdfParams(options.kdf, writeMode(options));
+    const cipher = options.cipher;
+    if (cipher !== CipherId.AES_256_GCM && cipher !== CipherId.CHACHA20_POLY1305 && cipher !== CipherId.CHAINED) {
+      throw new KeymakerError("unsupported-config", `Invalid cipher id: ${cipher}.`);
+    }
+    const shamir = slots?.shamir;
+    const passkey = slots?.passkey;
+    if (shamir?.withPassword && passkey) {
+      // §4.8: one slot that needs the password and the strips together, and
+      // nothing beside it. The worker's in-memory branch refuses the same way.
+      throw new KeymakerError(
+        "invalid-input",
+        "A passkey would open this backup on its own, and it was set to need the password and the strips together."
+      );
+    }
+
+    const keym2 = await loadKeym2();
+    const version = options.padded ? keym2.KEYM2_VERSION_V4 : keym2.KEYM2_VERSION;
+    const source = keym2.blobSource(file);
+    const keyFile = keyFileBuffer ? new Uint8Array(keyFileBuffer) : null;
+    const kopts = { kdf: options.kdf, cipher };
+    let written: { bytes: number; head: Uint8Array; shares?: string[] };
+    if (shamir?.withPassword) {
+      written = await keym2.encryptKeym2WithSharesRequiredToSink(
+        source, password, keyFile, kopts, shamir.threshold, shamir.count, guarded.sink, version
+      );
+    } else if (shamir || passkey) {
+      written = await keym2.encryptKeym2WithSlotsToSink(
+        source,
+        password,
+        keyFile,
+        kopts,
+        { shamir: shamir ? { threshold: shamir.threshold, count: shamir.count } : undefined, passkey },
+        guarded.sink,
+        version
+      );
+    } else {
+      written = await keym2.encryptKeym2ToSink(source, password, keyFile, kopts, guarded.sink, version);
+    }
+    return written.shares === undefined
+      ? { bytes: written.bytes, head: written.head }
+      : { bytes: written.bytes, head: written.head, shares: written.shares };
+  } catch (error) {
+    if (guarded.threw(error)) throw error;
+    if (isUserFacingError(error)) throw error;
+    if (error instanceof Error && /required|too (large|long)|invalid characters|not available|threshold|count/i.test(error.message)) {
+      throw error;
+    }
+    throw new Error("Encryption failed. Please try again.");
+  } finally {
+    if (keyFileBuffer) secureErase(keyFileBuffer);
+  }
+}
+
+/**
+ * A container whose slot has opened and whose first chunk has verified, ready
+ * to hand its plaintext to a sink. `DecryptResult` without the data.
+ */
+export interface OpenedContainer {
+  readonly format: DetectedFormat;
+  readonly keyFileUsed: boolean;
+  /** v3 §5.2, as `DecryptResult.slotTableAuthentic`. */
+  readonly slotTableAuthentic: boolean | null;
+  /** As `DecryptResult.weakKdf`: the slot that opened it. */
+  readonly weakKdf: string | null;
+  readonly openedBy: OpenedBy;
+  /** The number of plaintext bytes `drain` hands to its sink if it resolves. */
+  readonly plaintextBytes: number;
+  /**
+   * Hand the plaintext to `sink` as each chunk verifies. **§5.5: commit only
+   * when this resolves** — see `Keym2OpenedStream.drain`. A rejection is
+   * "Decryption failed." unless it is typed, or it came from `sink` itself, in
+   * which case it is that error. Single use.
+   */
+  drain(sink: Keym2ByteSink): Promise<void>;
+  /** Erase the payload keys if `drain` is not going to run. Idempotent. */
+  discard(): void;
+}
+
+/** What `openContainerStream` lets a caller observe without a second read. */
+export interface OpenStreamObserver {
+  /**
+   * Called with every range the reader reads, as it reads it, before the reader
+   * uses it. Ranges can overlap (the head and the first chunk do). The bytes
+   * are the reader's: look, do not keep or change them.
+   */
+  onRead?: (offset: number, bytes: Uint8Array) => void;
+}
+
+const STREAM_FORMAT_REFUSAL =
+  "This file is not a KEYM v2, v3 or v4 container, so it cannot be read a chunk at a time. " +
+  "KEYM v1 and the older IttyBitz formats seal the whole file as one block, and this app opens " +
+  `those only in memory, up to ${MAX_PLAINTEXT_SIZE / 1024 / 1024} MB.`;
+
+/**
+ * Open the KEYM v2/v3/v4 container in `file` without reading it whole: every
+ * structural check, the slot walk and the first chunk, as `decryptData` does
+ * them, then `drain` for the rest.
+ *
+ * KEYM v1 and both IttyBitz formats are refused with a typed
+ * `unsupported-config` error: each is one AEAD over the whole plaintext, so
+ * nothing can be verified until all of it has been read and held, which is the
+ * in-memory path's job.
+ *
+ * The caller's key-file buffer is zeroed before this returns (the slot walk is
+ * the only thing that needs it), on every exit. The PRF output is the
+ * caller's, as for `decryptData`.
+ */
+export async function openContainerStream(
+  file: Blob,
+  password: string,
+  keyFileBuffer: ArrayBuffer | null,
+  shares?: string[],
+  prfOutput?: Uint8Array,
+  observer?: OpenStreamObserver
+): Promise<OpenedContainer> {
+  try {
+    if (typeof Blob === "undefined" || !(file instanceof Blob)) {
+      throw new KeymakerError("invalid-input", "Valid data buffer is required.");
+    }
+    validateStreamCommon(file.size, password, false);
+    const hasShares = !!shares && shares.length > 0;
+    if (!password && !keyFileBuffer && !hasShares && !prfOutput) {
+      throw new KeymakerError(
+        "credential-required",
+        "A password, key file, recovery shares, or a passkey is required for decryption."
+      );
+    }
+    if (!crypto.subtle) {
+      throw new KeymakerError("webcrypto-unavailable", "Web Crypto API not available.");
+    }
+
+    const keym2 = await loadKeym2();
+    const base = keym2.blobSource(file);
+    const format = detectFormat(await base.read(0, Math.min(file.size, KEYM_MAGIC.length + 1)));
+    if (format !== "keym-v2" && format !== "keym-v3" && format !== "keym-v4") {
+      throw new KeymakerError("unsupported-config", STREAM_FORMAT_REFUSAL);
+    }
+    const onRead = observer?.onRead;
+    const source = onRead
+      ? {
+          length: base.length,
+          async read(offset: number, length: number): Promise<Uint8Array> {
+            const bytes = await base.read(offset, length);
+            onRead(offset, bytes);
+            return bytes;
+          },
+        }
+      : base;
+
+    const opened = await keym2.openKeym2Stream(
+      source,
+      password,
+      keyFileBuffer ? new Uint8Array(keyFileBuffer) : null,
+      shares,
+      prfOutput
+    );
+    return {
+      format,
+      keyFileUsed: opened.keyFileUsed,
+      slotTableAuthentic: opened.slotTableAuthentic,
+      ...describeOpenedSlot(keym2, opened.slot),
+      plaintextBytes: opened.plaintextLength,
+      async drain(sink: Keym2ByteSink): Promise<void> {
+        const guarded = guardSink(sink);
+        try {
+          await opened.drain(guarded.sink);
+        } catch (error) {
+          if (guarded.threw(error) || isUserFacingError(error)) throw error;
+          throw new Error("Decryption failed.");
+        }
+      },
+      discard(): void {
+        opened.discard();
+      },
+    };
+  } catch (error) {
+    // The in-memory v2 reader's answer for everything untyped: §6's one
+    // generic rejection, with nothing said about how far the walk got.
+    if (isUserFacingError(error)) throw error;
+    throw new Error("Decryption failed.");
+  } finally {
+    if (keyFileBuffer) secureErase(keyFileBuffer);
   }
 }

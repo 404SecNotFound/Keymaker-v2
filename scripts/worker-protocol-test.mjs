@@ -90,6 +90,8 @@ const scope = {
   String,
   Reflect,
   Proxy,
+  Blob,
+  File,
   navigator: {},
 };
 scope.self = scope;
@@ -128,6 +130,21 @@ const cases = [
   [{ id: "7", op: "ping" }, -1],
   [{ id: 8, op: "bogus" }, 8],
   [{ id: 9, op: 11 }, 9],
+  // The streaming ops. An ack is the one request a valid form of which gets
+  // no answer, so every malformed form must get one, or a page bug stalls a
+  // stream with nothing said.
+  [{ id: 20, op: "ack" }, 20],
+  [{ id: 21, op: "ack", stream: "20", seq: 0 }, 21],
+  [{ id: 22, op: "ack", stream: 20, seq: 1.5 }, 22],
+  [{ id: 23, op: "ack", stream: 20, seq: -1 }, 23],
+  [{ id: 24, op: "ack", stream: 424242, seq: 0 }, 24],
+  [{ id: "25", op: "ack", stream: 1, seq: 0 }, -1],
+  [{ id: 26, op: "encrypt-stream" }, 26],
+  [{ id: 27, op: "encrypt-stream", file: "not a file", password: "pw", keyFile: null, options: {} }, 27],
+  [{ id: 28, op: "open-stream" }, 28],
+  [{ id: 29, op: "open-stream", file: new Blob([new Uint8Array(64)]), password: "pw", keyFile: null, purpose: "decrypt", digest: false }, 29],
+  [{ id: 30, op: "open-stream", file: new Blob([new Uint8Array(64)]), password: "pw", keyFile: null, digest: false }, 30],
+  [{ id: 31, op: "open-stream", file: null, password: "pw", keyFile: null, purpose: "verify", digest: true }, 31],
 ];
 for (const [data, id] of cases) {
   const { threw, responses } = await send(data);
@@ -152,6 +169,21 @@ for (const [data, id] of cases) {
   const { threw, responses } = await send({ id: 3, op: "ping" });
   ok(threw === null && responses.length === 1 && responses[0].ok === true && responses[0].id === 3,
     "a well-formed ping is still answered ok:true with its id", JSON.stringify(responses[0]));
+}
+
+// An open-stream purpose the worker does not list is refused as such, before
+// anything is read: it must not fall through to `verify`, and in particular
+// not to a streamed decrypt that would post chunks.
+for (const purpose of ["decrypt", undefined]) {
+  const { responses } = await send({
+    id: 40, op: "open-stream", file: new Blob([new Uint8Array(64)]), password: "pw", keyFile: null, purpose, digest: false,
+  });
+  ok(
+    responses.length === 1 && responses[0].ok === false && /purpose/i.test(responses[0].message) &&
+      !responses.some((r) => r.op === "chunk"),
+    `open-stream with purpose ${JSON.stringify(purpose)} is refused by name, and posts no chunk`,
+    JSON.stringify(responses)
+  );
 }
 
 // A decrypt with the wrong shape of arguments stays a typed, user-facing

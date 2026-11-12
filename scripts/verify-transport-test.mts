@@ -23,9 +23,17 @@
  *     plaintext. That is the check that the scanner can see a leak at all: a
  *     scanner that found nothing anywhere would pass (1) against any worker.
  *
+ *  5. The same containers as Blobs through `open-stream` with `purpose:
+ *     "verify"` cross with the same allow-listed fields plus the container's
+ *     digest, in one message: no `chunk` message, no buffer. KEYM v1 and the
+ *     IttyBitz formats are refused by type. The failures in (3) fail the same
+ *     way.
+ *
  * The negative control is to make `verify` answer with the decrypt response;
- * (1) must fail. The PR records the run.
+ * (1) must fail. The PR records the run. For (5) it is to have `open-stream`
+ * post its chunks whatever the purpose.
  */
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -74,8 +82,10 @@ async function send(req: Record<string, unknown>): Promise<{ message: any; trans
 // ---------------------------------------------------------------------------
 // The scanner.
 // ---------------------------------------------------------------------------
+// `digest` is the SHA-256 of the container, not of the plaintext: null for an
+// in-memory verify, and hex of ciphertext for a streamed one.
 const VERIFY_FIELDS = new Set([
-  "id", "ok", "op", "format", "bytes", "openedBy", "keyFileUsed", "slotTable", "weakKdf",
+  "id", "ok", "op", "format", "bytes", "openedBy", "keyFileUsed", "slotTable", "weakKdf", "digest",
 ]);
 const ERROR_FIELDS = new Set(["id", "ok", "code", "message"]);
 
@@ -243,40 +253,40 @@ const passkey = cases.find((c) => c.label.startsWith("v3-passkey-aes256gcm"))!;
 const legacy = cases.find((c) => c.format === "ibtz-v1")!;
 const wrongStrip = (s: string) => s.slice(0, -3) + (s.at(-3) === "A" ? "B" : "A") + s.slice(-2);
 
-const failures: { label: string; req: ReturnType<typeof request>; secrets: string[] }[] = [
+const failures: { label: string; make: () => ReturnType<typeof request>; secrets: string[] }[] = [
   {
     label: "a wrong password",
-    req: request("verify", v3, { password: `${PASSWORD} but wrong` }),
+    make: () => request("verify", v3, { password: `${PASSWORD} but wrong` }),
     secrets: [v3.plaintext, `${PASSWORD} but wrong`, PASSWORD],
   },
   {
     label: "a wrong strip among the right ones",
-    req: request("verify", shamir, { shares: [wrongStrip(shamir.shares![0]!), ...shamir.shares!.slice(1)] }),
+    make: () => request("verify", shamir, { shares: [wrongStrip(shamir.shares![0]!), ...shamir.shares!.slice(1)] }),
     secrets: [shamir.plaintext, ...shamir.shares!],
   },
   {
     label: "fewer strips than the threshold",
-    req: request("verify", shamir, { shares: shamir.shares!.slice(0, 1) }),
+    make: () => request("verify", shamir, { shares: shamir.shares!.slice(0, 1) }),
     secrets: [shamir.plaintext, ...shamir.shares!],
   },
   {
     label: "the wrong passkey",
-    req: request("verify", passkey, { prfOutput: new Uint8Array(32).fill(0x5a) }),
+    make: () => request("verify", passkey, { prfOutput: new Uint8Array(32).fill(0x5a) }),
     secrets: [passkey.plaintext],
   },
   {
     label: "a container cut off mid-payload",
-    req: request("verify", v3, { container: v3.container.slice(0, v3.container.length - 20) }),
+    make: () => request("verify", v3, { container: v3.container.slice(0, v3.container.length - 20) }),
     secrets: [v3.plaintext, PASSWORD],
   },
   {
     label: "a container cut off inside its header",
-    req: request("verify", v3, { container: v3.container.slice(0, 12) }),
+    make: () => request("verify", v3, { container: v3.container.slice(0, 12) }),
     secrets: [v3.plaintext, PASSWORD],
   },
   {
     label: "one flipped payload byte",
-    req: request("verify", v3, {
+    make: () => request("verify", v3, {
       container: (() => {
         const t = v3.container.slice();
         t[t.length - 1]! ^= 0x01;
@@ -287,17 +297,17 @@ const failures: { label: string; req: ReturnType<typeof request>; secrets: strin
   },
   {
     label: "random bytes",
-    req: request("verify", v3, { container: new Uint8Array(200).fill(0x61) }),
+    make: () => request("verify", v3, { container: new Uint8Array(200).fill(0x61) }),
     secrets: [v3.plaintext, PASSWORD],
   },
   {
     label: "a wrong password on a legacy IttyBitz file",
-    req: request("verify", legacy, { password: "not the IttyBitz password" }),
+    make: () => request("verify", legacy, { password: "not the IttyBitz password" }),
     secrets: [legacy.plaintext, "not the IttyBitz password", LEGACY.password],
   },
 ];
 for (const f of failures) {
-  const out = await send(f.req);
+  const out = await send(f.make());
   const msg = out[0]?.message;
   const found = out.flatMap((o, i) => leaks(o.message, f.secrets, `message[${i}]`));
   const extra = msg ? Object.keys(msg).filter((k) => !ERROR_FIELDS.has(k)) : [];
@@ -307,6 +317,123 @@ for (const f of failures) {
       out[0]!.transfer.length === 0,
     [msg?.ok !== false ? `ok=${msg?.ok}` : "", ...found, extra.length ? `fields ${extra.join(", ")}` : ""]
       .filter(Boolean).join("; ")
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 5. The streamed verify: the same containers as Blobs, through `open-stream`.
+// ---------------------------------------------------------------------------
+//
+// `open-stream` with `purpose: "verify"` reads the container a chunk at a time
+// in the worker and must cross with exactly what the in-memory verify crosses
+// with, plus the container's digest: one message, on the same allow-list,
+// holding no buffer and nothing transferred — in particular no `chunk`
+// message, which is how a streamed decrypt would hand over plaintext. KEYM v1
+// and the IttyBitz formats cannot be read a chunk at a time and are refused
+// by type, with nothing secret in the refusal.
+//
+// The negative control is to have `open-stream` post its chunks whatever the
+// purpose; the first check below must fail.
+const STREAMABLE = new Set(["keym-v2", "keym-v3", "keym-v4"]);
+const sha256Hex = (u: Uint8Array) => createHash("sha256").update(u).digest("hex");
+
+function streamRequest(c: Case, override: Partial<Case> = {}) {
+  const x = { ...c, ...override };
+  return {
+    op: "open-stream",
+    file: new Blob([x.container as Uint8Array<ArrayBuffer>]),
+    password: x.password,
+    keyFile: x.keyFile ? owned(x.keyFile) : null,
+    shares: x.shares,
+    prfOutput: x.prfOutput ? x.prfOutput.slice() : undefined,
+    purpose: "verify",
+    digest: true,
+  };
+}
+
+/** `send`, bounded: a worker that waits for an ack nobody sends must fail here, not hang. */
+async function sendBounded(req: Record<string, unknown>, ms = 30_000) {
+  posted.length = 0;
+  const finished = await Promise.race([
+    handler!({ data: { id: ++nextId, ...req } }).then(() => true),
+    new Promise<boolean>((r) => setTimeout(() => r(false), ms)),
+  ]);
+  return { finished, out: posted.splice(0) };
+}
+
+console.log(`\nStreamed verify (${cases.length} containers as Blobs):`);
+for (const c of cases) {
+  const { finished, out } = await sendBounded(streamRequest(c));
+  const msg = out.at(-1)?.message;
+  const found = out.flatMap((o, i) => leaks(o.message, [c.plaintext], `message[${i}]`));
+  const transferred = out.flatMap((o) => o.transfer);
+  const chunkMessages = out.filter((o) => o.message?.op === "chunk").length;
+  if (!STREAMABLE.has(c.format)) {
+    const extra = msg ? Object.keys(msg).filter((k) => !ERROR_FIELDS.has(k)) : [];
+    check(
+      `${c.label}: refused by type as not streamable, and nothing secret crosses`,
+      finished && out.length === 1 && msg?.ok === false && msg.code === "unsupported-config" &&
+        found.length === 0 && transferred.length === 0 && extra.length === 0,
+      [
+        !finished ? "the worker did not finish" : "",
+        out.length !== 1 ? `${out.length} messages` : "",
+        `${msg?.ok} ${msg?.code} ${String(msg?.message ?? "").slice(0, 60)}`,
+        ...found,
+      ].filter(Boolean).join("; ")
+    );
+    continue;
+  }
+  const extra = msg ? Object.keys(msg).filter((k) => !VERIFY_FIELDS.has(k)) : [];
+  check(
+    `${c.label}: one message, on the allow-list, no chunk, no buffer, nothing transferred`,
+    finished && out.length === 1 && chunkMessages === 0 && msg?.ok === true && found.length === 0 &&
+      transferred.length === 0 && extra.length === 0,
+    [
+      !finished ? "the worker did not finish" : "",
+      out.length !== 1 ? `${out.length} messages` : "",
+      chunkMessages ? `${chunkMessages} chunk messages` : "",
+      msg?.ok !== true ? `ok=${msg?.ok} ${msg?.message ?? ""}` : "",
+      ...found,
+      transferred.length ? `${transferred.length} transferred` : "",
+      extra.length ? `unexpected fields ${extra.join(", ")}` : "",
+    ].filter(Boolean).join("; ")
+  );
+  const bytes = enc.encode(c.plaintext).byteLength;
+  check(
+    `${c.label}: reports what the in-memory verify reports, and the container's digest`,
+    msg?.op === "verify" &&
+      msg.bytes === bytes &&
+      msg.format === c.format &&
+      msg.openedBy === c.openedBy &&
+      msg.slotTable === c.slotTable &&
+      msg.digest === sha256Hex(c.container),
+    msg ? `got ${msg.bytes} bytes, ${msg.format}, ${msg.openedBy}, ${msg.slotTable}, ${msg.digest}` : "no message"
+  );
+}
+
+console.log("\nStreamed verify, failure:");
+for (const f of failures) {
+  // The same failures, built afresh (the worker zeroes the key file and PRF
+  // output it was handed) and re-sent with the container as a Blob.
+  const r = f.make();
+  const { finished, out } = await sendBounded({
+    op: "open-stream",
+    file: new Blob([r.data]),
+    password: r.password,
+    keyFile: r.keyFile,
+    shares: r.shares,
+    prfOutput: r.prfOutput,
+    purpose: "verify",
+    digest: true,
+  });
+  const msg = out[0]?.message;
+  const found = out.flatMap((o, i) => leaks(o.message, f.secrets, `message[${i}]`));
+  const extra = msg ? Object.keys(msg).filter((k) => !ERROR_FIELDS.has(k)) : [];
+  check(
+    `${f.label}: an error, and nothing secret in it`,
+    finished && out.length === 1 && msg?.ok === false && found.length === 0 && extra.length === 0 &&
+      out[0]!.transfer.length === 0,
+    [msg?.ok !== false ? `ok=${msg?.ok}` : "", `${out.length} messages`, ...found].filter(Boolean).join("; ")
   );
 }
 

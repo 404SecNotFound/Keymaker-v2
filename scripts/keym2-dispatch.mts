@@ -23,6 +23,11 @@ import {
   MAX_CONTAINER_SIZE,
   MAX_PLAINTEXT_SIZE,
   KEYM2_MAX_PADDED_STREAM,
+  KEYM2_MAX_STREAM_PADDED_STREAM,
+  MAX_STREAM_PLAINTEXT_SIZE,
+  MAX_STREAM_CONTAINER_SIZE,
+  encryptContainerToSink,
+  openContainerStream,
   oversizeRecoveryHelp,
   encryptData,
   type KdfParams,
@@ -43,6 +48,8 @@ import {
   keym2SlotCountOffset,
   keym2SlotTableOffset,
   keym2PaddedLen,
+  keym2ContainerLength,
+  encryptKeym2ToSink,
   isKeym2Binary,
   keym2SlotLen,
   keym2UnlockCost,
@@ -681,6 +688,182 @@ check(
     "decryptData opens a padded backup written at the plaintext cap, byte-identical",
     message || "plaintext differs"
   );
+}
+
+// ---------------------------------------------------------------------------
+// The streaming ceilings: 1 GiB of plaintext, and the container it can become
+// ---------------------------------------------------------------------------
+//
+// The streaming path has its own pair of ceilings beside the in-memory pair,
+// computed by the same function in keymaker-crypto.ts. The in-memory pair must
+// not move: it is pinned here to the value it had before the stream ceilings
+// existed, so factoring the arithmetic out cannot quietly change what a pasted
+// backup is measured against.
+//
+// Nothing here allocates a gibibyte. The worst cases are computed from the
+// format module's own `keym2ContainerLength`, and the one container written at
+// the cap is written from a zero-filled synthetic source into a counting sink,
+// a mebibyte at a time.
+{
+  check(
+    MAX_CONTAINER_SIZE === 106_958_969,
+    "the in-memory container ceiling is unchanged by the stream ceilings",
+    `MAX_CONTAINER_SIZE is ${MAX_CONTAINER_SIZE}`
+  );
+  check(MAX_STREAM_PLAINTEXT_SIZE === 2 ** 30, "the streaming plaintext ceiling is 1 GiB", `${MAX_STREAM_PLAINTEXT_SIZE}`);
+  check(
+    keym2PaddedLen(8 + MAX_STREAM_PLAINTEXT_SIZE) === KEYM2_MAX_STREAM_PADDED_STREAM,
+    "the restated stream padded-stream ceiling is keym2PaddedLen of a plaintext at the stream cap",
+    `keym2PaddedLen(8 + cap) = ${keym2PaddedLen(8 + MAX_STREAM_PLAINTEXT_SIZE)}, restated ${KEYM2_MAX_STREAM_PADDED_STREAM}`
+  );
+
+  // Every version, cipher and the 8 slots §6 allows, at the stream cap: the
+  // ceiling has to cover each of them, the 8-slot chained v3 container
+  // included, and the largest is the v4 chained one.
+  const CIPHERS: [string, CipherId][] = [
+    ["aes-256-gcm", CipherId.AES_256_GCM],
+    ["chacha20-poly1305", CipherId.CHACHA20_POLY1305],
+    ["chained", CipherId.CHAINED],
+  ];
+  let worst = 0;
+  let worstLabel = "";
+  for (const version of [KEYM2_VERSION_V2, KEYM2_VERSION_V3, KEYM2_VERSION_V4]) {
+    for (const [name, cipher] of CIPHERS) {
+      const size = keym2ContainerLength(version, cipher, KEYM2_MAX_SLOTS, MAX_STREAM_PLAINTEXT_SIZE);
+      if (size > worst) {
+        worst = size;
+        worstLabel = `v${version} + ${name}`;
+      }
+    }
+  }
+  const v3Chained = keym2ContainerLength(KEYM2_VERSION_V3, CipherId.CHAINED, KEYM2_MAX_SLOTS, MAX_STREAM_PLAINTEXT_SIZE);
+  check(
+    MAX_STREAM_CONTAINER_SIZE >= v3Chained,
+    "the stream container ceiling covers an 8-slot chained v3 container at the stream cap",
+    `v3 chained is ${v3Chained}; the ceiling is ${MAX_STREAM_CONTAINER_SIZE}`
+  );
+  check(
+    MAX_STREAM_CONTAINER_SIZE >= worst,
+    "the stream container ceiling covers the largest container any version and cipher makes at the stream cap",
+    `worst case is ${worst} (${worstLabel}, ${KEYM2_MAX_SLOTS} slots); the ceiling is ${MAX_STREAM_CONTAINER_SIZE}`
+  );
+  const padAllowance = KEYM2_MAX_STREAM_PADDED_STREAM - MAX_STREAM_PLAINTEXT_SIZE;
+  check(
+    MAX_STREAM_CONTAINER_SIZE - MAX_STREAM_PLAINTEXT_SIZE <= 64 * 1024 + padAllowance,
+    "the stream container ceiling is the stream cap plus overhead, not an unbounded allowance",
+    `${MAX_STREAM_CONTAINER_SIZE - MAX_STREAM_PLAINTEXT_SIZE} bytes over the stream cap; allowance ${64 * 1024 + padAllowance}`
+  );
+
+  // Written for real at the cap: v4, AES-256-GCM, one slot, 1 GiB of zeros
+  // read a range at a time and counted rather than kept. Seconds, and the
+  // memory of a chunk.
+  const started = Date.now();
+  const zeros = {
+    length: MAX_STREAM_PLAINTEXT_SIZE,
+    async read(_offset: number, length: number): Promise<Uint8Array> {
+      return new Uint8Array(length);
+    },
+  };
+  let counted = 0;
+  let writes = 0;
+  const summary = await encryptKeym2ToSink(
+    zeros,
+    PASSWORD,
+    null,
+    { kdf: FAST, cipher: CipherId.AES_256_GCM },
+    {
+      async write(bytes: Uint8Array): Promise<void> {
+        counted += bytes.length;
+        writes++;
+      },
+    },
+    KEYM2_VERSION_V4
+  );
+  const predicted = keym2ContainerLength(KEYM2_VERSION_V4, CipherId.AES_256_GCM, 1, MAX_STREAM_PLAINTEXT_SIZE);
+  check(
+    counted === predicted && summary.bytes === predicted,
+    "a v4 AES container streamed from 1 GiB of plaintext is exactly the predicted length",
+    `counted ${counted}, reported ${summary.bytes}, predicted ${predicted}, ${writes} writes`
+  );
+  check(
+    counted <= MAX_STREAM_CONTAINER_SIZE,
+    "and it fits under the stream container ceiling",
+    `${counted} vs ${MAX_STREAM_CONTAINER_SIZE}`
+  );
+  console.log(`  (1 GiB streamed in ${((Date.now() - started) / 1000).toFixed(1)} s)`);
+
+  // The refusals, through the streaming entry points, against the stream
+  // ceilings. A Blob subclass reports a size it does not hold, so no gigabyte
+  // is allocated to reach either branch.
+  class SizedBlob extends Blob {
+    constructor(private readonly claimed: number) {
+      super([new Uint8Array(16)]);
+    }
+    override get size(): number {
+      return this.claimed;
+    }
+  }
+  const discard = { async write(): Promise<void> {} };
+  const messageOf = async (fn: () => Promise<unknown>): Promise<{ code: string | null; message: string }> => {
+    try {
+      await fn();
+      return { code: null, message: "(no error thrown)" };
+    } catch (e) {
+      return {
+        code: (e as { code?: string }).code ?? null,
+        message: e instanceof Error ? e.message : String(e),
+      };
+    }
+  };
+  {
+    const r = await messageOf(() =>
+      encryptContainerToSink(new SizedBlob(MAX_STREAM_PLAINTEXT_SIZE + 1), PASSWORD, null,
+        { kdf: FAST, cipher: CipherId.AES_256_GCM }, {}, discard)
+    );
+    check(
+      r.code === "too-large" && r.message.includes(`${MAX_STREAM_PLAINTEXT_SIZE / 1024 / 1024}MB`),
+      "streaming a file one byte over the stream cap is refused as too large, naming the stream cap",
+      `${r.code}: ${r.message.slice(0, 120)}`
+    );
+  }
+  {
+    const r = await messageOf(() => openContainerStream(new SizedBlob(MAX_STREAM_CONTAINER_SIZE + 1), PASSWORD, null));
+    const streamingHelp = oversizeRecoveryHelp("streaming");
+    check(
+      r.code === "too-large" && r.message === streamingHelp,
+      "opening a container one byte over the stream ceiling gives the streaming recovery help",
+      `${r.code}: ${r.message.slice(0, 120)}`
+    );
+    check(
+      streamingHelp.includes("keym2.py") && streamingHelp.includes("decrypt --in") &&
+        streamingHelp.includes("RECOVERY.md") && /no size limit/i.test(streamingHelp) &&
+        streamingHelp.includes("1 GiB") && !/smaller file|smaller than/i.test(streamingHelp),
+      "the streaming recovery help names the 1 GiB limit and the same recovery route",
+      streamingHelp
+    );
+    check(
+      !streamingHelp.includes("in memory at once") && help === oversizeRecoveryHelp("in-memory"),
+      "the in-memory help is the default and the streaming help does not claim the memory reason",
+    );
+  }
+  // KEYM v1 and both IttyBitz formats are one AEAD over the whole file: the
+  // streaming reader refuses them by type, naming the in-memory limit, and does
+  // not attempt them.
+  {
+    const v1 = new Uint8Array(
+      await encryptData(toArrayBuffer(enc.encode("one block")), PASSWORD, null, { kdf: FAST, cipher: CipherId.AES_256_GCM })
+    );
+    const legacyNoise = webcrypto.getRandomValues(new Uint8Array(200));
+    legacyNoise[0] = 0x00; // not "K", so this classifies as headerless IttyBitz v0
+    for (const [label, bytes] of [["KEYM v1", v1], ["headerless IttyBitz v0", legacyNoise]] as const) {
+      const r = await messageOf(() => openContainerStream(new Blob([bytes]), PASSWORD, null));
+      check(
+        r.code === "unsupported-config" && r.message.includes(`${MAX_PLAINTEXT_SIZE / 1024 / 1024} MB`),
+        `openContainerStream refuses a ${label} container by type, naming the in-memory limit`,
+        `${r.code}: ${r.message.slice(0, 160)}`
+      );
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------

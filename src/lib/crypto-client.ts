@@ -70,6 +70,26 @@ let nextId = 1;
 const pending = new Map<number, Pending>();
 
 /**
+ * Streams in flight, by the id of the request that started them. A `chunk`
+ * message goes here and not to `pending`: it is a piece of the output, not the
+ * operation's answer, which arrives as an ordinary response after the last one.
+ */
+const streams = new Map<number, { chunk: (seq: number, data: ArrayBuffer) => void }>();
+
+/**
+ * Why a streaming call was refused on a browser with no worker.
+ *
+ * There is deliberately no page-thread fallback for streaming. The in-memory
+ * calls fall back because losing encryption outright is worse than a frozen
+ * tab; a gigabyte read, sealed and handed back on the page's own thread is a
+ * tab that stops responding for minutes with no way to stop it, and the
+ * in-memory path still covers every file up to its own limit.
+ */
+export const STREAM_NEEDS_WORKER =
+  "Large files are encrypted and checked in Keymaker's background worker, and this browser could not " +
+  "start one, so nothing was read. Files up to 100 MB can still be processed on the page.";
+
+/**
  * What every in-flight operation is failed with when the user stops the work.
  *
  * A class rather than a message, because the readiness probe has to tell a
@@ -119,6 +139,14 @@ function spawn(): Worker | null {
 
     worker.addEventListener("message", (event: MessageEvent<CryptoResponse>) => {
       const res = event.data;
+      if (res.ok === true && res.op === "chunk") {
+        const stream = streams.get(res.id);
+        // A chunk for no stream (a verify, which posts none, or one this page
+        // has already abandoned) is dropped, and its bytes with it.
+        if (stream) stream.chunk(res.seq, res.data);
+        else secureErase(res.data);
+        return;
+      }
       const entry = pending.get(res.id);
       if (!entry) return;
       pending.delete(res.id);
@@ -278,6 +306,9 @@ function ready(): Promise<boolean> {
 }
 
 function failAllPending(reason: unknown) {
+  // Streams first: a chunk that arrives between the two must not be handed to
+  // a writer whose operation has already been failed.
+  streams.clear();
   for (const [, entry] of pending) entry.reject(reason);
   pending.clear();
 }
@@ -584,6 +615,192 @@ export async function verifyViaWorker(
   } finally {
     // As in decryptViaWorker: the page's copy of the PRF output, on every exit.
     secureErase(prfOutput);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Streaming: a File read in the worker, the container written by the page
+// ---------------------------------------------------------------------------
+
+/**
+ * Stop a stream whose writer failed, and fail its operation with that error.
+ *
+ * The worker is still sealing toward a writer that has stopped, and
+ * terminating it is the only way to stop it — the same reason Stop terminates.
+ * The operation is taken out of `pending` before anything else is failed, so
+ * it alone is rejected with the writer's error (a full disk is what the person
+ * needs to hear about, not "Cancelled."); anything else in flight dies with
+ * the worker as a cancellation.
+ */
+function abortStream(id: number, reason: unknown): void {
+  const entry = pending.get(id);
+  pending.delete(id);
+  streams.delete(id);
+  failAllPending(new CryptoCancelled());
+  terminate();
+  readiness = null;
+  entry?.reject(reason);
+}
+
+export interface StreamEncryptOutcome {
+  /** The container's length: the sum of every chunk handed to `onChunk`. */
+  bytes: number;
+  /** The container's bytes before its first payload chunk, as handed to `onChunk` first. */
+  head: Uint8Array;
+  /** Lowercase hex SHA-256 of every byte handed to `onChunk`, computed in the worker as it sealed them. */
+  digest: string;
+  /** §4.6, present only when `shamir` was requested. Produced once, never again. */
+  shares?: string[] | undefined;
+}
+
+/**
+ * Encrypt a `File` of up to `MAX_STREAM_PLAINTEXT_SIZE` without holding it.
+ *
+ * The worker slices the file and seals it a chunk at a time; each piece of the
+ * container reaches `onChunk` in order, and the next is acknowledged only once
+ * `onChunk` has resolved, so at most `STREAM_WINDOW` pieces are ever waiting
+ * on this side. The promise resolves once every piece has been written: until
+ * then what `onChunk` has received is a prefix of a container, not a
+ * container, and on a rejection it is the caller's to discard.
+ *
+ * - If `onChunk` rejects, the worker is terminated and this rejects with that
+ *   error.
+ * - Stop (`cancelAllCryptoWork`) terminates the worker; this rejects with
+ *   `CryptoCancelled`.
+ * - With no worker this is refused with a typed error and nothing is read:
+ *   there is no page-thread fallback for streaming (`STREAM_NEEDS_WORKER`).
+ *
+ * The key file is transferred to the worker and the PRF output erased here on
+ * every exit, as `encryptViaWorker` does; a key file that never reached the
+ * worker (a refusal, a Stop during the readiness probe) is erased here too.
+ */
+export async function encryptFileViaWorker(
+  file: File,
+  password: string,
+  keyFile: ArrayBuffer | null,
+  options: KeymakerOptions,
+  onChunk: (bytes: Uint8Array) => Promise<void>,
+  shamir?: { threshold: number; count: number; withPassword?: boolean },
+  passkey?: { prfOutput: Uint8Array; salt: Uint8Array }
+): Promise<StreamEncryptOutcome> {
+  try {
+    const w = (await ready()) ? spawn() : null;
+    if (!w) {
+      lastRunUsedWorker = false;
+      throw new KeymakerError("unsupported-config", STREAM_NEEDS_WORKER);
+    }
+    lastRunUsedWorker = true;
+
+    const id = nextId++;
+    // One write at a time, in order. Each chunk is acknowledged only after the
+    // write before it and its own have resolved.
+    let writes: Promise<void> = Promise.resolve();
+    let writeFailure: { error: unknown } | null = null;
+    streams.set(id, {
+      chunk: (seq, data) => {
+        writes = writes.then(async () => {
+          if (writeFailure || !streams.has(id)) return;
+          try {
+            await onChunk(new Uint8Array(data));
+          } catch (error) {
+            writeFailure = { error };
+            abortStream(id, error);
+            return;
+          }
+          if (streams.has(id)) w.postMessage({ id: nextId++, op: "ack", stream: id, seq } satisfies CryptoRequest);
+        });
+      },
+    });
+
+    try {
+      const transfer: Transferable[] = keyFile ? [keyFile] : [];
+      const res = await post<Extract<CryptoResponse, { op: "encrypt-stream"; ok: true }>>(
+        w,
+        { id, op: "encrypt-stream", file, password, keyFile, options, shamir, passkey },
+        transfer
+      );
+      // The worker answers only once every chunk is acknowledged, so this has
+      // already settled; awaiting it keeps "resolved" meaning "all written"
+      // even if that ever stops being true.
+      await writes;
+      if (writeFailure) throw (writeFailure as { error: unknown }).error;
+      return { bytes: res.bytes, head: new Uint8Array(res.head), digest: res.digest, shares: res.shares };
+    } catch (error) {
+      // No further chunk is started, and the rejection waits for a write
+      // already in progress (which never rejects: its failure is caught
+      // above). So when this settles the caller's writer is idle and what it
+      // holds can be discarded without racing a write still landing.
+      streams.delete(id);
+      await writes;
+      throw error;
+    } finally {
+      streams.delete(id);
+    }
+  } finally {
+    // Both no-ops when the buffer was transferred (a detached buffer has
+    // nothing left to erase); both needed on every path where it was not.
+    secureErase(passkey?.prfOutput);
+    secureErase(keyFile);
+  }
+}
+
+/**
+ * `verifyViaWorker` for a `File` of up to `MAX_STREAM_CONTAINER_SIZE`: the
+ * worker reads the container a chunk at a time, counts and erases the
+ * plaintext, and answers with the count and what the reader established. No
+ * chunk crosses. With `digest`, the answer carries the SHA-256 of exactly the
+ * container bytes the reader read.
+ *
+ * KEYM v1 and the IttyBitz formats are refused (they cannot be read a chunk at
+ * a time); with no worker the call is refused, unlike `verifyViaWorker`.
+ * Erases the PRF output and any key file that did not reach the worker.
+ */
+export async function verifyFileViaWorker(
+  file: File,
+  password: string,
+  keyFile: ArrayBuffer | null,
+  shares?: string[],
+  prfOutput?: Uint8Array,
+  opts?: { digest?: boolean }
+): Promise<VerifyOutcome & { digest: string | null }> {
+  try {
+    const w = (await ready()) ? spawn() : null;
+    if (!w) {
+      lastRunUsedWorker = false;
+      throw new KeymakerError("unsupported-config", STREAM_NEEDS_WORKER);
+    }
+    lastRunUsedWorker = true;
+
+    const id = nextId++;
+    const transfer: Transferable[] = keyFile ? [keyFile] : [];
+    const res = await post<Extract<CryptoResponse, { op: "verify"; ok: true }>>(
+      w,
+      {
+        id,
+        op: "open-stream",
+        file,
+        password,
+        keyFile,
+        shares,
+        prfOutput,
+        purpose: "verify",
+        digest: opts?.digest === true,
+      },
+      transfer
+    );
+    return {
+      format: res.format,
+      bytes: res.bytes,
+      openedBy: res.openedBy,
+      keyFileUsed: res.keyFileUsed,
+      slotTable: res.slotTable,
+      weakKdf: res.weakKdf,
+      inWorker: true,
+      digest: res.digest,
+    };
+  } finally {
+    secureErase(prfOutput);
+    secureErase(keyFile);
   }
 }
 
