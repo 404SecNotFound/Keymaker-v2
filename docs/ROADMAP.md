@@ -1480,6 +1480,65 @@ each is for its own reviewed change. The report has a recommendation for each.
 text-mode and a file-mode test and requires no change notice; disabling the fix
 fails both checks. `npm run test:screenshots` holds all 18 shots at 2360px.
 
+### 9.7 Large files, part one: encrypt to a file you choose
+
+The app held every file in memory twice, so it stopped at 100 MB. The format
+never needed that (§5 is chunked), and the streaming core and the worker's
+streaming protocol already existed. This part puts them on the page.
+
+- **Encrypt.** A file above 100 MB, up to 1 GiB, is encrypted where the page
+  can save straight to a file the user chooses (`showSaveFilePicker` in a
+  secure, top-level page) and has a worker: desktop Chromium. The save dialog
+  is the first thing the click waits for, because it needs the click's
+  activation. The worker streams the container to that file, and the page shows
+  progress from the chunks written. Closing the file is what saves it. Only
+  after the close resolves does the page show a receipt, record the backup's
+  digest and show any recovery shares, so shares never appear for a file that
+  was not saved. During the close, Stop and tab switches wait. A run that does
+  not finish discards its file and never removes the one the user chose, which
+  could be a file they chose to overwrite. Stop says nothing was saved. At or
+  below 100 MB nothing changed, in any browser.
+- **Elsewhere.** Without the save dialog (Firefox, Safari) or without a worker,
+  encrypt stays at 100 MB, and a larger file is refused with the limit that
+  applies and where a larger one is available. A browser must not write a
+  backup it cannot hand over, and there is no streaming on the page's own
+  thread.
+- **Verify.** A KEYM v2 or later backup above 100 MB is verified in the worker
+  a chunk at a time, in every browser with a worker, up to the largest
+  container a 1 GiB file becomes. The worker's digest replaces the page's
+  whole-file hash, so part e's evidence (a checked saved copy, a recovery test)
+  still counts for a large backup.
+- **Words.** The file box states the limit that applies: "1 GB max, saved where
+  you choose" or "100 MB max in this browser", and on Decrypt "100 MB to open
+  here · 1 GB to verify". Nothing says a streamed file is saved before the
+  close resolves.
+
+**Decision: a save target, not a workspace.** The Cut table's row on the File
+System Access API is split. A vault, a workspace, persisted handles, directory
+pickers and reading back what was written stay cut. A one-shot save target is
+admitted: the ciphertext lands only where the user chose to save it, as a
+download does, and nothing is kept between visits.
+
+**Not yet done.** Opening a backup above 100 MB, in any browser, is Stage C2;
+it is refused with a pointer to Verify only. What the real save dialog does on
+disk has not been observed: whether it creates or empties the chosen file on
+confirm, what is left after a crash, and how long closing a 1 GiB file takes.
+The page claims no more than that nothing is saved until the file is complete,
+and that a stopped or failed save may leave an empty or partial temporary file.
+
+**Checks.** `npm run test:save-target` holds each browser's limits, the words
+built from them, and the save target's rules: no commit after an abort, an abort
+after the commit does nothing, a rejected close is not a save, no write once it
+is not open. `tests/browser/stream-save.spec.ts` replaces the headless dialog,
+which always cancels, with a stand-in over an OPFS file, and first proves the
+stand-in commits only on close. It encrypts a 103 MiB file to it, stops one
+mid-stream, cancels the dialog, makes the close fail with shares requested, and
+verifies the saved file back. The tests for a browser without the dialog also
+run in Chromium with the dialog deleted. A recorded digest of something else,
+the commit moved into the `finally`, the dialog opened after the derivation,
+shares shown before the commit and a label read from the wrong limit each built
+and failed their own test.
+
 ---
 
 ## Ongoing — not a phase, a standing obligation
@@ -1529,7 +1588,8 @@ Not "later". Cut, with reasons.
 | **PAKE / croc-style transfer** | Needs a rendezvous server. The zero-server property is the product. |
 | **Steganography (KEYM-in-PNG)** | The blueprint frames it honestly as "obscurity, not security" — which is the argument for not shipping it. The audio carrier that ships under *Audio* (`KAUD1`, `docs/FORMAT-AUDIO-STEGO.md`) is kept for the opposite reason: it is documented as a carrier, not steganography. The magic sits in the first sample LSBs, nothing is hidden from steganalysis, and all confidentiality is the container's, so it makes no claim this row would cut. It is a transport for a container, like paper, and stays only as long as it claims nothing more. |
 | **TOTP vault** | Scope creep into password-manager territory, against incumbents with sync. Dilutes focus for no differentiation. |
-| **OPFS vault / File System Access workspace** | Chromium-only, large surface, and it puts plaintext-adjacent state into durable storage — directly against "nothing is stored", which is the claim people choose this tool for. |
+| **OPFS vault / File System Access workspace** (persisted handles, directory pickers, reading back what was written) | Chromium-only, large surface, and it puts plaintext-adjacent state into durable storage — directly against "nothing is stored", which is the claim people choose this tool for. |
+| **One-shot save target** (`showSaveFilePicker` and `createWritable`), split from the row above | **Admitted, not cut** (9.7). The file is chosen by the user for one save, the ciphertext lands only there, as a download would, and no handle or state is kept between visits. Browsers without the dialog keep today's behaviour. |
 | **Importers (Hat.sh, age, OpenPGP)** | Low value, ongoing maintenance, and OpenPGP is a key-model mismatch with a huge dependency tree. |
 | **Reed-Solomon error correction** | Genuinely interesting, but AEAD already rejects any corrupted container, so parity has to wrap the whole thing as an outer layer with its own spec and reference parity. Real cost is well above the blueprint's "M". Revisit only if bit-rot is an observed complaint. |
 | **Video walkthrough** (Phase 7 alternative) | Cannot be version-controlled, cannot be tested against the code, and goes stale silently the first time the UI moves. The written walkthrough in 7.1 is executed by `recovery_test.py`; a video is a screenshot with a play button. |
