@@ -1569,13 +1569,32 @@ admitted: the ciphertext lands only where the user chose to save it, as a
 download does, and nothing is kept between visits.
 
 **Not yet done.** Opening a backup above 100 MB in a browser without the save
-dialog (Firefox, Safari), which would need a different output. The broader
-"100 MB" wording in the docs page, the README body, HOW-IT-WORKS and RECOVERY.
-What the real save dialog does on disk has not been observed: whether it
-creates or empties the chosen file on confirm, what is left after a crash, and
-how long closing a 1 GiB file takes. The page claims no more than that nothing
-is saved until the file is complete, and that a stopped or failed save may
-leave an empty or partial temporary file.
+dialog (Firefox, Safari), which would need a different output. What the real
+save dialog does on disk has not been observed: whether it creates or empties
+the chosen file on confirm, what is left after a crash, and how long closing a
+1 GiB file takes. The page claims no more than that nothing is saved until the
+file is complete, and that a stopped or failed save may leave an empty or
+partial temporary file.
+
+**Stage D: wording, and what was measured.** The docs page, the README, the
+format design's section 5 introduction, HOW-IT-WORKS, RECOVERY, the audit
+documents and the changelog now say what is true: 100 MB in memory in every
+browser, 1 GB where the browser has a save dialog and a worker, Verify only to
+1 GB with a worker, and KEYM v1 and IttyBitz at 100 MB because they are one
+block by format. The 1 GB ceiling is there because `reference/keym2.py` reads
+the whole file into memory. Measured on one machine (4 cores, 15 GB of RAM),
+with Argon2id and AES: a 150 MiB backup decrypts in under a second at about
+640 MiB peak, and a 1 GiB backup in about six seconds at about 4.1 GiB peak,
+both byte for byte, roughly four times the file. Through the page in headless
+Chromium, into an OPFS stand-in (not a real disk), a 512 MiB streamed encrypt
+took about 6 seconds and the two-step open about 4 seconds for its save phase,
+one run each. A 1 GiB streamed encrypt into the same stand-in did not finish in
+any of four runs. In the three that recorded it, the stand-in's file was aborted after about 800 to
+950 MiB had been written, and in the one run that recorded the page's messages
+it showed its write-failure message. The cause was not found (the browser reported a 3.2 GB
+quota and almost none used), so it is open whether it is the stand-in, the
+headless browser or the page, and no document claims that a 1 GiB file completes
+in a browser. The suites' largest streamed file is 104 MiB.
 
 **Checks.** `npm run test:save-target` holds each browser's limits, the words
 built from them, and the save target's rules: no commit after an abort, an abort
