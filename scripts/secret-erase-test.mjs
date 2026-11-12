@@ -217,6 +217,26 @@ const keyBytes = (n) => Uint8Array.from({ length: n }, (_, i) => (i * 13 + 7) & 
     ok(!w.requests.some((q) => q.op === "ack"), "and nothing it did not write was acknowledged");
     ok(zeroed(p), "the page's PRF output is erased after the writer failed");
   }
+  // Stop while a write is in progress: the call settles only once that write
+  // has finished, so the caller never discards a destination a write is still
+  // landing in. Control: drop the wait in the client's catch and this fails.
+  {
+    streamMode = "ok";
+    let release;
+    const gate = new Promise((r) => { release = r; });
+    let writing = 0;
+    let settled = false;
+    const pending = settle(m.encryptFileViaWorker(file(), "pw", null, OPTIONS, async () => { writing++; await gate; writing--; }))
+      .then((r) => { settled = true; return r; });
+    await tick();
+    ok(writing === 1, "a write is in progress");
+    m.cancelAllCryptoWork();
+    await tick();
+    ok(!settled, "Stop does not settle the streamed encrypt while a write is still in progress");
+    release();
+    const r = await pending;
+    ok(r.error instanceof m.CryptoCancelled && writing === 0, "it settles as cancelled once the write has finished");
+  }
   // Verify: success, failure and Stop.
   {
     streamMode = "ok";

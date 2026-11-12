@@ -725,6 +725,14 @@ export async function encryptFileViaWorker(
       await writes;
       if (writeFailure) throw (writeFailure as { error: unknown }).error;
       return { bytes: res.bytes, head: new Uint8Array(res.head), digest: res.digest, shares: res.shares };
+    } catch (error) {
+      // No further chunk is started, and the rejection waits for a write
+      // already in progress (which never rejects: its failure is caught
+      // above). So when this settles the caller's writer is idle and what it
+      // holds can be discarded without racing a write still landing.
+      streams.delete(id);
+      await writes;
+      throw error;
     } finally {
       streams.delete(id);
     }
