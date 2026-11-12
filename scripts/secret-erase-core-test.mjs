@@ -845,6 +845,154 @@ const secureEraseLocal = (v) => v && v.fill(0);
   subtle.deriveBits = nativeDeriveBits;
 }
 
+// ---------------------------------------------------------------------------
+// The streaming core. Every writer and `decryptKeym2` now run through
+// `writeKeym2SlotsToSink` and `openKeym2Stream`, which read the plaintext a
+// chunk at a time and hand output to a sink. What they own and must erase,
+// on success and on every way out of a failure:
+//
+// - the writer: the master key it draws, the KDF input, every plaintext
+//   buffer it reads from its source, including when the sink throws
+//   mid-stream and when sealing a chunk throws with that chunk in hand;
+// - the reader: the payload key and chunk 0's plaintext it holds between
+//   open and drain, on `discard` and when `drain` fails part-way.
+//
+// Plaintext needles are 64-byte windows of a pseudo-random plaintext taken
+// from chunks 0, 1 and 2, searched for everywhere but the caller's own
+// buffer. The ChaCha payload key is a copy of the master key, so the reader's
+// checks search for the master key itself. Each check fails with the
+// streaming core's `finally` erases removed.
+// ---------------------------------------------------------------------------
+{
+  const st = await bundle(
+    "stream-core",
+    `export { encryptKeym2ToSink, encryptKeym2WithExplicitSecrets, openKeym2Stream, bytesSource,
+       KEYM2_VERSION_V3, KEYM2_CHUNK_SIZE } from "./keym-v2";
+     export { KdfId, CipherId } from "./keymaker-crypto";`
+  );
+  const C = st.KEYM2_CHUNK_SIZE;
+  const OPTS = { kdf: { kdf: st.KdfId.PBKDF2, params: { iterations: 600_000 } }, cipher: st.CipherId.AES_256_GCM };
+  const PLAIN = new U8(2 * C + 10);
+  for (let i = 0, x = 0x9e3779b9; i < PLAIN.length; i++) {
+    x = (Math.imul(x, 1103515245) + 12345) >>> 0;
+    PLAIN[i] = x >>> 24;
+  }
+  // Chunk 2 holds only the last 10 bytes, so its window is 9 of them.
+  const needles = [[100, 64], [C + 100, 64], [2 * C + 1, 9]].map(([at, n]) => U8.from(PLAIN.subarray(at, at + n)));
+  const SALT = U8.from({ length: 32 }, (_, i) => (i * 7 + 3) & 0xff);
+  const CID = U8.from({ length: 16 }, (_, i) => (i * 13 + 1) & 0xff);
+  const MASTER = U8.from({ length: 32 }, (_, i) => (i * 17 + 9) & 0xff);
+  const plaintextLeft = (seen) =>
+    needles.flatMap((n, i) => holders(seen, n, { except: [PLAIN.buffer] }).map((size) => `chunk ${i} window in a ${size}-byte buffer`));
+
+  const nativeRandom = crypto.getRandomValues.bind(crypto);
+  let draws = null;
+  crypto.getRandomValues = (view) => {
+    const filled = nativeRandom(view);
+    if (draws) draws.push(U8.from(view));
+    return filled;
+  };
+  const subtle = crypto.subtle;
+  const nativeEncrypt = subtle.encrypt.bind(subtle);
+  let encryptCalls = 0;
+  let failEncryptAt = 0;
+  subtle.encrypt = (...args) => {
+    encryptCalls++;
+    if (failEncryptAt && encryptCalls === failEncryptAt) return Promise.reject(new Error("injected: chunk seal refused"));
+    return nativeEncrypt(...args);
+  };
+
+  // -- the writer ---------------------------------------------------------------
+  // Writes, in order: the head (1), chunk 0 (2), chunk 1 (3), chunk 2 (4).
+  // AES encrypt calls: the slot wrap (1), chunk 0 (2), chunk 1 (3), chunk 2 (4).
+  const sinkError = new Error("injected: the destination refused a write");
+  for (const [label, failWrite, failSeal] of [
+    ["a streamed write", 0, 0],
+    ["a streamed write whose sink throws mid-stream", 3, 0],
+    ["a streamed write whose chunk seal throws with the chunk in hand", 0, 3],
+  ]) {
+    let writes = 0;
+    const sink = {
+      write: async () => {
+        writes++;
+        if (writes === failWrite) throw sinkError;
+      },
+    };
+    draws = [];
+    encryptCalls = 0;
+    failEncryptAt = failSeal;
+    const run = await observe(() =>
+      st.encryptKeym2ToSink(st.bytesSource(PLAIN), PASSWORD, U8.from(KEY_FILE), OPTS, sink, st.KEYM2_VERSION_V3)
+    );
+    failEncryptAt = 0;
+    const drawn = draws.filter((d) => d.length === 32);
+    draws = null;
+    const expectError = failWrite ? sinkError.message : failSeal ? "injected: chunk seal refused" : null;
+    ok(expectError ? run.error?.message === expectError : run.error === null && run.value?.bytes > 2 * C,
+       expectError ? `${label}: the failure reaches the caller as itself` : `${label} completes`,
+       run.error ? String(run.error.message) : "");
+    ok(drawn.length === 2, `${label}: draws the salt and then the master key (the master-key check is not vacuous)`,
+       `${drawn.length} 32-byte draws`);
+    ok(run.seen.some((v) => v.length === C), `${label}: the census saw the chunk-sized plaintext reads (not vacuous)`);
+    if (drawn.length === 2) {
+      const leftMaster = holders(run.seen, drawn[1]);
+      ok(leftMaster.length === 0, `${label}: no copy of the master key survives`, none(leftMaster));
+    }
+    ok(holders(run.seen, PASSWORD_BYTES).length === 0, `${label}: no copy of the password bytes (the KDF input) survives`,
+       none(holders(run.seen, PASSWORD_BYTES)));
+    ok(holders(run.seen, KEY_FILE_DIGEST).length === 0, `${label}: no copy of the key-file digest survives`,
+       none(holders(run.seen, KEY_FILE_DIGEST)));
+    const left = plaintextLeft(run.seen);
+    ok(left.length === 0, `${label}: no plaintext buffer the writer read survives`, left.join("; "));
+  }
+
+  // -- the reader ---------------------------------------------------------------
+  const chacha = { ...OPTS, cipher: st.CipherId.CHACHA20_POLY1305 };
+  const container = await st.encryptKeym2WithExplicitSecrets(PLAIN, PASSWORD, null, chacha, SALT, U8.from(MASTER),
+    st.KEYM2_VERSION_V3, CID);
+  {
+    const run = await observe(() => st.openKeym2Stream(st.bytesSource(container), PASSWORD, null));
+    ok(run.error === null, "a streamed ChaCha container opens", String(run.error));
+    if (run.error === null) {
+      ok(holders(run.seen, MASTER).length > 0 && holders(run.seen, needles[0]).length > 0,
+         "before discard the census sees the held payload key and chunk 0's plaintext (not vacuous)");
+      run.value.discard();
+      ok(holders(run.seen, MASTER).length === 0, "after discard no copy of the payload key survives",
+         none(holders(run.seen, MASTER)));
+      const left = plaintextLeft(run.seen);
+      ok(left.length === 0, "after discard chunk 0's held plaintext does not survive", left.join("; "));
+    }
+  }
+  {
+    // Chunk 2 tampered: chunks 0 and 1 verify and reach the sink, chunk 2 does
+    // not. The sink is a temporary destination and discards what it was
+    // handed when drain rejects, as §5.5 requires of a caller.
+    const tampered = U8.from(container);
+    tampered[tampered.length - 3] ^= 0x01;
+    let handed = 0;
+    const run = await observe(async () => {
+      const stream = await st.openKeym2Stream(st.bytesSource(tampered), PASSWORD, null);
+      const temporary = [];
+      try {
+        await stream.drain({ write: async (bytes) => { handed++; temporary.push(bytes); } });
+      } catch (e) {
+        for (const b of temporary) b.fill(0);
+        throw e;
+      }
+    });
+    ok(run.error?.message === "Decryption failed.", "a drain that fails on chunk 2 rejects with the generic error",
+       run.error ? String(run.error.message) : "no error");
+    ok(handed === 2, "chunks 0 and 1 reached the sink before it failed (not vacuous)", `${handed} write(s)`);
+    ok(holders(run.seen, MASTER).length === 0, "after a failed drain no copy of the payload key survives",
+       none(holders(run.seen, MASTER)));
+    const left = plaintextLeft(run.seen);
+    ok(left.length === 0, "after a failed drain no plaintext copy of the core's survives", left.join("; "));
+  }
+
+  crypto.getRandomValues = nativeRandom;
+  subtle.encrypt = nativeEncrypt;
+}
+
 await settle();
 console.log(failed === 0 ? "\nAll core secret-erase checks passed." : `\n${failed} check(s) FAILED.`);
 process.exit(failed === 0 ? 0 : 1);

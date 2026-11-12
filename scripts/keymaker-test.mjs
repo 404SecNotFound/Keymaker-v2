@@ -11,6 +11,7 @@
  *   node scripts/keymaker-test.mjs fuzz       → run the parser fuzzer
  *   node scripts/keymaker-test.mjs generate   → regenerate fixtures
  *   node scripts/keymaker-test.mjs keym2-dispatch → KEYM version routing
+ *   node scripts/keymaker-test.mjs keym2-stream   → the KEYM v2 streaming core
  */
 import { build } from "esbuild";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -30,6 +31,7 @@ const ENTRY_BY_MODE = {
   "verify-transport": "verify-transport-test.mts",
   "backup-workflow": "backup-workflow-test.mts",
   vectors: "vectors-test.mts",
+  "keym2-stream": "keym2-stream-test.mts",
 };
 const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
 const entry = join(HERE, ENTRY_BY_MODE[mode]);
