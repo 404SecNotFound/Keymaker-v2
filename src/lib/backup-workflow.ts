@@ -62,7 +62,12 @@ export function settingsChanges(sealed: CreationSettings, now: CreationSettings)
 }
 
 export interface ExportStarted {
-  how: "download" | "print";
+  /**
+   * `save` is a large file written straight to a file the user chose in the
+   * save dialog, recorded once that file was closed (which is what saves it).
+   * Like a download, the page cannot see what happens to the file afterwards.
+   */
+  how: "download" | "print" | "save";
   /** ISO 8601, when the page asked the browser. */
   at: string;
 }
@@ -328,7 +333,8 @@ export function workflowSteps(i: StepInputs): Step[] {
     steps.push(done("saved-copy", "Every printed container symbol was read back and matches this backup."));
   } else {
     const said: string[] = [];
-    if (i.keptOnScreen === false) said.push("Downloaded when it was written");
+    if (i.exports.save) said.push("Saved to the file you chose when it was written");
+    else if (i.keptOnScreen === false) said.push("Downloaded when it was written");
     if (i.exports.download) said.push("Download started");
     if (i.exports.print) said.push("Paper vault sent to print");
     if (p) said.push(`${p.checked.length} of ${p.total} printed symbols matched`);

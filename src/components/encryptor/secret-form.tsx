@@ -51,7 +51,7 @@ import { InheritancePlan } from "@/components/inheritance-plan";
 import { SelfExtractExport } from "@/components/self-extract-export";
 import { cn } from "@/lib/utils";
 import { PASSWORD_POLICY_HINT } from "@/lib/password-policy";
-import { MAX_PASSWORD_LENGTH, MAX_CONTAINER_SIZE, MAX_PLAINTEXT_SIZE, CipherId } from "@/lib/keymaker-crypto";
+import { MAX_PASSWORD_LENGTH, CipherId } from "@/lib/keymaker-crypto";
 import { predictArgon2Ms } from "@/lib/kdf-calibration";
 import { EFF_LARGE_WORDLIST_SIZE } from "@/lib/eff-wordlist";
 import { FileSelector, RevealableQr, InfoTip, LockWarning } from "./shared-ui";
@@ -69,6 +69,7 @@ import {
   PASSWORD_ENTROPY_BITS,
   PASSPHRASE_WORDS,
   PASSPHRASE_ENTROPY_BITS,
+  dropzoneLabel,
 } from "./shared";
 import { useEncryptorContext } from "./context";
 import { GuideHeading, GuideNav, GuideRecovery, GuideReview } from "./guide";
@@ -109,6 +110,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     rehearseFromPaper, downloadContainer, clipboardSecondsLeft,
     clipboardClearPending, clearClipboardNow, lockSecondsLeft, wipeAck,
     wipeNow, backupDiffers, accessRule, formatDetail, verifyDiffers,
+    saveToDisk, workerAvailable, saveProgress, saveCommitting, exportsStarted, createdDigest,
   } = useEncryptorContext();
 
   // Key-file toggle + picker/generator. Rendered in place on the Decrypt
@@ -236,24 +238,20 @@ export function SecretForm({ mode }: { mode: Mode }) {
                   return;
                 }
               }
-              handleFileChange(
-                e,
-                setFile,
-                // Decrypting accepts the container, which is larger than the
-                // plaintext it holds by header + salt + nonces + tags.
-                mode === 'decrypt' ? MAX_CONTAINER_SIZE : MAX_PLAINTEXT_SIZE,
-                mode === 'decrypt' ? 'container' : 'plaintext'
-              );
+              // Decrypting accepts the container, which is larger than the
+              // plaintext it holds by header + salt + nonces + tags. Each
+              // picker takes the largest file its mode can act on in this
+              // browser; see `fileLimits`.
+              handleFileChange(e, setFile, mode === 'decrypt' ? 'container' : 'plaintext');
             }}
             onClear={() => setFile(null)}
             selectedFile={file}
             icon={<FileText className="h-5 w-5" />}
             label="Drop a file here"
-            description={
-              mode === 'decrypt'
-                ? `a .keym container, or a QR image to scan · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`
-                : `or click to browse · ${Math.floor(MAX_PLAINTEXT_SIZE / 1024 / 1024)} MB max`
-            }
+            description={dropzoneLabel(mode === 'decrypt' ? 'decrypt' : 'encrypt', {
+              toDisk: saveToDisk,
+              worker: workerAvailable,
+            })}
           />
         ) : mode === 'encrypt' && seedMode ? (
           <SeedGrid
@@ -1439,6 +1437,11 @@ export function SecretForm({ mode }: { mode: Mode }) {
           role="status"
           aria-labelledby="receipt-title"
           data-testid="seal-receipt"
+          // The SHA-256 of the container this receipt describes: ciphertext,
+          // not a secret. A verify compares its input with it (Section 06e),
+          // and the browser suite reads it to hold a streamed save to it.
+          data-container-sha256={createdDigest ?? undefined}
+          data-container-bytes={receipt.bytes}
           data-guide="saved-copy"
           className="animate-in fade-in-0 slide-in-from-bottom-2 space-y-3 rounded-xl border border-border p-4 duration-500"
         >
@@ -1500,8 +1503,10 @@ export function SecretForm({ mode }: { mode: Mode }) {
             </div>
           ) : (
             <p className="text-[12px] leading-snug text-muted-foreground">
-              The file was downloaded as it was sealed; nothing else of it is kept here.
-              To print a paper vault or rehearse from paper, seal in Text mode.
+              {exportsStarted.save
+                ? "The file was saved where you chose; nothing else of it is kept here."
+                : "The file was downloaded as it was sealed; nothing else of it is kept here."}
+              {" "}To print a paper vault or rehearse from paper, seal in Text mode.
             </p>
           )}
         </section>
@@ -1786,6 +1791,29 @@ export function SecretForm({ mode }: { mode: Mode }) {
       {/* Shown while the derivation runs, with the way out beside it. A notice
           that explains a long wait but offers no way to end it is only half an
           answer. */}
+      {/* A streamed encrypt's progress, from the chunks written to the file
+          the user chose. Worded so it never says "saved" before the file is
+          closed: until then what is on disk is a temporary file. */}
+      {isLoading && saveProgress !== null && (
+        <div
+          role="status"
+          data-testid="save-progress"
+          className="mt-2 space-y-1.5 rounded-xl border border-border p-3 text-[12.5px] leading-snug text-muted-foreground"
+        >
+          <progress
+            value={saveCommitting ? 1 : saveProgress}
+            max={1}
+            aria-label="Encrypting to the file you chose"
+            className="h-1.5 w-full accent-primary"
+          />
+          <p>
+            {saveCommitting
+              ? "Finishing the save. Nothing is saved until this completes."
+              : `Encrypting to the file you chose: ${Math.round(saveProgress * 100)}%. Nothing is saved until the file is complete.`}
+          </p>
+        </div>
+      )}
+
       {isLoading && unlockCostNotice && (
         <div
           role="status"
@@ -1845,7 +1873,10 @@ export function SecretForm({ mode }: { mode: Mode }) {
 
       {/* Only while something is running. Terminating the worker is a real
           stop, not a disowning — see cancelOperation. */}
-      {isLoading && (
+      {/* Not while a streamed encrypt closes its file: that is the moment it
+          is saved, and stopping it then could only lose the shares it was
+          written with. */}
+      {isLoading && !saveCommitting && (
         <Button
           variant="ghost"
           onClick={cancelOperation}

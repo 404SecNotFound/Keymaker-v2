@@ -2025,6 +2025,12 @@ older reader, and `--capacity` still overrides the size.
   rather than all at once. **The format change is necessary but not sufficient**,
   and claiming otherwise on the strength of the format alone would be the same
   mistake as claiming Argon2id worked because the Node tests passed.
+  *What ships, November 2026:* where the browser has the save dialog (desktop
+  Chromium), the app encrypts a file of up to 1 GiB straight to a file the user
+  chooses, which is saved only when it is complete, and any browser with a worker
+  verifies a backup of that size a chunk at a time. Browsers without the save
+  dialog keep the in-memory cap of 100 MB for encrypting, and opening a backup
+  above it is not yet streamed in any browser.
 - **Metadata.** Container length reveals plaintext length *exactly*: neither the
   payload nor the final chunk is padded, so overhead is a constant and container
   length determines plaintext length byte for byte. v2 adds no padding scheme:

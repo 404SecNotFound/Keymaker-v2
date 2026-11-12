@@ -13,6 +13,11 @@ import {
   KeymakerError,
   loadKeym2,
   CipherId,
+  MAX_CONTAINER_SIZE,
+  MAX_PLAINTEXT_SIZE,
+  MAX_STREAM_CONTAINER_SIZE,
+  MAX_STREAM_PLAINTEXT_SIZE,
+  oversizeRecoveryHelp,
   type OpenedBy,
 } from "@/lib/keymaker-crypto";
 import { loadShamir } from "@/lib/keym-v2";
@@ -385,11 +390,142 @@ export const validateAndSanitizeFile = (file: File) => {
   return true;
 };
 
-// 100 MB. Note: encrypting a file of this size transiently holds several full
-// copies in memory (the read ArrayBuffer, the Web Crypto ciphertext output,
-// and the Blob for download), so peak usage is a multiple of this limit —
-// the practical ceiling on low-RAM mobile devices.
-export const MAX_FILE_SIZE = 100 * 1024 * 1024;
+/**
+ * How large a file each action takes, in bytes, in a browser with these
+ * capabilities.
+ *
+ * - `encrypt`: the plaintext. Up to `MAX_STREAM_PLAINTEXT_SIZE` (1 GiB) only
+ *   where the page can save straight to a file the user chooses and has a
+ *   worker to stream in; the in-memory cap everywhere else, because a browser
+ *   must not write a backup it cannot hand over, and there is no streaming on
+ *   the page's own thread.
+ * - `decryptOpen`: the container, to open and hand back the contents. The
+ *   in-memory cap in this stage, in every browser.
+ * - `verify`: the container, to check it opens without handing anything back.
+ *   No output, so no save dialog is needed: streamed in every browser with a
+ *   worker.
+ *
+ * Pure, so the rule is tested without a browser (`npm run test:save-target`).
+ * The page asks it once for the pickers and the labels, and again when an
+ * action starts.
+ */
+export interface FileLimits {
+  encrypt: number;
+  decryptOpen: number;
+  verify: number;
+}
+
+export interface BrowserCaps {
+  /** `canSaveToDisk()`: a save dialog, in a secure top-level page. */
+  toDisk: boolean;
+  /** A crypto worker that runs. */
+  worker: boolean;
+}
+
+export function fileLimits({ toDisk, worker }: BrowserCaps): FileLimits {
+  return {
+    encrypt: toDisk && worker ? MAX_STREAM_PLAINTEXT_SIZE : MAX_PLAINTEXT_SIZE,
+    decryptOpen: MAX_CONTAINER_SIZE,
+    verify: worker ? MAX_STREAM_CONTAINER_SIZE : MAX_CONTAINER_SIZE,
+  };
+}
+
+/** The largest file a mode's file picker accepts: whatever its largest action takes. */
+export function pickerLimit(mode: "encrypt" | "decrypt", limits: FileLimits): number {
+  return mode === "decrypt" ? Math.max(limits.decryptOpen, limits.verify) : limits.encrypt;
+}
+
+/**
+ * A limit as people say it. A container limit is named by the plaintext it
+ * holds (a backup of a 100 MB file is "100 MB", not "102 MB"), so the label
+ * and the encrypt limit it pairs with read the same.
+ */
+function limitLabel(bytes: number): string {
+  const plaintext =
+    bytes === MAX_CONTAINER_SIZE ? MAX_PLAINTEXT_SIZE : bytes === MAX_STREAM_CONTAINER_SIZE ? MAX_STREAM_PLAINTEXT_SIZE : bytes;
+  return plaintext >= 1024 ** 3
+    ? `${Math.floor(plaintext / 1024 ** 3)} GB`
+    : `${Math.floor(plaintext / 1024 ** 2)} MB`;
+}
+
+/** The file dropzone's second line: the limit that applies in this browser, short. */
+export function dropzoneLabel(mode: "encrypt" | "decrypt", caps: BrowserCaps): string {
+  const limits = fileLimits(caps);
+  if (mode === "decrypt") {
+    const open = limitLabel(limits.decryptOpen);
+    const verify = limitLabel(limits.verify);
+    return open === verify
+      ? `a .keym container, or a QR image to scan · ${open} max`
+      : `a .keym container, or a QR image to scan · ${open} to open here · ${verify} to verify`;
+  }
+  return caps.toDisk && caps.worker
+    ? `or click to browse · ${limitLabel(limits.encrypt)} max, saved where you choose`
+    : `or click to browse · ${limitLabel(limits.encrypt)} max in this browser`;
+}
+
+/** What a toast says when something is refused for its size. */
+export interface SizeRefusal {
+  title: string;
+  description: string;
+}
+
+const NO_LIMIT_CLI = "The command-line reference, keym2.py, has no size limit.";
+
+/**
+ * Why this browser will not encrypt a file this large, and where it could be.
+ * Which sentence depends only on what this browser lacks.
+ */
+export function encryptTooLarge(caps: BrowserCaps): SizeRefusal {
+  const limit = limitLabel(fileLimits(caps).encrypt);
+  const stream = limitLabel(MAX_STREAM_PLAINTEXT_SIZE);
+  if (caps.toDisk && caps.worker) {
+    return {
+      title: "Too large for this browser",
+      description: `This file is larger than the ${limit} this browser can encrypt. ${NO_LIMIT_CLI}`,
+    };
+  }
+  if (!caps.worker) {
+    return {
+      title: "Too large for this browser",
+      description:
+        `Files over ${limitLabel(MAX_PLAINTEXT_SIZE)} are encrypted in Keymaker's background worker, and this browser ` +
+        `could not start one, so it encrypts files up to ${limit}. ${NO_LIMIT_CLI}`,
+    };
+  }
+  return {
+    title: "Too large for this browser",
+    description:
+      `This browser encrypts files up to ${limit}, because it cannot save straight to a file you choose. ` +
+      `A desktop Chromium browser, such as Chrome or Edge, can, and encrypts files up to ${stream}. ${NO_LIMIT_CLI}`,
+  };
+}
+
+/** A backup above the in-memory cap, asked to be opened rather than verified. */
+export function decryptOpenTooLarge(caps: BrowserCaps): SizeRefusal {
+  return {
+    title: "Too large to open here",
+    description:
+      oversizeRecoveryHelp() +
+      (caps.worker
+        ? `\n\nTo check that it opens without opening it here, turn on Verify only. Backups up to ` +
+          `${limitLabel(fileLimits(caps).verify)} can be checked that way.`
+        : ""),
+  };
+}
+
+/** A backup above what Verify only can read in this browser. */
+export function verifyTooLarge(caps: BrowserCaps): SizeRefusal {
+  return {
+    title: "Too large for this app",
+    description: oversizeRecoveryHelp(caps.worker ? "streaming" : "in-memory"),
+  };
+}
+
+/** What Stop says during a streamed encrypt. Nothing is saved until the file is complete. */
+export const NOTHING_SAVED_ON_STOP =
+  "The encryption was stopped and nothing was saved. An empty or partial temporary file may be left " +
+  "where you chose to save it. Your password and file are still here.";
+
 // QR version 40, error-correction level L, byte mode. Every QRCodeCanvas below
 // pins level="L" explicitly — raising the ECC level without lowering this
 // limit would make qrcode.react throw for inputs above the new capacity

@@ -627,6 +627,7 @@ npm run test:password-policy      # the advisory password floor accepts and refu
 npm run test:access-policy        # every way in the form describes opens a real container, and no other does
 npm run test:verify-transport     # a verify sends back a byte count, never the plaintext, for every format
 npm run test:worker-stream        # a file streamed through the worker: chunks in order, at most 4 un-acked, no plaintext
+npm run test:save-target          # each browser's file limits, and a streamed save is never reported saved before it is
 npm run test:slot-transaction     # a new backup's ways in are written in one operation, deriving the password once
 npm run test:backup-workflow      # a stale job cannot restore a success state; no step is shown done without evidence
 npm run test:recovery-envelopes   # KMPART2 names a corrupt part, a truncated tail, a mixed set
