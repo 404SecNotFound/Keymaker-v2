@@ -70,6 +70,7 @@ import {
   KeymakerError,
   warmCryptoDependencies,
   MAX_PLAINTEXT_SIZE,
+  MAX_CONTAINER_SIZE,
   oversizeRecoveryHelp,
   MAX_BASE64_INPUT_CHARS,
   MAX_TEXT_PLAINTEXT_BYTES,
@@ -84,12 +85,17 @@ import {
 } from "@/lib/keymaker-crypto";
 import {
   encryptViaWorker,
+  encryptFileViaWorker,
   calibrateViaWorker,
   decryptViaWorker,
   verifyViaWorker,
+  verifyFileViaWorker,
   cancelAllCryptoWork,
   warmCryptoWorker,
+  workerKnownUnavailable,
+  workerWillBeUsed,
 } from "@/lib/crypto-client";
+import { canSaveToDisk, chooseSaveTarget, SaveFailed, SAVE_PICKER_FAILED, type SaveTarget } from "@/lib/save-target";
 import {
   describeCalibration,
   type DeviceFit,
@@ -122,6 +128,12 @@ import {
   kdfLabelOf,
   cipherLabelOf,
   randomFilenameSuffix,
+  fileLimits,
+  pickerLimit,
+  encryptTooLarge,
+  decryptOpenTooLarge,
+  verifyTooLarge,
+  NOTHING_SAVED_ON_STOP,
   DOORS,
   BASE_PATH,
   KEYMAKER_REPO,
@@ -351,6 +363,61 @@ export function useEncryptorState() {
   useEffect(() => {
     isLoadingRef.current = isLoading;
   }, [isLoading]);
+  /**
+   * What this browser can do with a large file: save straight to a file the
+   * user chooses (`canSaveToDisk`), and run the crypto in a worker. Both are
+   * decided after mount, because the page is prerendered and neither is known
+   * until it runs in a browser. The worker is assumed until the warm-up probe
+   * says otherwise, so the first paint does not flash a smaller limit on the
+   * browsers that have one; a streamed operation still refuses with a typed
+   * error if the worker turns out to be missing.
+   */
+  const [saveToDisk, setSaveToDisk] = useState(false);
+  const [workerAvailable, setWorkerAvailable] = useState(true);
+  useEffect(() => {
+    setSaveToDisk(canSaveToDisk());
+    if (workerKnownUnavailable()) {
+      setWorkerAvailable(false);
+      return;
+    }
+    let live = true;
+    workerWillBeUsed()
+      .then((ok) => {
+        if (live) setWorkerAvailable(ok);
+      })
+      .catch(() => {
+        // A Stop during the probe. Not a verdict on the worker.
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  /** How large a file each action takes in this browser. See `fileLimits`. */
+  const limits = useMemo(() => fileLimits({ toDisk: saveToDisk, worker: workerAvailable }), [saveToDisk, workerAvailable]);
+  /**
+   * A streamed encrypt's progress, 0 to 1, from the chunks written so far; null
+   * when no streamed encrypt is running.
+   */
+  const [saveProgress, setSaveProgress] = useState<number | null>(null);
+  /**
+   * True while a streamed encrypt is closing its file, which is the moment the
+   * backup is saved. Stop and mode or input switches are held off for that
+   * moment (see `committingRef`), and the page says it is finishing the save.
+   */
+  const [saveCommitting, setSaveCommitting] = useState(false);
+  /**
+   * The same, for callbacks that cannot wait for a render. A switch during
+   * the commit would disown an operation whose file is about to exist, and
+   * with it any recovery shares that file was written with, which nothing can
+   * issue again.
+   */
+  const committingRef = useRef(false);
+  /**
+   * The operation number of the streamed encrypt that owns a save target, or
+   * null. Stop reads it to say nothing was saved; the operation's own
+   * `finally` clears it only if no newer stream has taken it since.
+   */
+  const streamingSaveRef = useRef<number | null>(null);
   /** Set before the derivation starts when this container will be slow. */
   const [unlockCostNotice, setUnlockCostNotice] = useState<string | null>(null);
   const [isCryptoAvailable, setIsCryptoAvailable] = useState(true);
@@ -1173,6 +1240,12 @@ export function useEncryptorState() {
    * the way out has to be a button.
    */
   const cancelOperation = useCallback(() => {
+    // A streamed encrypt that is closing its file has, in effect, finished:
+    // the backup exists once the close resolves, and disowning it now would
+    // drop the recovery shares it was written with. The button is not shown
+    // during the commit; this covers anything else that reaches here.
+    if (committingRef.current) return;
+    const streaming = streamingSaveRef.current !== null;
     // Same two steps clearSensitiveState uses: move the counter so the
     // in-flight completion path goes quiet, then actually kill the worker.
     opSeqRef.current++;
@@ -1188,6 +1261,13 @@ export function useEncryptorState() {
     // claiming something the app did not do. Distinguishing the two costs one
     // sentence and keeps the button honest on the browsers least able to
     // afford the wait.
+    // A streamed encrypt always has a worker (it refuses without one), so
+    // `stopped` is true here. Its file is discarded by the operation's own
+    // `finally`, which still runs although the operation is now stale.
+    if (streaming) {
+      toast({ title: "Stopped", description: NOTHING_SAVED_ON_STOP });
+      return;
+    }
     toast({
       title: stopped ? "Stopped" : "Stopped waiting",
       description: stopped
@@ -1536,6 +1616,9 @@ export function useEncryptorState() {
   }, [hasSecretsToLock, clearSensitiveState, toast]);
 
   const handleModeChange = useCallback((newMode: string) => {
+    // Held off while a streamed encrypt closes its file: see `committingRef`.
+    // The commit takes moments, and the tab is still there afterwards.
+    if (committingRef.current) return;
     setWorkspacePage("workbench");
     if (newMode === mode) return;
     setMode(newMode as Mode);
@@ -1581,6 +1664,8 @@ export function useEncryptorState() {
   }, [inputType, outputText, handleModeChange]);
 
   const handleInputTypeChange = useCallback((newType: InputChoice) => {
+      // As in handleModeChange: not while a streamed encrypt commits its file.
+      if (committingRef.current) return;
       // Same reasoning as resetState: an operation started against File mode
       // must not deliver its result into Text mode. This was the reproducible
       // half of the bug — switch input type mid-derivation and the finished
@@ -1786,6 +1871,7 @@ export function useEncryptorState() {
    * is a no-op, so a form in progress is never reset by a stray click.
    */
   const openDoor = useCallback((door: Door) => {
+    if (committingRef.current) return;
     setWorkspacePage("workbench");
     if (door === currentDoor) return;
     if (door === "open") {
@@ -1819,6 +1905,7 @@ export function useEncryptorState() {
    * the same ordering `openDoor` relies on to keep its `setShamirEnabled(true)`.
    */
   const openInheritance = useCallback(() => {
+    if (committingRef.current) return;
     setWorkspacePage("workbench");
     if (mode !== "encrypt") handleModeChange("encrypt");
     // Text, because step 4 is the paper vault, and the paper vault prints a
@@ -1832,20 +1919,25 @@ export function useEncryptorState() {
   }, [mode, inputType, handleModeChange, handleInputTypeChange]);
 
   /**
-   * @param maxBytes Ceiling for this particular picker. Encrypting caps the
-   *   *plaintext*; decrypting has to allow the container, which is larger by
-   *   the header, salt, nonces and tags. Sharing one limit meant a file of
-   *   exactly the maximum size could be encrypted and then rejected on the way
-   *   back in — the picker refused the container before the crypto core, which
-   *   does allow the overhead, ever saw it.
+   * @param kind What this picker is for, which decides its ceiling and what a
+   *   refusal says. Encrypting caps the *plaintext*; decrypting has to allow
+   *   the container, which is larger by the header, salt, nonces and tags.
+   *   Sharing one limit meant a file of exactly the maximum size could be
+   *   encrypted and then rejected on the way back in — the picker refused the
+   *   container before the crypto core, which does allow the overhead, ever
+   *   saw it.
+   *
+   *   The plaintext and container pickers take the largest file any action in
+   *   their mode can take in this browser (`pickerLimit`): on the Decrypt tab
+   *   that is what Verify only can read, although opening stays at the
+   *   in-memory cap. `processData` holds each action to its own limit, with a
+   *   message that says which. A key file is read whole, so it keeps the
+   *   in-memory cap everywhere.
    */
   const handleFileChange = useCallback((
     e: ChangeEvent<HTMLInputElement> | DragEvent<HTMLDivElement>,
     setter: (file: File | null) => void,
-    maxBytes: number = MAX_PLAINTEXT_SIZE,
-    /** What the file is, when it is refused for being too big. A key file or a
-     *  plaintext can be swapped for a smaller one; a container cannot. */
-    oversized: "plaintext" | "container" = "plaintext"
+    kind: "keyfile" | "plaintext" | "container" = "keyfile"
   ) => {
     let selectedFile: File | null = null;
     if ('dataTransfer' in e) { // DragEvent
@@ -1874,25 +1966,31 @@ export function useEncryptorState() {
         return;
     }
     
+    const maxBytes =
+      kind === "keyfile" ? MAX_PLAINTEXT_SIZE : pickerLimit(kind === "container" ? "decrypt" : "encrypt", limits);
     if (selectedFile.size > maxBytes) {
       // "Pick a smaller file" is right for a file you are about to encrypt and
       // wrong for one you are trying to open: a backup has no smaller version,
       // and the reference decryptor has no size limit. Same rejection, two
-      // completely different next steps.
-      toast({
-        title: oversized === "container" ? "Too large for this app" : "File Too Large",
-        description:
-          oversized === "container"
-            ? oversizeRecoveryHelp()
-            : `Please select a file smaller than ${Math.floor(maxBytes / 1024 / 1024)}MB.`,
-        variant: "destructive",
-      });
+      // completely different next steps. A plaintext's refusal names the limit
+      // in this browser and where a larger one is available.
+      const caps = { toDisk: saveToDisk, worker: workerAvailable };
+      const refusal =
+        kind === "container"
+          ? verifyTooLarge(caps)
+          : kind === "plaintext"
+            ? encryptTooLarge(caps)
+            : {
+                title: "File Too Large",
+                description: `Please select a file smaller than ${Math.floor(maxBytes / 1024 / 1024)}MB.`,
+              };
+      toast({ ...refusal, variant: "destructive" });
       setter(null);
       return;
     }
 
     setter(selectedFile);
-  }, [toast]);
+  }, [toast, limits, saveToDisk, workerAvailable]);
   
 
   const generatePassword = useCallback(() => {
@@ -2209,6 +2307,79 @@ export function useEncryptorState() {
         return;
     }
 
+    // Each action's own limit in this browser (`fileLimits`). The picker took
+    // the largest any action in this mode can take, so this is where a file
+    // the chosen action cannot take is refused, before anything is cleared,
+    // read or derived. Asked again here rather than read from state, so a
+    // worker that has since failed is not offered a stream.
+    const caps = { toDisk: canSaveToDisk(), worker: workerAvailable && !workerKnownUnavailable() };
+    const actionLimits = fileLimits(caps);
+    const fileSize = inputType === 'file' && file ? file.size : 0;
+    // Chromium streams only above the in-memory cap. At or below it the
+    // existing path runs unchanged in every browser.
+    const streamEncrypt = mode === 'encrypt' && fileSize > MAX_PLAINTEXT_SIZE;
+    if (mode === 'encrypt' && fileSize > actionLimits.encrypt) {
+      toast({ ...encryptTooLarge(caps), variant: "destructive" });
+      return;
+    }
+    if (mode === 'decrypt' && fileSize > actionLimits.decryptOpen) {
+      const refusal = !verifyOnly
+        ? decryptOpenTooLarge(caps)
+        : fileSize > actionLimits.verify
+          ? verifyTooLarge(caps)
+          : null;
+      if (refusal) {
+        toast({ ...refusal, variant: "destructive" });
+        return;
+      }
+    }
+
+    // The name a File-mode backup is written under, by download or by the
+    // save dialog.
+    const outName = obscureFilename
+      ? `keymaker-${randomFilenameSuffix()}.keym`
+      : `${file?.name ?? "backup"}.keym`;
+
+    /**
+     * A streamed encrypt's file. The save dialog is the FIRST thing awaited
+     * after the click: it needs the click's transient activation, which
+     * Chromium keeps for a few seconds and loses by six, so nothing that can
+     * take time (the key file, the Argon2id notice, a passkey tap, the
+     * derivation) may come before it. Cancelling it costs nothing: no key is
+     * derived and the password stays.
+     */
+    let target: SaveTarget | null = null;
+    if (streamEncrypt) {
+      try {
+        target = await chooseSaveTarget(outName);
+      } catch (error) {
+        if (!isStale()) {
+          toast({
+            title: "Nothing was saved",
+            description: error instanceof SaveFailed ? error.message : SAVE_PICKER_FAILED,
+            variant: "destructive",
+          });
+        }
+        return;
+      }
+      if (!target) {
+        if (!isStale()) {
+          toast({
+            title: "Nothing was saved",
+            description: "No file was chosen, so nothing was encrypted. Your password and file are still here.",
+          });
+        }
+        return;
+      }
+      if (isStale()) {
+        // The writable belongs to this operation, stale or not.
+        await target.abort();
+        return;
+      }
+      streamingSaveRef.current = opId;
+      setSaveProgress(0);
+    }
+
     setIsLoading(true);
     setOutputText('');
     setShowDecryptedText(false);
@@ -2291,7 +2462,10 @@ export function useEncryptorState() {
         // weaker backup than the one they asked for is the trade this project
         // does not make. PBKDF2 needs no warning: WebCrypto keeps it
         // off-thread even in the fallback.
-        if (kdf.kdf === KdfId.ARGON2ID) {
+        //
+        // Not for a streamed encrypt: it has no page-thread fallback, and
+        // refuses with a typed error if the worker is missing.
+        if (kdf.kdf === KdfId.ARGON2ID && !target) {
           const { workerWillBeUsed } = await import("@/lib/crypto-client");
           if (!(await workerWillBeUsed()) && !isStale()) {
             setUnlockCostNotice(
@@ -2307,8 +2481,12 @@ export function useEncryptorState() {
           }
         }
 
+        // A streamed encrypt never holds the file: the worker reads it a chunk
+        // at a time.
         const encoder = new TextEncoder();
-        inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
+        if (!target) {
+          inputBuffer = inputType === 'file' ? await file!.arrayBuffer() : (encoder.encode(textSecret).buffer as ArrayBuffer);
+        }
         // Stop, a tab switch or the lock can land while a large file is still
         // being read. Every await from here to the worker is a point where the
         // operation may already be disowned, and going on would start a fresh
@@ -2332,11 +2510,122 @@ export function useEncryptorState() {
         }
 
         if (isStale()) return;
+
+        // What the receipt says about protection comes from the same
+        // functions the inspector's plan pane uses; the parsed pane says it
+        // again from the bytes, and receipt.spec.ts holds the two together.
+        const sealedWith: CreationSettings = {
+          inputType: inputType === 'file' ? 'file' : 'text',
+          kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
+          cipher: cipherLabelOf(cipherChoice),
+          padded: hideSize,
+          waysIn: policy.waysIn,
+        };
+        const receiptOf = (from: string, to: string, onScreen: boolean, bytes: number): Receipt => ({
+          from,
+          to,
+          kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
+          cipher: cipherLabelOf(cipherChoice),
+          waysIn: policy.waysIn.map(describeWayIn),
+          bytes,
+          onScreen,
+          shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
+        });
+
+        if (target) {
+          // A file above the in-memory cap, streamed to the file the user
+          // chose. The worker reads the file a chunk at a time and hands each
+          // piece of the container here, in order; each is written before the
+          // next is acknowledged. Until `commit()` resolves, what is on disk is
+          // a temporary file and nothing has been saved.
+          const { keym2ContainerLength, keym2SlotCountOffset } = await loadKeym2();
+          if (isStale()) return;
+          const saveTo = target;
+          const plaintextLength = file!.size;
+          let written = 0;
+          // The container's exact length, from its own head (version, cipher
+          // and slot count), so progress counts the chunks written against
+          // the chunks there will be.
+          let total = 0;
+          let shown = -1;
+          const streamed = await encryptFileViaWorker(
+            file!,
+            mutablePassword,
+            keyFileBuffer,
+            { kdf, cipher: cipherChoice, padded: hideSize },
+            async (bytes) => {
+              if (total === 0) {
+                try {
+                  const version = bytes[4] as number;
+                  total = keym2ContainerLength(
+                    version,
+                    bytes[5] as CipherId,
+                    bytes[keym2SlotCountOffset(version)] as number,
+                    plaintextLength
+                  );
+                } catch {
+                  total = -1;
+                }
+              }
+              await saveTo.write(bytes);
+              written += bytes.byteLength;
+              if (total > 0 && !isStale()) {
+                const now = Math.min(99, Math.floor((written / total) * 100));
+                if (now !== shown) {
+                  shown = now;
+                  setSaveProgress(now / 100);
+                }
+              }
+            },
+            shamirRequestOf(policy),
+            passkey
+          );
+          // Transferred to the worker; nothing of it is left here.
+          keyFileBuffer = null;
+
+          // The commit point. Checked immediately before it: an operation the
+          // user has moved on from discards its file in the `finally`. From
+          // here until the close resolves, Stop and mode or input switches are
+          // held off, because the file is about to exist and the shares it was
+          // written with must reach the page with it.
+          if (isStale()) return;
+          committingRef.current = true;
+          setSaveCommitting(true);
+          await saveTo.commit();
+          committingRef.current = false;
+          // Only a wipe can have moved the operation on during the commit.
+          // The file is saved; the page was asked to forget everything.
+          if (isStale()) return;
+
+          // Saved. Only now does the page describe a backup, and only now are
+          // the shares shown: they must never appear for a file that was not
+          // committed, because they would open nothing anyone has.
+          setSealedPeek(streamed.head.slice(0, Math.min(KEYM2_HEADER_PEEK_BYTES, streamed.head.byteLength)));
+          setRehearsal({ kind: "idle" });
+          setRehearsalOpen(false);
+          setRehearsalInput("");
+          setRehearsalPassword("");
+          setCreated({ armored: "", digest: streamed.digest, inputType: "file" });
+          setReceipt(receiptOf(file!.name, saveTo.name, false, streamed.bytes));
+          dispatchWorkflow({ type: "sealed", job: opId, settings: sealedWith });
+          dispatchWorkflow({ type: "export-started", how: "save", at: new Date().toISOString() });
+          setFile(null);
+          if (streamed.shares) {
+            setIssuedShares({
+              threshold: shamirThreshold,
+              shares: streamed.shares,
+              withPassword: !policy.sharesOpenAlone,
+            });
+          }
+          finishOperation(null, null);
+          return;
+        }
+
         // §4.6. Requested in the same call that writes the container, so the
         // share secret is generated and dropped inside the worker and the
         // password is not held past the operation that already needed it.
         const encrypted = await encryptViaWorker(
-          inputBuffer,
+          inputBuffer!,
           mutablePassword,
           keyFileBuffer,
           { kdf, cipher: cipherChoice, padded: hideSize },
@@ -2389,27 +2678,6 @@ export function useEncryptorState() {
         // after the await and before touching state, the way the text branch
         // does.
 
-        // What the receipt says about protection comes from the same
-        // functions the inspector's plan pane uses; the parsed pane says it
-        // again from the bytes, and receipt.spec.ts holds the two together.
-        const sealedWith: CreationSettings = {
-          inputType: inputType === 'file' ? 'file' : 'text',
-          kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
-          cipher: cipherLabelOf(cipherChoice),
-          padded: hideSize,
-          waysIn: policy.waysIn,
-        };
-        const receiptOf = (from: string, to: string, onScreen: boolean): Receipt => ({
-          from,
-          to,
-          kdf: kdfLabelOf(kdfChoice, argonMemoryMiB, argonTimeCost, argonParallelism),
-          cipher: cipherLabelOf(cipherChoice),
-          waysIn: policy.waysIn.map(describeWayIn),
-          bytes: resultBuffer.byteLength,
-          onScreen,
-          shares: shamirEnabled ? { threshold: shamirThreshold, count: shamirCount } : null,
-        });
-
         // Section 06e. Taken before the bytes leave: a verify later compares
         // its input with this to tell whether it opened this exact backup.
         const digest = await sha256Hex(new Uint8Array(resultBuffer));
@@ -2417,13 +2685,10 @@ export function useEncryptorState() {
 
         if (inputType === 'file') {
             const blob = new Blob([resultBuffer]);
-            const outName = obscureFilename
-              ? `keymaker-${randomFilenameSuffix()}.keym`
-              : `${file!.name}.keym`;
             if (isStale()) return;
             triggerDownload(blob, outName);
             setCreated({ armored: "", digest, inputType: "file" });
-            setReceipt(receiptOf(file!.name, outName, false));
+            setReceipt(receiptOf(file!.name, outName, false, resultBuffer.byteLength));
             dispatchWorkflow({ type: "sealed", job: opId, settings: sealedWith });
             setFile(null);
         } else {
@@ -2441,7 +2706,7 @@ export function useEncryptorState() {
             const armored = armorKeym2(new Uint8Array(resultBuffer));
             setOutputText(armored);
             setCreated({ armored, digest, inputType: "text" });
-            setReceipt(receiptOf("text", "keym2: container, on screen", true));
+            setReceipt(receiptOf("text", "keym2: container, on screen", true, resultBuffer.byteLength));
             dispatchWorkflow({ type: "sealed", job: opId, settings: sealedWith });
             setTextSecret('');
             // The grid's cells hold the same plaintext; sealed means gone.
@@ -2450,7 +2715,29 @@ export function useEncryptorState() {
 
       } else { // Decrypt — the KEYM container is self-describing, and legacy
         // IttyBitz (IBTZ) blobs are auto-detected and handled transparently.
-        if (inputType === 'file') {
+        //
+        // A backup above the in-memory cap reaches here only to be verified
+        // (the limits above refused anything else), and it is never read
+        // whole on this thread: the worker reads it a chunk at a time, and
+        // the page reads its head, which is all the notice, the passkey salt
+        // and the shares check below need.
+        const streamVerify = verifying && inputType === 'file' && file!.size > MAX_CONTAINER_SIZE;
+        let streamHead: Uint8Array | null = null;
+        if (streamVerify) {
+            streamHead = new Uint8Array(await file!.slice(0, KEYM2_HEADER_PEEK_BYTES).arrayBuffer());
+            if (isStale()) return;
+            const { isKeym2Binary } = await loadKeym2();
+            if (!isKeym2Binary(streamHead)) {
+              // Only a binary KEYM v2, v3 or v4 container can be read a chunk
+              // at a time. Anything else this large is not a file this app
+              // could open in memory either.
+              throw new KeymakerError(
+                "too-large",
+                "Above 100 MB, Verify only reads a binary .keym backup a piece at a time, and this file is not one. " +
+                  oversizeRecoveryHelp()
+              );
+            }
+        } else if (inputType === 'file') {
             inputBuffer = await file!.arrayBuffer();
             const fromText = await containerFromTextFile(new Uint8Array(inputBuffer));
             // Copied rather than `.buffer`: a reader may hand back a view into
@@ -2499,9 +2786,13 @@ export function useEncryptorState() {
         // price nothing at all — on exactly the expensive container this is
         // for. The size and its derivation live beside the format constants
         // they depend on; keym2-dispatch.mts asserts the relationship.
-        const headerPeek = new Uint8Array(
-          inputBuffer.slice(0, Math.min(KEYM2_HEADER_PEEK_BYTES, inputBuffer.byteLength))
-        );
+        const headerPeek =
+          streamHead ??
+          new Uint8Array(inputBuffer!.slice(0, Math.min(KEYM2_HEADER_PEEK_BYTES, inputBuffer!.byteLength)));
+        // What the passkey and shares checks below read: the container's
+        // header and slot table. The whole container in memory, or the head of
+        // one read a chunk at a time, which holds both.
+        const structural = streamHead ?? new Uint8Array(inputBuffer!);
 
         // Say so before the wait, not after it.
         //
@@ -2565,7 +2856,7 @@ export function useEncryptorState() {
         if (usePasskey) {
           const { passkeySlotSaltsKeym2, derivePrfSalt } = await loadKeym2();
           const { assertPasskeyPrf } = await import("@/lib/webauthn-prf");
-          const salts = passkeySlotSaltsKeym2(new Uint8Array(inputBuffer));
+          const salts = passkeySlotSaltsKeym2(structural);
           if (salts.length === 0) {
             throw new KeymakerError(
               "invalid-input",
@@ -2582,7 +2873,7 @@ export function useEncryptorState() {
         // salts, which are in the clear, so it tells nobody anything new.
         if (suppliedShares.length > 0 && !mutablePassword) {
           const { sharesNeedPasswordKeym2 } = await loadKeym2();
-          if (await sharesNeedPasswordKeym2(new Uint8Array(inputBuffer), suppliedShares)) {
+          if (await sharesNeedPasswordKeym2(structural, suppliedShares)) {
             throw new KeymakerError(
               "credential-required",
               "These strips open this backup together with its password. Type the password as well, then try again."
@@ -2688,16 +2979,35 @@ export function useEncryptorState() {
           // Section 06e. Hashed before the worker takes the buffer. A match is a
           // verify of this page's own backup, which the steps count as a
           // recovery test, and as a saved-copy check when it came from a file.
+          //
+          // A backup above the in-memory cap is hashed by the worker as it
+          // reads it, over exactly the bytes the reader read, and only when
+          // there is a created backup to compare with.
           const createdDigest = createdRef.current?.digest ?? null;
-          const inputDigest = createdDigest ? await sha256Hex(new Uint8Array(inputBuffer)) : null;
-          if (isStale()) return;
-          const verified = await verifyViaWorker(
-            inputBuffer,
-            mutablePassword,
-            keyFileBuffer,
-            suppliedShares.length > 0 ? suppliedShares : undefined,
-            prfOutput ?? undefined
-          );
+          let inputDigest: string | null;
+          let verified: Awaited<ReturnType<typeof verifyViaWorker>>;
+          if (streamVerify) {
+            const streamed = await verifyFileViaWorker(
+              file!,
+              mutablePassword,
+              keyFileBuffer,
+              suppliedShares.length > 0 ? suppliedShares : undefined,
+              prfOutput ?? undefined,
+              { digest: createdDigest !== null }
+            );
+            inputDigest = streamed.digest;
+            verified = streamed;
+          } else {
+            inputDigest = createdDigest ? await sha256Hex(new Uint8Array(inputBuffer!)) : null;
+            if (isStale()) return;
+            verified = await verifyViaWorker(
+              inputBuffer!,
+              mutablePassword,
+              keyFileBuffer,
+              suppliedShares.length > 0 ? suppliedShares : undefined,
+              prfOutput ?? undefined
+            );
+          }
           const info = await describeOpened(verified);
           if (isStale()) return;
           setDecryptInfo(info);
@@ -2724,8 +3034,10 @@ export function useEncryptorState() {
           return;
         }
 
+        // Never a streamed input: a backup above the in-memory cap is refused
+        // before this unless it is being verified, which returned above.
         const decryptResult = await decryptViaWorker(
-          inputBuffer,
+          inputBuffer!,
           mutablePassword,
           keyFileBuffer,
           suppliedShares.length > 0 ? suppliedShares : undefined,
@@ -2874,7 +3186,9 @@ export function useEncryptorState() {
         // A genuine authentication failure is a plain Error and still collapses
         // to one generic string, so wrong-password and corrupt-ciphertext stay
         // indistinguishable.
-        const safeMessage = isUserFacingError(error)
+        // A save that did not complete says so in its own words: what was not
+        // saved, and what may be left where the user chose to save.
+        const safeMessage = error instanceof SaveFailed || isUserFacingError(error)
           ? error.message
           : mode === 'decrypt'
             ? 'Decryption failed. The password or key file may be incorrect, or the data may be corrupted.'
@@ -2898,6 +3212,20 @@ export function useEncryptorState() {
       secureErase(inputBuffer);
       secureErase(keyFileBuffer);
       secureErase(prfOutput);
+      // A streamed encrypt's file is this operation's, stale or not: if it
+      // was not committed (a failure, a Stop, a switch, a refusal), discard
+      // what was written. Never `handle.remove()`: if the user chose to
+      // overwrite a file, that could delete it. Awaited before the spinner
+      // comes down, so a new run cannot start while this one still holds it.
+      if (target) {
+        committingRef.current = false;
+        if (target.state !== "committed") await target.abort();
+        if (streamingSaveRef.current === opId) {
+          streamingSaveRef.current = null;
+          setSaveCommitting(false);
+          setSaveProgress(null);
+        }
+      }
       // Only the operation that still owns the UI may touch it — a stale one
       // writing here is the data-loss half of B1. The password clear moved to
       // the success path (U13); the spinner has to come down on every outcome,
@@ -2915,7 +3243,7 @@ export function useEncryptorState() {
     // the render before the user touched any of them, so the share path took
     // the no-credential exit while every control leading to it looked live —
     // a click that did nothing at all, with no error to explain it.
-  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, hideSize, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey, policy]);
+  }, [file, mode, keyFile, toast, inputType, textSecret, password, generated, kdfChoice, argonTimeCost, argonMemoryMiB, argonParallelism, cipherChoice, obscureFilename, isLoading, verifyOnly, useShares, shareInput, shamirEnabled, hideSize, shamirThreshold, shamirCount, sharesNeedPassword, passkeyEnabled, usePasskey, policy, workerAvailable]);
   
   const handleUseKeyFileChange = useCallback((checked: boolean) => {
       setUseKeyFile(checked);
@@ -3696,6 +4024,12 @@ export function useEncryptorState() {
     openDoor,
     openInheritance,
     handleFileChange,
+    saveToDisk,
+    workerAvailable,
+    limits,
+    saveProgress,
+    saveCommitting,
+    createdDigest: created?.digest ?? null,
     generatePassword,
     generatePassphrase,
     clearClipboardNow,
