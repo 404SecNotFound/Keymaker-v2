@@ -290,7 +290,9 @@ know that the others exist.
 Three consequences worth naming before the details:
 
 - **Re-passwording does not touch the payload.** Rewrite one slot; the
-  ciphertext is unchanged, however large it is.
+  ciphertext is unchanged, however large it is. The master key is unchanged
+  too, so this is not revocation: see FORMAT-V3-DESIGN §5.3, "What revocation
+  does not do".
 - **Deterministic nonces stop depending on salt freshness.** §5.2's counter
   nonces are safe because the payload key is fresh per container — and it is now
   fresh *by construction* rather than as a consequence of the salt being fresh.

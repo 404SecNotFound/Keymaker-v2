@@ -78,7 +78,7 @@ Where there is no documented position, the row is a question, not a claim.
 | Someone editing the slot table of a copy | v3 onward: detected and reported, not refused (FORMAT-V3-DESIGN §5.2). v2: not detected (FORMAT-V3-DESIGN §7). |
 | A holder of fewer than k shares | Addressed: k−1 shares reveal nothing (FORMAT-V2-DESIGN §4.6, enumerated in the selftest). |
 | A dishonest share holder supplying a wrong share | **Question.** The share checksum catches transcription damage (FORMAT-V2-DESIGN §4.6); whether it resists a deliberately altered share is not stated. |
-| Someone holding an older copy after a slot was removed | **No documented position.** A copy made before the removal still carries the slot, and no file format can change a copy it does not hold. The documents that offer slot removal should say so. |
+| Someone holding an older copy after a slot was removed | **Not addressed, by design.** Removal edits one file. An older copy still opens with the removed secret, and the master key it yields also opens the current file's payload, which is not re-encrypted. Only a fresh container (decrypt and re-encrypt) stops a former secret working against new content (FORMAT-V3-DESIGN §5.3, §7). |
 | A compromised delivery of the app | Out of the app's reach at run time. Mitigated by the verification procedure in VERIFYING.md, which depends on the reader obtaining the signer identity from somewhere other than the app. |
 | A compromised device | Out of scope (README, "What this does not protect against"). |
 

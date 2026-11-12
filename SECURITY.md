@@ -71,6 +71,10 @@ Out of scope / known limitations:
   and slots are still readable, and a plaintext just over a bucket boundary is
   still on the far side of it. If the *size* of what is being protected is
   itself sensitive and the backup is not v4, the cipher does not help.
+- **Revocation against an older copy.** Removing a slot or re-passwording
+  edits one file and keeps the master key. An earlier copy still opens with the
+  removed secret, and its master key also opens the current file's payload. A
+  fresh container is the only remedy (FORMAT-V3-DESIGN §5.3).
 - **Password strength.** Weak passwords undermine any KDF. Argon2id
   (memory-hard) is the default recommendation, but cannot fix a weak
   password.
