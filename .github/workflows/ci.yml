@@ -304,6 +304,14 @@ jobs:
       - name: Verify keeps the plaintext in the worker
         run: npm run test:verify-transport
 
+      # The worker's streaming protocol, against the shipping worker module: a
+      # file encrypted through encrypt-stream comes back as chunks that
+      # concatenate to a container the in-memory reader opens, with a digest
+      # over exactly those bytes; at most 4 chunks are ever un-acknowledged; no
+      # chunk carries plaintext; a streamed verify posts no chunk. Seconds.
+      - name: Streaming through the worker
+        run: npm run test:worker-stream
+
       # Roadmap 9.3. Creating a backup with extra ways in derives the password
       # once, writes the same bytes as enrolling them one by one, and refuses
       # bad input before any derivation.

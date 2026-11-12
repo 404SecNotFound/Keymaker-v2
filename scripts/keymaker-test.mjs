@@ -12,6 +12,7 @@
  *   node scripts/keymaker-test.mjs generate   → regenerate fixtures
  *   node scripts/keymaker-test.mjs keym2-dispatch → KEYM version routing
  *   node scripts/keymaker-test.mjs keym2-stream   → the KEYM v2 streaming core
+ *   node scripts/keymaker-test.mjs worker-stream  → the worker's streaming protocol
  */
 import { build } from "esbuild";
 import { pathToFileURL, fileURLToPath } from "node:url";
@@ -32,6 +33,7 @@ const ENTRY_BY_MODE = {
   "backup-workflow": "backup-workflow-test.mts",
   vectors: "vectors-test.mts",
   "keym2-stream": "keym2-stream-test.mts",
+  "worker-stream": "worker-stream-test.mts",
 };
 const mode = ENTRY_BY_MODE[process.argv[2]] ? process.argv[2] : "regression";
 const entry = join(HERE, ENTRY_BY_MODE[mode]);
