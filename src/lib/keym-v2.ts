@@ -491,19 +491,35 @@ export function parseKeym2CoreHeader(data: Uint8Array): Keym2CoreHeader {
 }
 
 
-interface Keym2Container {
+/** Everything before the payload: what a reader needs before it touches a chunk. */
+interface Keym2Head {
   core: Keym2CoreHeader;
   coreBytes: Uint8Array;
   /** Raw fixed-width slot records, unparsed — see `parseKeym2Slot`. */
   records: Uint8Array[];
-  payload: Uint8Array;
   /** v3 §3, the stored `slot_table_mac`; null for a v2 container. */
   slotTableMac: Uint8Array | null;
+  /** §3, where the first chunk starts. */
+  payloadOffset: number;
+}
+
+interface Keym2Container extends Keym2Head {
+  payload: Uint8Array;
 }
 
 
 /**
- * Split a container into core header, raw slot records and payload.
+ * Split a container's head into core header and raw slot records, from the
+ * head bytes and the container's total length alone.
+ *
+ * `head` is the container's first `min(totalLength, KEYM2_HEADER_PEEK_BYTES)`
+ * bytes, or more (the whole container is fine). Every length check runs
+ * against `totalLength`, and every one of them compares against a bound no
+ * larger than the largest head the format permits (953 bytes, see
+ * `KEYM2_HEADER_PEEK_BYTES`), so for those checks a head of that many bytes and
+ * the whole container give the same answer: this is §6's checks in the order
+ * `parseKeym2Container` has always run them, and the streaming reader runs
+ * exactly these.
  *
  * Slot *contents* are deliberately not parsed here (§4.4, finding F7). A reader
  * validates only the slots it attempts, because validating a slot it is going
@@ -511,10 +527,15 @@ interface Keym2Container {
  * they could otherwise open through a perfectly valid passphrase slot beside
  * it.
  */
-function parseKeym2Container(data: Uint8Array): Keym2Container {
-  const core = parseKeym2CoreHeader(data);
+function parseKeym2Head(head: Uint8Array, totalLength: number): Keym2Head {
+  if (head.length < Math.min(totalLength, KEYM2_HEADER_PEEK_BYTES) || head.length > totalLength) {
+    // A caller bug, not a property of the container: the checks below would
+    // be answering a different question from the one §6 asks.
+    throw new Error("KEYM: parseKeym2Head needs the container's leading bytes.");
+  }
+  const core = parseKeym2CoreHeader(head);
 
-  const slotCount = data[keym2SlotCountOffset(core.version)] as number;
+  const slotCount = head[keym2SlotCountOffset(core.version)] as number;
   if (slotCount < SLOT_COUNT_MIN || slotCount > KEYM2_MAX_SLOTS) reject();
 
   const width = keym2SlotLen(core.cipher);
@@ -523,24 +544,33 @@ function parseKeym2Container(data: Uint8Array): Keym2Container {
 
   // §6: shorter than payload_offset plus the minimum payload for one chunk.
   // The smallest chunk is zero plaintext bytes and its tag(s).
-  if (data.length < payloadOffset + core.tagOverhead) reject();
+  if (totalLength < payloadOffset + core.tagOverhead) reject();
 
   const records: Uint8Array[] = [];
   for (let i = 0; i < slotCount; i++) {
-    records.push(data.subarray(table + i * width, table + (i + 1) * width));
+    records.push(head.subarray(table + i * width, table + (i + 1) * width));
   }
   return {
     core,
-    coreBytes: data.subarray(0, coreHeaderLen(core.version)),
+    coreBytes: head.subarray(0, coreHeaderLen(core.version)),
     records,
-    payload: data.subarray(payloadOffset),
     // Read at a fixed offset, deliberately without consulting `slot_count` —
     // that is why v3 §3 puts the MAC *before* the table rather than after it.
     slotTableMac:
       keym2HasAuthenticatedTable(core.version)
-        ? data.subarray(SLOT_TABLE_MAC_OFFSET_V3, SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN)
+        ? head.subarray(SLOT_TABLE_MAC_OFFSET_V3, SLOT_TABLE_MAC_OFFSET_V3 + SLOT_TABLE_MAC_LEN)
         : null,
+    payloadOffset,
   };
+}
+
+/**
+ * Split a container into core header, raw slot records and payload: the head
+ * as `parseKeym2Head` reads it, and the rest.
+ */
+function parseKeym2Container(data: Uint8Array): Keym2Container {
+  const head = parseKeym2Head(data, data.length);
+  return { ...head, payload: data.subarray(head.payloadOffset) };
 }
 
 
@@ -710,7 +740,7 @@ async function computeSlotTableMac(
  * have every v2 container assert an assurance the format cannot give: v2's
  * table is strippable and the strip is undetectable.
  */
-async function verifySlotTable(parsed: Keym2Container, master: Uint8Array): Promise<boolean | null> {
+async function verifySlotTable(parsed: Keym2Head, master: Uint8Array): Promise<boolean | null> {
   if (parsed.slotTableMac === null) return null;
   const expected = await computeSlotTableMac(parsed.coreBytes, parsed.records, master);
   // Constant-time. Not because a timing signal here is worth much — reaching
@@ -749,7 +779,7 @@ const SLOT_TABLE_CHANGED_WRITE =
  * v2 container, which claims nothing and must keep the enrolment it always
  * allowed.
  */
-async function requireAuthenticSlotTable(parsed: Keym2Container, master: Uint8Array): Promise<void> {
+async function requireAuthenticSlotTable(parsed: Keym2Head, master: Uint8Array): Promise<void> {
   if ((await verifySlotTable(parsed, master)) === false) {
     secureErase(master);
     throw new KeymakerError("invalid-input", SLOT_TABLE_CHANGED_WRITE);
@@ -1164,15 +1194,26 @@ function chunkCount(plaintextLength: number): number {
  * remainder above CHUNK means a truncated or padded payload.
  */
 function chunkLayout(payloadLength: number, tagOverhead: number): number[] {
+  const { count, lastSize } = chunkGeometry(payloadLength, tagOverhead);
+  const sizes = new Array<number>(count - 1).fill(KEYM2_CHUNK_SIZE);
+  sizes.push(lastSize);
+  return sizes;
+}
+
+/**
+ * `chunkLayout` without the array: the chunk count and the last chunk's
+ * plaintext size. Every chunk before the last is full. The streaming reader
+ * takes this rather than a list, which for a large file would be one entry
+ * per mebibyte of payload.
+ */
+function chunkGeometry(payloadLength: number, tagOverhead: number): { count: number; lastSize: number } {
   if (payloadLength < tagOverhead) reject();
   const stride = KEYM2_CHUNK_SIZE + tagOverhead;
   const rest = payloadLength - tagOverhead;
   const full = Math.floor(rest / stride);
   const remainder = rest - full * stride;
   if (remainder > KEYM2_CHUNK_SIZE) reject();
-  const sizes = new Array<number>(full).fill(KEYM2_CHUNK_SIZE);
-  sizes.push(remainder);
-  return sizes;
+  return { count: full + 1, lastSize: remainder };
 }
 
 /** §5.4. Chained is AES inner, ChaCha outer, both under the same nonce —
@@ -1423,7 +1464,7 @@ async function slotSecretFor(slot: Keym2Slot, secrets: Keym2Secrets): Promise<Sl
  * it discards.
  */
 async function* unwrapCandidates(
-  container: Keym2Container,
+  container: Keym2Head,
   secrets: Keym2Secrets
 ): AsyncGenerator<{ master: Uint8Array; slot: Keym2Slot }> {
   for (const record of container.records) {
