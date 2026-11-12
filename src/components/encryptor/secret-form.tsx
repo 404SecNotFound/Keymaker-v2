@@ -111,6 +111,7 @@ export function SecretForm({ mode }: { mode: Mode }) {
     clipboardClearPending, clearClipboardNow, lockSecondsLeft, wipeAck,
     wipeNow, backupDiffers, accessRule, formatDetail, verifyDiffers,
     saveToDisk, workerAvailable, saveProgress, saveCommitting, exportsStarted, createdDigest,
+    pendingSave, savedDecrypt, savePendingFile, discardPendingSave,
   } = useEncryptorContext();
 
   // Key-file toggle + picker/generator. Rendered in place on the Decrypt
@@ -1375,6 +1376,73 @@ export function SecretForm({ mode }: { mode: Mode }) {
         </p>
       ) : null}
 
+      {/* Phase 1 of a streamed decrypt (format §5.5). The credentials opened
+          the backup and its first chunk verified; nothing else is checked and
+          nothing is saved. Neutral on purpose: no success colour, no tick and
+          no "decrypted" until the file is committed. */}
+      {pendingSave && mode === 'decrypt' && (
+        <div
+          role="status"
+          data-testid="pending-save"
+          className="mt-2 animate-in fade-in-50 rounded-xl border border-border bg-inset p-4 text-[12.5px] leading-snug text-muted-foreground"
+        >
+          <p className="flex items-center gap-2 text-[13px] font-medium text-foreground">
+            <Unlock className="h-4 w-4 shrink-0" aria-hidden="true" />
+            {pendingSave.openedBy === "passkey"
+              ? "This passkey is right."
+              : pendingSave.openedBy === "shares"
+                ? "These recovery shares are right."
+                : pendingSave.openedBy === "passphrase-and-shares"
+                  ? "This password and these recovery shares are right."
+                  : "The password is right."}{" "}
+            Nothing is saved yet.
+          </p>
+          <p className="mt-1.5">
+            The first part of this backup has opened. The rest of it is not checked yet, and nothing has been
+            saved. Choose where to save it: each part is checked as it is written, and the file is saved only if
+            every part checks out. Contents: {formatBytes(pendingSave.bytes)}.
+          </p>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button
+              onClick={savePendingFile}
+              disabled={isLoading}
+              data-testid="save-decrypted"
+              className="h-auto py-2 text-[13px]"
+            >
+              Save decrypted file…
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={discardPendingSave}
+              disabled={isLoading}
+              data-testid="discard-decrypted"
+              className="h-auto py-2 text-[13px] text-muted-foreground hover:text-foreground"
+            >
+              Discard
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Phase 2 committed: the last chunk verified with final_flag and the
+          file was closed, which is what saved it. Only now a result. */}
+      {savedDecrypt && mode === 'decrypt' && (
+        <div
+          role="status"
+          data-testid="decrypt-saved"
+          className="mt-2 animate-in fade-in-50 rounded-xl border border-success/40 bg-success/10 px-4 py-3"
+        >
+          <p className="flex items-center gap-2 text-[13px] font-medium text-success">
+            <ShieldCheck className="h-4 w-4 shrink-0" />
+            Decrypted and saved
+          </p>
+          <p className="mt-1 text-[12px] leading-snug text-success/90">
+            Every part of the backup checked out. {formatBytes(savedDecrypt.bytes)} of contents were saved
+            as {savedDecrypt.name}.
+          </p>
+        </div>
+      )}
+
       {/* v3 §5.2. The container opened and the plaintext above is genuine —
           the payload authenticates on its own and did so before this rendered.
           What this reports is that the *slot table* has changed since the
@@ -1803,13 +1871,15 @@ export function SecretForm({ mode }: { mode: Mode }) {
           <progress
             value={saveCommitting ? 1 : saveProgress}
             max={1}
-            aria-label="Encrypting to the file you chose"
+            aria-label={mode === 'decrypt' ? "Decrypting to the file you chose" : "Encrypting to the file you chose"}
             className="h-1.5 w-full accent-primary"
           />
           <p>
             {saveCommitting
               ? "Finishing the save. Nothing is saved until this completes."
-              : `Encrypting to the file you chose: ${Math.round(saveProgress * 100)}%. Nothing is saved until the file is complete.`}
+              : mode === 'decrypt'
+                ? `Checking and writing to the file you chose: ${Math.round(saveProgress * 100)}%. Nothing is saved until every part has been checked.`
+                : `Encrypting to the file you chose: ${Math.round(saveProgress * 100)}%. Nothing is saved until the file is complete.`}
           </p>
         </div>
       )}
