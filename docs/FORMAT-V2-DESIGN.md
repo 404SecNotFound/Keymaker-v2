@@ -1298,26 +1298,37 @@ construction without waiting for a real derivation:
 ## 5. Payload: chunked AEAD
 
 The change that removes the **format's** reason for a 100 MB cap. The app still
-enforces one, and the distinction is worth stating precisely because the earlier
-wording here — "the change that removes the 100 MB cap" — reads as a promise the
-product does not keep.
+enforces one where it cannot stream, and the distinction is worth stating
+precisely because the earlier wording here, "the change that removes the 100 MB
+cap", reads as a promise the product does not keep everywhere.
 
 v1 held the plaintext, the ciphertext and both together in memory, and
 authenticated the whole thing as a single buffer; the cap followed from the
 format. Chunking ends that: a conforming reader or writer can stream 1 MiB at a
 time and nothing in this document imposes an upper bound on payload length.
 
-What still imposes one is the application. `MAX_PLAINTEXT_SIZE` in
-`src/lib/keymaker-crypto.ts` is 100 MB and the UI enforces it — the dropzone's
-byte limit, the "100 MB max" label and the encrypted-text ceiling all read it —
-because the browser build assembles the plaintext as one `Uint8Array` before
-encrypting and again after decrypting. Removing the cap without making those
-paths stream would trade a clear refusal for an out-of-memory tab, which is a
-worse failure on a file someone is trying to back up.
+What imposes a bound now is the application, and the bound depends on the
+browser. `MAX_PLAINTEXT_SIZE` in `src/lib/keymaker-crypto.ts` is 100 MB, and
+the in-memory paths hold the plaintext as one `Uint8Array` before encrypting
+and again after decrypting, so the web app stops there in every browser unless
+the paths below apply. Where the browser has a save dialog
+(`showSaveFilePicker`, desktop Chromium such as Chrome and Edge) and a worker,
+the app streams. It encrypts a file of up to 1 GiB, writing the container a
+chunk at a time to a file the user chooses. It opens a KEYM v2, v3 or v4
+backup of up to the container size that file becomes in two steps, a password
+check and then "Save decrypted file…", writing the contents a chunk at a time to
+a file the user chooses. Any browser with a worker verifies a backup of that
+size a chunk at a time. Firefox and Safari have no save dialog, so they keep
+the 100 MB limit to encrypt and to open, and the app says so. A KEYM v1 or
+legacy IttyBitz file is a single block by format and stays at the in-memory
+limit in every browser. The 1 GiB ceiling is a property of this build and its
+recovery tool, not of the format: `reference/keym2.py` reads the whole file into
+memory.
 
-So: the format is unbounded, `reference/keym2.py` is bounded only by the memory
-of the machine running it, and the web app stops at 100 MB. A future change that
-streams the browser paths is what would lift the last one.
+So: the format is unbounded, `reference/keym2.py` is bounded by the memory of
+the machine running it, and the web app is bounded at 100 MB in memory and at
+1 GiB where it can stream to a file the user chooses. How the streamed paths
+meet §5.5 is recorded in the roadmap, section 9.7.
 
 ### 5.1 Structure
 
