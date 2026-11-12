@@ -73,7 +73,7 @@
     "@radix-ui/react-tooltip": "^1.4.1",
     "class-variance-authority": "^0.7.0",
     "clsx": "^2.1.1",
-    "hash-wasm": "4.12.0",
+    "hash-wasm": "4.13.0",
     "jsqr": "1.4.0",
     "lucide-react": "^1.70.0",
     "next": "^16.4.5",
