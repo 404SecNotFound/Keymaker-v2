@@ -1713,6 +1713,7 @@ Docs      RECOVERY.md executed         ─ done ─  recovery_test.py runs every
 v4        Padded payload               ─ done ─  spec · reference · parity · fixtures · the app's switch, off by default · re-seal offer
 Phase 9   Assurance work               ─ done ─  inheritance plan · claims narrowed · verify-only in the worker · buffer owners · one derivation
 §06       Creation workflow            ─ done ─  steps · format detail · evidence kept · usability fixes · v2.4.0
+9.7       Large files                  ─ done ─  encrypt and open to a file you choose, up to 1 GB, where the browser has a save dialog · verify to 1 GB in the worker · 100 MB elsewhere · wording and figures
 Phase 8   Outreach                     ──────    owner-only · drafts in docs/OUTREACH.md · after v2.4.0 is tagged
 ```
 
