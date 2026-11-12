@@ -16,6 +16,18 @@
   timer. A password generated after an earlier one was shown has to be shown
   too.
 - **A focus ring on text fields.** Fields now show the same ring as buttons.
+- **Files above 100 MB, where the browser can save to a file you choose.** In
+  a desktop Chromium browser such as Chrome or Edge, Encrypt takes a file of
+  up to 1 GB and writes the backup a chunk at a time to a file you choose in
+  the save dialog. Decrypt opens a KEYM v2, v3 or v4 backup of up to 1 GB in
+  two steps: the first checks the password and saves nothing, and "Save
+  decrypted file…" then writes the contents to a file you choose. Nothing is
+  saved until the file is complete, and recovery shares are shown only after
+  the backup is saved. A stopped or failed save may leave an empty or partial
+  temporary file where you chose to save. The container format is unchanged.
+- **Verify only checks a backup of up to 1 GB** in any browser that can run
+  the background worker, because it hands nothing back and needs no save
+  dialog.
 
 ### Fixed
 - **An update accepted in one tab no longer reloads a tab holding unsaved
@@ -24,6 +36,17 @@
   reloads when its banner is pressed.
 
 ### Changed
+- **The file box says which limit applies in this browser.** It reads "1 GB
+  max, saved where you choose" where the browser can stream, and "100 MB max
+  in this browser" where it cannot. Firefox and Safari have no save dialog and
+  stay at 100 MB to encrypt and to open. KEYM v1 and IttyBitz files are one
+  block by format and stay at 100 MB everywhere. A refusal for size now says
+  which of these applies and where a larger file can be handled.
+- **The recovery guidance gives measured figures.** `reference/keym2.py` has
+  no size limit of its own but reads the whole backup into memory. On one
+  machine (4 cores, 15 GB of RAM) a 1 GiB backup needed about 4.1 GiB, which
+  is why the app stops at 1 GB. RECOVERY.md, the README, the in-app guide and
+  the format design's section 5 introduction say so.
 - **The app now stores one word in the browser.** Whether the guide is on is
   kept in `localStorage` under `keymaker.guided`, as "on" or "off". Nothing
   else is stored. Where storage is unavailable the guide is on each visit.
